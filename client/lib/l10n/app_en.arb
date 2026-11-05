@@ -1086,5 +1086,159 @@
         "type": "int"
       }
     }
-  }
+  },
+  "providerLastCheckFailed": "Last check failed ({cause}); using the saved model list.",
+  "@providerLastCheckFailed": {
+    "description": "Warning-style line for a non-definitive failed check over a still-usable saved model list",
+    "placeholders": {
+      "cause": {
+        "type": "String"
+      }
+    }
+  },
+  "providerProbeForbidden": "Key accepted: {models} models, but this account is not allowed to run {model}.",
+  "@providerProbeForbidden": {
+    "description": "Non-blocking warning when the provider forbids the account from running the probed model",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      }
+    }
+  },
+  "providerFormBackToList": "Back to providers",
+  "providerUsageTitle": "Usage & limits",
+  "providerUsageRefresh": "Refresh",
+  "providerUsageUpdatedJustNow": "Updated just now",
+  "providerUsageUpdated": "Updated {when}",
+  "@providerUsageUpdated": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageJustNow": "just now",
+  "providerUsageAgoSeconds": "{count}s ago",
+  "@providerUsageAgoSeconds": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageAgoMinutes": "{count}m ago",
+  "@providerUsageAgoMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageAgoHours": "{count}h ago",
+  "@providerUsageAgoHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageLoading": "Loading usage…",
+  "providerUsageRefreshing": "Refreshing…",
+  "providerUsagePlan": "Plan: {plan}",
+  "@providerUsagePlan": {
+    "placeholders": {
+      "plan": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageUsedPercent": "{percent}% used",
+  "@providerUsageUsedPercent": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageRemainingPercent": "{percent}% remaining",
+  "@providerUsageRemainingPercent": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAt": "Resets {when}",
+  "@providerUsageResetsAt": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAnyMoment": "Resets any moment",
+  "providerUsageResetsInMoment": "Resets in a moment",
+  "providerUsageResetsInMinutes": "Resets in {count} min",
+  "@providerUsageResetsInMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsInHours": "Resets in {count} h",
+  "@providerUsageResetsInHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsInDays": "Resets in {count} d",
+  "@providerUsageResetsInDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsOnDate": "Resets on {when}",
+  "@providerUsageResetsOnDate": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAvailable": "{count} resets available",
+  "@providerUsageResetsAvailable": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetAvailableSingle": "1 reset available",
+  "providerUsageResetLimits": "Reset limits",
+  "providerUsageCancel": "Cancel",
+  "providerUsageResetDialogTitle": "Reset usage limits?",
+  "providerUsageResetDialogBody": "This will use one reset credit for this account.",
+  "providerUsageResetExhaustedTitle": "Reset before limits are exhausted?",
+  "providerUsageResetExhaustedBody": "{message} A reset restores the full allowance and cannot be undone.",
+  "@providerUsageResetExhaustedBody": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetAnyway": "Reset anyway",
+  "providerUsageAuthRequired": "Account sign-in is required to view usage limits.",
+  "providerUsageUnavailable": "Usage information is temporarily unavailable. Please retry.",
+  "providerUsageFailed": "Usage information could not be loaded. Please try again.",
+  "providerUsageRetry": "Retry",
+  "providerUsageReconnect": "Reconnect"
 }

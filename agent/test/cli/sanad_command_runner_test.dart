@@ -242,28 +242,35 @@ void main() {
       expect(restartInvoked, isTrue);
     });
 
-    test('routes to setup command and subcommands', () async {
-      List<String>? capturedArgs;
+    test('routes only the bare setup wizard to the injected entry point', () async {
+      final captured = <List<String>>[];
       final runner = SanadCommandRunner(
         stdoutSink: stdoutBuffer,
         stderrSink: stderrBuffer,
         onSetup: (args) {
-          capturedArgs = args;
+          captured.add(args);
           return 0;
         },
       );
 
       await runner.run(['setup']);
-      expect(capturedArgs, isEmpty);
+      expect(captured.single, isEmpty);
 
-      await runner.run(['setup', 'list']);
-      expect(capturedArgs, ['list']);
-
-      await runner.run(['setup', 'status']);
-      expect(capturedArgs, ['status']);
-
-      await runner.run(['setup', 'remove', 'anthropic']);
-      expect(capturedArgs, ['remove', 'anthropic']);
+      // Subcommands own their implementation so `--json` reaches
+      // `CliProviderSetup` (issue 339 review 2).
+      for (final args in [
+        ['setup', 'status', '--json'],
+        ['setup', 'list', '--json'],
+        ['setup', 'remove', 'anthropic'],
+      ]) {
+        final handler = runner.commands['setup']!;
+        expect(
+          handler.subcommands[args[1]],
+          isNotNull,
+          reason: '${args[1]} must be a real subcommand',
+        );
+      }
+      expect(captured, hasLength(1), reason: 'no subcommand delegates');
     });
 
     test('routes to login and logout commands', () async {

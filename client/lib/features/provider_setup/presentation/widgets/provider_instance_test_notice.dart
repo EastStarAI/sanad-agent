@@ -79,6 +79,13 @@ class ProviderInstanceTestNotice extends StatelessWidget {
             result.modelsCount,
             warning.model ?? result.model ?? '',
           );
+        case 'forbidden':
+          // A probe 403 means "may list, may not run": a warning, never a
+          // rejected credential (issue 339 review 2).
+          return l10n.providerProbeForbidden(
+            result.modelsCount,
+            warning.model ?? result.model ?? '',
+          );
         case 'timeout':
           return l10n.providerProbeTimedOut(result.modelsCount);
         case 'network':

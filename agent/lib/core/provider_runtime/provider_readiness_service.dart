@@ -36,13 +36,16 @@ class ProviderReadiness {
     this.discoveryError,
   });
 
+  /// Stable wire shape: every additive nullable field is present as null when
+  /// it has no value, so a JSON consumer never guards a missing key
+  /// (issue 339 review 2).
   Map<String, dynamic> toMap() => {
     'has_provider': hasProvider,
     'runtime_ready': runtimeReady,
-    if (activeProvider != null) 'active_provider': activeProvider,
-    if (activeModel != null) 'active_model': activeModel,
-    if (reason != null) 'reason': reason,
-    if (discoveryError != null) 'discovery_error': discoveryError!.toMap(),
+    'active_provider': activeProvider,
+    'active_model': activeModel,
+    'reason': reason,
+    'discovery_error': discoveryError?.toMap(),
   };
 }
 

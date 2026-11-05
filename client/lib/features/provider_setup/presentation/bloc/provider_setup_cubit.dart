@@ -81,10 +81,11 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
       // (Windows provider-list path, plan 97g). Readiness ordering is
       // preserved: the snapshot is emitted only after all three succeed.
       final snapshot = await _loadProviderSnapshot();
-      final targetStatus = _targetStatusFor(
+      final targetStatus = providerSetupStatusFor(
         instances: snapshot.instances,
         readiness: snapshot.readiness,
         forcePicker: forcePicker,
+        showReadyState: showReadyState,
       );
       _emitSnapshot(
         templates: snapshot.templates,
@@ -150,15 +151,32 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     );
   }
 
+  /// Cancels a pending auth session, if any. One owner for the three flows that
+  /// leave an authenticated step.
+  Future<void> _cancelAuthSessionIfAny() async {
+    final sessionId = state.authSession?.sessionId;
+    if (sessionId == null) return;
+    try {
+      await _client.authCancel(sessionId: sessionId, agent: agent);
+    } catch (_) {}
+  }
+
+  /// Leaves the setup flow without deleting the instance it persisted.
+  ///
+  /// A rejected credential keeps the instance in `needs_auth`, so the list — not
+  /// a destructive Discard — must be a valid exit (issue 339 review 2).
+  Future<void> finishSetupKeepingInstance() async {
+    await _cancelAuthSessionIfAny();
+    _clearDraft();
+    emit(state.copyWith(provisionalInstanceId: null, verificationFailure: null));
+    backToInstances();
+    await load();
+  }
+
   Future<void> backToProviderDetails() async {
     _stopPolling();
     _modelDiscoveryGeneration++;
-    final sessionId = state.authSession?.sessionId;
-    if (sessionId != null) {
-      try {
-        await _client.authCancel(sessionId: sessionId, agent: agent);
-      } catch (_) {}
-    }
+    await _cancelAuthSessionIfAny();
     emit(
       state.copyWith(
         status: ProviderSetupStatus.instanceForm,
@@ -174,12 +192,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
   Future<void> discardProvisionalSetup() async {
     _stopPolling();
     _modelDiscoveryGeneration++;
-    final sessionId = state.authSession?.sessionId;
-    if (sessionId != null) {
-      try {
-        await _client.authCancel(sessionId: sessionId, agent: agent);
-      } catch (_) {}
-    }
+    await _cancelAuthSessionIfAny();
     final provisionalId = state.provisionalInstanceId;
     if (provisionalId == null) {
       if (state.instances.isEmpty) {
@@ -1055,19 +1068,6 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     );
   }
 
-  ProviderSetupStatus _targetStatusFor({
-    required List<ProviderInstanceDto> instances,
-    required ProviderReadinessDto readiness,
-    required bool forcePicker,
-  }) {
-    if (instances.isEmpty || forcePicker) {
-      return ProviderSetupStatus.picker;
-    }
-    if (readiness.runtimeReady && showReadyState) {
-      return ProviderSetupStatus.ready;
-    }
-    return ProviderSetupStatus.instancesList;
-  }
 
   List<ProviderDto> _mapProviders(
     List<ProviderTemplateDto> templates,

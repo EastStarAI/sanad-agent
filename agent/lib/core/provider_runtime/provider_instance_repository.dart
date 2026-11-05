@@ -272,6 +272,25 @@ class ProviderInstanceRepository {
     }
   }
 
+  /// Records the cause of the last failed connection check on an existing cache
+  /// row without touching the cached models, source, or revisions.
+  ///
+  /// A failure that demotes an instance must stay explainable after a restart
+  /// (issue 339 review 2), and a non-blocking warning must survive it too. This
+  /// is the narrow write for both: it never invalidates a proven model list.
+  void recordVerificationCause({
+    required String instanceId,
+    required String cacheKey,
+    required String? lastError,
+    required String? lastErrorDetail,
+  }) {
+    _db.execute(
+      'UPDATE provider_model_cache SET last_error = ?, last_error_detail = ? '
+      'WHERE instance_id = ? AND cache_key = ?',
+      [lastError, lastErrorDetail, instanceId, cacheKey],
+    );
+  }
+
   void deleteModelCache(String instanceId) {
     _db.execute('DELETE FROM provider_model_cache WHERE instance_id = ?', [
       instanceId,

@@ -283,25 +283,30 @@ class ProviderInstanceService {
       return;
     }
 
-    // A current-revision discovery failure is the reason this instance is not
-    // ready, so the status keeps reporting it (issue 339) instead of collapsing
-    // every incomplete state into `draft`.
+    // A stored failure is the reason this instance is not ready. A definitive
+    // one names its status; a warning-grade one proves nothing about the
+    // configuration, so it must not move an already-ready instance (issue 339
+    // review 2).
     final failure = _discoveryFailure(existing);
-    final target = failure == null
-        ? InstanceStatus.draft
-        : statusForFailure(failure);
-    if (existing.status != target) {
-      _setStatus(id, target);
+    if (failure != null) {
+      final target = statusForFailure(failure);
+      if (target == null) return;
+      if (existing.status != target) _setStatus(id, target);
+      return;
+    }
+    if (existing.status != InstanceStatus.draft) {
+      _setStatus(id, InstanceStatus.draft);
     }
   }
 
   /// Applies the outcome of one connection verification (discovery, optionally
   /// followed by a generation probe).
   ///
-  /// A verified outcome re-runs [markReadyIfComplete]; a failure promotes the
-  /// instance to the status its category proves — a rejected credential is
-  /// `needs_auth`, a definitive endpoint failure is `error`, and an unproven
-  /// transport/parse failure keeps `draft`.
+  /// A verified outcome re-runs [markReadyIfComplete]. A definitive failure
+  /// promotes the instance to the status its category proves — a rejected
+  /// credential is `needs_auth`, a definitive endpoint failure is `error` — and
+  /// an unproven or warning-grade failure leaves the status untouched with its
+  /// cause attached.
   void applyConnectionOutcome(
     String id,
     ProviderDiscoveryError? failure, {
@@ -314,29 +319,32 @@ class ProviderInstanceService {
       return;
     }
     final target = statusForFailure(failure);
+    // A warning-grade cause never changes the lifecycle status.
+    if (target == null) return;
     if (existing.status != target) {
       _setStatus(id, target);
     }
   }
 
-  /// Status a verified connection failure proves.
+  /// Status a verified connection failure proves, or null when it proves
+  /// nothing about the configuration and must leave the status untouched.
   ///
-  /// `needs_auth` is reserved for a rejected credential (`401`/`403`); a
-  /// definitive endpoint/account failure is `error`; a failure that proves
-  /// nothing about the credential (transport, timeout, empty list, unknown)
-  /// leaves the instance in `draft` with the sanitized cause attached.
-  static String statusForFailure(ProviderDiscoveryError failure) {
+  /// `needs_auth` is reserved for a rejected credential (`401`, or `403` when
+  /// discovery itself was refused) and `error` for a definitive endpoint
+  /// failure. Transport failures, timeouts, rate limits, outages, unusable
+  /// lists, and every warning-grade copy (a probe `403`, a model rejecting the
+  /// check request) attach their cause without naming a status.
+  static String? statusForFailure(ProviderDiscoveryError failure) {
+    if (!failure.isDefinitive) return null;
     switch (failure.kind) {
       case ProviderFailureCategory.invalidCredential:
       case ProviderFailureCategory.forbidden:
         return InstanceStatus.needsAuth;
       case ProviderFailureCategory.endpointNotFound:
-      case ProviderFailureCategory.rateLimited:
-      case ProviderFailureCategory.serverError:
       case ProviderFailureCategory.http:
         return InstanceStatus.error;
       default:
-        return InstanceStatus.draft;
+        return null;
     }
   }
 

@@ -6,6 +6,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_state.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 /// Disclosure `Usage & limits` section embedded inside a provider instance
 /// card (Task 55 §3.6).
@@ -29,19 +30,25 @@ class ProviderUsageSection extends StatelessWidget {
   final DeviceConfig? agent;
   final String instanceId;
 
+  /// The same account re-authentication the instance form's `Reconnect account`
+  /// runs. Usage never implements a second reconnect path (issue 339 review 2).
+  final VoidCallback onReconnect;
+
   const ProviderUsageSection({
     super.key,
     required this.agent,
     required this.instanceId,
+    required this.onReconnect,
   });
 
-  String _updatedLabel(DateTime at) {
+  String _updatedLabel(BuildContext context, DateTime at) {
+    final l10n = AppLocalizations.of(context)!;
     final local = at.toLocal();
     final delta = DateTime.now().difference(local);
-    if (delta.inSeconds < 30) return 'just now';
-    if (delta.inMinutes < 1) return '${delta.inSeconds}s ago';
-    if (delta.inHours < 1) return '${delta.inMinutes}m ago';
-    if (delta.inHours < 24) return '${delta.inHours}h ago';
+    if (delta.inSeconds < 30) return l10n.providerUsageJustNow;
+    if (delta.inMinutes < 1) return l10n.providerUsageAgoSeconds(delta.inSeconds);
+    if (delta.inHours < 1) return l10n.providerUsageAgoMinutes(delta.inMinutes);
+    if (delta.inHours < 24) return l10n.providerUsageAgoHours(delta.inHours);
     return DateFormat('EEE, MMM d, HH:mm').format(local);
   }
 
@@ -92,7 +99,7 @@ class ProviderUsageSection extends StatelessWidget {
                     ),
                     const SizedBox(width: 6),
                     Text(
-                      'Usage & limits',
+                      AppLocalizations.of(context)!.providerUsageTitle,
                       style: TextStyle(
                         fontSize: 13,
                         fontWeight: FontWeight.w600,
@@ -102,7 +109,11 @@ class ProviderUsageSection extends StatelessWidget {
                     const Spacer(),
                     if (entry.result != null) ...[
                       Text(
-                        entry.fetchedAt == null ? 'Updated just now' : 'Updated ${_updatedLabel(entry.fetchedAt!)}',
+                        entry.fetchedAt == null
+                            ? AppLocalizations.of(context)!.providerUsageUpdatedJustNow
+                            : AppLocalizations.of(context)!.providerUsageUpdated(
+                                _updatedLabel(context, entry.fetchedAt!),
+                              ),
                         style: TextStyle(
                           fontSize: 11,
                           color: theme.colorScheme.onSurface.withValues(alpha: 0.4),
@@ -120,7 +131,9 @@ class ProviderUsageSection extends StatelessWidget {
                                 child: AppProgressIndicator(strokeWidth: 1.5),
                               )
                             : const Icon(Icons.refresh, size: 12),
-                        label: const Text('Refresh'),
+                        label: Text(
+                          AppLocalizations.of(context)!.providerUsageRefresh,
+                        ),
                         style: TextButton.styleFrom(
                           visualDensity: VisualDensity.compact,
                           padding: const EdgeInsets.symmetric(horizontal: 6),
@@ -150,6 +163,7 @@ class ProviderUsageSection extends StatelessWidget {
                     instanceId: instanceId,
                     entry: entry,
                     isStaleRefreshing: isStaleRefreshing,
+                    onReconnect: onReconnect,
                   ),
                 ),
               ],
@@ -167,6 +181,7 @@ class _UsageBody extends StatelessWidget {
   final String instanceId;
   final ProviderUsageEntry entry;
   final bool isStaleRefreshing;
+  final VoidCallback onReconnect;
 
   const _UsageBody({
     required this.cubit,
@@ -174,6 +189,7 @@ class _UsageBody extends StatelessWidget {
     required this.instanceId,
     required this.entry,
     required this.isStaleRefreshing,
+    required this.onReconnect,
   });
 
   @override
@@ -182,20 +198,20 @@ class _UsageBody extends StatelessWidget {
 
     // Loading phase with no prior snapshot: small inline indicator only.
     if (entry.phase == ProviderUsagePhase.loading || entry.result == null) {
-      return const Padding(
-        padding: EdgeInsets.symmetric(vertical: 12),
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 12),
         child: Center(
           child: Column(
             children: [
-              SizedBox(
+              const SizedBox(
                 width: 18,
                 height: 18,
                 child: AppProgressIndicator(strokeWidth: 2),
               ),
-              SizedBox(height: 8),
+              const SizedBox(height: 8),
               Text(
-                'Loading usage…',
-                style: TextStyle(fontSize: 12),
+                AppLocalizations.of(context)!.providerUsageLoading,
+                style: const TextStyle(fontSize: 12),
               ),
             ],
           ),
@@ -213,6 +229,7 @@ class _UsageBody extends StatelessWidget {
         hasStaleSnapshot: entry.hasVisibleSnapshot,
         staleSnapshot: entry.hasVisibleSnapshot ? result.snapshot : null,
         onRetry: () => cubit.refresh(instanceId: instanceId, agent: agent),
+        onReconnect: onReconnect,
       );
     }
 
@@ -238,7 +255,7 @@ class _UsageBody extends StatelessWidget {
                 ),
                 const SizedBox(width: 6),
                 Text(
-                  'Refreshing…',
+                  AppLocalizations.of(context)!.providerUsageRefreshing,
                   style: TextStyle(
                     fontSize: 11,
                     color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -249,7 +266,7 @@ class _UsageBody extends StatelessWidget {
           ),
         if (snapshot.planName != null && snapshot.planName!.isNotEmpty) ...[
           Text(
-            'Plan: ${snapshot.planName}',
+            AppLocalizations.of(context)!.providerUsagePlan(snapshot.planName!),
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w500,
@@ -322,7 +339,9 @@ class _WindowRow extends StatelessWidget {
               children: [
                 if (remaining != null && used != null)
                   Text(
-                    '${_formatPercent(used)}% used',
+                    AppLocalizations.of(context)!.providerUsageUsedPercent(
+                      _formatPercent(used),
+                    ),
                     style: TextStyle(
                       fontSize: 11,
                       color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -331,7 +350,9 @@ class _WindowRow extends StatelessWidget {
                 if (remaining != null) ...[
                   const SizedBox(width: 8),
                   Text(
-                    '${_formatPercent(remaining)}% remaining',
+                    AppLocalizations.of(
+                      context,
+                    )!.providerUsageRemainingPercent(_formatPercent(remaining)),
                     style: TextStyle(
                       fontSize: 12,
                       fontWeight: FontWeight.bold,
@@ -362,7 +383,9 @@ class _WindowRow extends StatelessWidget {
             child: Tooltip(
               message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
               child: Text(
-                'Resets ${_formatLocalRelative(window.resetAt!)}',
+                AppLocalizations.of(
+                  context,
+                )!.providerUsageResetsAt(_formatLocalRelative(context, window.resetAt!)),
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -411,16 +434,25 @@ class _WindowRow extends StatelessWidget {
     return theme.colorScheme.primary;
   }
 
-  String _formatLocalRelative(DateTime resetAt) {
+  String _formatLocalRelative(BuildContext context, DateTime resetAt) {
+    final l10n = AppLocalizations.of(context)!;
     final local = resetAt.toLocal();
     final now = DateTime.now();
     final delta = local.difference(now);
-    if (delta.isNegative) return 'any moment';
-    if (delta.inMinutes < 1) return 'in a moment';
-    if (delta.inHours < 1) return 'in ${delta.inMinutes} min';
-    if (delta.inHours < 24) return 'in ${delta.inHours} h';
-    if (delta.inDays <= 6) return 'in ${delta.inDays} d';
-    return "on ${DateFormat('EEE, MMM d, HH:mm').format(local)}";
+    if (delta.isNegative) return l10n.providerUsageResetsAnyMoment;
+    if (delta.inMinutes < 1) return l10n.providerUsageResetsInMoment;
+    if (delta.inHours < 1) {
+      return l10n.providerUsageResetsInMinutes(delta.inMinutes);
+    }
+    if (delta.inHours < 24) {
+      return l10n.providerUsageResetsInHours(delta.inHours);
+    }
+    if (delta.inDays <= 6) {
+      return l10n.providerUsageResetsInDays(delta.inDays);
+    }
+    return l10n.providerUsageResetsOnDate(
+      DateFormat('EEE, MMM d, HH:mm').format(local),
+    );
   }
 }
 
@@ -449,7 +481,13 @@ class _ResetControls extends StatelessWidget {
           children: [
             Expanded(
               child: Text(
-                '$count reset${count == 1 ? '' : 's'} available',
+                count == 1
+                    ? AppLocalizations.of(
+                        context,
+                      )!.providerUsageResetAvailableSingle
+                    : AppLocalizations.of(
+                        context,
+                      )!.providerUsageResetsAvailable(count),
                 style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
               ),
             ),
@@ -458,7 +496,9 @@ class _ResetControls extends StatelessWidget {
               icon: entry.resetInProgress
                   ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.restart_alt, size: 14),
-              label: const Text('Reset limits'),
+              label: Text(
+                AppLocalizations.of(context)!.providerUsageResetLimits,
+              ),
               style: TextButton.styleFrom(
                 visualDensity: VisualDensity.compact,
                 padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -489,11 +529,25 @@ class _ResetControls extends StatelessWidget {
       final approved = await showDialog<bool>(
         context: context,
         builder: (dialogContext) => AlertDialog(
-          title: const Text('Reset usage limits?'),
-          content: const Text('This will use one reset credit for this account.'),
+          title: Text(
+            AppLocalizations.of(context)!.providerUsageResetDialogTitle,
+          ),
+          content: Text(
+            AppLocalizations.of(context)!.providerUsageResetDialogBody,
+          ),
           actions: [
-            TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-            FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Reset limits')),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(
+                AppLocalizations.of(context)!.providerUsageCancel,
+              ),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(
+                AppLocalizations.of(context)!.providerUsageResetLimits,
+              ),
+            ),
           ],
         ),
       );
@@ -506,11 +560,25 @@ class _ResetControls extends StatelessWidget {
     final force = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
-        title: const Text('Reset before limits are exhausted?'),
-        content: Text('${result.message} A reset restores the full allowance and cannot be undone.'),
+        title: Text(
+          AppLocalizations.of(context)!.providerUsageResetExhaustedTitle,
+        ),
+        content: Text(
+          AppLocalizations.of(context)!.providerUsageResetExhaustedBody(
+            result.message,
+          ),
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(dialogContext, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(dialogContext, true), child: const Text('Reset anyway')),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: Text(AppLocalizations.of(context)!.providerUsageCancel),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(
+              AppLocalizations.of(context)!.providerUsageResetAnyway,
+            ),
+          ),
         ],
       ),
     );
@@ -530,6 +598,7 @@ class _AttentionBody extends StatelessWidget {
   final bool hasStaleSnapshot;
   final ProviderUsageSnapshotDto? staleSnapshot;
   final VoidCallback onRetry;
+  final VoidCallback onReconnect;
 
   const _AttentionBody({
     required this.result,
@@ -537,12 +606,15 @@ class _AttentionBody extends StatelessWidget {
     required this.hasStaleSnapshot,
     required this.staleSnapshot,
     required this.onRetry,
+    required this.onReconnect,
   });
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final message = _messageFor(result.status, result.message);
+    final l10n = AppLocalizations.of(context)!;
+    final message = _messageFor(l10n, result.status);
+    final needsReconnect = result.status == 'auth_required';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -561,9 +633,11 @@ class _AttentionBody extends StatelessWidget {
         Row(
           children: [
             Icon(
-              result.status == 'auth_required' ? Icons.lock_outline : Icons.error_outline,
+              needsReconnect ? Icons.lock_outline : Icons.error_outline,
               size: 16,
-              color: result.status == 'auth_required' ? Colors.amber[700] : theme.colorScheme.error,
+              color: needsReconnect
+                  ? Colors.amber[700]
+                  : theme.colorScheme.error,
             ),
             const SizedBox(width: 6),
             Expanded(
@@ -581,10 +655,19 @@ class _AttentionBody extends StatelessWidget {
         Align(
           alignment: Alignment.centerRight,
           child: TextButton.icon(
-            onPressed: isStaleRefreshing ? null : onRetry,
-            icon: const Icon(Icons.refresh, size: 14),
+            // Sign-in required runs the same account re-authentication the
+            // instance form exposes; anything else is a usage refresh.
+            onPressed: isStaleRefreshing
+                ? null
+                : (needsReconnect ? onReconnect : onRetry),
+            icon: Icon(
+              needsReconnect ? Icons.login : Icons.refresh,
+              size: 14,
+            ),
             label: Text(
-              result.status == 'auth_required' ? 'Reconnect' : 'Retry',
+              needsReconnect
+                  ? l10n.providerUsageReconnect
+                  : l10n.providerUsageRetry,
             ),
           ),
         ),
@@ -592,16 +675,18 @@ class _AttentionBody extends StatelessWidget {
     );
   }
 
-  String _messageFor(String status, String? message) {
+  String _messageFor(AppLocalizations l10n, String status) {
+    // Never echo the daemon's English message: each status owns its localized
+    // sentence (issue 339 review 2).
     switch (status) {
       case 'auth_required':
-        return 'Account sign-in is required to view usage limits.';
+        return l10n.providerUsageAuthRequired;
       case 'unavailable':
-        return message ?? 'Usage information is temporarily unavailable. Please retry.';
+        return l10n.providerUsageUnavailable;
       case 'failed':
-        return message ?? 'Usage information could not be loaded. Please try again.';
+        return l10n.providerUsageFailed;
       default:
-        return message ?? 'Usage information is temporarily unavailable.';
+        return l10n.providerUsageUnavailable;
     }
   }
 }

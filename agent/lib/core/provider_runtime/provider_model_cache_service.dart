@@ -325,6 +325,23 @@ class ProviderModelCacheService {
     }
   }
 
+  /// Persists the cause of one connection check (discovery or probe) on the
+  /// stored row, so a demotion or a warning is explainable after a restart.
+  ///
+  /// Passing null clears it, which is what a passing probe does. The cached
+  /// models and their verification state are never touched here.
+  void recordVerificationCause(
+    String instanceId,
+    ProviderDiscoveryError? failure,
+  ) {
+    _repo.recordVerificationCause(
+      instanceId: instanceId,
+      cacheKey: 'models',
+      lastError: failure?.summary,
+      lastErrorDetail: failure?.toJson(),
+    );
+  }
+
   /// Applies the discovery result to the instance lifecycle when the
   /// composition root wired the owning service (issue 339): a rejected
   /// credential becomes `needs_auth`, and a verified list returns the instance

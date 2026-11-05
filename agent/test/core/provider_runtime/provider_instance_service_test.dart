@@ -439,7 +439,7 @@ void main() {
       );
     });
 
-    test('applyConnectionOutcome keeps draft for an unproven failure', () {
+    test('applyConnectionOutcome never demotes for an unproven failure', () {
       final inst = instanceService.create(
         templateId: 'openai',
         displayName: 'OpenAI',
@@ -448,6 +448,9 @@ void main() {
       );
       instanceService.markNeedsAuth(inst.id);
 
+      // A transport failure says nothing about the credential, so the earlier
+      // rejected-key verdict survives it (issue 339 review 2: only a
+      // definitive cause may move the status).
       instanceService.applyConnectionOutcome(
         inst.id,
         failureFor(ProviderFailureCategory.network),
@@ -455,7 +458,7 @@ void main() {
 
       expect(
         instanceService.findById(inst.id)!.status,
-        equals(InstanceStatus.draft),
+        equals(InstanceStatus.needsAuth),
       );
     });
 
@@ -513,8 +516,8 @@ void main() {
         defaultModel: 'gpt-4o',
       );
       seedCache(inst.id, source: 'cache_stale', error: failureFor(
-        ProviderFailureCategory.serverError,
-        statusCode: 503,
+        ProviderFailureCategory.endpointNotFound,
+        statusCode: 404,
       ));
 
       instanceService.reconcileStatus(inst.id, credentialConfigured: true);
@@ -522,6 +525,26 @@ void main() {
       expect(
         instanceService.findById(inst.id)!.status,
         equals(InstanceStatus.error),
+      );
+
+      // A provider outage is a moment, not the configuration: the status stays
+      // where it was and the cause is reported as a warning instead.
+      final outage = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI outage',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(outage.id, source: 'fallback', error: failureFor(
+        ProviderFailureCategory.serverError,
+        statusCode: 503,
+      ));
+
+      instanceService.reconcileStatus(outage.id, credentialConfigured: true);
+
+      expect(
+        instanceService.findById(outage.id)!.status,
+        equals(InstanceStatus.draft),
       );
     });
 

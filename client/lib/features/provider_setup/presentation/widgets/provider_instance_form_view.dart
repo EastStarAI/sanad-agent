@@ -6,6 +6,7 @@ import 'package:sanad_client/features/provider_setup/data/models/provider_templa
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_discovery_notice.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_step_scaffold.dart';
 
 const _supportedProviderProtocols = [
@@ -310,6 +311,28 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
                   onPressed: saving ? null : () => _cancel(context),
                   child: const Text('Cancel'),
                 ),
+                // A provisional instance is already persisted, so leaving must
+                // not force a choice between an unusable form and deleting it
+                // (issue 339 review 2). Keyed stably for driver automation.
+                if (state.provisionalInstanceId != null) ...[
+                  const SizedBox(width: 8),
+                  TextButton.icon(
+                    key: const Key('provider_form_back_to_list'),
+                    onPressed: saving
+                        ? null
+                        : () => unawaited(
+                            context
+                                .read<ProviderSetupCubit>()
+                                .finishSetupKeepingInstance(),
+                          ),
+                    icon: const Icon(Icons.arrow_back, size: 16),
+                    label: Text(
+                      AppLocalizations.of(
+                        context,
+                      )!.providerFormBackToList,
+                    ),
+                  ),
+                ],
                 const Spacer(),
                 FilledButton(
                   key: const Key('provider_form_submit'),

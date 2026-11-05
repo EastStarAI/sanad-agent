@@ -242,6 +242,92 @@ void main() {
       );
     });
 
+    test('a bare HTTP <status> row is re-derived from the live legacy shape', () {
+      // Observed live in a real Home: `last_error` was exactly `HTTP 401`.
+      final restored = ProviderDiscoveryError.tryRestore(legacyText: 'HTTP 401');
+
+      expect(restored, isNotNull);
+      expect(restored!.kind, ProviderFailureCategory.invalidCredential);
+      expect(restored.statusCode, 401);
+      expect(restored.message, 'Invalid credential (HTTP 401)');
+      expect(restored.isDefinitive, isTrue);
+
+      final forbidden = ProviderDiscoveryError.tryRestore(
+        legacyText: 'HTTP 403',
+      );
+      expect(forbidden!.kind, ProviderFailureCategory.forbidden);
+      expect(forbidden.statusCode, 403);
+
+      final unavailable = ProviderDiscoveryError.tryRestore(
+        legacyText: 'HTTP 503',
+      );
+      expect(unavailable!.kind, ProviderFailureCategory.serverError);
+      expect(unavailable.isDefinitive, isFalse);
+    });
+
+    test('a legacy ClientException/SocketException row becomes network', () {
+      // Observed live: the stored text carried a local port and a URL.
+      final restored = ProviderDiscoveryError.tryRestore(
+        legacyText:
+            'ClientException with SocketException: Connection refused '
+            '(OS Error: Connection refused, errno = 61), address = localhost, '
+            'port = 51790, uri=http://localhost:9000/v1/models',
+      );
+
+      expect(restored, isNotNull);
+      expect(restored!.kind, ProviderFailureCategory.network);
+      expect(restored.message, 'Could not reach the provider endpoint');
+      expect(restored.endpoint, isNull);
+      expect(restored.summary.contains('51790'), isFalse);
+      expect(restored.summary.contains('localhost'), isFalse);
+      expect(restored.isDefinitive, isFalse);
+    });
+
+    test('a legacy timeout text becomes a timeout cause', () {
+      final restored = ProviderDiscoveryError.tryRestore(
+        legacyText: 'TimeoutException after 0:00:12.000000: Future not completed',
+      );
+
+      expect(restored!.kind, ProviderFailureCategory.timeout);
+      expect(restored.isDefinitive, isFalse);
+    });
+
+    test('restoreDetailed flags a legacy row so it can be rewritten', () {
+      final legacy = ProviderDiscoveryError.restoreDetailed(
+        legacyText: 'HTTP 401',
+      );
+      expect(legacy.legacy, isTrue);
+      expect(legacy.error!.kind, ProviderFailureCategory.invalidCredential);
+
+      final structured = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('', 401),
+          operation: 'getAvailableModels',
+        ),
+      );
+      final stored = ProviderDiscoveryError.restoreDetailed(
+        detailJson: structured.toJson(),
+      );
+      expect(stored.legacy, isFalse);
+      expect(stored.error!.kind, ProviderFailureCategory.invalidCredential);
+    });
+
+    test('a stored warning keeps its weight across a reload', () {
+      final warning = ProviderDiscoveryError.capture(
+        LlmHttpException.fromResponse(
+          http.Response('forbidden', 403),
+          operation: 'chat',
+        ),
+      ).asWarning();
+
+      final restored = ProviderDiscoveryError.tryRestore(
+        detailJson: warning.toJson(),
+      );
+
+      expect(restored!.kind, ProviderFailureCategory.forbidden);
+      expect(restored.isDefinitive, isFalse);
+    });
+
     test('a structured row wins over leftover legacy text', () {
       final error = ProviderDiscoveryError.capture(
         LlmHttpException.fromResponse(

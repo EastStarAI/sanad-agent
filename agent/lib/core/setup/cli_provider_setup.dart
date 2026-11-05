@@ -714,12 +714,20 @@ class CliProviderSetup {
                   'display_name': inst.displayName,
                   'protocol': inst.protocol,
                   'auth_method': inst.authMethod,
-                  if (inst.baseUrl != null) 'base_url': inst.baseUrl,
-                  if (inst.defaultModel != null)
-                    'default_model': inst.defaultModel,
+                  'base_url': inst.baseUrl,
+                  'default_model': inst.defaultModel,
                   'status': inst.status,
                   'is_default': inst.isDefault,
-                  ...?projections[inst.id]?.toMap(),
+                  // Every additive nullable field is emitted, as null, so a JSON
+                  // consumer never has to guard a missing key (issue 339
+                  // review 2).
+                  'discovery_error': projections[inst.id]?.error?.toMap(),
+                  'model_cache': projections[inst.id]?.source == null
+                      ? null
+                      : {
+                          'source': projections[inst.id]!.source,
+                          'verified': projections[inst.id]!.verified,
+                        },
                 },
               )
               .toList(),

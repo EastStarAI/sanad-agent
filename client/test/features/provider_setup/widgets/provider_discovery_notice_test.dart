@@ -158,4 +158,66 @@ void main() {
       findsNothing,
     );
   });
+
+  testWidgets(
+    'a non-definitive cause warns beside READY in English and Arabic',
+    (tester) async {
+      // A provider outage over a still-usable saved list: the card stays
+      // READY, so the notice must read as a warning, not as an error
+      // (issue 339 review 2).
+      const warning = ProviderDiscoveryErrorDto(
+        kind: 'network',
+        message: 'Could not reach the provider endpoint',
+        definitive: false,
+      );
+      final en = await _l10nFor('en');
+      final ar = await _l10nFor('ar');
+
+      for (final locale in ['en', 'ar']) {
+        final l10n = locale == 'en' ? en : ar;
+        await tester.pumpWidget(_host(error: warning, locale: locale));
+
+        final expected = l10n.providerLastCheckFailed(
+          l10n.providerDiscoveryNetwork,
+        );
+        expect(
+          find.text(expected),
+          findsOneWidget,
+          reason: 'warning copy must name the cause in $locale',
+        );
+        // The bare error sentence must not appear alone: that is the READY +
+        // error contradiction.
+        expect(find.text(l10n.providerDiscoveryNetwork), findsNothing);
+        if (locale == 'ar') {
+          expect(expected, isNot(en.providerLastCheckFailed(
+            en.providerDiscoveryNetwork,
+          )));
+        }
+      }
+    },
+  );
+
+  testWidgets('an older daemon payload cannot produce an error beside READY', (
+    tester,
+  ) async {
+    final l10n = await _l10nFor('en');
+    // No `definitive` field: weight follows the category, so a transport cause
+    // is a warning while a rejected credential is still an error.
+    final network = ProviderDiscoveryErrorDto.fromJson({
+      'kind': 'network',
+      'message': 'Model discovery failed',
+    })!;
+    await tester.pumpWidget(_host(error: network));
+
+    expect(
+      find.text(l10n.providerLastCheckFailed(l10n.providerDiscoveryNetwork)),
+      findsOneWidget,
+    );
+
+    final unauthorized = ProviderDiscoveryErrorDto.fromJson({
+      'kind': 'http',
+      'status_code': 401,
+    })!;
+    expect(unauthorized.definitive, isTrue);
+  });
 }

@@ -2,7 +2,9 @@ import 'dart:async';
 
 import 'package:sanad_client/features/provider_setup/data/models/provider_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
+import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
 
 /// Copy reported when a credential was stored but its connection could not be
 /// proven. The typed cause travels beside it in
@@ -66,4 +68,22 @@ List<ProviderDto> mapProvidersToCatalog(
       authStatus: configuredInstance?.status ?? 'missing',
     );
   }).toList();
+}
+
+/// Landing step for a fresh provider snapshot.
+///
+/// A picker is forced when nothing is configured yet; otherwise readiness decides
+/// between the terminal ready screen (only when the host shows it) and the
+/// configured list.
+ProviderSetupStatus providerSetupStatusFor({
+  required List<ProviderInstanceDto> instances,
+  required ProviderReadinessDto readiness,
+  required bool forcePicker,
+  required bool showReadyState,
+}) {
+  if (instances.isEmpty || forcePicker) return ProviderSetupStatus.picker;
+  if (readiness.runtimeReady && showReadyState) {
+    return ProviderSetupStatus.ready;
+  }
+  return ProviderSetupStatus.instancesList;
 }

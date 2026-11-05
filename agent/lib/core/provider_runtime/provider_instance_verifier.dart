@@ -46,6 +46,9 @@ class ProbeWarning {
   /// The model or its request parameters were rejected.
   static const modelRejected = 'model_rejected';
 
+  /// The account may list models but is not allowed to run the probed one.
+  static const forbidden = 'forbidden';
+
   /// The probe exceeded its time budget.
   static const timeout = 'timeout';
 
@@ -264,6 +267,8 @@ class ProviderInstanceVerifier {
           )
           .timeout(budget);
       stopwatch.stop();
+      // A pass clears a previous warning from the stored row.
+      _cache.recordVerificationCause(instanceId, null);
       _applyVerified(instance);
       return InstanceVerification(
         success: true,
@@ -279,8 +284,10 @@ class ProviderInstanceVerifier {
         error,
         endpoint: _chatEndpoint(instance),
       );
-      if (cause.isAuthFailure) {
-        // A probe 401/403 is the one probe result that proves the credential.
+      if (cause.kind == ProviderFailureCategory.invalidCredential) {
+        // Only a probe 401 proves the credential is rejected. The cause is
+        // persisted so the demotion survives a restart (issue 339 review 2).
+        _cache.recordVerificationCause(instanceId, cause);
         return _fail(
           instance,
           cause,
@@ -289,8 +296,15 @@ class ProviderInstanceVerifier {
           latency: stopwatch.elapsed,
         );
       }
-      // Everything else keeps the status discovery decided.
+      // A probe 403, a model/parameter rejection, a timeout, a transport
+      // failure, a rate limit, or a 5xx proves nothing about the credential:
+      // warn, keep the status discovery decided, and persist the warning so the
+      // card still explains itself after a restart. The verified discovery is
+      // applied first — the warning must never block the readiness it did not
+      // disprove (issue 339 review 2).
+      final warningCause = cause.asWarning();
       _applyVerified(instance);
+      _cache.recordVerificationCause(instanceId, warningCause);
       return InstanceVerification(
         success: true,
         modelsCount: models.length,
@@ -300,7 +314,7 @@ class ProviderInstanceVerifier {
         warning: ProbeWarning(
           kind: _warningKindFor(cause),
           model: probeModel,
-          cause: cause,
+          cause: warningCause,
         ),
       );
     }
@@ -315,10 +329,11 @@ class ProviderInstanceVerifier {
         return ProbeWarning.network;
       case ProviderFailureCategory.rateLimited:
         return ProbeWarning.rateLimited;
-      case ProviderFailureCategory.invalidCredential:
       case ProviderFailureCategory.forbidden:
-        // Classified as a warning only when a caller decided it is not
-        // definitive; keep the model-rejection wording for a 400/404/422.
+        // The account may list models but not run this one: a policy warning.
+        return ProbeWarning.forbidden;
+      case ProviderFailureCategory.invalidCredential:
+        // Only reachable when a caller downgraded it; keep the model wording.
         return ProbeWarning.modelRejected;
       case ProviderFailureCategory.endpointNotFound:
       case ProviderFailureCategory.http:

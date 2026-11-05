@@ -71,7 +71,8 @@ class ProviderDiscoveryError {
     this.statusCode,
     required this.message,
     this.endpoint,
-  });
+    bool? definitive,
+  }) : _definitiveOverride = definitive;
 
   final String kind;
   final int? statusCode;
@@ -84,6 +85,9 @@ class ProviderDiscoveryError {
   /// fragment, and user info are stripped because they can carry a secret.
   final String? endpoint;
 
+  /// Caller-supplied definitiveness. Null keeps the derived default in [isDefinitive].
+  final bool? _definitiveOverride;
+
   /// Whether the endpoint rejected the credential itself.
   bool get isAuthFailure =>
       kind == ProviderFailureCategory.invalidCredential ||
@@ -95,7 +99,15 @@ class ProviderDiscoveryError {
   /// `needs_auth`/`error`. Transient conditions (`408`, `429`, `5xx`), transport
   /// failures, unusable model lists, and unclassified errors never do: they
   /// describe the moment, not the configuration.
+  ///
+  /// A probe can downgrade a cause that would otherwise be definitive: a `403`
+  /// to a one-token generation request proves the credential listed models but
+  /// the account may not run that model, which is a warning, not a rejection
+  /// (issue 339 review 2). That downgrade travels through [asWarning] and is
+  /// persisted, so a stored row keeps the same weight after a restart.
   bool get isDefinitive {
+    final override = _definitiveOverride;
+    if (override != null) return override;
     switch (kind) {
       case ProviderFailureCategory.invalidCredential:
       case ProviderFailureCategory.forbidden:
@@ -242,25 +254,51 @@ class ProviderDiscoveryError {
   /// Rebuilds the projection from stored columns.
   ///
   /// [detailJson] is the structured column written by this version. Rows
-  /// written by an older daemon only carry [legacyText]; those are re-derived
-  /// from the `LlmHttpException(<status> ...)` prefix our own
-  /// `toString()` produced, so a raw provider body is never replayed.
+  /// written by an older daemon only carry [legacyText]; their shape is
+  /// re-derived without replaying the body — see [restoreDetailed] for the
+  /// normalized result and the legacy flag a caller can use to rewrite the row.
   static ProviderDiscoveryError? tryRestore({
+    Object? detailJson,
+    Object? legacyText,
+  }) => restoreDetailed(
+    detailJson: detailJson,
+    legacyText: legacyText,
+  ).error;
+
+  /// [tryRestore] plus whether the cause came from a legacy row.
+  ///
+  /// `legacy` is true when a structured detail was absent or unusable and the
+  /// cause had to be re-derived from raw text, which is the signal a caller
+  /// needs to rewrite the stored row into the sanitized form.
+  static ({ProviderDiscoveryError? error, bool legacy}) restoreDetailed({
     Object? detailJson,
     Object? legacyText,
   }) {
     final structured = _decodeMap(detailJson);
     if (structured != null) {
       final restored = fromMap(structured);
-      if (restored != null) return restored;
+      if (restored != null) return (error: restored, legacy: false);
     }
     final legacy = legacyText?.toString().trim();
-    if (legacy == null || legacy.isEmpty) return null;
+    if (legacy == null || legacy.isEmpty) {
+      return (error: null, legacy: false);
+    }
     final inline = _decodeMap(legacy);
     if (inline != null) {
       final restored = fromMap(inline);
-      if (restored != null) return restored;
+      if (restored != null) return (error: restored, legacy: true);
     }
+    return (error: _fromLegacyText(legacy), legacy: true);
+  }
+
+  /// Re-derives a cause from the raw text shapes older daemons actually stored.
+  ///
+  /// Observed live (issue 339 review 2): `LlmHttpException(<status> ...)`,
+  /// a bare `HTTP <status>`, and
+  /// `ClientException with SocketException: Connection refused ... uri=...`.
+  /// Only the category and a canonical reason are kept; no URL, port, host, or
+  /// body fragment is carried forward.
+  static ProviderDiscoveryError _fromLegacyText(String legacy) {
     final status = _legacyStatus(legacy);
     if (status != null) {
       return ProviderDiscoveryError(
@@ -278,20 +316,42 @@ class ProviderDiscoveryError {
         message: 'The provider returned an unexpected model list',
       );
     }
+    if (lowered.contains('timeoutexception') ||
+        lowered.contains('timed out') ||
+        lowered.contains('timeout')) {
+      return const ProviderDiscoveryError(
+        kind: ProviderFailureCategory.timeout,
+        message: 'The provider endpoint timed out',
+      );
+    }
+    if (lowered.contains('socketexception') ||
+        lowered.contains('clientexception') ||
+        lowered.contains('connection refused') ||
+        lowered.contains('connection reset') ||
+        lowered.contains('connection closed') ||
+        lowered.contains('failed host lookup') ||
+        lowered.contains('network is unreachable') ||
+        lowered.contains('handshakeexception')) {
+      return const ProviderDiscoveryError(
+        kind: ProviderFailureCategory.network,
+        message: 'Could not reach the provider endpoint',
+      );
+    }
     return const ProviderDiscoveryError(
       kind: ProviderFailureCategory.unknown,
       message: 'Model discovery failed',
     );
   }
 
+  /// `LlmHttpException(<status> ...)` or a bare `HTTP <status>`.
   static final RegExp _legacyStatusPattern = RegExp(
-    r'^LlmHttpException\((\d{3})\b',
+    r'^(?:LlmHttpException\((\d{3})\b|[Hh][Tt][Tt][Pp][ /:]{1,2}(\d{3})\b)',
   );
 
   static int? _legacyStatus(String legacy) {
-    final match = _legacyStatusPattern.firstMatch(legacy);
+    final match = _legacyStatusPattern.firstMatch(legacy.trim());
     if (match == null) return null;
-    return int.tryParse(match.group(1)!);
+    return int.tryParse(match.group(1) ?? match.group(2) ?? '');
   }
 
   static Map<String, dynamic>? _decodeMap(Object? value) {
@@ -314,13 +374,25 @@ class ProviderDiscoveryError {
     if (!ProviderFailureCategory.isValid(kind) || message.isEmpty) return null;
     final rawStatus = map['status_code'];
     final endpoint = map['endpoint']?.toString();
+    final rawDefinitive = map['definitive'];
     return ProviderDiscoveryError(
       kind: kind,
       statusCode: rawStatus is num ? rawStatus.toInt() : null,
       message: _bound(_redactor.redact(message)),
       endpoint: endpoint == null || endpoint.isEmpty ? null : endpoint,
+      definitive: rawDefinitive is bool ? rawDefinitive : null,
     );
   }
+
+  /// This cause at warning weight: it explains a failed check without proving
+  /// the configuration is wrong.
+  ProviderDiscoveryError asWarning() => ProviderDiscoveryError(
+    kind: kind,
+    statusCode: statusCode,
+    message: message,
+    endpoint: endpoint,
+    definitive: false,
+  );
 
   Map<String, dynamic> toMap() => {
     'kind': kind,

@@ -37,13 +37,24 @@ class ProviderDiscoveryProjection {
         row['config_revision'] == instance.configRevision &&
         row['credential_revision'] == instance.credentialRevision;
     final source = row['source']?.toString();
+    final restored = ProviderDiscoveryError.restoreDetailed(
+      detailJson: row['last_error_detail'],
+      legacyText: row['last_error'],
+    );
+    final error = restored.error;
+    if (restored.legacy && error != null) {
+      // Read-repair (issue 339 review 2): rows written by an older daemon keep
+      // only the sanitized summary and its structured form, so a raw body, a
+      // local port, or an embedded URL never survives in the database.
+      repository.recordVerificationCause(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+    }
     return ProviderDiscoveryProjection(
-      error: revisionsMatch
-          ? ProviderDiscoveryError.tryRestore(
-              detailJson: row['last_error_detail'],
-              legacyText: row['last_error'],
-            )
-          : null,
+      error: revisionsMatch ? error : null,
       source: source,
       verified: revisionsMatch && source == 'live',
     );

@@ -855,7 +855,7 @@ OPENROUTER_API_KEY=sk-or-test
   );
 
   test(
-    'provider.instance.test reports a categorized probe rejection',
+    'provider.instance.test reports a probe 403 as a warning',
     () async {
       final repo = getIt<ProviderInstanceRepository>();
 
@@ -905,6 +905,13 @@ OPENROUTER_API_KEY=sk-or-test
           updatedAt: DateTime.now(),
         ),
       );
+      // The credential is proven by discovery, so the instance reaches ready and
+      // the probe warning must not take that away.
+      await getIt<ProviderCredentialService>().applyApiKeyEdit(
+        'test-probe-inst',
+        action: 'replace',
+        newApiKey: 'sk-test-probe-key',
+      );
 
       final envelope = await sendCommand(
         'provider.instance.test',
@@ -915,14 +922,17 @@ OPENROUTER_API_KEY=sk-or-test
       );
 
       final payload = envelope['payload'] as Map<String, dynamic>;
-      expect(payload['success'], isFalse);
-      expect(payload['models_count'], 1);
-      expect((payload['failure'] as Map)['kind'], 'forbidden');
-      expect((payload['failure'] as Map)['status_code'], 403);
-      expect(payload['error'], contains('Access denied (HTTP 403)'));
+      // Discovery accepted the key, so a probe 403 warns instead of demoting
+      // (issue 339 review 2).
+      expect(payload['success'], isTrue);
+      expect(payload['probe_state'], 'warning');
+      expect(payload.containsKey('failure'), isFalse);
+      final warning = payload['warning'] as Map;
+      expect(warning['kind'], 'forbidden');
+      expect((warning['cause'] as Map)['definitive'], isFalse);
       expect(
         repo.findById('test-probe-inst')!.status,
-        InstanceStatus.needsAuth,
+        InstanceStatus.ready,
       );
     },
   );

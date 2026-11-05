@@ -146,7 +146,9 @@ void main() {
       expect(payload['has_provider'], isFalse);
       expect(payload['runtime_ready'], isFalse);
       expect(payload['reason'], 'No provider instance is configured.');
-      expect(payload.containsKey('active_provider'), isFalse);
+      // Stable wire shape: an absent value is present as null, never missing.
+      expect(payload.containsKey('active_provider'), isTrue);
+      expect(payload['active_provider'], isNull);
     });
 
     test(
@@ -172,7 +174,8 @@ void main() {
       final runtimePayload = h.payloadOf(await h.runtimeCheck());
 
       expect(setup['runtime_ready'], isTrue);
-      expect(setup.containsKey('reason'), isFalse);
+      expect(setup.containsKey('reason'), isTrue);
+      expect(setup['reason'], isNull);
       expect(runtimePayload['runtime_ready'], isFalse);
       expect(
         runtimePayload['reason'],
@@ -197,7 +200,8 @@ void main() {
         expect(payload['runtime_ready'], isTrue);
         expect(payload['active_provider'], instance.id);
         expect(payload['active_model'], 'gpt-4o');
-        expect(payload.containsKey('reason'), isFalse);
+        expect(payload.containsKey('reason'), isTrue);
+        expect(payload['reason'], isNull);
       },
     );
   });

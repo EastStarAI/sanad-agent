@@ -328,6 +328,10 @@ class _InstanceCard extends StatelessWidget {
           ProviderUsageSection(
             agent: agent,
             instanceId: instance.id,
+            // One shared action: the same account re-authentication the edit
+            // form exposes (issue 339 review 2).
+            onReconnect: () =>
+                unawaited(context.read<ProviderSetupCubit>().reconnectInstance(instance)),
           ),
           const SizedBox(height: 12),
           const Divider(height: 1),

@@ -31,9 +31,15 @@ class ProviderDiscoveryNotice extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
-    final color = discovery != null
-        ? theme.colorScheme.error
-        : theme.colorScheme.onSurfaceVariant;
+    // A definitive cause is an error; a non-definitive one explains a failed
+    // check over a still-usable saved list, so it keeps a warning style and
+    // never contradicts a READY badge (issue 339 review 2).
+    final isWarning = discovery != null && !discovery.definitive;
+    final color = isWarning
+        ? theme.colorScheme.tertiary
+        : discovery == null
+        ? theme.colorScheme.onSurfaceVariant
+        : theme.colorScheme.error;
 
     return Container(
       key: Key('provider_discovery_notice_$instanceId'),
@@ -50,7 +56,11 @@ class ProviderDiscoveryNotice extends StatelessWidget {
         children: [
           if (discovery != null)
             Text(
-              messageForFailure(l10n, discovery),
+              isWarning
+                  ? l10n.providerLastCheckFailed(
+                      messageForFailure(l10n, discovery),
+                    )
+                  : messageForFailure(l10n, discovery),
               key: Key('provider_discovery_message_$instanceId'),
               style: TextStyle(fontSize: 12, color: color, height: 1.35),
             ),
@@ -114,9 +124,10 @@ class ProviderDiscoveryNotice extends StatelessWidget {
             ? l10n.providerDiscoveryUnknown
             : l10n.providerDiscoveryHttp(status);
       default:
-        return failure.message?.isNotEmpty == true
-            ? failure.message!
-            : l10n.providerDiscoveryUnknown;
+        // Never echo the daemon's English summary: every category has a
+        // localized sentence and `unknown` is the catch-all (issue 339
+        // review 2).
+        return l10n.providerDiscoveryUnknown;
     }
   }
 }

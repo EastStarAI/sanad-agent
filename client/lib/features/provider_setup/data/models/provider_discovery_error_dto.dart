@@ -8,15 +8,17 @@ class ProviderDiscoveryErrorDto {
   final String kind;
   final int? statusCode;
 
-  /// Short English reason sent by the daemon. Used as a fallback for an
-  /// unknown [kind]; localized kinds render their own text.
+  /// Short English reason sent by the daemon. Never rendered: the Client owns
+  /// the localized sentence for every category, so an RTL interface stays
+  /// fully translated.
   final String? message;
 
   /// `scheme://host[:port]/path` of the probed models endpoint.
   final String? endpoint;
 
   /// Whether the daemon considers this failure proof that the credential or the
-  /// endpoint is wrong. Only a definitive failure may block setup.
+  /// endpoint is wrong. Only a definitive failure may block setup or contradict
+  /// a `READY` badge; a non-definitive one renders as a warning beside it.
   final bool definitive;
 
   const ProviderDiscoveryErrorDto({
@@ -39,8 +41,31 @@ class ProviderDiscoveryErrorDto {
       statusCode: (json['status_code'] as num?)?.toInt(),
       message: json['message']?.toString(),
       endpoint: json['endpoint']?.toString(),
-      definitive: json['definitive'] as bool? ?? true,
+      definitive: json['definitive'] as bool? ?? _defaultDefinitive(kind, json['status_code']),
     );
+  }
+
+  /// Weight of a cause from a daemon that predates the `definitive` field.
+  ///
+  /// A rejected credential or a proven endpoint failure is definitive; a
+  /// transport, timeout, rate-limit, or provider-outage cause is not, so an
+  /// older daemon's row cannot produce an error beside a `READY` badge.
+  static bool _defaultDefinitive(String kind, Object? rawStatus) {
+    final status = (rawStatus as num?)?.toInt();
+    switch (kind) {
+      case 'invalid_credential':
+      case 'forbidden':
+      case 'endpoint_not_found':
+        return true;
+      case 'http':
+        return status != null &&
+            status >= 400 &&
+            status < 500 &&
+            status != 408 &&
+            status != 429;
+      default:
+        return false;
+    }
   }
 
   Map<String, dynamic> toJson() => {

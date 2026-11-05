@@ -16,6 +16,7 @@ import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_projection.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_verifier.dart';
@@ -249,7 +250,9 @@ void main() {
       // keeps going instead of rejecting a possibly valid credential.
       expect(result.success, isFalse);
       expect(result.failure!.isDefinitive, isFalse);
-      expect(status(), InstanceStatus.error);
+      // A non-definitive failure never moves the status (owner decision:
+      // READY + warning, never a demotion it cannot justify).
+      expect(status(), InstanceStatus.draft);
     });
   });
 
@@ -310,6 +313,53 @@ void main() {
 
       expect(result.probeState, ProbeState.passed);
       expect(adapter.lastGenerationModel, 'gpt-4o-mini');
+    });
+
+    test('a probe 403 is a warning and keeps the status', () async {
+      // Discovery accepted the key; the account may just not run this model.
+      adapter = _ScriptedAdapter(generationError: _http(403, 'forbidden'));
+      createInstance();
+      await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.success, isTrue);
+      expect(result.probeState, ProbeState.warning);
+      expect(result.failure, isNull);
+      expect(result.warning!.kind, ProbeWarning.forbidden);
+      expect(result.warning!.cause.isDefinitive, isFalse);
+      expect(status(), InstanceStatus.ready);
+      // The warning is durable: it survives a reload of the instance row.
+      final row = repo.readModelCache('inst-verify', 'models')!;
+      expect(row['last_error'], contains('Access denied (HTTP 403)'));
+      final restored = ProviderDiscoveryError.tryRestore(
+        detailJson: row['last_error_detail'],
+        legacyText: row['last_error'],
+      );
+      expect(restored!.isDefinitive, isFalse);
+      expect(restored.kind, ProviderFailureCategory.forbidden);
+    });
+
+    test('a probe 401 persists its cause so the demotion survives a restart', () async {
+      adapter = _ScriptedAdapter(
+        generationError: _http(401, '{"error":{"message":"revoked $_secret"}}'),
+      );
+      createInstance();
+      await storeCredential();
+      instances.markReady('inst-verify');
+
+      final result = await buildVerifier().verify('inst-verify');
+
+      expect(result.success, isFalse);
+      expect(status(), InstanceStatus.needsAuth);
+      // Durable cause, readable exactly as the card reads it after a restart.
+      final row = repo.readModelCache('inst-verify', 'models')!;
+      expect(row['last_error'], contains('Invalid credential (HTTP 401)'));
+      final projected = ProviderDiscoveryProjection.of(repo, repo.findById('inst-verify')!);
+      expect(projected.error!.kind, ProviderFailureCategory.invalidCredential);
+      expect(projected.error!.isDefinitive, isTrue);
+      expect(projected.error!.summary.contains(_secret), isFalse);
     });
 
     test('a probe 401 is definitive and marks needs_auth', () async {
@@ -540,7 +590,7 @@ void main() {
     });
 
     test('status mapping follows the failure category', () {
-      String statusFor(String kind, {int? statusCode}) =>
+      String? statusFor(String kind, {int? statusCode}) =>
           ProviderInstanceService.statusForFailure(
             ProviderDiscoveryError(
               kind: kind,
@@ -557,22 +607,37 @@ void main() {
         statusFor(ProviderFailureCategory.forbidden, statusCode: 403),
         InstanceStatus.needsAuth,
       );
+      expect(
+        statusFor(ProviderFailureCategory.endpointNotFound, statusCode: 404),
+        InstanceStatus.error,
+      );
+      expect(
+        statusFor(ProviderFailureCategory.http, statusCode: 418),
+        InstanceStatus.error,
+      );
+      // Non-definitive causes never map to a status: a rate limit, a provider
+      // outage, a transport failure, or an unusable list describes the moment.
       for (final kind in [
-        ProviderFailureCategory.endpointNotFound,
         ProviderFailureCategory.rateLimited,
         ProviderFailureCategory.serverError,
-        ProviderFailureCategory.http,
-      ]) {
-        expect(statusFor(kind), InstanceStatus.error, reason: kind);
-      }
-      for (final kind in [
         ProviderFailureCategory.network,
         ProviderFailureCategory.timeout,
         ProviderFailureCategory.noModels,
         ProviderFailureCategory.unknown,
       ]) {
-        expect(statusFor(kind), InstanceStatus.draft, reason: kind);
+        expect(statusFor(kind), isNull, reason: kind);
       }
+      // A warning-grade copy never maps to a lifecycle status.
+      expect(
+        ProviderInstanceService.statusForFailure(
+          const ProviderDiscoveryError(
+            kind: ProviderFailureCategory.forbidden,
+            statusCode: 403,
+            message: 'x',
+          ).asWarning(),
+        ),
+        isNull,
+      );
     });
 
     test('definitiveness is narrower than the status mapping', () {
@@ -583,6 +648,15 @@ void main() {
           message: 'x',
         ).isDefinitive,
         isTrue,
+      );
+      // A warning-grade copy of a normally definitive kind proves nothing.
+      expect(
+        const ProviderDiscoveryError(
+          kind: ProviderFailureCategory.forbidden,
+          statusCode: 403,
+          message: 'x',
+        ).asWarning().isDefinitive,
+        isFalse,
       );
       expect(
         const ProviderDiscoveryError(

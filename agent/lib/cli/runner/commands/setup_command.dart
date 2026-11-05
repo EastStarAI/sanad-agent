@@ -7,21 +7,21 @@ class SetupCommand extends SanadCommand {
   final FutureOr<int> Function(List<String> args)? onSetup;
 
   SetupCommand({this.onSetup, super.customAction}) {
+    // The bare command keeps the injected interactive entry point; every
+    // subcommand owns its own implementation so `--json` reaches
+    // `CliProviderSetup` (issue 339 review 2).
     addSubcommand(
       SetupListCommand(
-        onSetup: onSetup,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
       ),
     );
     addSubcommand(
       SetupStatusCommand(
-        onSetup: onSetup,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
       ),
     );
     addSubcommand(
       SetupRemoveCommand(
-        onSetup: onSetup,
         customAction: customAction != null ? (cmd) => customAction!(cmd) : null,
       ),
     );
@@ -49,9 +49,7 @@ class SetupCommand extends SanadCommand {
 }
 
 class SetupListCommand extends SanadCommand {
-  final FutureOr<int> Function(List<String> args)? onSetup;
-
-  SetupListCommand({this.onSetup, super.customAction});
+  SetupListCommand({super.customAction});
 
   @override
   String get name => 'list';
@@ -65,9 +63,6 @@ class SetupListCommand extends SanadCommand {
 
   @override
   Future<int> execute() async {
-    if (onSetup != null) {
-      return await onSetup!(['list']);
-    }
     final cli = CliProviderSetup(CliProviderServices());
     cli.listProviders(out: stdoutSink, json: json);
     return 0;
@@ -75,9 +70,7 @@ class SetupListCommand extends SanadCommand {
 }
 
 class SetupStatusCommand extends SanadCommand {
-  final FutureOr<int> Function(List<String> args)? onSetup;
-
-  SetupStatusCommand({this.onSetup, super.customAction});
+  SetupStatusCommand({super.customAction});
 
   @override
   String get name => 'status';
@@ -87,9 +80,6 @@ class SetupStatusCommand extends SanadCommand {
 
   @override
   Future<int> execute() async {
-    if (onSetup != null) {
-      return await onSetup!(['status']);
-    }
     final cli = CliProviderSetup(CliProviderServices());
     cli.status(out: stdoutSink, json: json);
     return 0;
@@ -97,9 +87,7 @@ class SetupStatusCommand extends SanadCommand {
 }
 
 class SetupRemoveCommand extends SanadCommand {
-  final FutureOr<int> Function(List<String> args)? onSetup;
-
-  SetupRemoveCommand({this.onSetup, super.customAction});
+  SetupRemoveCommand({super.customAction});
 
   @override
   String get name => 'remove';
@@ -114,9 +102,6 @@ class SetupRemoveCommand extends SanadCommand {
   @override
   Future<int> execute() async {
     final rest = argResults?.rest ?? const [];
-    if (onSetup != null) {
-      return await onSetup!(['remove', ...rest]);
-    }
     if (rest.isEmpty) {
       return 1;
     }

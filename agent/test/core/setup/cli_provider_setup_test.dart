@@ -237,6 +237,42 @@ OPENAI_MODEL=gpt-4o
       expect(text, isNot(contains(secret)));
     });
 
+    test('sanad providers --json emits every nullable field as null', () {
+      final env = envWith('ACTIVE_PROVIDER=openai\n');
+      final services = servicesWith(env);
+      // An instance with no base URL and no selected model still has a stable
+      // shape: a consumer must never see a missing key (issue 339 review 2).
+      services.instanceRepo.createInstance(
+        ProviderInstance(
+          id: 'model-less',
+          templateId: 'custom',
+          displayName: 'Local',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          status: InstanceStatus.draft,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+
+      final out = StringBuffer();
+      CliProviderSetup(services).listProviders(out: out, json: true);
+
+      final provider =
+          ((jsonDecode(out.toString()) as Map<String, dynamic>)['providers']
+                  as List)
+              .single
+              as Map<String, dynamic>;
+      expect(provider.containsKey('base_url'), isTrue);
+      expect(provider['base_url'], isNull);
+      expect(provider.containsKey('default_model'), isTrue);
+      expect(provider['default_model'], isNull);
+      // The discovery projection is always present, as null when healthy.
+      expect(provider.containsKey('discovery_error'), isTrue);
+      expect(provider['discovery_error'], isNull);
+      expect(provider.containsKey('model_cache'), isTrue);
+    });
+
     test('sanad setup status --json carries the structured cause', () {
       final env = envWith('ACTIVE_PROVIDER=opencode-go\n');
       final services = servicesWith(env);

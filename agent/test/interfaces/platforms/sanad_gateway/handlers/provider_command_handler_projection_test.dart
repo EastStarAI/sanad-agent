@@ -185,14 +185,14 @@ void main() {
               as Map;
 
       expect(failingEntry['cache_status'], 'error');
-      // Legacy free text is never replayed; the cause degrades to the canonical
-      // sanitized form (issue 339).
-      expect(failingEntry['warning'], 'Model discovery failed');
+      // Legacy free text is never replayed; the cause is re-derived into the
+      // canonical sanitized form (issue 339 review 2).
+      expect(failingEntry['warning'], 'Could not reach the provider endpoint');
       expect(failingEntry['models'], isEmpty);
       // A stored error keeps a partial list unverified without downgrading the
       // revision-match cache status.
       expect(partialEntry['cache_status'], 'ready');
-      expect(partialEntry['warning'], 'Model discovery failed');
+      expect(partialEntry['warning'], 'The provider endpoint timed out');
       expect((partialEntry['model_cache'] as Map)['verified'], isFalse);
       expect((partialEntry['model_cache'] as Map)['source'], 'cache_stale');
     });
@@ -388,6 +388,72 @@ void main() {
       expect(payload['status'], InstanceStatus.ready);
       expect(payload['discovery_error'], isNull);
       expect(payload['model_cache'], {'source': 'live', 'verified': true});
+    });
+
+    test('a legacy row is re-derived and rewritten to the sanitized form', () async {
+      final instance = h.createInstance();
+      // The two shapes found in a live Home: a bare HTTP status and a raw
+      // ClientException/SocketException string with a local port.
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['status_code'], 401);
+      expect(discovery['definitive'], isTrue);
+
+      // Read-repair: the stored row keeps only the sanitized form.
+      final row = h.repo.readModelCache(instance.id, 'models')!;
+      expect(row['last_error'], 'Invalid credential (HTTP 401)');
+      expect(row['last_error_detail'], isNotNull);
+      expect(row['last_error_detail'], contains('invalid_credential'));
+
+      // A raw network row is re-derived as a non-definitive warning.
+      final network = h.createInstance(displayName: 'Local');
+      h.repo.upsertModelCache(
+        instanceId: network.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: network.configRevision,
+        credentialRevision: network.credentialRevision,
+        lastError:
+            'ClientException with SocketException: Connection refused '
+            '(OS Error: Connection refused, errno = 61), address = localhost, '
+            'port = 51790, uri=http://localhost:9000/v1/models',
+      );
+      final instances = h.payloadOf(await h.instancesList())['instances'] as List;
+      final networkPayload =
+          instances.firstWhere((entry) => (entry as Map)['id'] == network.id)
+              as Map;
+      final networkError = Map<String, dynamic>.from(
+        networkPayload['discovery_error'] as Map,
+      );
+      expect(networkError['kind'], ProviderFailureCategory.network);
+      expect(networkError['definitive'], isFalse);
+      expect(jsonEncode(networkError), isNot(contains('51790')));
+      expect(
+        h.repo.readModelCache(network.id, 'models')!['last_error'],
+        'Could not reach the provider endpoint',
+      );
     });
 
     test('the instances-changed broadcast carries the same projection', () async {

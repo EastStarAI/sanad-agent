@@ -1741,6 +1741,56 @@ void main() {
       await cubit.close();
     });
 
+    test('a rejected key can leave setup without deleting the instance', () async {
+      // Live finding: the only ways out were Cancel -> Discard (which deletes
+      // the persisted instance) or a client restart (issue 339 review 2).
+      final fake = _FakeProviderSetupClient(
+        providers: [_apiKeyProvider(id: 'opencode-go')],
+      )..testConnectionResult = const {
+          'success': false,
+          'models_count': 0,
+          'probe_state': 'not_run',
+          'failure': {
+            'kind': 'invalid_credential',
+            'status_code': 401,
+            'message': 'Invalid credential (HTTP 401)',
+            'definitive': true,
+          },
+        };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load(forcePicker: true);
+      cubit.selectTemplate(
+        cubit.state.templates.firstWhere((t) => t.name == 'opencode-go'),
+      );
+
+      await cubit.createOrUpdateInstance(
+        displayName: 'OpenCode Go 2',
+        authMethod: 'api_key',
+        newApiKey: 'sk-rejected-key-000123456789',
+      );
+
+      // The key is rejected: the form stays with a typed cause and a persisted
+      // provisional instance.
+      expect(cubit.state.status, ProviderSetupStatus.instanceForm);
+      expect(cubit.state.verificationFailure!.kind, 'invalid_credential');
+      expect(cubit.state.provisionalInstanceId, 'inst-1');
+      final loadsBefore = fake.listInstancesCalls;
+
+      await cubit.finishSetupKeepingInstance();
+
+      expect(fake.removeInstanceCalls, isEmpty, reason: 'must not discard');
+      expect(cubit.state.status, ProviderSetupStatus.instancesList);
+      expect(cubit.state.provisionalInstanceId, isNull);
+      expect(cubit.state.verificationFailure, isNull);
+      expect(fake.listInstancesCalls, greaterThan(loadsBefore));
+      // The instance the daemon persisted in needs_auth is still listed.
+      expect(
+        cubit.state.instances.map((instance) => instance.id),
+        contains('inst-1'),
+      );
+      await cubit.close();
+    });
+
     test('a probe 401 from the setup gate blocks with needs-auth copy', () async {
       final fake = _FakeProviderSetupClient(
         providers: [_apiKeyProvider(id: 'opencode-go')],
