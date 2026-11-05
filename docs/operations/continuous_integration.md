@@ -1,6 +1,6 @@
 ---
 title: "Public CI Pipeline and Merge Queue"
-description: "Job layout, test sharding, toolchain caching, required-check aggregate, slow-test evidence, and the protected merge-queue runbook for Public CI."
+description: "Job layout, cross-component path classification, test sharding, toolchain caching, required-check aggregate, slow-test evidence, and the protected merge-queue runbook for Public CI."
 ---
 
 # Public CI Pipeline and Merge Queue
@@ -40,6 +40,21 @@ slowest single shard instead of the whole suite.
 matrix, and it fails unless each dependency succeeded or was skipped by
 classification. A new lane that is not added to its `needs` and to its result
 check is a coverage hole, so both edits belong to the same change.
+
+### Cross-Component Contract Fixtures
+
+A path is classified by the component that *consumes* it, not only by the
+directory that owns it. `agent/test/fixtures/cli_relay_grammar.json` belongs to
+the Agent, but the Client reads it as the source of truth for the relay grammar,
+so the `client` classifier case lists that fixture explicitly and a change to it
+runs the Client analyze and test lanes.
+
+Every Agent-to-Client contract artifact must be listed in the `client` case for
+the same reason: a contract change that runs only the Agent lane leaves the
+Client consumer unverified, which is how a stale relay table reached `main`.
+Client-to-Agent contracts follow the inverse rule and belong in the `agent`
+case. A new consumer also needs a test in the consuming component, because
+classification only decides which lanes run, never whether the consumer agrees.
 
 ## Test Sharding
 
