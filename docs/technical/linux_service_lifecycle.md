@@ -168,9 +168,23 @@ reinstalling.
 ## Ownership, conflicts, and transactions
 
 A successful installation writes non-secret `service.json` ownership metadata
-inside the controlling Sanad Home. Uninstall removes only a definition whose
-scope and path match this metadata. An unowned definition is reported but not
-deleted.
+inside the controlling Sanad Home — the Home the unit itself runs with. Uninstall
+removes only a definition whose scope and path match this metadata. An unowned
+definition is reported but not deleted.
+
+That file is written last, by the installing process, after the Home already
+belongs to the unit's account, so `service install` hands the file to that
+account as well: ownership to the unit's account and group with mode `0600`, for
+the dedicated account and for an explicit `--run-as-user <account>`, and skipped
+exactly when the unit runs as the account that wrote it (`--run-as-user root`, user
+scope). The account is a reader, not an observer: `status`, `start`, `stop`,
+`restart`, and `uninstall` all resolve that metadata, and the installer's closing
+hint is `~/.sanad/bin/sanad service restart` run as that account. A metadata file
+the reading process may not read is therefore reported as a permission problem in
+that Home with the remedy, never as an absent or unowned service. Every other
+file the installing process writes into a Home it already handed over is
+transient: the staged definition and the staged metadata are removed on every
+failure path.
 
 Unit replacement stages content under Sanad Home. Existing system definitions
 are backed up with mode and ownership, and activation must prove both enabled

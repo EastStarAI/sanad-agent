@@ -1,4 +1,3 @@
-import 'dart:convert';
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
@@ -6,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'linux_service_identity.dart';
 import 'service_account_access.dart';
 import 'service_account_policy.dart';
+import 'service_install_transactions.dart';
+import 'service_metadata.dart';
 import 'service_models.dart';
 import 'service_unit_builder.dart';
 
@@ -26,8 +27,10 @@ class LinuxServiceManager {
     this.runAsUser,
     this.postActivationVerification,
     this.userScope = false,
+    ServiceMetadataStore metadata = const ServiceMetadataStore(),
   }) : _paths = paths,
-       _identityOverride = identity;
+       _identityOverride = identity,
+       _metadata = metadata;
 
   static const String dedicatedUser = SystemServiceAccount.dedicatedUser;
   static const String dedicatedHome = SystemServiceAccount.dedicatedHome;
@@ -48,9 +51,9 @@ class LinuxServiceManager {
   final bool userScope;
   final LinuxServicePaths _paths;
   final LinuxServiceIdentity? _identityOverride;
+  final ServiceMetadataStore _metadata;
   String? _userScopeFailureReason;
 
-  String get _metadataPath => p.join(sanadHome, 'service.json');
   String get _userUnitPath =>
       p.join(loginHome, '.config', 'systemd', 'user', serviceName);
   String get _systemUnitPath => p.join(_paths.systemUnitDirectory, serviceName);
@@ -126,11 +129,7 @@ class LinuxServiceManager {
       // user-scope unit already runs as the caller, so both skip this step.
       if (selection.identity.userName != current.userName) {
         final ownership = await secureServiceAccountHome(
-          runPrivileged: (executable, arguments) => _runPrivileged(
-            executable,
-            arguments,
-            currentIsRoot: current.isRoot,
-          ),
+          runPrivileged: _privilegedRunner(current),
           targetHome: targetHome,
           userName: selection.identity.userName,
           groupName: selection.identity.groupName,
@@ -184,13 +183,20 @@ class LinuxServiceManager {
       if (!transaction.ready) {
         return _failure(await status(), transaction.error!);
       }
-
-      final activated = await _activate(selection.scope, selection.identity);
-      if (!activated.succeeded) {
+      // One rollback path: activation, the staged definition, and a legacy unit
+      // preserved for migration are all reversed together, so every failure
+      // below leaves no service behind and reports a status computed after the
+      // reversal rather than before it.
+      Future<void> abandon() async {
         await _deactivate(selection.scope, selection.identity);
         await transaction.rollback();
         await _reload(selection.scope, selection.identity);
         await legacyUser?.restore();
+      }
+
+      final activated = await _activate(selection.scope, selection.identity);
+      if (!activated.succeeded) {
+        await abandon();
         return _failure(await status(), activated.conciseError);
       }
 
@@ -200,10 +206,7 @@ class LinuxServiceManager {
         configPath: targetPath,
       );
       if (!live.running || !live.enabled) {
-        await _deactivate(selection.scope, selection.identity);
-        await transaction.rollback();
-        await _reload(selection.scope, selection.identity);
-        await legacyUser?.restore();
+        await abandon();
         return _failure(
           live,
           live.error ?? 'The service did not become enabled and running.',
@@ -212,30 +215,41 @@ class LinuxServiceManager {
 
       final verificationError = await postActivationVerification?.call();
       if (verificationError != null) {
-        await _deactivate(selection.scope, selection.identity);
-        await transaction.rollback();
-        await _reload(selection.scope, selection.identity);
-        await legacyUser?.restore();
+        await abandon();
         return _failure(await status(), verificationError);
       }
 
       if (legacyUser != null) {
         final migrated = await legacyUser.commit();
         if (!migrated.succeeded) {
-          await _deactivate(selection.scope, selection.identity);
-          await transaction.rollback();
-          await _reload(selection.scope, selection.identity);
-          await legacyUser.restore();
+          await abandon();
           return _failure(await status(), migrated.conciseError);
         }
       }
-      await transaction.commit();
+      // The metadata describes the Home the unit runs with, so it is written
+      // there and then handed to the account that Home belongs to: this process
+      // wrote it after the recursive transfer above, and a system unit whose
+      // account differs must be able to read the state it reports.
       await _writeMetadata(
         scope: selection.scope,
         configPath: targetPath,
         sanadHome: targetHome,
         identity: selection.identity,
       );
+      if (selection.identity.userName != current.userName) {
+        final metadata = await secureServiceAccountFile(
+          runPrivileged: _privilegedRunner(current),
+          path: ServiceMetadataStore.pathIn(targetHome),
+          userName: selection.identity.userName,
+          groupName: selection.identity.groupName,
+        );
+        if (!metadata.succeeded) {
+          await _metadata.remove(targetHome);
+          await abandon();
+          return _failure(await status(), metadata.conciseError);
+        }
+      }
+      await transaction.commit();
       return ServiceOperationResult(success: true, status: live);
     } catch (error) {
       return _failure(await status(), _concise(error));
@@ -243,7 +257,9 @@ class LinuxServiceManager {
   }
 
   Future<ServiceOperationResult> uninstall() async {
-    final metadata = await _readMetadata();
+    final read = await _metadata.read(sanadHome);
+    if (read.error case final error?) return _failure(await status(), error);
+    final metadata = read.payload;
     if (metadata == null) {
       final current = await status();
       if (!current.installed) {
@@ -278,8 +294,7 @@ class LinuxServiceManager {
       return _failure(await status(), removed.conciseError);
     }
     await _reload(scope, identity);
-    final metadataFile = File(_metadataPath);
-    if (metadataFile.existsSync()) await metadataFile.delete();
+    await _metadata.remove(sanadHome);
     return const ServiceOperationResult(
       success: true,
       status: ServiceStatus.missing(),
@@ -290,7 +305,9 @@ class LinuxServiceManager {
   Future<ServiceOperationResult> stop() => _lifecycle(starting: false);
 
   Future<ServiceOperationResult> restart() async {
-    final metadata = await _readMetadata();
+    final read = await _metadata.read(sanadHome);
+    if (read.error case final error?) return _failure(await status(), error);
+    final metadata = read.payload;
     if (metadata == null) {
       return _failure(await status(), 'The Sanad service is not installed.');
     }
@@ -306,7 +323,9 @@ class LinuxServiceManager {
   }
 
   Future<ServiceOperationResult> _lifecycle({required bool starting}) async {
-    final metadata = await _readMetadata();
+    final read = await _metadata.read(sanadHome);
+    if (read.error case final error?) return _failure(await status(), error);
+    final metadata = read.payload;
     if (metadata == null) {
       return _failure(await status(), 'The Sanad service is not installed.');
     }
@@ -327,7 +346,12 @@ class LinuxServiceManager {
   }
 
   Future<ServiceStatus> status() async {
-    final metadata = await _readMetadata();
+    final read = await _metadata.read(sanadHome);
+    // A metadata file this process may not read is a permission problem in the
+    // Sanad Home, not an absent service: reporting "not installed" would send
+    // the account that runs the unit to install it again.
+    if (read.error case final error?) return _unreadable(error);
+    final metadata = read.payload;
     if (metadata != null) {
       final scope = ServiceScope.fromWireName(metadata['scope'] as String?);
       if (scope == null) {
@@ -369,7 +393,7 @@ class LinuxServiceManager {
     return const ServiceStatus.missing();
   }
 
-  Future<_LegacyUserMigration> _prepareLegacyUserMigration(
+  Future<LegacyUserMigration> _prepareLegacyUserMigration(
     LinuxServiceIdentity identity,
   ) async {
     final unit = File(_userUnitPath);
@@ -380,17 +404,17 @@ class LinuxServiceManager {
       configPath: unit.path,
     );
     if (previous.state == ServiceState.managerUnavailable) {
-      return _LegacyUserMigration.failed(
+      return LegacyUserMigration.failed(
         previous.error ?? 'The legacy user service manager is unavailable.',
       );
     }
     if (previous.running || previous.enabled) {
       final stopped = await _deactivate(ServiceScope.systemdUser, identity);
       if (!stopped.succeeded) {
-        return _LegacyUserMigration.failed(stopped.conciseError);
+        return LegacyUserMigration.failed(stopped.conciseError);
       }
     }
-    return _LegacyUserMigration(
+    return LegacyUserMigration(
       commit: () async {
         try {
           if (unit.existsSync()) {
@@ -765,7 +789,12 @@ class LinuxServiceManager {
         : runner('sudo', ['--', executable, ...arguments], null);
   }
 
-  Future<_ConfigTransaction> _replaceConfig({
+  /// The same privileged context, bound once for the ownership transfers.
+  PrivilegedRunner _privilegedRunner(LinuxServiceIdentity current) =>
+      (executable, arguments) =>
+          _runPrivileged(executable, arguments, currentIsRoot: current.isRoot);
+
+  Future<ServiceConfigTransaction> _replaceConfig({
     required String targetPath,
     required String content,
     required bool privileged,
@@ -780,37 +809,41 @@ class LinuxServiceManager {
     final backup = '$targetPath.sanad-backup';
     final existed = File(targetPath).existsSync();
     ServiceProcessResult result;
-    if (privileged) {
-      if (existed) {
-        result = await _runPrivileged('cp', [
-          '--preserve=mode,ownership',
-          targetPath,
-          backup,
-        ], currentIsRoot: false);
-        if (!result.succeeded) {
-          return _ConfigTransaction.failed(result.conciseError);
+    try {
+      if (privileged) {
+        if (existed) {
+          result = await _runPrivileged('cp', [
+            '--preserve=mode,ownership',
+            targetPath,
+            backup,
+          ], currentIsRoot: false);
+          if (!result.succeeded) {
+            return ServiceConfigTransaction.failed(result.conciseError);
+          }
         }
+        result = await _runPrivileged('install', [
+          '-m',
+          executableMode ? '0755' : '0644',
+          stage.path,
+          targetPath,
+        ], currentIsRoot: false);
+      } else {
+        final target = File(targetPath);
+        await target.parent.create(recursive: true);
+        if (existed) await target.copy(backup);
+        await stage.rename(targetPath);
+        result = const ServiceProcessResult(exitCode: 0);
       }
-      result = await _runPrivileged('install', [
-        '-m',
-        executableMode ? '0755' : '0644',
-        stage.path,
-        targetPath,
-      ], currentIsRoot: false);
-    } else {
-      final target = File(targetPath);
-      await target.parent.create(recursive: true);
-      if (existed) await target.copy(backup);
-      await stage.rename(targetPath);
-      result = const ServiceProcessResult(exitCode: 0);
-    }
-    if (stage.existsSync()) {
-      await stage.delete();
+    } finally {
+      // The staging file lives in the Sanad Home, which after the ownership
+      // transfer belongs to the unit's account, so even a failed install must
+      // not leave a fragment of the installing account's ownership behind.
+      if (stage.existsSync()) await stage.delete();
     }
     if (!result.succeeded) {
-      return _ConfigTransaction.failed(result.conciseError);
+      return ServiceConfigTransaction.failed(result.conciseError);
     }
-    return _ConfigTransaction(
+    return ServiceConfigTransaction(
       commit: () async {
         if (privileged) {
           if (existed) {
@@ -857,52 +890,29 @@ class LinuxServiceManager {
     return const ServiceProcessResult(exitCode: 0);
   }
 
+  /// Records the installation that owns this Home's service definition.
+  ///
+  /// It is written into the Home the unit runs with, because that is the Home
+  /// the unit's account reads it back from when it asks for `service status`.
   Future<void> _writeMetadata({
     required ServiceScope scope,
     required String configPath,
     required String sanadHome,
     required LinuxServiceIdentity identity,
-  }) async {
-    final file = File(_metadataPath);
-    await file.parent.create(recursive: true);
-    if (FileSystemEntity.typeSync(file.path, followLinks: false) ==
-        FileSystemEntityType.link) {
-      throw StateError('Refusing symlinked service ownership metadata.');
-    }
-    final temporary = File('${file.path}.tmp-$pid');
-    final sink = temporary.openWrite(mode: FileMode.writeOnly);
-    sink.write(
-      jsonEncode({
-        'version': 1,
-        'scope': scope.wireName,
-        'config_path': configPath,
-        'sanad_home': sanadHome,
-        'user': identity.userName,
-        'group': identity.groupName,
-        'uid': identity.uid,
-        'home': identity.home,
-        'dedicated': identity.dedicated,
-      }),
-    );
-    await sink.flush();
-    await sink.close();
-    await temporary.rename(file.path);
-  }
-
-  Future<Map<String, Object?>?> _readMetadata() async {
-    final file = File(_metadataPath);
-    if (!file.existsSync()) return null;
-    if (FileSystemEntity.typeSync(file.path, followLinks: false) ==
-        FileSystemEntityType.link) {
-      return null;
-    }
-    try {
-      final decoded = jsonDecode(await file.readAsString());
-      return decoded is Map<String, Object?> ? decoded : null;
-    } catch (_) {
-      return null;
-    }
-  }
+  }) => _metadata.write(
+    home: sanadHome,
+    payload: {
+      'version': 1,
+      'scope': scope.wireName,
+      'config_path': configPath,
+      'sanad_home': sanadHome,
+      'user': identity.userName,
+      'group': identity.groupName,
+      'uid': identity.uid,
+      'home': identity.home,
+      'dedicated': identity.dedicated,
+    },
+  );
 
   Future<LinuxServiceIdentity> _identityFromMetadata(
     Map<String, Object?> metadata,
@@ -932,6 +942,17 @@ class LinuxServiceManager {
   ServiceOperationResult _failure(ServiceStatus status, String error) =>
       ServiceOperationResult(success: false, status: status, error: error);
 
+  /// A failed status for metadata that exists but must not be acted on.
+  ServiceStatus _unreadable(String error) => ServiceStatus(
+    state: ServiceState.failed,
+    scope: ServiceScope.unavailable,
+    backend: 'unknown',
+    installed: true,
+    enabled: false,
+    running: false,
+    error: error,
+  );
+
   String _concise(Object error) =>
       error.toString().replaceFirst(RegExp(r'^[^:]+: '), '').split('\n').first;
 }
@@ -940,47 +961,4 @@ class _BackendSelection {
   const _BackendSelection(this.scope, this.identity);
   final ServiceScope scope;
   final LinuxServiceIdentity identity;
-}
-
-class _LegacyUserMigration {
-  _LegacyUserMigration({
-    required Future<ServiceProcessResult> Function() commit,
-    required Future<void> Function() restore,
-  }) : _commit = commit,
-       _restore = restore,
-       error = null;
-
-  _LegacyUserMigration.failed(this.error)
-    : _commit = _failedCommit,
-      _restore = _noop;
-
-  final String? error;
-  final Future<ServiceProcessResult> Function() _commit;
-  final Future<void> Function() _restore;
-  bool get ready => error == null;
-  Future<ServiceProcessResult> commit() => _commit();
-  Future<void> restore() => _restore();
-
-  static Future<ServiceProcessResult> _failedCommit() async =>
-      const ServiceProcessResult(exitCode: 1);
-  static Future<void> _noop() async {}
-}
-
-class _ConfigTransaction {
-  _ConfigTransaction({
-    required Future<void> Function() commit,
-    required Future<void> Function() rollback,
-  }) : _commit = commit,
-       _rollback = rollback,
-       error = null;
-
-  _ConfigTransaction.failed(this.error) : _commit = _noop, _rollback = _noop;
-
-  final String? error;
-  final Future<void> Function() _commit;
-  final Future<void> Function() _rollback;
-  bool get ready => error == null;
-  Future<void> commit() => _commit();
-  Future<void> rollback() => _rollback();
-  static Future<void> _noop() async {}
 }

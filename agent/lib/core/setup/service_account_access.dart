@@ -23,18 +23,45 @@ Future<ServiceProcessResult> secureServiceAccountHome({
   required String targetHome,
   required String userName,
   required String groupName,
+}) => _handOver(
+  runPrivileged: runPrivileged,
+  chownArguments: ['-R', '$userName:$groupName', targetHome],
+  mode: '0700',
+  modePaths: [targetHome, p.join(targetHome, 'logs')],
+);
+
+/// Gives the unit's account ownership of one file the installing process wrote
+/// after the Home transfer, and restricts it to owner access.
+///
+/// `service install` writes the Home's ownership metadata after that recursive
+/// transfer, and it writes it as the installing account. A system unit whose
+/// account differs therefore has to be given this one file explicitly: the
+/// installer prints `service restart` for that account, and `service status`
+/// there can only report the service it runs when it can read the metadata that
+/// says which installation owns it.
+Future<ServiceProcessResult> secureServiceAccountFile({
+  required PrivilegedRunner runPrivileged,
+  required String path,
+  required String userName,
+  required String groupName,
+}) => _handOver(
+  runPrivileged: runPrivileged,
+  chownArguments: ['$userName:$groupName', path],
+  mode: '0600',
+  modePaths: [path],
+);
+
+/// One rule for "this path belongs to that account, and only that account may
+/// read or write it".
+Future<ServiceProcessResult> _handOver({
+  required PrivilegedRunner runPrivileged,
+  required List<String> chownArguments,
+  required String mode,
+  required List<String> modePaths,
 }) async {
-  final ownership = await runPrivileged('chown', [
-    '-R',
-    '$userName:$groupName',
-    targetHome,
-  ]);
+  final ownership = await runPrivileged('chown', chownArguments);
   if (!ownership.succeeded) return ownership;
-  return runPrivileged('chmod', [
-    '0700',
-    targetHome,
-    p.join(targetHome, 'logs'),
-  ]);
+  return runPrivileged('chmod', [mode, ...modePaths]);
 }
 
 /// Proof that the account a system-scope unit runs as can reach the paths that

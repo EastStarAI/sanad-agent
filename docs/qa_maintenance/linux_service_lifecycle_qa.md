@@ -34,6 +34,8 @@ The focused Agent suite must prove:
 - the installer's default dedicated Home equal to the Agent's shared policy constant (drift guard across the shell and Dart implementations);
 - `--run-as-user <account>` registering that existing account with its own Home and ownership, refusing an unknown account before any download, refusing a non-root install, and accepting `root` only by name with a warning;
 - the unit's account owning the Home the installing process wrote — a recursive ownership transfer and `0700` on the Home and `logs/` that runs after the startup files exist and before activation, a first install succeeding on a clean Home without a second run, and no transfer when the unit runs as the account that created the Home (`--run-as-user root`, user scope);
+- the ownership metadata belonging to that same account — a `chown` to the unit's account and group plus mode `0600` issued after the metadata is written, for the dedicated account and for `--run-as-user <account>`, and no transfer for `--run-as-user root` or a user-scope unit;
+- `status`, `start`, `stop`, `restart`, and `uninstall` reporting a metadata file that exists but cannot be read as a permission problem with an actionable message, instead of `Failed`/unowned or "not installed";
 - the installer stopping before download and pairing (exit `71`) when a surviving definition names another Home, with the exact removal command;
 - a service-account access preflight that refuses an `ExecStart` or working directory the unit's account cannot reach, before the definition is written or activated, and that keeps installing when the probing tool is absent;
 - a health window that polls the Home's Local Gateway credential until it appears and that fails with the credential message and the real attempt count when it never does;
@@ -78,18 +80,28 @@ on real clean hosts under G6 and G7:
 1. Desktop user systemd with a live user bus and durable linger.
 2. Headless systemd where no usable user bus exists.
 3. Direct-root installation proving the daemon uid is not zero, the state tree
-   belongs to the dedicated account, and the account can execute the unit's
+   belongs to the dedicated account, the account can execute the unit's
    `ExecStart` and enter its `WorkingDirectory` (the artifact and the daemon's
-   Home are the same Home, `/var/lib/sanad-agent`);
+   Home are the same Home, `/var/lib/sanad-agent`), and the installed
+   `service.json` is owned by that account with mode `0600` so that
+   `runuser -u sanad-agent -- /var/lib/sanad-agent/bin/sanad service status`
+   reports `Running`;
 3b. The same installation invoked through `sudo` (`sudo -i`, `sudo bash install.sh`,
    `curl … | sudo bash`, with `SUDO_USER` set to the invoking cloud-image
    account) producing the identical unit, the identical Home, and no failure
    after the device authorization;
 3c. `install.sh --run-as-user <account>` on a clean host: the printed account and
    Home, a unit whose `User=` is that account, the account's ownership of the
-   startup files `service install` wrote (`secret_vault.lock` included), a
-   daemon that becomes healthy on that first run, and a refusal (before
-   download) for an unknown account or a non-root invocation;
+   startup files `service install` wrote (`secret_vault.lock` included), an
+   ownership metadata file that account can read, a daemon that becomes healthy
+   on that first run, and a refusal (before download) for an unknown account or a
+   non-root invocation;
+3d. `runuser -u <account> -- <home>/bin/sanad service status` on that first run
+   reporting `Running` (not `Failed` and not "not installed"), and the same
+   `service restart`/`stop`/`start` acting on the installed unit rather than
+   claiming it is absent — for both the dedicated account and
+   `--run-as-user <account>`;
+
 4. OpenRC installation on a clean supported distribution.
 5. SSH logout and reboot, followed by bounded polling for `Running` and Online.
 6. Stop/start/restart/uninstall/reinstall and injected activation failure.
