@@ -3,6 +3,9 @@ import 'package:equatable/equatable.dart';
 /// How live transcript text is surfaced in the composer.
 enum DictationPreviewPolicy { live, onStop }
 
+/// Decoding strategy of a catalog model, mirrored from the daemon's catalog.
+enum DictationModelMode { batch, streaming }
+
 /// Session lifecycle of one dictation run.
 enum DictationStatus { idle, preparing, listening, finalizing }
 
@@ -15,6 +18,7 @@ class DictationModelOption extends Equatable {
     this.totalBytes,
     this.hosted = false,
     this.installed = false,
+    this.mode = DictationModelMode.batch,
   });
 
   final String id;
@@ -24,8 +28,14 @@ class DictationModelOption extends Equatable {
   final bool hosted;
   final bool installed;
 
+  /// How the daemon decodes this model. Batch models publish one transcript at
+  /// the end; streaming models publish live text.
+  final DictationModelMode mode;
+
+  bool get isStreaming => mode == DictationModelMode.streaming;
+
   @override
-  List<Object?> get props => [id, label, note, totalBytes, hosted, installed];
+  List<Object?> get props => [id, label, note, totalBytes, hosted, installed, mode];
 }
 
 /// Daemon-reported speech model state (`stt_status` + `stt_download_progress`).
@@ -37,6 +47,7 @@ class DictationModelStatus extends Equatable {
     this.installedBytes,
     this.unavailableReason,
     this.models = const [],
+    this.installingModelId,
   });
 
   final String? selectedModelId;
@@ -52,6 +63,10 @@ class DictationModelStatus extends Equatable {
   /// Full catalog as reported by the daemon (for the model sheet).
   final List<DictationModelOption> models;
 
+  /// Model whose install is currently running; owned here, not by the sheet,
+  /// so the progress bar survives rebuilds until the daemon reports installed.
+  final String? installingModelId;
+
   bool get isDownloading => downloadProgress != null;
 
   DictationModelStatus copyWith({
@@ -62,6 +77,8 @@ class DictationModelStatus extends Equatable {
     int? installedBytes,
     String? unavailableReason,
     List<DictationModelOption>? models,
+    String? installingModelId,
+    bool clearInstallingModel = false,
   }) {
     return DictationModelStatus(
       selectedModelId: selectedModelId ?? this.selectedModelId,
@@ -71,6 +88,9 @@ class DictationModelStatus extends Equatable {
       installedBytes: installedBytes ?? this.installedBytes,
       unavailableReason: unavailableReason ?? this.unavailableReason,
       models: models ?? this.models,
+      installingModelId: clearInstallingModel
+          ? null
+          : (installingModelId ?? this.installingModelId),
     );
   }
 
@@ -82,6 +102,7 @@ class DictationModelStatus extends Equatable {
         installedBytes,
         unavailableReason,
         models,
+        installingModelId,
       ];
 }
 
@@ -94,6 +115,8 @@ class DictationState extends Equatable {
     this.partialText = '',
     this.errorCode,
     this.sessionNeedsFirstUseSheet = false,
+    this.discardText = false,
+    this.level = 0,
   });
 
   final DictationStatus status;
@@ -110,6 +133,14 @@ class DictationState extends Equatable {
 
   /// True when the session stopped because no model is installed yet.
   final bool sessionNeedsFirstUseSheet;
+
+  /// True when the session ended by cancel, so its dictated text must leave
+  /// the composer instead of staying as user text.
+  final bool discardText;
+
+  /// Latest microphone loudness (0..1) used by the voice visualization. It is
+  /// display-only: audio itself never leaves the capture callback.
+  final double level;
 
   bool get isActive =>
       status == DictationStatus.preparing ||
@@ -130,6 +161,8 @@ class DictationState extends Equatable {
     String? errorCode,
     bool clearError = false,
     bool? sessionNeedsFirstUseSheet,
+    bool? discardText,
+    double? level,
   }) {
     return DictationState(
       status: status ?? this.status,
@@ -140,6 +173,8 @@ class DictationState extends Equatable {
       errorCode: clearError ? null : (errorCode ?? this.errorCode),
       sessionNeedsFirstUseSheet:
           sessionNeedsFirstUseSheet ?? this.sessionNeedsFirstUseSheet,
+      discardText: discardText ?? this.discardText,
+      level: level ?? this.level,
     );
   }
 
@@ -152,5 +187,9 @@ class DictationState extends Equatable {
         partialText,
         errorCode,
         sessionNeedsFirstUseSheet,
+        discardText,
+        // The meter only repaints when the state differs, so loudness has to be
+        // part of equality or every level update is suppressed.
+        level,
       ];
 }

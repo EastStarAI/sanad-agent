@@ -28,23 +28,26 @@ const List<SttCatalogEntry> kSttCatalog = [
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: true,
-    hosted: false,
+    hosted: true,
     files: [
       SttModelFile(
         name: 'egy-whisper-turbo-encoder.int8.onnx',
-        url: '',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-int8/resolve/main/egy-whisper-turbo-encoder.int8.onnx',
         sizeBytes: 674622359,
         sha256: 'c8b1106104ad7838ed6357187ecc1e95e6d1198645c9b398b246b345015951b1',
       ),
       SttModelFile(
         name: 'egy-whisper-turbo-decoder.int8.onnx',
-        url: '',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-int8/resolve/main/egy-whisper-turbo-decoder.int8.onnx',
         sizeBytes: 361070805,
         sha256: 'e6c339082ff82180051032e8714eeeaa66e4e313f2ec3a2c3ffb2919d8810aa7',
       ),
       SttModelFile(
         name: 'egy-whisper-turbo-tokens.txt',
-        url: '',
+        url:
+            'https://huggingface.co/AhmedAttia3/sanad-egy-whisper-turbo-int8/resolve/main/egy-whisper-turbo-tokens.txt',
         sizeBytes: 816730,
         sha256: 'b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126',
       ),

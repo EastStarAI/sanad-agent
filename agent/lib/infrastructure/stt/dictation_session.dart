@@ -159,6 +159,16 @@ class DictationSession {
     _started = true;
     _sessionClock.start();
 
+    // Replay readiness: the recognizer is loaded before this session attached
+    // its listener, so the client's loading state would otherwise never end.
+    final alreadyReady = engine.ready;
+    if (alreadyReady != null) {
+      transport.send('dictation_ready', {
+        'model_id': alreadyReady.modelId,
+        'load_ms': alreadyReady.loadMs,
+      });
+    }
+
     _eventSubscription = engine.events.listen((event) {
       switch (event) {
         case SttReadyEvent():
@@ -173,6 +183,10 @@ class DictationSession {
           });
         case SttFinalEvent():
           _segments++;
+          _logger.info(
+            'dictation final: audio_ms=${event.audioMs} '
+            'decode_ms=${event.decodeMs} model=$modelId',
+          );
           transport.send('dictation_final', {
             'seq': event.seq,
             'text': event.text,

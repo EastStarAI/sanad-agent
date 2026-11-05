@@ -43,12 +43,21 @@ class _SttWorker {
   int _seq = 0;
   bool _disposed = false;
 
-  /// Samples fed since the last forced cut. Whisper's own VAD only ends a
-  /// segment on silence, so continuous narration could otherwise produce 20 s
-  /// segments and multi-second decode latency. A forced cut every ~6 s bounds
-  /// first-text latency for every model.
-  int _samplesSinceCut = 0;
-  static const int _forcedCutSamples = 4 * 16000;
+  /// Speech segments collected for the whole utterance, in order.
+  ///
+  /// Nothing is decoded while the user speaks: a cut mid-word is what produced
+  /// fragmented transcripts, so the session holds the audio and decodes once at
+  /// the end. The VAD is only used to trim silence and to find silence-aligned
+  /// group boundaries, never to publish text.
+  final List<Float32List> _speech = <Float32List>[];
+  int _bufferedSamples = 0;
+
+  /// Whisper's decoder rejects a single decode longer than 30 s, so groups are
+  /// kept well below that and joined into one transcript afterwards.
+  static const int _maxGroupSamples = 24 * 16000;
+
+  /// Hard ceiling on buffered audio: 5 minutes of 16 kHz mono PCM16.
+  static const int _maxBufferedSamples = 5 * 60 * 16000;
 
   void handle(Map message) {
     switch (message['cmd']) {
@@ -59,7 +68,8 @@ class _SttWorker {
       case 'finish':
         _finish();
       case 'cancel':
-        _drain(discard: true);
+        _speech.clear();
+        _bufferedSamples = 0;
         _out.send({'evt': 'idle'});
       case 'dispose':
         _dispose();
@@ -84,6 +94,10 @@ class _SttWorker {
             decoder: message['decoder'] as String,
             language: message['language'] as String? ?? 'ar',
             task: 'transcribe',
+            // A segment that ends exactly on the last phoneme makes the decoder
+            // drop the final word; one second of trailing silence is what the
+            // upstream examples use, and it is what makes the last word survive.
+            tailPaddings: 1000,
           ),
           tokens: message['tokens'] as String,
           modelType: 'whisper',
@@ -122,61 +136,111 @@ class _SttWorker {
 
   void _audio(Uint8List pcm16) {
     final vad = _vad;
-    final recognizer = _recognizer;
-    if (vad == null || recognizer == null) {
+    if (vad == null || _recognizer == null) {
       throw const SttException('not_ready', 'recognizer is not loaded');
     }
-    vad.acceptWaveform(_pcm16ToFloat32(pcm16));
-    _samplesSinceCut += pcm16.lengthInBytes ~/ 2;
-    if (_samplesSinceCut >= _forcedCutSamples) {
-      vad.flush();
-      _samplesSinceCut = 0;
-    }
-    _drain();
-    _out.send({'evt': 'idle'});
-  }
-
-  void _finish() {
-    final vad = _vad;
-    if (vad == null) {
-      _out.send({'evt': 'done'});
+    if (_bufferedSamples >= _maxBufferedSamples) {
+      // The session ceiling is enforced by the caller too; this is the last
+      // guard so a stuck session can never grow without bound.
+      _out.send({'evt': 'idle'});
       return;
     }
-    vad.flush();
-    _samplesSinceCut = 0;
-    _drain();
-    _out.send({'evt': 'done'});
+    vad.acceptWaveform(_pcm16ToFloat32(pcm16));
+    _collectSpeech();
     _out.send({'evt': 'idle'});
   }
 
-  void _drain({bool discard = false}) {
+  /// Moves every finished VAD segment into the session buffer. The segments are
+  /// concatenated again at decode time, so VAD boundaries only remove silence.
+  void _collectSpeech() {
     final vad = _vad;
-    final recognizer = _recognizer;
-    if (vad == null || recognizer == null) return;
+    if (vad == null) return;
     while (!vad.isEmpty()) {
       final segment = vad.front();
       final samples = segment.samples;
       vad.pop();
-      if (discard || samples.isEmpty) continue;
-      final decode = Stopwatch()..start();
+      if (samples.isEmpty) continue;
+      if (_bufferedSamples >= _maxBufferedSamples) continue;
+      _speech.add(samples);
+      _bufferedSamples += samples.length;
+    }
+  }
+
+  void _finish() {
+    final vad = _vad;
+    if (vad == null || _recognizer == null) {
+      _out.send({'evt': 'done', 'segments': 0});
+      return;
+    }
+    vad.flush();
+    _collectSpeech();
+    final decode = Stopwatch()..start();
+    final text = _transcribeAll();
+    decode.stop();
+    var audioSamples = 0;
+    for (final segment in _speech) {
+      audioSamples += segment.length;
+    }
+    _speech.clear();
+    _bufferedSamples = 0;
+    if (text.isNotEmpty) {
+      _out.send({
+        'evt': 'final',
+        'seq': _seq++,
+        'text': text,
+        'audioMs': audioSamples * 1000 ~/ 16000,
+        'decodeMs': decode.elapsedMilliseconds,
+      });
+    }
+    _out.send({'evt': 'done', 'segments': text.isEmpty ? 0 : 1});
+    _out.send({'evt': 'idle'});
+  }
+
+  /// Decodes the buffered utterance in silence-aligned groups and joins the
+  /// results into the one transcript the user sees.
+  String _transcribeAll() {
+    final recognizer = _recognizer;
+    if (recognizer == null || _speech.isEmpty) return '';
+
+    final parts = <String>[];
+    var group = <Float32List>[];
+    var groupSamples = 0;
+
+    void decodeGroup() {
+      if (group.isEmpty) return;
+      // Trailing silence is part of the contract with the decoder: a segment
+      // that ends on the last phoneme loses its final word, and VAD hands us
+      // segments that end exactly there.
+      const tailPad = 8000; // 0.5 s at 16 kHz
+      final total = groupSamples + tailPad;
+      final samples = Float32List(total);
+      var offset = 0;
+      for (final chunk in group) {
+        samples.setRange(offset, offset + chunk.length, chunk);
+        offset += chunk.length;
+      }
+      group = <Float32List>[];
+      groupSamples = 0;
       final stream = recognizer.createStream();
       try {
         stream.acceptWaveform(samples: samples, sampleRate: 16000);
         recognizer.decode(stream);
         final text = recognizer.getResult(stream).text.trim();
-        decode.stop();
-        if (text.isEmpty) continue;
-        _out.send({
-          'evt': 'final',
-          'seq': _seq++,
-          'text': text,
-          'audioMs': samples.length * 1000 ~/ 16000,
-          'decodeMs': decode.elapsedMilliseconds,
-        });
+        if (text.isNotEmpty) parts.add(text);
       } finally {
         stream.free();
       }
     }
+
+    for (final segment in _speech) {
+      if (groupSamples > 0 && groupSamples + segment.length > _maxGroupSamples) {
+        decodeGroup();
+      }
+      group.add(segment);
+      groupSamples += segment.length;
+    }
+    decodeGroup();
+    return parts.join(' ').trim();
   }
 
   void _dispose() {

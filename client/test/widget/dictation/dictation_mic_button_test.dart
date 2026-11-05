@@ -34,7 +34,8 @@ class _Transport implements DictationTransport {
 
   @override
   Future<void> close() async {
-    if (!eventsController.isClosed) await eventsController.close();
+    // The fake resolver hands the same transport to every session, so the event
+    // stream stays open across sessions like a fresh daemon connection would.
   }
 }
 
@@ -53,7 +54,12 @@ class _Capture implements DictationCapture {
   }
 
   @override
-  Future<void> stop() async {}
+  Future<void> stop() async {
+    started = false;
+    // The real recorder closes its stream on stop, which is how the cubit knows
+    // the last frames were handed over before it tells the daemon to decode.
+    if (!controller.isClosed) await controller.close();
+  }
 
   @override
   Future<void> dispose() async {
@@ -83,10 +89,64 @@ void main() {
   tearDown(() async {
     chatController.dispose();
     await cubit.close();
+    await transport.eventsController.close();
   });
 
-  Widget build({Object? scopeKey}) {
-    return MaterialApp(
+  /// Seeds the daemon state a real session would have: one installed model.
+  Future<void> seedReadyModel(WidgetTester tester) async {
+    // The status round-trip resolves only once the reply is pumped through, so
+    // the request is started here and awaited after the event lands.
+    final pending = cubit.refreshStatus(device);
+    await tester.pump();
+    transport.eventsController.add({
+      'event': 'stt_status',
+      'supported': true,
+      'selected': 'whisper-base-int8',
+      'models': [
+        {
+          'id': 'whisper-base-int8',
+          'label': 'Whisper base',
+          'hosted': true,
+          'installed': true,
+        },
+      ],
+    });
+    await tester.pump();
+    await pending;
+    await tester.pump();
+  }
+
+  /// Completes the daemon handshake that unlocks capture: the session is
+  /// "listening" only once the recognizer reports it is loaded.
+  Future<void> emitReady(WidgetTester tester) async {
+    transport.eventsController.add({
+      'event': 'dictation_ready',
+      'model_id': 'whisper-base-int8',
+      'load_ms': 12,
+    });
+    await tester.pump();
+    await tester.pump();
+  }
+
+  /// Gives the session teardown real event-loop turns: cancelling stream
+  /// subscriptions cannot complete on the fake clock alone.
+  Future<void> settle(WidgetTester tester) async {
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+  }
+
+  /// Starts a session through the button and waits for the ready handshake.
+  Future<void> startSession(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    await emitReady(tester);
+  }
+
+  Widget build({Object? scopeKey}) {    return MaterialApp(
       localizationsDelegates: const [
         AppLocalizations.delegate,
         GlobalMaterialLocalizations.delegate,
@@ -113,9 +173,9 @@ void main() {
 
   testWidgets('pressing the mic starts a dictation session', (tester) async {
     await tester.pumpWidget(build());
+    await seedReadyModel(tester);
 
-    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
-    await tester.pump();
+    await startSession(tester);
 
     expect(transport.commands, contains('start'));
     expect(capture.started, isTrue);
@@ -150,17 +210,20 @@ void main() {
     expect(capture.started, isFalse);
   });
 
-  testWidgets('finalized text lands in the composer', (tester) async {
+  testWidgets('finalized text lands in the composer at the caret', (tester) async {
+    chatController.text = 'قبل ';
+    chatController.selection = const TextSelection.collapsed(offset: 4);
+
     await tester.pumpWidget(build());
-    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
-    await tester.pump();
+    await seedReadyModel(tester);
+    await startSession(tester);
 
     transport.eventsController
         .add({'event': 'dictation_final', 'seq': 1, 'text': 'السلام عليكم'});
     await tester.pump();
     await tester.pump();
 
-    expect(chatController.text, 'السلام عليكم');
+    expect(chatController.text, 'قبل السلام عليكم');
   });
 
   testWidgets('cancel returns the composer to its pre-session text', (tester) async {
@@ -168,8 +231,8 @@ void main() {
     chatController.selection = const TextSelection.collapsed(offset: 7);
 
     await tester.pumpWidget(build());
-    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
-    await tester.pump();
+    await seedReadyModel(tester);
+    await startSession(tester);
 
     transport.eventsController
         .add({'event': 'dictation_final', 'seq': 1, 'text': 'dictated'});
@@ -185,24 +248,59 @@ void main() {
     expect(chatController.selection.baseOffset, lessThanOrEqualTo(7));
   });
 
-  testWidgets('the elapsed counter appears while listening', (tester) async {
+  testWidgets('a voice meter replaces the elapsed timer while listening', (
+    tester,
+  ) async {
     await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+
+    // Before the daemon reports the model ready, the mic only shows loading.
     await tester.tap(find.byKey(const Key('dictation_mic_btn')));
     await tester.pump();
-
+    expect(find.byKey(const Key('dictation_level')), findsNothing);
     expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
 
-    await tester.pump(const Duration(seconds: 2));
-    await tester.pump();
+    await emitReady(tester);
+    // The meter lives inside the button itself, replacing the stop icon.
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('dictation_mic_btn')),
+        matching: find.byKey(const Key('dictation_level')),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
+  });
 
-    expect(find.byKey(const Key('dictation_elapsed')), findsOneWidget);
-    expect(find.text('0:02'), findsOneWidget);
+  testWidgets('a press starts recording when a model is ready', (tester) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+    expect(cubit.state.model.isReady, isTrue);
+
+    await startSession(tester);
+
+    expect(transport.commands, contains('start'));
+    expect(cubit.state.status, DictationStatus.listening);
+  });
+
+  testWidgets('a press without a ready model does not start recording', (tester) async {
+    await tester.pumpWidget(build());
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    // The first press asks the daemon for its status and waits for the reply
+    // (or its 4s fallback) before deciding it cannot record.
+    await tester.pump(const Duration(seconds: 10));
+    await tester.pump(const Duration(seconds: 10));
+
+    expect(transport.commands, isNot(contains('start')));
+    expect(find.byKey(const Key('dictation_model_sheet')), findsOneWidget);
   });
 
   testWidgets('changing the composer scope cancels the live session', (tester) async {
     await tester.pumpWidget(build());
-    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
-    await tester.pump();
+    await seedReadyModel(tester);
+    await startSession(tester);
     expect(cubit.state.status, DictationStatus.listening);
 
     await tester.pumpWidget(build(scopeKey: 'other-conversation'));
@@ -213,6 +311,38 @@ void main() {
 
     expect(transport.commands, contains('cancel'));
     expect(chatController.text, isEmpty);
+  });
+
+  testWidgets('a second session appends without repeating the first', (
+    tester,
+  ) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+
+    Future<void> dictate(String text) async {
+      await startSession(tester);
+      transport.eventsController
+          .add({'event': 'dictation_final', 'seq': 1, 'text': text});
+      await tester.pump();
+      await tester.pump();
+      // A second press stops the session, and the daemon's drain closes it.
+      await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+      await settle(tester);
+      transport.eventsController.add({'event': 'dictation_done', 'segments': 1});
+      await settle(tester);
+      expect(cubit.state.status, DictationStatus.idle);
+    }
+
+    await dictate('First');
+    await dictate('Second');
+
+    final text = chatController.text;
+    expect(text, contains('First'));
+    expect(text, contains('Second'));
+    // The finished session hands its text to the composer; the next one must
+    // not rewrite it as part of its own range.
+    expect(RegExp('First').allMatches(text), hasLength(1));
+    expect(RegExp('Second').allMatches(text), hasLength(1));
   });
 }
 

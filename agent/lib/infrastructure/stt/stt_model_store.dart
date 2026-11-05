@@ -102,14 +102,23 @@ class SttModelStore {
     }
     await Directory(modelDir(entry.id)).create(recursive: true);
     await Directory(sharedDir).create(recursive: true);
-    if (!File(vadPath).existsSync()) {
+    // Progress is cumulative across every artifact of the install, so the
+    // client bar never drops back to zero between encoder/decoder/tokens.
+    final needsVad = !File(vadPath).existsSync();
+    var total = entry.files.fold<int>(0, (sum, file) => sum + file.sizeBytes);
+    if (needsVad) total += kSileroVadFile.sizeBytes;
+    var offset = 0;
+    if (needsVad) {
       await _downloadFile(
         kSileroVadFile,
         vadPath,
         id: entry.id,
         onProgress: onProgress,
         isCancelled: isCancelled,
+        offsetBase: offset,
+        grandTotal: total,
       );
+      offset += kSileroVadFile.sizeBytes;
     }
     for (final file in entry.files) {
       await _downloadFile(
@@ -118,7 +127,10 @@ class SttModelStore {
         id: entry.id,
         onProgress: onProgress,
         isCancelled: isCancelled,
+        offsetBase: offset,
+        grandTotal: total,
       );
+      offset += file.sizeBytes;
     }
   }
 
@@ -128,6 +140,8 @@ class SttModelStore {
     required String id,
     SttProgressCallback? onProgress,
     bool Function()? isCancelled,
+    int offsetBase = 0,
+    int? grandTotal,
   }) async {
     final partial = File('$destination$_partialSuffix');
     if (partial.existsSync()) {
@@ -157,7 +171,11 @@ class SttModelStore {
         received += chunk.length;
         hashInput.add(chunk);
         sink.add(chunk);
-        onProgress?.call(id, received, file.sizeBytes);
+        onProgress?.call(
+          id,
+          offsetBase + received,
+          grandTotal ?? file.sizeBytes,
+        );
       }
       await sink.flush();
       await sink.close();
@@ -205,7 +223,15 @@ class SttModelStore {
   /// A `model_path` override wins over the catalog: its required files are
   /// discovered by name and no checksum is enforced, because the user supplied
   /// the directory. Anything missing yields a typed error naming the gap.
-  SttModelFiles? resolve(SttSettings settings) {
+  /// Precedence for which catalog entry a session loads: an explicit
+  /// `stt.model_id` in config wins, then the user's selection from the model
+  /// sheet, then the catalog default.
+  String resolveModelId(SttSettings settings, {String? selectedModelId}) {
+    if (settings.modelId.isNotEmpty) return settings.modelId;
+    return selectedModelId ?? settings.effectiveModelId;
+  }
+
+  SttModelFiles? resolve(SttSettings settings, {String? selectedModelId}) {
     final overridePath = settings.modelPath?.trim();
     if (overridePath != null && overridePath.isNotEmpty) {
       return _resolveDirectory(
@@ -214,14 +240,17 @@ class SttModelStore {
         language: settings.language,
       );
     }
-    final entry = sttEntryById(settings.effectiveModelId);
+    // Precedence: an explicit `stt.model_id` in config wins, then the user's
+    // selection from the model sheet, then the catalog default.
+    final modelId = resolveModelId(settings, selectedModelId: selectedModelId);
+    final entry = sttEntryById(modelId);
     if (entry == null) {
       throw SttException(
         'model_unknown',
-        'model "${settings.effectiveModelId}" is not in the catalog',
+        'model "$modelId" is not in the catalog',
       );
     }
-    final dir = Directory(modelDir(entry.id));
+    final dir = modelDir(entry.id);
     if (!statusOf(entry).installed) return null;
     return SttModelFiles(
       modelId: entry.id,

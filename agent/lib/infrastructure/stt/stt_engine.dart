@@ -18,6 +18,12 @@ abstract class SttEngine {
   /// Typed events for this session. Completes when the worker closes.
   Stream<SttEvent> get events;
 
+  /// The readiness the worker already reported, if it has one.
+  ///
+  /// The engine loads the recognizer before a session subscribes to [events],
+  /// so the ready event must be replayable or the client would wait forever.
+  SttReadyEvent? get ready;
+
   /// Spawns the worker and loads the recognizer.
   Future<void> start(
     SttModelFiles files, {
@@ -57,9 +63,15 @@ class SherpaSttEngine implements SttEngine {
   bool _closed = false;
   bool _cancelled = false;
   int _droppedChunks = 0;
+  Completer<void>? _finished;
 
   @override
   Stream<SttEvent> get events => _events.stream;
+
+  SttReadyEvent? _readyEvent;
+
+  @override
+  SttReadyEvent? get ready => _readyEvent;
 
   @override
   Future<void> start(
@@ -79,12 +91,12 @@ class SherpaSttEngine implements SttEngine {
           final port = message['port'] as SendPort;
           if (!portCompleter.isCompleted) portCompleter.complete(port);
         case 'ready':
-          _emit(
-            SttReadyEvent(
-              loadMs: message['loadMs'] as int? ?? 0,
-              modelId: message['modelId'] as String? ?? modelId,
-            ),
+          final ready = SttReadyEvent(
+            loadMs: message['loadMs'] as int? ?? 0,
+            modelId: message['modelId'] as String? ?? modelId,
           );
+          _readyEvent = ready;
+          _emit(ready);
           if (!(_ready?.isCompleted ?? true)) _ready?.complete();
         case 'final':
           if (_cancelled || _closed) return;
@@ -102,6 +114,7 @@ class SherpaSttEngine implements SttEngine {
         case 'done':
           if (_cancelled || _closed) return;
           _emit(SttDoneEvent(droppedChunks: _droppedChunks));
+          if (!(_finished?.isCompleted ?? true)) _finished?.complete();
         case 'error':
           _emit(
             SttErrorEvent(
@@ -192,10 +205,23 @@ class SherpaSttEngine implements SttEngine {
     _inbox!.send({'cmd': 'audio', 'pcm': _queue.removeFirst()});
   }
 
+  /// Flushes the tail of the audio and resolves once the worker reports that
+  /// draining finished, so the caller can wait for the last segment before
+  /// tearing the worker down.
+  ///
+  /// A batch model decodes the whole utterance here, which is many times real
+  /// time on long recordings, so the wait is generous rather than a timeout in
+  /// disguise: closing early would throw the transcript away.
   @override
   Future<void> finish() async {
-    if (_closed) return;
-    _inbox?.send({'cmd': 'finish'});
+    if (_closed || _inbox == null) return;
+    final finished = Completer<void>();
+    _finished = finished;
+    _inbox!.send({'cmd': 'finish'});
+    await finished.future.timeout(
+      const Duration(seconds: 300),
+      onTimeout: () {},
+    );
   }
 
   @override

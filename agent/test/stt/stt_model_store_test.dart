@@ -56,6 +56,46 @@ void main() {
   }
 
   group('stt model store', () {
+    test('resolve returns real on-disk paths for an installed catalog model', () {
+      final entry = kSttCatalog.firstWhere((e) => e.id == 'whisper-base-int8');
+      Directory(store.modelDir(entry.id)).createSync(recursive: true);
+      for (final file in entry.files) {
+        final handle = File(
+          '${store.modelDir(entry.id)}/${file.name}',
+        ).openSync(mode: FileMode.write);
+        // Sparse files: only the declared length matters to statusOf().
+        handle.truncateSync(file.sizeBytes);
+        handle.closeSync();
+      }
+      writeVadAsset();
+
+      final files = store.resolve(
+        const SttSettings(),
+        selectedModelId: 'whisper-base-int8',
+      );
+
+      expect(files, isNotNull);
+      expect(files!.modelId, 'whisper-base-int8');
+      expect(File(files.encoder).existsSync(), isTrue);
+      expect(File(files.decoder).existsSync(), isTrue);
+      expect(File(files.tokens).existsSync(), isTrue);
+      expect(File(files.vad).existsSync(), isTrue);
+    });
+
+    test('resolveModelId prefers config, then the selection, then the default', () {
+      const fromConfig = SttSettings(modelId: 'whisper-base-int8');
+      const noConfig = SttSettings();
+
+      expect(
+        store.resolveModelId(fromConfig, selectedModelId: 'egy-whisper-turbo-int8'),
+        'whisper-base-int8',
+      );
+      expect(
+        store.resolveModelId(noConfig, selectedModelId: 'whisper-base-int8'),
+        'whisper-base-int8',
+      );
+      expect(store.resolveModelId(noConfig), defaultSttEntry.id);
+    });
     test('statusOf reports missing files and a missing vad asset', () {
       final payload = utf8.encode('hello');
       final entry = entryFor(payload);
@@ -88,6 +128,30 @@ void main() {
       expect(File('${destination.path}.partial').existsSync(), isFalse);
       expect(progress, isNotEmpty);
       expect(store.statusOf(entry).installed, isTrue);
+    });
+
+    test('install reports one cumulative total across artifacts', () async {
+      final payload = utf8.encode('cumulative payload');
+      final entry = entryFor(payload, url: await urlFor(payload));
+      final pairs = <String>[];
+
+      await store.install(
+        entry,
+        onProgress: (_, received, total) => pairs.add('$received/$total'),
+      );
+
+      expect(pairs, isNotEmpty);
+      final receivedValues = pairs
+          .map((pair) => int.parse(pair.split('/').first))
+          .toList();
+      final totals = pairs.map((pair) => int.parse(pair.split('/').last)).toSet();
+      // One grand total for the whole install, so the client bar is monotonic
+      // instead of restarting per file.
+      expect(totals, hasLength(1));
+      expect(receivedValues.last, totals.first);
+      for (var i = 1; i < receivedValues.length; i++) {
+        expect(receivedValues[i], greaterThanOrEqualTo(receivedValues[i - 1]));
+      }
     });
 
     test('a checksum mismatch never activates the file', () async {

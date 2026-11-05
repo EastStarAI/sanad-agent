@@ -28,6 +28,7 @@ import 'package:sanad_client/utils/workspace_picker_helper.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/widgets/voice_stream_panel.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_context_chips.dart';
 import 'package:sanad_client/features/conversations/domain/models/compaction_event_snapshot.dart';
@@ -77,6 +78,10 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   late final ConversationInputCubit _inputCubit;
   ConversationCacheRepository? _draftRepository;
   Timer? _draftSaveDebouncer;
+
+  /// True while a send is waiting for a live dictation session to finish, so a
+  /// second press cannot dispatch the same text twice.
+  bool _awaitingDictation = false;
   StreamSubscription? _draftCleanupSubscription;
   bool _isSettingDraftText = false;
   bool _hasUnsavedDraftChanges = false;
@@ -244,12 +249,37 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
   }) {
     if (inputSlice.isAwaitingMessageAcceptance) return;
     if (!_validateSelections(agentSlice, inputSlice)) return;
+    unawaited(_sendAfterDictation(intent: intent));
+  }
+
+  /// Sends the composer text, but never while dictation is still capturing.
+  ///
+  /// Pressing send mid-dictation must stop the session and wait for the
+  /// transcript, otherwise the message goes out with the text the composer had
+  /// *before* the user spoke and their words are silently dropped.
+  Future<void> _sendAfterDictation({
+    required MessageDeliveryIntent intent,
+  }) async {
+    if (_awaitingDictation) return;
+    final dictation = context.read<DictationCubit>();
+    if (dictation.state.isActive) {
+      _awaitingDictation = true;
+      try {
+        await dictation.stopAndWait();
+      } finally {
+        _awaitingDictation = false;
+      }
+      if (!mounted) return;
+      // The transcript is written by the composer's listener; let that frame
+      // land before reading the controller back.
+      await Future<void>.delayed(Duration.zero);
+      if (!mounted) return;
+    }
 
     final dispatchExport = _chatController.exportForDispatch();
     final text = dispatchExport.plainText.trim();
     if (text.isEmpty) return;
-
-    unawaited(_dispatchComposerText(text, intent: intent));
+    await _dispatchComposerText(text, intent: intent);
   }
 
   Future<void> _dispatchComposerText(

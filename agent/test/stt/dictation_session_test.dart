@@ -14,9 +14,15 @@ class _FakeEngine implements SttEngine {
   bool cancelCalled = false;
   bool disposed = false;
   bool started = false;
+  Completer<void>? finishGate;
 
   @override
   Stream<SttEvent> get events => _events.stream;
+
+  SttReadyEvent? readyEvent;
+
+  @override
+  SttReadyEvent? get ready => readyEvent;
 
   @override
   Future<void> start(
@@ -31,7 +37,12 @@ class _FakeEngine implements SttEngine {
   void acceptAudio(Uint8List pcm16) => audio.add(pcm16.length);
 
   @override
-  Future<void> finish() async => finishCalled = true;
+  Future<void> finish() async {
+    finishCalled = true;
+    final gate = finishGate;
+    if (gate != null) await gate.future;
+    emit(const SttDoneEvent(droppedChunks: 0));
+  }
 
   @override
   Future<void> cancel() async => cancelCalled = true;
@@ -123,6 +134,19 @@ void main() {
       await session.close();
     });
 
+    test('replays readiness the engine reported before the session attached', () async {
+      engine.readyEvent = const SttReadyEvent(loadMs: 321, modelId: 'test-model');
+      final session = sessionWith();
+      await session.start();
+      await Future<void>.delayed(Duration.zero);
+
+      // Without the replay the client would sit in its loading state forever.
+      final ready = channel.eventsOf('dictation_ready');
+      expect(ready, hasLength(1));
+      expect(ready.single['load_ms'], 321);
+      await session.close();
+    });
+
     test('forwards microphone audio to the engine only while open', () async {
       final session = sessionWith();
       await session.start();
@@ -134,6 +158,28 @@ void main() {
       if (!channel.closed) channel.addAudio([5, 6]);
       await Future<void>.delayed(Duration.zero);
       expect(engine.audio, [4]);
+    });
+
+    test('a stop waits for the drain before closing the channel', () async {
+      final gate = Completer<void>();
+      engine.finishGate = gate;
+      final session = sessionWith();
+      await session.start();
+      channel.sendCommand(DictationCommand.stop);
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      // The trailing audio is still being decoded: the client must keep the
+      // channel open so the final segment and `done` still reach it.
+      expect(engine.finishCalled, isTrue);
+      expect(channel.closed, isFalse);
+      expect(channel.eventsOf('dictation_done'), isEmpty);
+
+      gate.complete();
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(channel.eventsOf('dictation_done'), hasLength(1));
+      expect(channel.closed, isTrue);
+      expect(engine.disposed, isTrue);
     });
 
     test('a stop command drains the engine and closes the channel', () async {

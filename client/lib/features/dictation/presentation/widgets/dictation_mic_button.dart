@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:logging/logging.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
@@ -50,11 +51,12 @@ class DictationMicButton extends StatefulWidget {
 }
 
 class _DictationMicButtonState extends State<DictationMicButton> {
+  static final _logger = Logger('DictationMicButton');
+
   final DictationInsertion _insertion = DictationInsertion();
   String _appliedText = '';
-  Timer? _ticker;
-  Duration _elapsed = Duration.zero;
   String? _announcedCode;
+  double _lastLoggedLevel = -1;
 
   @override
   void initState() {
@@ -81,16 +83,12 @@ class _DictationMicButtonState extends State<DictationMicButton> {
   @override
   void dispose() {
     widget.chatController.removeListener(_onControllerChanged);
-    _ticker?.cancel();
     super.dispose();
   }
 
   void _resetLocalState() {
     _insertion.reset();
     _appliedText = '';
-    _ticker?.cancel();
-    _ticker = null;
-    _elapsed = Duration.zero;
     _announcedCode = null;
   }
 
@@ -114,26 +112,15 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     _appliedText = text;
   }
 
-  void _startTicker() {
-    _ticker?.cancel();
-    _elapsed = Duration.zero;
-    _ticker = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (!mounted) {
-        timer.cancel();
-        return;
-      }
-      setState(() => _elapsed += const Duration(seconds: 1));
-      if (_elapsed >= widget.sessionLimit) {
-        timer.cancel();
-        unawaited(context.read<DictationCubit>().stopForLimit());
-      }
-    });
-  }
-
-  void _stopTicker() {
-    _ticker?.cancel();
-    _ticker = null;
-    if (_elapsed != Duration.zero) setState(() => _elapsed = Duration.zero);
+  /// Ends the session in the composer: cancelled text is removed, while a
+  /// finished one stays as ordinary user text that the next session must not
+  /// own or rewrite.
+  void _settle(DictationState state) {
+    if (state.discardText) {
+      _insertion.removeOwned(widget.chatController);
+    }
+    _insertion.reset();
+    _appliedText = '';
   }
 
   Future<void> _onPressed(DictationState state) async {
@@ -143,19 +130,31 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     switch (state.status) {
       case DictationStatus.idle:
         _resetLocalState();
-        await cubit.start(device);
-        if (!mounted) return;
-        if (cubit.state.sessionNeedsFirstUseSheet) {
-          await DictationModelSheet.show(
-            context,
-            device: device,
-            isFirstUse: true,
-          );
+        // One press starts recording when a model is ready; the sheet only
+        // appears when there is nothing to record with (or on long press).
+        if (cubit.state.model.models.isEmpty) {
+          // The composer has not talked to the daemon yet this run: ask for the
+          // catalog once, so an already-installed model starts immediately
+          // instead of showing the sheet on the first press.
+          await cubit.refreshStatus(device);
+          if (!mounted) return;
+        }
+        final ready = cubit.state.model.isReady &&
+            cubit.state.model.unavailableReason == null;
+        _logger.info(
+          'dictation press: ready=$ready '
+          'selected=${cubit.state.model.selectedModelId} '
+          'models=${cubit.state.model.models.length} '
+          'reason=${cubit.state.model.unavailableReason}',
+        );
+        if (!ready) {
+          await DictationModelSheet.show(context, device: device);
           return;
         }
-        if (cubit.state.isActive) _startTicker();
+        // Pin the insertion to the caret the user had when they pressed.
+        _insertion.begin(widget.chatController);
+        await cubit.start(device);
       case DictationStatus.listening:
-        _stopTicker();
         await cubit.stop();
         if (!mounted) return;
         widget.focusNode?.requestFocus();
@@ -169,7 +168,6 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     final device = widget.device;
     if (device == null) return;
     if (state.isActive) {
-      _stopTicker();
       await context.read<DictationCubit>().cancel();
       if (!mounted) return;
     }
@@ -189,15 +187,10 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     };
     _announcedCode = code;
     if (message == null) return;
+    _logger.info('dictation announce code=$code');
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
       SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
     );
-  }
-
-  String get _elapsedLabel {
-    final minutes = _elapsed.inMinutes;
-    final seconds = _elapsed.inSeconds.remainder(60);
-    return '$minutes:${seconds.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -209,9 +202,18 @@ class _DictationMicButtonState extends State<DictationMicButton> {
           previous.errorCode != current.errorCode ||
           previous.status != current.status,
       listener: (context, state) {
+        // A new session can hit the same condition again (say, two silent
+        // attempts in a row), so the announced code only guards one session.
+        if (state.status == DictationStatus.preparing ||
+            state.status == DictationStatus.listening) {
+          _announcedCode = null;
+        }
         _announce(state);
-        _syncText(state);
-        if (!state.isActive) _stopTicker();
+        if (state.status == DictationStatus.idle) {
+          _settle(state);
+        } else {
+          _syncText(state);
+        }
         if (state.status == DictationStatus.listening) {
           widget.focusNode?.unfocus();
         }
@@ -222,6 +224,14 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       },
       builder: (context, state) {
         final isActive = state.isActive;
+        // TEMP diagnostics: proves the widget receives level changes at all.
+        if (state.status == DictationStatus.listening &&
+            (state.level - _lastLoggedLevel).abs() > 0.2) {
+          _lastLoggedLevel = state.level;
+          _logger.info(
+            'dictation meter render level=${state.level.toStringAsFixed(2)}',
+          );
+        }
         final isBusy =
             state.status == DictationStatus.preparing ||
             state.status == DictationStatus.finalizing;
@@ -231,25 +241,16 @@ class _DictationMicButtonState extends State<DictationMicButton> {
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            if (isActive && _elapsed != Duration.zero) ...[
-              Text(
-                _elapsedLabel,
-                key: const Key('dictation_elapsed'),
-                style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: Theme.of(context).colorScheme.error,
-                      fontFeatures: const [FontFeature.tabularFigures()],
-                    ),
-              ),
-              const SizedBox(width: 6),
-            ],
             SizedBox(
               width: 32,
               height: 32,
               child: IconButton(
                 key: const Key('dictation_mic_btn'),
-                tooltip: isActive
-                    ? '${l10n.dictationStopTooltip} · $_elapsedLabel'
-                    : l10n.dictationStartTooltip,
+                tooltip: isBusy
+                    ? l10n.dictationPreparingTooltip
+                    : isActive
+                        ? l10n.dictationStopTooltip
+                        : l10n.dictationStartTooltip,
                 onPressed:
                     widget.device == null ? null : () => _onPressed(state),
                 onLongPress:
@@ -273,11 +274,19 @@ class _DictationMicButtonState extends State<DictationMicButton> {
                         child:
                             AppProgressIndicator(strokeWidth: 2, color: color),
                       )
-                    : Icon(
-                        isActive ? Symbols.stop_circle : Symbols.mic,
-                        size: 18,
-                        color: isActive ? color : (widget.dimTextColor ?? color),
-                      ),
+                    : state.status == DictationStatus.listening
+                        // The button *is* the meter while capturing: the user
+                        // watches the microphone, not a separate widget.
+                        ? _VoiceMeter(
+                            key: const Key('dictation_level'),
+                            level: state.level,
+                            color: color,
+                          )
+                        : Icon(
+                            Symbols.mic,
+                            size: 18,
+                            color: widget.dimTextColor ?? color,
+                          ),
               ),
             ),
           ],
@@ -286,3 +295,44 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     );
   }
 }
+
+/// Live loudness meter drawn inside the mic button while audio is captured.
+///
+/// Replaces both the old elapsed timer and the static stop icon: the button
+/// itself shows that the microphone is hearing the user.
+class _VoiceMeter extends StatelessWidget {
+  const _VoiceMeter({super.key, required this.level, required this.color});
+
+  final double level;
+  final Color color;
+
+  static const List<double> _weights = [0.45, 0.75, 1.0, 0.75, 0.45];
+
+  @override
+  Widget build(BuildContext context) {
+    final clamped = level.clamp(0.0, 1.0);
+    return SizedBox(
+      width: 28,
+      height: 24,
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          for (final weight in _weights)
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 60),
+              curve: Curves.easeOut,
+              width: 4,
+              // 5 px at silence up to the full 24 px, shaped by the bar weight.
+              height: 5 + (19 * clamped * weight),
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.7 + (0.3 * clamped)),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+

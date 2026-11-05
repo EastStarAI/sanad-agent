@@ -24,7 +24,9 @@ Add a dictation mic button to the conversation composer that sends microphone PC
 - **Out of scope:** streaming-catalog model, Windows/Linux support, language auto-detection, multi-model simultaneous load, dictation into any field other than the composer, changes to the text protocol, changes to `AgentRunner`.
 
 ## Open decision (owner)
-- **Hosting for the Egyptian ONNX artifact.** The light model can be pinned from the public sherpa-onnx whisper-base release. The Egyptian model has no public URL yet. Until the owner publishes it (recommended: a Hugging Face repo with pinned file list, sizes, and SHA-256), the supported path is `stt.model_path` pointing at a locally exported ONNX directory, and `egy-whisper-turbo-int8` is marked "not hosted yet" in the catalog. This does not block G0/G1/G2.
+- **Hosting for the Egyptian ONNX artifact — decided (owner, live-test follow-up).** The light model already reuses the public `csukuangfj/sherpa-onnx-whisper-base` repository; nothing new is published for it. The Egyptian fine-tune upstream (`mohammedaly22/whisper-large-v3-turbo-egyptian-code-switching`) is public but ships PyTorch weights only, so sherpa cannot consume it. Decision: publish our exported ONNX in a dedicated public Hugging Face model repo under the org (`EastStarAI/sanad-egy-whisper-turbo-int8`, ~989 MB: encoder 674,622,359 B, decoder 361,070,805 B, tokens 816,730 B, plus the shared `silero_vad.onnx`), free and fully under our control, with the pinned SHA-256 digests already recorded in G0. Optional later: propose the same folder upstream so the fine-tune repo also carries the sherpa artifacts. Until the repo is published the catalog keeps `hosted: false` and `stt.model_path` stays the supported local path.
+- **No automatic model selection.** After a download completes the user still presses Use; the client never sends `select` on its own.
+- **Mic press policy.** One press starts recording when a model is selected and installed; when none is ready it opens the model sheet. Long press always opens the sheet.
 
 ## Gates
 
@@ -79,10 +81,36 @@ Reference: `refrence_projects/hermes-agent` (`use-voice-recorder.ts`, `stt-lease
 - [x] **5. One undo step per dictation session.** Cancel removes the whole session range in one write, returning the composer to its pre-session text; edits the user made outside the range are untouched (covered by widget and insertion tests). No client-side undo stack exists to integrate with, so the session is its own unit.
 - [x] **6. One dictation lease per daemon.** `DictationService.acquireSession()/releaseSession()` allows a single session; a second one is refused with `dictation_busy`, the lease is released on teardown and on engine-start failure, and `stt_status` advertises `busy`.
 
-### G5 — Generic streaming engine (after v1)
-- [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer` emitting `dictation_partial` + `dictation_final`; the worker isolate is reused.
-- [ ] Catalog entry with `mode: streaming`, validated with a public English streaming model (no Arabic streaming model exists in sherpa today).
-- [ ] No transport, protocol, or UI change: the client already renders partials and honours `dictation_preview`.
+### G2c — Live-test findings (owner-reported, in progress)
+Reported while testing the running build: no visible download state, the sheet reopening on every press, and the hosted-model question.
+
+- [x] **Install progress is owned by the cubit, not the sheet.** `DictationModelStatus.installingModelId` is set when `install` is sent and cleared only when `stt_status` reports that model installed or a `dictation_error` arrives, so the bar survives rebuilds; the tile shows a spinner plus a percentage and a localized "Downloading…" label.
+- [x] **Cumulative progress in the daemon.** `SttModelStore.install` counts the shared VAD plus every catalog file into one grand total and reports `offsetBase + received` against it, so the bar rises monotonically instead of restarting per file.
+- [x] **Mic press policy.** One press starts recording when the selected model is installed; when nothing is ready it opens the sheet, and a long press always opens it. The sticky `sessionNeedsFirstUseSheet` flag no longer drives the button, so a completed install cannot re-open the sheet on every press.
+- [x] **No auto-select after download** (owner decision): the user still presses Use.
+- [x] **Publish the Egyptian ONNX** and flip the catalog entry to `hosted: true`. Done 2026-11-05: public repo `AhmedAttia3/sanad-egy-whisper-turbo-int8` (MIT, model card, three artifacts with pinned sizes/SHAs); a clean-home download verified 1037 MB at 2.8 MB/s with checksum match. `EastStarAI` does not exist on the Hub (404) and the token cannot create orgs, so the namespace is the owner's account until the org is created and the repo transferred (one URL edit here).
+- [ ] Tests for the new state (install start → progress → completion clears; press policy with and without a ready model).
+
+### G2d — Single-pass batch, cursor insertion, state-driven mic UI (owner-corrected 2026-11-05)
+
+Live testing showed the chunked attempt itself is the defect: a 4 s forced cut lands in
+mid-word, so each segment decodes from a broken boundary and the composer receives
+fragmented text. The owner rejected that behaviour: a model either streams, or receives
+the whole utterance once.
+
+- [ ] **Engine contract carries the capability.** `SttCatalogEntry.mode` (`batchVad` | `streaming`) plus `supportsPartial` reach the client through `stt_status`, so the UI picks the interaction per model instead of assuming one.
+- [ ] **Batch = one decode, at the end.** The daemon buffers the whole session audio (16 kHz mono PCM16) up to the cap and decodes once on `stop`; no forced cut, no mid-speech `partial`/`final`, exactly one `dictation_final` (empty when nothing was recognized) followed by `dictation_done`. The 4 s cut and the segment cadence are removed, not tuned.
+- [ ] **Streaming = one decode loop, live text.** A `mode: streaming` entry feeds `OnlineRecognizer` chunk by chunk and publishes incremental text; the client renders it in place.
+- [ ] **Session cap by bytes** (5 minutes of PCM16 ≈ 9.6 MB) with the existing `session_limit` error, since unbounded buffering is the one new risk of single-pass.
+- [ ] **Insertion anchored at the caret.** The insertion range is captured at session start and the final text is written there once; nothing accumulates across sessions and user text before/after the caret is untouched.
+- [ ] **Mic UI is state-driven.** No elapsed timer: `loading` while the model readies → `ready/listening` with the loudness meter **drawn inside the mic button** (log-scale level, ~16 Hz) → `loading` again from stop until the transcript lands in the composer.
+- [ ] **Preview policy control removed** (owner decision 2026-11-05): the sheet's Live/When-stopped switch promised a behaviour the batch path no longer has. `previewPolicy` stays internal (live by default) so a streaming model renders partials without any UI change.
+- [ ] Tests: daemon (single decode, no partial for batch, cap), cubit (one final, no partial for batch, insertion offsets), widget (no timer key, three-state affordance, text lands at the caret with surrounding draft preserved).
+
+### G5 — Streaming path proven with a light English model (owner-approved, after G2d)
+- [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer`, selected by `mode: streaming`; the worker isolate is reused and no transport/UI fork is introduced.
+- [ ] Catalog entry with `mode: streaming` pointing at a public, sherpa-packaged, light English streaming model (English-only is acceptable and expected; no Arabic streaming model exists in sherpa today), installed through the same hosted download path.
+- [ ] Live A/B evidence: the streaming entry shows live text in the composer while the Arabic batch entry lands one text block at stop, both inserted at the caret.
 - [ ] Explicitly excluded: model-specific ONNX surgery for third-party exports (see G0b).
 
 ### G0b — Nawah (NeMo TDT, Arabic) — deprioritized
@@ -101,7 +129,10 @@ Reference: `refrence_projects/hermes-agent` (`use-voice-recorder.ts`, `stt-lease
 ## Acceptance Criteria
 - [ ] Given a macOS arm64 device with dictation supported and no model installed, when the user presses the mic button, then one sheet offers the catalog entries, and after a confirmed download the session starts without leaving the composer.
 - [ ] Given an active dictation session, when the user speaks Arabic, then daemon-emitted transcript text appears in the composer within the measured first-final latency and is never sourced from the client.
-- [ ] Given a batch model, when a VAD segment ends, then exactly one `final` for that segment is published and no later event mutates it.
+- [ ] Given a batch model, when the user stops the session, then exactly one `final` carries the whole utterance and no text was published mid-speech.
+- [ ] Given any model, when the transcript lands, then it starts at the caret captured at session start and leaves the user's surrounding draft untouched.
+- [ ] Given a streaming model, when the user speaks, then partial text updates in place and the final replaces it without duplication.
+- [ ] Given a dictation session, when the model is readying or the transcript is still being drained, then the mic shows a loading affordance, and a voice visualization only while audio is being captured (no elapsed timer).
 - [ ] Given a partial is displayed, when the user types into the composer, then the typed text is preserved and only the dictation-owned range is replaced.
 - [ ] Given the client disconnects, cancels, or the daemon shuts down mid-session, then no further transcript event is published, the recognizer and queue are released, and the composer keeps the last committed text.
 - [ ] Given `stt.model_path` points at a valid sherpa ONNX directory, when the daemon starts, then that model is used with no download and no SHA requirement.
@@ -144,7 +175,7 @@ observed), queue high-water 200 chunks (≈20 s) so the longest decode never dro
 audio.
 
 ## Current status
-- Current gate: `G2 — Client dictation surface` closed (settings surface deferred to G6 by owner decision); v1 closes locally at G3.
-- Remaining work: G2 then G3 (v1, local macOS). G5 (generic streaming engine) follows v1. G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact. Hosted delivery is not tracked in this public plan.
+- Current gate: **G2d** (single-pass batch, cursor insertion, state-driven mic UI) after live testing rejected the chunked VAD cadence; G5 (English streaming proof) follows it, and G3 closes v1.
+- Remaining work: G2d then G5 then G3 (v1, local macOS). G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact. Hosted delivery of the Egyptian artifacts is done (see G2c).
 - Uncommitted at handoff: G1 daemon runtime, catalog, store, settings, session, route, capability, 39 tests, probe tools.
 - Open owner decision: hosting URL for the Egyptian ONNX artifacts (see "Open decision"); the light public model unblocks the full download path meanwhile.

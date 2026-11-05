@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_catalog.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_model_store.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -136,9 +138,25 @@ stt:
     });
 
     test('an unhosted model reports not_hosted instead of hanging', () async {
-      final egyptian = kSttCatalog.firstWhere((entry) => !entry.hosted);
+      const unhosted = SttCatalogEntry(
+        id: 'unhosted-entry',
+        label: 'Unhosted',
+        note: 'no pinned URL',
+        mode: SttModelMode.batchVad,
+        language: 'ar',
+        hosted: false,
+        files: [
+          SttModelFile(
+            name: 'missing.onnx',
+            url: '',
+            sizeBytes: 1,
+            sha256:
+                '0000000000000000000000000000000000000000000000000000000000000000',
+          ),
+        ],
+      );
       await expectLater(
-        service().install(egyptian.id),
+        SttModelStore(sanadHome: home.path).install(unhosted),
         throwsA(
           isA<Object>().having(
             (error) => error.toString(),

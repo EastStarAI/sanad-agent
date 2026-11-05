@@ -18,6 +18,7 @@ class DictationInsertion {
   int? _end;
   String _owned = '';
   String? _pending;
+  int? _anchor;
 
   bool get hasRange => _start != null;
 
@@ -27,11 +28,20 @@ class DictationInsertion {
   /// True when a write was deferred because an IME composition is live.
   bool get hasPending => _pending != null;
 
+  /// Pins the insertion point to the caret the user had when the session
+  /// started, so a transcript written at stop still lands where they began
+  /// instead of wherever the caret wandered to.
+  void begin(TextEditingController controller) {
+    reset();
+    _anchor = _caretOffset(controller.value);
+  }
+
   void reset() {
     _start = null;
     _end = null;
     _owned = '';
     _pending = null;
+    _anchor = null;
   }
 
   /// Applies [text] (the full session text so far) to [controller].
@@ -53,7 +63,7 @@ class DictationInsertion {
     final end = _end;
 
     if (start == null || end == null) {
-      final caret = _caretOffset(value);
+      final caret = (_anchor ?? _caretOffset(value)).clamp(0, value.text.length);
       final separator = _needsSeparator(value.text, caret) ? ' ' : '';
       final insertAt = caret + separator.length;
       _replace(controller, value, caret, caret, '$separator$text');
@@ -80,7 +90,8 @@ class DictationInsertion {
       reset();
       return;
     }
-    final caret = _caretOffset(value);
+    final caret =
+        (_anchor ?? _caretOffset(value)).clamp(0, value.text.length);
     final separator = _needsSeparator(value.text, caret) ? ' ' : '';
     final insertAt = caret + separator.length;
     _replace(controller, value, caret, caret, '$separator$tail');

@@ -28,11 +28,17 @@ class DictationModelSheet extends StatefulWidget {
     required DeviceConfig device,
     bool isFirstUse = false,
   }) {
+    // The sheet is pushed on a new route, so carry the cubit explicitly instead
+    // of relying on the composer's provider ancestry.
+    final cubit = context.read<DictationCubit>();
     return showDialog<void>(
       context: context,
-      builder: (_) => DictationModelSheet(
-        device: device,
-        isFirstUse: isFirstUse,
+      builder: (_) => BlocProvider.value(
+        value: cubit,
+        child: DictationModelSheet(
+          device: device,
+          isFirstUse: isFirstUse,
+        ),
       ),
     );
   }
@@ -42,8 +48,6 @@ class DictationModelSheet extends StatefulWidget {
 }
 
 class _DictationModelSheetState extends State<DictationModelSheet> {
-  String? _installingId;
-
   @override
   void initState() {
     super.initState();
@@ -51,10 +55,10 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
     unawaited(context.read<DictationCubit>().refreshStatus(widget.device));
   }
 
-  Future<void> _download(DictationCubit cubit, String modelId) async {
-    setState(() => _installingId = modelId);
-    await cubit.installModel(modelId, device: widget.device);
-    if (mounted) setState(() => _installingId = null);
+  Future<void> _download(DictationCubit cubit, String modelId) {
+    // The cubit owns the installing state, so the progress bar keeps rendering
+    // until the daemon reports the model installed (no local flicker).
+    return cubit.installModel(modelId, device: widget.device);
   }
 
   @override
@@ -102,8 +106,8 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                     _ModelTile(
                       option: option,
                       selected: option.id == model.selectedModelId,
-                      isDownloading: _installingId == option.id,
-                      progress: _installingId == option.id
+                      isDownloading: model.installingModelId == option.id,
+                      progress: model.installingModelId == option.id
                           ? model.downloadProgress
                           : null,
                       onDownload: () => _download(cubit, option.id),
@@ -116,28 +120,6 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                     const SizedBox(height: 12),
                     Text(l10n.dictationModelRequired, style: bodyStyle),
                   ],
-                  const SizedBox(height: 12),
-                  Text(
-                    l10n.dictationPreviewPolicyTitle,
-                    style: theme.textTheme.labelLarge,
-                  ),
-                  const SizedBox(height: 6),
-                  SegmentedButton<DictationPreviewPolicy>(
-                    key: const Key('dictation_preview_policy'),
-                    segments: [
-                      ButtonSegment(
-                        value: DictationPreviewPolicy.live,
-                        label: Text(l10n.dictationPreviewLive),
-                      ),
-                      ButtonSegment(
-                        value: DictationPreviewPolicy.onStop,
-                        label: Text(l10n.dictationPreviewOnStop),
-                      ),
-                    ],
-                    selected: {state.previewPolicy},
-                    onSelectionChanged: (selection) =>
-                        cubit.setPreviewPolicy(selection.first),
-                  ),
                 ],
               ),
             ),
@@ -181,13 +163,23 @@ class _ModelTile extends StatelessWidget {
 
     Widget? action;
     if (isDownloading) {
-      action = SizedBox(
-        width: 20,
-        height: 20,
-        child: CircularProgressIndicator(
-          strokeWidth: 2,
-          value: progress,
-        ),
+      action = Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, value: progress),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            progress == null
+                ? l10n.dictationDownloading
+                : '${(progress! * 100).round()}%',
+            key: const Key('dictation_download_percent'),
+            style: theme.textTheme.labelSmall,
+          ),
+        ],
       );
     } else if (option.installed && !selected) {
       action = TextButton(

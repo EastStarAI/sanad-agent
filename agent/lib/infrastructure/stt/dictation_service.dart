@@ -283,6 +283,9 @@ class _DictationConnection {
           }
       }
     } on SttException catch (error) {
+      _logger.warning(
+        'dictation command failed: code=${error.code} message=${error.message}',
+      );
       transport.send('dictation_error', {
         'code': error.code,
         'message': error.message,
@@ -334,7 +337,10 @@ class _DictationConnection {
       });
       return;
     }
-    final files = service.store.resolve(service.settings);
+    final files = service.store.resolve(
+      service.settings,
+      selectedModelId: service.selectedModelId,
+    );
     if (files == null) {
       transport.send('dictation_error', {
         'code': 'model_not_installed',
