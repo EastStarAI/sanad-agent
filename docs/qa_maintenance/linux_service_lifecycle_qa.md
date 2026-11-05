@@ -33,6 +33,7 @@ The focused Agent suite must prove:
 - a root install entered through sudo producing the identical account and Home as a direct root install, and the installer never consulting `SUDO_USER`;
 - the installer's default dedicated Home equal to the Agent's shared policy constant (drift guard across the shell and Dart implementations);
 - `--run-as-user <account>` registering that existing account with its own Home and ownership, refusing an unknown account before any download, refusing a non-root install, and accepting `root` only by name with a warning;
+- the unit's account owning the Home the installing process wrote — a recursive ownership transfer and `0700` on the Home and `logs/` that runs after the startup files exist and before activation, a first install succeeding on a clean Home without a second run, and no transfer when the unit runs as the account that created the Home (`--run-as-user root`, user scope);
 - the installer stopping before download and pairing (exit `71`) when a surviving definition names another Home, with the exact removal command;
 - a service-account access preflight that refuses an `ExecStart` or working directory the unit's account cannot reach, before the definition is written or activated, and that keeps installing when the probing tool is absent;
 - a health window that polls the Home's Local Gateway credential until it appears and that fails with the credential message and the real attempt count when it never does;
@@ -85,8 +86,10 @@ on real clean hosts under G6 and G7:
    account) producing the identical unit, the identical Home, and no failure
    after the device authorization;
 3c. `install.sh --run-as-user <account>` on a clean host: the printed account and
-   Home, the transferred ownership, a unit whose `User=` is that account, and a
-   refusal (before download) for an unknown account or a non-root invocation;
+   Home, a unit whose `User=` is that account, the account's ownership of the
+   startup files `service install` wrote (`secret_vault.lock` included), a
+   daemon that becomes healthy on that first run, and a refusal (before
+   download) for an unknown account or a non-root invocation;
 4. OpenRC installation on a clean supported distribution.
 5. SSH logout and reboot, followed by bounded polling for `Running` and Online.
 6. Stop/start/restart/uninstall/reinstall and injected activation failure.

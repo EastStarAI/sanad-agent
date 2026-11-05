@@ -215,6 +215,15 @@ void main() {
         contains('Environment="HOME=${dedicatedHome.replaceAll(r'\', r'\\')}"'),
       );
       expect(Directory(dedicatedHome).existsSync(), isTrue);
+      // The dedicated path keeps its ownership transfer and owner-only modes.
+      expect(
+        host.commands,
+        contains('chown -R sanad-agent:sanad-agent $dedicatedHome'),
+      );
+      expect(
+        host.commands,
+        contains('chmod 0700 $dedicatedHome ${p.join(dedicatedHome, 'logs')}'),
+      );
     },
   );
 
@@ -462,6 +471,137 @@ void main() {
     expect(result.error, contains('requires a root installation'));
   });
 
+  test(
+    'run-as-user takes ownership of the Home the install process wrote',
+    () async {
+      Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+      final accountHome = p.join(root.path, 'home', 'ubuntu');
+      // The root `service install` process writes these before activation; the
+      // live failure was a root-owned `secret_vault.lock` the daemon could not
+      // open, so the ownership transfer has to cover them.
+      final serviceHome = Directory(p.join(accountHome, '.sanad'))
+        ..createSync(recursive: true);
+      for (final name in [
+        '.env',
+        'secret_vault.lock',
+        'agent_credential_backend.json',
+        'skills',
+        'workspaces',
+      ]) {
+        File(p.join(serviceHome.path, name)).writeAsStringSync('x');
+      }
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: '/root',
+        sanadHome: serviceHome.path,
+        runAsUser: 'ubuntu',
+        identity: const LinuxServiceIdentity(
+          userName: 'root',
+          groupName: 'root',
+          uid: 0,
+          home: '/root',
+          isRoot: true,
+        ),
+      );
+
+      final result = await manager.install();
+
+      expect(result.success, isTrue, reason: result.error);
+      // The transfer ran after those files existed, and before activation.
+      expect(host.homeEntriesAtChown, contains('secret_vault.lock'));
+      expect(host.homeEntriesAtChown, contains('skills'));
+      expect(
+        host.commands,
+        contains('chown -R ubuntu:ubuntu ${serviceHome.path}'),
+      );
+      final chownIndex = host.commands.indexWhere(
+        (command) => command.startsWith('chown -R ubuntu:ubuntu'),
+      );
+      final activationIndex = host.commands.indexWhere(
+        (command) => command.contains('enable --now'),
+      );
+      expect(chownIndex, isNonNegative);
+      expect(activationIndex, isNonNegative);
+      expect(chownIndex, lessThan(activationIndex));
+      expect(
+        host.commands,
+        contains(
+          'chmod 0700 ${serviceHome.path} ${p.join(serviceHome.path, 'logs')}',
+        ),
+      );
+    },
+  );
+
+  test('run-as-user succeeds on the first run against a clean Home', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    // Only the installer-provided Home exists; nothing was ever installed, so
+    // no service definition can make a second attempt succeed.
+    final serviceHome =
+        Directory(p.join(root.path, 'home', 'ubuntu', '.sanad'))
+          ..createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: serviceHome.path,
+      runAsUser: 'ubuntu',
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isTrue, reason: result.error);
+    expect(result.status.state, ServiceState.running);
+    expect(
+      host.commands,
+      contains('chown -R ubuntu:ubuntu ${serviceHome.path}'),
+    );
+    final unit = File(
+      p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+    ).readAsStringSync();
+    expect(unit, contains('User=ubuntu'));
+    // The install process wrote the Home, so the daemon it starts as `ubuntu`
+    // must be able to read the Secret Vault and credential locks in it.
+    expect(
+      host.commands,
+      contains(
+        'chmod 0700 ${serviceHome.path} ${p.join(serviceHome.path, 'logs')}',
+      ),
+    );
+  });
+
+  test('run-as-user root keeps the Home it owns', () async {
+    Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
+    final manager = _manager(
+      host: host,
+      paths: paths,
+      loginHome: '/root',
+      sanadHome: sanadHome.path,
+      runAsUser: 'root',
+      identity: const LinuxServiceIdentity(
+        userName: 'root',
+        groupName: 'root',
+        uid: 0,
+        home: '/root',
+        isRoot: true,
+      ),
+    );
+
+    final result = await manager.install();
+
+    expect(result.success, isTrue, reason: result.error);
+    // Root owns its own Home: no ownership transfer, no permission rewrite.
+    expect(host.commands, isNot(contains(startsWith('chown -R'))));
+    expect(host.commands, isNot(contains(startsWith('chmod 0700'))));
+  });
+
   test('one policy decides the system account', () {
     expect(
       SystemServiceAccount.usesDedicatedAccount(isRoot: true),
@@ -646,6 +786,8 @@ void main() {
       expect(host.linger, isFalse);
       expect(host.commands, isNot(contains(contains('loginctl'))));
       expect(host.commands, isNot(contains(contains('sudo'))));
+      // A user-scope unit runs as the caller, who already owns the Home.
+      expect(host.commands, isNot(contains(startsWith('chown -R'))));
       final unit = File(
         p.join(loginHome.path, '.config/systemd/user/sanad-agent.service'),
       ).readAsStringSync();
@@ -783,6 +925,9 @@ class _FakeServiceHost {
   final Set<String> inaccessiblePaths = {};
   final List<String> commands = [];
 
+  /// Entries the Home held when the last ownership transfer ran.
+  List<String> homeEntriesAtChown = const [];
+
   Future<ServiceProcessResult> run(
     String executable,
     List<String> arguments,
@@ -814,6 +959,13 @@ class _FakeServiceHost {
       final target = arguments[3];
       File(target).parent.createSync(recursive: true);
       File(source).copySync(target);
+      return _result(true);
+    }
+    if (executable == 'chown') {
+      final home = Directory(arguments.last);
+      homeEntriesAtChown = home.existsSync()
+          ? home.listSync().map((entry) => p.basename(entry.path)).toList()
+          : const [];
       return _result(true);
     }
     if (executable == 'cp') {

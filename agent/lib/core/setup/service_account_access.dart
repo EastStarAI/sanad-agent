@@ -1,4 +1,41 @@
+import 'package:path/path.dart' as p;
+
 import 'service_models.dart';
+
+/// Runs one command in the caller's root context, or through `sudo` when the
+/// caller is not root.
+typedef PrivilegedRunner =
+    Future<ServiceProcessResult> Function(
+      String executable,
+      List<String> arguments,
+    );
+
+/// Gives the unit's account ownership of a Home another account created, and
+/// restricts it to owner access.
+///
+/// A system unit starts after the installing process wrote that Home, so the
+/// unit's account must own every file the daemon opens on startup — the Secret
+/// Vault, its locks, and the credential backend metadata — or the daemon exits
+/// on a permission error and the install times out waiting for a service that
+/// can never become healthy.
+Future<ServiceProcessResult> secureServiceAccountHome({
+  required PrivilegedRunner runPrivileged,
+  required String targetHome,
+  required String userName,
+  required String groupName,
+}) async {
+  final ownership = await runPrivileged('chown', [
+    '-R',
+    '$userName:$groupName',
+    targetHome,
+  ]);
+  if (!ownership.succeeded) return ownership;
+  return runPrivileged('chmod', [
+    '0700',
+    targetHome,
+    p.join(targetHome, 'logs'),
+  ]);
+}
 
 /// Proof that the account a system-scope unit runs as can reach the paths that
 /// unit names.

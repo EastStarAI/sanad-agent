@@ -99,7 +99,8 @@ Flutter client there.
    Settings sidebar to open **Add device**.
 3. Give the device a name.
 4. Copy the complete generated command and run it once on the target computer
-   or server. Do not extract, reconstruct, or share its embedded credential.
+   or server (on a Linux server, hand its stdin to `sudo bash -s --`). Do not
+   extract, reconstruct, or share its embedded credential.
 
 The installer detects the operating system and architecture, reads the public
 release manifest, verifies the selected artifact, installs the `sanad` command,
@@ -119,6 +120,19 @@ For macOS or Linux:
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh | bash
 ```
+
+On a Linux server, run the same installer with `sudo` so the service runs as the
+dedicated unprivileged `sanad-agent` account from `/var/lib/sanad-agent`:
+
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh | sudo bash
+```
+
+Prefer that form on every server: a cloud SSH account is usually a passwordless
+sudoer, so an Agent running as that account would be effectively root and could
+read the account's `~/.ssh` and cloud credentials. `--run-as-user <account>` is
+the deliberate alternative and `--run-as-user root` prints a warning that every
+Agent tool then runs with root privileges.
 
 For Windows PowerShell:
 

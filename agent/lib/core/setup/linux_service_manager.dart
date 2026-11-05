@@ -118,9 +118,22 @@ class LinuxServiceManager {
         if (!account.succeeded) {
           return _failure(await status(), account.conciseError);
         }
-        final ownership = await _secureDedicatedHome(
-          targetHome,
-          selection.identity,
+      }
+      // The Agent runs the unit as an account that did not create this Home: the
+      // `service install` process writes the Secret Vault, credential locks, and
+      // skill/workspace roots as root before activation, so the named account
+      // has to own them before the daemon starts. Root owns its own Home and a
+      // user-scope unit already runs as the caller, so both skip this step.
+      if (selection.identity.userName != current.userName) {
+        final ownership = await secureServiceAccountHome(
+          runPrivileged: (executable, arguments) => _runPrivileged(
+            executable,
+            arguments,
+            currentIsRoot: current.isRoot,
+          ),
+          targetHome: targetHome,
+          userName: selection.identity.userName,
+          groupName: selection.identity.groupName,
         );
         if (!ownership.succeeded) {
           return _failure(await status(), ownership.conciseError);
@@ -576,26 +589,6 @@ class LinuxServiceManager {
       '/usr/sbin/nologin',
       dedicatedUser,
     ], null);
-  }
-
-  Future<ServiceProcessResult> _secureDedicatedHome(
-    String targetHome,
-    LinuxServiceIdentity identity,
-  ) async {
-    final owner = '${identity.userName}:${identity.groupName}';
-    final ownership = await _runPrivileged('chown', [
-      '-R',
-      owner,
-      targetHome,
-    ], currentIsRoot: true);
-    if (!ownership.succeeded) {
-      return ownership;
-    }
-    return _runPrivileged('chmod', [
-      '0700',
-      targetHome,
-      p.join(targetHome, 'logs'),
-    ], currentIsRoot: true);
   }
 
   Future<ServiceStatus> _statusFor(

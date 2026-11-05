@@ -71,10 +71,9 @@ definition it proves the account named in the unit can reach the paths that unit
 names: it asks the kernel the same question systemd will ask, with `test -x` on
 `ExecStart` and on `WorkingDirectory` executed as that account. `test -x` needs
 search permission on every parent directory, so it fails exactly where activation
-would. The preflight runs after the dedicated home's ownership is fixed and
-before the definition is staged, so a refusal leaves no unit, no activation, and
-no rollback behind, and its message names the account, the unreachable path, and
-the remedy. A host that lacks the probing tool (`runuser` as root, `sudo`
+would. The preflight runs after the service account owns the Home and before the
+definition is staged, so a refusal leaves no unit, no activation, and no rollback
+behind, and its message names the account, the unreachable path, and the remedy. A host that lacks the probing tool (`runuser` as root, `sudo`
 otherwise) keeps installing: the probe is a guard, and the activation health
 transaction still has to prove the service is running.
 
@@ -85,12 +84,24 @@ An operator who needs the system unit to run as an existing account names it:
 <account>` together with the Home that account can reach. The account must exist
 (`getent passwd`), the install must run as root, and the choice is never silent —
 the installer prints the account and Home it will use. The installer places the
-Home at that account's own `~/.sanad`, gives that account ownership of the tree
-so the daemon can read the credentials pairing wrote, and passes the same account
-to `service install`; the preflight above then still has to pass. A non-root
-invocation may not name an account. `--run-as-user root` is accepted only when
-asked for by name and prints a warning, because every Agent tool, MCP server, and
-terminal task then inherits root's privileges.
+Home at that account's own `~/.sanad` and gives that account ownership of the
+tree, and passes the same account to `service install`; the preflight above then
+still has to pass. A non-root invocation may not name an account.
+`--run-as-user root` is accepted only when asked for by name and prints a
+warning, because every Agent tool, MCP server, and terminal task then inherits
+root's privileges.
+
+The installer's ownership pass cannot be the last word: `service install` runs
+as root afterwards and creates the daemon's startup files in that same Home —
+`.env`, `secret_vault.lock`, the credential backend and lock, `skills/`, and
+`workspaces/`. Before activation, `service install` therefore re-applies the same
+normalization the dedicated account receives — a recursive ownership transfer to
+the unit's account and `0700` on the Home and its `logs/` — to whichever Home the
+unit names. Without it the daemon cannot open `secret_vault.lock`, exits, and the
+install rolls back on its health timeout, so a clean Home would appear to need a
+second run. The step is skipped when the unit runs as the account that created
+the Home, so `--run-as-user root` and a user-scope unit keep their Home
+untouched.
 
 ### A surviving definition for another Home
 
@@ -171,9 +182,11 @@ instance. When durable user systemd is unavailable, a known legacy user unit is
 stopped, preserved until the replacement is healthy, then removed. Migration
 failure rolls back the replacement and restores the legacy unit.
 
-The direct-root dedicated home is recursively assigned to the service account
-and restricted to owner access before activation. Agent tools never execute as
-root merely because service registration required root privileges.
+The Home a system unit names is recursively assigned to the account that unit
+runs as and restricted to owner access before activation — for the dedicated
+`sanad-agent` account and for an explicit `--run-as-user <account>`, whose Home
+the installing process itself wrote. Agent tools never execute as root merely
+because service registration required root privileges.
 
 ## Installer health transaction
 

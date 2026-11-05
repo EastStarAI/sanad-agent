@@ -170,10 +170,37 @@ and the narrow firewall rule before changing settings. Bound retries.
 ## 5. Install and pair
 
 Check remote dependencies: Bash, curl, CA certificates, Python 3, `sha256sum`,
-working systemd, and sudo access for registration. On a fresh Ubuntu host install
-only missing packages (`sudo apt-get update` then the missing packages from
-`bash curl ca-certificates python3 coreutils`). Run the installer as the normal
-SSH user, not with `sudo bash`. It selects a durable non-root service.
+a working systemd, and sudo access. On a fresh Ubuntu host install only missing
+packages (`sudo apt-get update` then the missing packages from
+`bash curl ca-certificates python3 coreutils`).
+
+Run the official installer **with `sudo`** on a server:
+
+```bash
+curl -fsSL https://sanad.eaststarai.com/install.sh | sudo bash -s -- --login
+```
+
+The service then runs as the dedicated unprivileged `sanad-agent` account from
+`/var/lib/sanad-agent`. That is the point: a cloud SSH account is usually a
+passwordless sudoer, so an Agent running as that account is effectively root and
+can read `~/.ssh` and the cloud credentials stored for it, while the dedicated
+account cannot. `SUDO_USER` never changes the account, so `sudo -i`,
+`sudo bash install.sh`, and `curl … | sudo bash` all produce the same unit.
+
+Deliberate alternatives, never defaults:
+
+- `--run-as-user <existing-account>` runs the unit as that account with its Home
+  under `~account/.sanad`. The install must be root, the account must exist, and
+  the Agent still refuses a binary or Home that account cannot reach.
+- `--run-as-user root` prints a warning because every Agent tool then runs with
+  root privileges. Do not propose it.
+- `SANAD_HOME=<path>` relocates the state; the installer still refuses a Home the
+  service account cannot reach.
+
+If the installer reports that an existing Sanad service is registered for
+another Sanad Home, it stops before downloading anything and prints the removal
+command. Report that command; deleting a service definition stays the user's
+decision.
 
 Request: **"Open Sanad → Settings, then click + beside Devices in the Settings
 sidebar to open Add device. Name the device and send the complete Linux
@@ -191,10 +218,13 @@ consent loop. Do not repeat it in replies, plans, evals, reports, shell history,
 or diagnostic logs; disable shell tracing. Never claim zero exposure.
 
 Stream the complete unchanged command to a remote `bash -s` through stdin;
-keep `gcloud --command='bash -s'` and SSH argv credential-free. An owner-only
-temporary script may be used as transient transport when necessary; remove it
-in a finally path and never put it in the project. Do not extract or reconstruct
-the embedded credential. The current Client command itself uses the installer's
+keep `gcloud --command='bash -s'` and SSH argv credential-free. On a Linux
+server hand that stdin to `sudo bash -s` so the service lands in the dedicated
+account's Home; the script content stays byte-identical and the pairing
+credential still arrives on stdin. An owner-only temporary script may be used
+as transient transport when necessary; remove it in a finally path and never put
+it in the project. Do not extract or reconstruct the embedded credential. The
+current Client command itself uses the installer's
 `--pairing-token` argument, so remote installer process-argument exposure is
 possible even when SSH transport uses stdin. Do not falsely promise that the
 Client command already uses `--pairing-token-stdin`; changing Client/installer
@@ -207,9 +237,11 @@ it is not unattended authentication on a headless VM.
 The official installer verifies manifest origin, artifact size/SHA-256, expected
 version, local service health, and successful cloud registration before success.
 Accept that built-in success for the fast route; if unclear, perform one bounded
-`~/.sanad/bin/sanad --version` / `service status` check. Do not add routine reboot,
-logout durability tests, manual UI acceptance, billing reports, budgets, or model
-requests. Those belong to troubleshooting or explicitly requested validation.
+`/var/lib/sanad-agent/bin/sanad --version` / `service status` check, or use the
+`SANAD_HOME` recorded in the unit for a `--run-as-user` install. Do not add
+routine reboot, logout durability tests, manual UI acceptance, billing reports,
+budgets, or model requests. Those belong to troubleshooting or explicitly
+requested validation.
 
 Expired/used pairing command: ask for a fresh complete Add device command; do
 not repeatedly retry it or silently delete a device. On failure preserve existing
