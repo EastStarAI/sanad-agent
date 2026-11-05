@@ -263,6 +263,11 @@ class _SidebarBody extends StatelessWidget {
       } else {
         await sessionCubit.selectSession(hit.session);
       }
+      // The search hit is the authoritative Session for this id, and a
+      // route-restored selection can still be an identity placeholder that never
+      // learned its workspace. Adopting it here is what gives the header and the
+      // composer that session's real workspace and permission mode.
+      sessionCubit.adoptSelectedSession(hit.session);
       if (!context.mounted) return;
       context.go(AppRoutes.sessionLocation(device.id, hit.session.id));
       if (isDrawerMode && onClose != null) onClose!();

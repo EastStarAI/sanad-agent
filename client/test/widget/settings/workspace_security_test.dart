@@ -40,6 +40,7 @@ class _FakeSecurityClient implements WorkspaceSecurityClient {
     WorkspacePermissionMode? permissionMode,
     WorkspaceExecutionMode? executionMode,
     WorkspaceHostDiscoveryPolicy? hostDiscoveryPolicy,
+    String? sessionId,
   }) async {
     updates.add({
       'expected_revision': expectedRevision,

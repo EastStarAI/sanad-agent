@@ -201,10 +201,18 @@ abstract class ConversationClient {
     Map<String, String>? secretValues,
   });
   Future<WorkspacePolicy> getWorkspacePolicy(String workspacePath);
+
+  /// Applies [mode] to the workspace policy of [workspacePath].
+  ///
+  /// When [sessionId] names the conversation the change was made in, the
+  /// Agent also updates that session's own permission override, so a session
+  /// started with `sanad run --allow-all-tools` really loses or gains its tool
+  /// authority instead of only rendering a different label.
   Future<WorkspacePolicy> setWorkspacePermissionMode({
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   });
   Stream<WorkspacePolicy> watchWorkspacePolicy(String workspaceId);
 }

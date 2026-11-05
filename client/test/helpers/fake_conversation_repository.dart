@@ -887,6 +887,7 @@ class FakeConversationRepository implements ConversationRepository, AttachmentSe
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   }) async {
     setPermissionModeRequests.add({
       'device_id': agent.id,

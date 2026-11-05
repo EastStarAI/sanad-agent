@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:logging/logging.dart';
 import 'package:meta/meta.dart';
 import 'package:sanad_agent/core/di.dart';
-import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/session_queue_provider_override.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
@@ -23,7 +22,6 @@ import 'package:sanad_agent/evolution/models/pending_steer_record.dart';
 import 'package:sanad_agent/evolution/models/suspended_checkpoint.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
-import 'package:sanad_agent/interfaces/session_payload_builder.dart';
 
 import 'session_queue_coordinator.dart';
 import 'session_turn_executor.dart';
@@ -33,6 +31,7 @@ import 'suspended_checkpoint_store.dart';
 import 'session_restart_checkpoint_manager.dart';
 import 'session_stop_coordinator.dart';
 import 'session_metadata_resolver.dart';
+import 'session_creation_projector.dart';
 import 'session_command_outcome_publisher.dart';
 import 'session_compact_admission.dart';
 import 'session_input_classifier.dart';
@@ -92,6 +91,11 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
   late final SessionStopCoordinator _stopCoordinator;
   final SessionMetadataResolver _metadataResolver =
       const SessionMetadataResolver();
+  late final SessionCreationProjector _creationProjector =
+      SessionCreationProjector(
+        metadataResolver: _metadataResolver,
+        emitResponse: _emitResponse,
+      );
   final SessionInputClassifier _inputClassifier =
       const SessionInputClassifier();
   late final SessionCommandOutcomePublisher _outcomePublisher =
@@ -1033,57 +1037,12 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
     var thinkingRouteRevalidated = false;
 
     if (isNewSession) {
-      final initialTitle = _resolveInitialSessionTitle(event);
-      final sessionMetadata = await _buildWorkspaceSessionMetadata(
-        requestedWorkspaceId,
+      titleOwnerSession = await _creationProjector.createAndPublish(
+        event: event,
+        turnRequest: turnRequest,
+        requestedWorkspaceId: requestedWorkspaceId,
+        payloadModel: payloadModel,
       );
-
-      final model = (payloadModel != null && payloadModel.isNotEmpty)
-          ? payloadModel
-          : (getIt.isRegistered<Config>()
-                ? getIt<Config>().llmModel
-                : 'sanad-agent');
-
-      final session = SessionState(
-        sessionId: event.sessionId,
-        model: model,
-        providerId: turnRequest.effectiveProviderInstanceId,
-        thinkingMode: turnRequest.thinkingMode,
-        title: initialTitle.title,
-        titleStatus: initialTitle.isPlaceholder
-            ? SessionTitleStatus.pending
-            : SessionTitleStatus.finalized,
-        workspaceId: _workspaceIdFromMetadata(
-          sessionMetadata,
-          fallback: requestedWorkspaceId,
-        ),
-        createdAt: DateTime.now(),
-        updatedAt: DateTime.now(),
-      );
-      sessionManager.db.saveSession(session);
-      titleOwnerSession = session;
-      if (sessionMetadata.isNotEmpty) {
-        sessionManager.saveSessionMetadata(event.sessionId, sessionMetadata);
-      }
-
-      _emitResponse(
-        GatewayResponse(
-          sessionId: event.sessionId,
-          platformId: event.platformId,
-          message: Message(
-            role: MessageRole.assistant,
-            content: initialTitle.title,
-          ),
-          isSessionCreated: true,
-          isComplete: true,
-          runId: event.runId,
-          sessionPayload: buildSessionPayload(
-            session: session,
-            sessionMetadata: sessionMetadata,
-          ),
-        ),
-      );
-
       if (event.type == 'create_session') {
         return;
       }
@@ -1379,11 +1338,6 @@ class SessionRunOrchestrator implements SessionQueueProviderOverride {
       persist: persist,
     );
   }
-
-  ({String title, bool isPlaceholder}) _resolveInitialSessionTitle(
-    GatewayEvent event,
-  ) =>
-      _metadataResolver.resolveInitialSessionTitle(event);
 
   String? _resolveWorkspaceId(GatewayEvent event, {String? fallback}) =>
       _metadataResolver.resolveWorkspaceId(event, fallback: fallback);

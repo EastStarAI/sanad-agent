@@ -10,6 +10,7 @@ import 'package:sanad_agent/engine/runtime/tool_execution_coordinator.dart';
 import 'package:sanad_agent/evolution/attachments/attachment_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 
@@ -48,10 +49,12 @@ class LocalRuntimeOrchestrator {
       if (normalized != null) {
         metadata['execution_root'] = normalized;
       }
-    } else if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
-      final path = workspaceId.substring('exec_root:'.length);
-      final normalized = _runtimeContextBuilder.pathResolver
-          .validateAndNormalizeExecutionRoot(path);
+    } else if (isExecRootWorkspaceId(workspaceId)) {
+      final path = executionRootOfWorkspaceId(workspaceId);
+      final normalized = path == null
+          ? null
+          : _runtimeContextBuilder.pathResolver
+                .validateAndNormalizeExecutionRoot(path);
       if (normalized != null) {
         metadata['execution_root'] = normalized;
       }
@@ -67,24 +70,43 @@ class LocalRuntimeOrchestrator {
       }
     }
 
+    // A turn that does not state its own tool authority keeps the durable
+    // authority of the session it enters, as long as it does not retarget the
+    // session: a Client message into a session started with
+    // `sanad run --allow-all-tools` keeps those permissions, while a turn that
+    // moves the session to another root or workspace revokes them.
+    final storedRoot = existingSessionMetadata?['execution_root']
+        ?.toString()
+        .trim();
+    final turnRoot = metadata['execution_root']?.toString().trim();
+    final keepsRunTargeting = turnRoot != null && turnRoot.isNotEmpty
+        ? storedRoot == turnRoot
+        : workspaceId == null || workspaceId.isEmpty;
+    final existingAllowAllTools = existingSessionMetadata?['allow_all_tools'];
     if (request.metadata.containsKey('allow_all_tools')) {
       metadata['allow_all_tools'] =
           request.metadata['allow_all_tools'] == true ||
           request.metadata['allow_all_tools'] == 'true';
+    } else if (existingAllowAllTools != null && keepsRunTargeting) {
+      metadata['allow_all_tools'] =
+          existingAllowAllTools == true || existingAllowAllTools == 'true';
     } else {
       metadata['allow_all_tools'] = false;
     }
-    if (metadata['allow_all_tools'] != true &&
-        metadata['permission_mode'] == 'full_access') {
-      metadata['permission_mode'] = 'default_mode';
-    }
+    // The stored pair must describe the authority the Agent will enforce: a
+    // session without its own override falls back to the workspace policy, and
+    // one with it is full access. Keeping them in step means the Client can
+    // read the session's real mode instead of tracking a display-only change.
+    metadata['permission_mode'] = metadata['allow_all_tools'] == true
+        ? 'full_access'
+        : 'default_mode';
     // Session metadata is merged across turns; always record this turn's
     // authority so an earlier owner stamp can never carry over.
     metadata[CommandAuthority.payloadKey] = CommandAuthority.fromStamped(
       request.metadata[CommandAuthority.payloadKey],
     ).value;
 
-    if (workspaceId != null && workspaceId.startsWith('exec_root:')) {
+    if (isExecRootWorkspaceId(workspaceId)) {
       return metadata;
     }
 
