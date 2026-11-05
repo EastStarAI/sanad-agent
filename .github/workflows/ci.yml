@@ -63,9 +63,13 @@ jobs:
           esac
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
+          # `agent/test/fixtures/cli_relay_grammar.json` is Agent-owned but the
+          # Client reads it as a cross-component contract, so a change to it
+          # must run the Client lanes too. Add every Agent-to-Client contract
+          # fixture here; docs/operations/continuous_integration.md owns the rule.
           while IFS= read -r path; do
             case "$path" in agent/*|.agents/skills/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) agent=true ;; esac
-            case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json) client=true ;; esac
+            case "$path" in client/*|shared/auth_lock/*|release/contract/*|release/release-contract.json|agent/test/fixtures/cli_relay_grammar.json) client=true ;; esac
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_*.dart|scripts/release/*|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|shared/auth_lock/*|shared/auth_lock/**/*|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac

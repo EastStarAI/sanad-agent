@@ -248,6 +248,23 @@ void main() {
       );
     });
 
+    test('a value option declared for another command still consumes it', () {
+      // The relay reads the Agent's union grammar, so `--run-as-user`
+      // (`service install`) consumes its value even in an argv the Agent
+      // rejects for a session command. Reading it as a flag shifts the walk one
+      // token and binds the approval to the value instead of the session id.
+      expect(
+        clientCliSessionTargetFor([
+          'session',
+          'steer',
+          '--run-as-user',
+          'some-account',
+          'sess-B',
+        ]).sessionId,
+        'sess-B',
+      );
+    });
+
     test('reads an explicit --session option', () {
       expect(
         clientCliSessionTargetFor([
