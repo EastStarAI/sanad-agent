@@ -507,6 +507,7 @@
   "dictationUse": "استخدام",
   "dictationInstalled": "مثبّت",
   "dictationSelected": "محدد",
+  "dictationModeStreaming": "بث مباشر",
   "dictationNotHosted": "غير متاح للتنزيل بعد",
   "dictationUnavailableTitle": "الإملاء غير متاح على هذا الجهاز",
   "dictationModelRequired": "ثبّت نموذج إملاء للبدء.",

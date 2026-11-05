@@ -662,6 +662,7 @@
   "dictationUse": "Use",
   "dictationInstalled": "Installed",
   "dictationSelected": "Selected",
+  "dictationModeStreaming": "Live",
   "dictationNotHosted": "Not hosted yet",
   "dictationUnavailableTitle": "Dictation is not available on this device",
   "dictationModelRequired": "Install a dictation model to start.",

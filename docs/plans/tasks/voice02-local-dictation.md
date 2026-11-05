@@ -171,6 +171,11 @@ batch path does not need VAD, so this is acceptable for v1).
 - [ ] Windows/Linux: `supports_dictation` stays false with a reason and the button is not actionable — client test asserts it.
 - [ ] Owner decision needed: does dictation follow the **agent device** (a phone paired to a macOS agent can dictate) or the **client surface** (phone never shows the mic)? The daemon capability is per agent, so the current answer is the former; confirm before writing the mobile behaviour.
 
+### G9 — Replace SnackBars with the app-wide toast (owner request, 2026-11-05)
+- [x] Dictation notices (`no_speech`, `session_limit`, `microphone_denied`, `dictation_busy`) now use `ToastUtils.showInfo`; no `SnackBar` remains in the dictation feature.
+- [ ] Audit the rest of the client for `ScaffoldMessenger.showSnackBar` / `SnackBar(` and move each one to `ToastUtils` (`showInfo` / `showSuccess` / `showError`), keeping the message text and localized strings unchanged.
+- [ ] Record the decision in `client/AGENTS.md`: the toast surface owns transient user feedback; a SnackBar is only acceptable where a toast would be hidden (e.g. a full-screen modal barrier), and that exception must be stated at the call site.
+
 ## Acceptance Criteria
 - [ ] Given a macOS arm64 device with dictation supported and no model installed, when the user presses the mic button, then one sheet offers the catalog entries, and after a confirmed download the session starts without leaving the composer.
 - [ ] Given an active dictation session, when the user speaks Arabic, then daemon-emitted transcript text appears in the composer within the measured first-final latency and is never sourced from the client.

@@ -228,6 +228,29 @@ class _ModelTile extends StatelessWidget {
                           Icon(Icons.check_circle,
                               size: 14, color: colorScheme.primary),
                         ],
+                        // The mode is the one thing the note cannot be trusted to
+                        // carry: a streaming model writes while you speak, a batch
+                        // model lands the text when you stop.
+                        if (option.isStreaming) ...[
+                          const SizedBox(width: 6),
+                          Container(
+                            key: const Key('dictation_mode_streaming_badge'),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 1,
+                            ),
+                            decoration: BoxDecoration(
+                              color: colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              l10n.dictationModeStreaming,
+                              style: theme.textTheme.labelSmall?.copyWith(
+                                color: colorScheme.onSecondaryContainer,
+                              ),
+                            ),
+                          ),
+                        ],
                         if (selected) ...[
                           const SizedBox(width: 6),
                           Text(

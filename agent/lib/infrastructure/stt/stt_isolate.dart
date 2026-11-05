@@ -218,7 +218,7 @@ class _SttWorker {
     while (recognizer.isReady(stream)) {
       recognizer.decode(stream);
     }
-    final text = recognizer.getResult(stream).text.trim();
+    final text = _sentenceCase(recognizer.getResult(stream).text);
     if (text.isNotEmpty && text != _lastPartial) {
       _lastPartial = text;
       _out.send({'evt': 'partial', 'seq': _partialSeq, 'text': text});
@@ -382,7 +382,7 @@ class _SttWorker {
     while (recognizer.isReady(stream)) {
       recognizer.decode(stream);
     }
-    final text = recognizer.getResult(stream).text.trim();
+    final text = _sentenceCase(recognizer.getResult(stream).text);
     if (text.isNotEmpty) {
       _out.send({
         'evt': 'final',
@@ -412,6 +412,15 @@ class _SttWorker {
     _recognizer = null;
     _out.send({'evt': 'closed'});
     Isolate.exit();
+  }
+
+  /// Streaming zipformer models emit upper-case tokens. The composer is a text
+  /// field, not a caption, so the text is normalized to sentence case: lower-case
+  /// everywhere, capital first letter. Batch whisper already returns cased text.
+  static String _sentenceCase(String raw) {
+    final text = raw.trim().toLowerCase();
+    if (text.isEmpty) return '';
+    return text[0].toUpperCase() + text.substring(1);
   }
 
   static Float32List _pcm16ToFloat32(Uint8List pcm16) {

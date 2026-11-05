@@ -350,10 +350,17 @@ class DictationCubit extends Cubit<DictationState> {
           ),
         );
       case 'dictation_final':
-        // One final per session: the daemon sends the whole utterance once, so
-        // the text replaces instead of accumulating.
-        final text = (event['text'] as String?) ?? '';
-        emit(state.copyWith(committedText: text, partialText: ''));
+        // A batch model sends one final for the whole utterance, while a
+        // streaming model sends one per silence-closed segment. Appending covers
+        // both: later segments extend the transcript instead of wiping it.
+        final text = ((event['text'] as String?) ?? '').trim();
+        final committed = state.committedText.trim();
+        final merged = text.isEmpty
+            ? committed
+            : committed.isEmpty
+            ? text
+            : '$committed $text';
+        emit(state.copyWith(committedText: merged, partialText: ''));
       case 'dictation_done':
         final segments = (event['segments'] as num?)?.toInt() ?? 0;
         _logger.info('dictation drained: segments=$segments');

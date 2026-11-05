@@ -12,6 +12,7 @@ import 'package:sanad_client/features/dictation/presentation/bloc/dictation_stat
 import 'package:sanad_client/features/dictation/presentation/utils/dictation_insertion.dart';
 import 'package:sanad_client/features/dictation/presentation/widgets/dictation_model_sheet.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 /// Composer mic button: starts, stops, and cancels a daemon-side dictation
 /// session, and owns the composer range the transcript is written into.
@@ -187,9 +188,9 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     _announcedCode = code;
     if (message == null) return;
     _logger.info('dictation announce code=$code');
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(message), duration: const Duration(seconds: 4)),
-    );
+    // A notice, not a blocking bar: the toast surface is the app-wide feedback
+    // owner, so dictation never pushes a SnackBar over the composer.
+    ToastUtils.showInfo(context, message);
   }
 
   @override

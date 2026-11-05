@@ -210,7 +210,7 @@ void main() {
       expect(models.last.isStreaming, isTrue);
     });
 
-    test('live policy shows partials, finals replace and clear the tail', () async {
+    test('live policy shows partials and appends each final', () async {
       cubit = build();
       await startSession();
 
@@ -226,9 +226,9 @@ void main() {
 
       transport.controller.add({'event': 'dictation_final', 'seq': 2, 'text': 'عامل إيه'});
       await Future<void>.delayed(Duration.zero);
-      // One transcript per session: the last final is the whole utterance, so it
-      // replaces the earlier text instead of stacking mid-speech fragments.
-      expect(cubit.state.committedText, 'عامل إيه');
+      // A streaming model closes one segment per silence; the next final extends
+      // the transcript instead of wiping the words already spoken.
+      expect(cubit.state.committedText, 'السلام عليكم عامل إيه');
     });
 
     test('on_stop policy buffers partials but still commits finals', () async {
