@@ -164,6 +164,13 @@ batch path does not need VAD, so this is acceptable for v1).
 - [x] Graph maintenance per `graphify` rules when code files change (repo graph rebuilt: 43,984 nodes / 63,787 edges).
 - [ ] Commit inside the worktree with the `sanad-agent@eaststarai.com` identity and a plan-referenced message; open the PR with verification results.
 
+### G8 — Mic button on every surface (owner request, 2026-11-05)
+- [ ] Client review: `composer_container.dart` gates the button on `capabilities.supportsDictation`; prove the capability comes from the daemon per device, never from a hardcoded platform check in the client.
+- [ ] Compact/mobile layout: the button keeps a 44 px tap target and does not overflow the composer row; widget test at compact width.
+- [ ] Web: the dictation path imports nothing from `dart:io` or native bindings; a web build analyzes clean, and the button is either hidden or explains the unsupported reason.
+- [ ] Windows/Linux: `supports_dictation` stays false with a reason and the button is not actionable — client test asserts it.
+- [ ] Owner decision needed: does dictation follow the **agent device** (a phone paired to a macOS agent can dictate) or the **client surface** (phone never shows the mic)? The daemon capability is per agent, so the current answer is the former; confirm before writing the mobile behaviour.
+
 ## Acceptance Criteria
 - [ ] Given a macOS arm64 device with dictation supported and no model installed, when the user presses the mic button, then one sheet offers the catalog entries, and after a confirmed download the session starts without leaving the composer.
 - [ ] Given an active dictation session, when the user speaks Arabic, then daemon-emitted transcript text appears in the composer within the measured first-final latency and is never sourced from the client.
