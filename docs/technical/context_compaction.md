@@ -911,6 +911,20 @@ For compaction exchanges, the dump captures the exact route and safe options use
 - **Capture Completeness:** Dumper tracks `capture_state` through `initialized` → `request_sent` → `completed` (or `error`). Responses marked incomplete or truncated due to length limits (`length`, `incomplete`, Anthropic `max_tokens`, or `partial_message`) explicitly set `capture_state: 'truncated'` and `truncated: true`. Responses terminating with `failed` or `cancelled` finish reasons or non-200 status codes are explicitly marked `capture_state: 'error'`.
 - **Durable Link:** Completed compaction dumps cache their repository-relative path (e.g., `request_dumps/compaction_dump_<key>_<timestamp>.json`), which is persisted directly into the compaction operation record via `diagnostics_json` (`relative_dump_path`). Captures are discoverable by operation and request ID without reading payload bodies.
 
+### 10.5 Retention Applies to Compaction Dumps
+
+Compaction dumps share the dump directory and the owner retention window
+(`SANAD_HOME/config.yaml` `diagnostics.requestDumpRetentionDays`, default 3
+days); see [agent_runtime.md](agent_runtime.md), section "Diagnostic Request
+Dumps". `RequestDumpRetentionService` is the only deleter and skips every path
+`LLMRequestDumper.inFlightDumpPaths()` reports, so a capture that an executing
+compaction pass still owns is never removed. Startup recovery reconciles
+orphaned `started` operations at daemon start, so no operation survives as
+in-progress without either an active dump reference or a fresh capture attempt.
+A completed or failed operation whose dump has since expired keeps its
+`relative_dump_path` as a historical pointer to a file retention removed;
+diagnostics read payload bodies only from captures that still exist.
+
 ## 11. Minimal Durable Compaction Diagnostics & Post-Boundary Binding
 
 Task 106 Stage 1 Slice 2 introduces minimal durable diagnostics on `session_compaction_operations`, isolating single-request context occupancy from aggregate execution cost and binding provider-confirmed post-compaction usage to the exact first request using the newly activated boundary.

@@ -21,6 +21,7 @@ This contract applies to `agent/lib/evolution/db/`.
 - On-disk connections run in WAL journal mode with a 5000ms `busy_timeout`. In-memory connections keep the 5000ms `busy_timeout` only (SQLite cannot enable WAL for `:memory:`).
 - Outer transactions, schema initialization, migrations, and database-wide `VACUUM` wrap their work in a bounded busy-retry loop: up to 3 retries with progressive backoff (50/100/200ms) and a `WARNING` log per retry, rethrowing the underlying `SqliteException` on exhaustion.
 - Nested transactions use SQLite savepoints inside the retry boundary and must never retry independently.
+- `sqlite_transaction.dart` is the one write-transaction boundary over a raw connection: repositories never issue a bare `BEGIN`/`COMMIT`/`ROLLBACK` pair themselves. SQLite auto-rolls a transaction back for fatal errors (`SQLITE_FULL`, `SQLITE_IOERR`, `SQLITE_NOMEM`, `SQLITE_BUSY`, `SQLITE_INTERRUPT`), so a boundary rolls back only while the connection still has a transaction and always rethrows the original failure. A second `ROLLBACK` must never replace it with `cannot rollback - no transaction is active`.
 
 ## Repository Ownership
 - Each table has one repository responsible for schema-facing CRUD and query semantics.

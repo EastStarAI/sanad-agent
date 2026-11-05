@@ -691,6 +691,12 @@ Key distinctions (Plan 30 §7.2):
   event, then blocked with manual retry. `timeout` keeps its smaller bounded
   retry budget before becoming blocked.
 - `context_overflow` / `content_policy_blocked`: fatal.
+- `storage_full`: blocked, not retried automatically, no auto failover, manual
+  retry only. A full local disk is classified before provider failure text, so
+  the text of the failure SQLite or the OS reports (`SQLITE_FULL`,
+  `database or disk is full`, `ENOSPC`, `no space left on device`) can never be
+  presented under a provider title, and its notice carries no provider response
+  body.
 
 ### Auto failover
 

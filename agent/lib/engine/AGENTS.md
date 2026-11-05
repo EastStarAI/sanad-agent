@@ -29,6 +29,7 @@ This contract applies to `agent/lib/engine/`.
 - `view_image` tool lifecycle logs, public events, and history-query projections redact the local path while preserving safe detail/status and stable tool-call identity; approval requests remain the explicit path-review surface.
 - LLM request diagnostics recursively sanitize a deep copy. Typed image blocks and data URIs become MIME/decoded-size metadata with no payload sample, and the live provider request remains untouched.
 - `LLMRequestDumper` owns dump lifecycle, file naming, and capture state; `LLMPayloadSanitizer` is the single owner of the redaction applied to every value a dump writes — credential masking, image metadata, MIME sniffing, and string sanitization — so no part of a credential survives sanitization.
+- `RequestDumpRetentionService` is the only deleter of dump files. It bounds the directory with the owner policy (`config.yaml` `diagnostics.requestDumpRetentionDays`, default 3 days, positive integer), sweeps once at daemon start and once per interval after that, deletes only the names `LLMRequestDumper.isDumpFileName` produces inside the state Home's `request_dumps` directory, never follows a symbolic link, never touches a dump `LLMRequestDumper.inFlightDumpPaths()` still owns, and logs one lifecycle line per sweep that reclaimed space.
 
 ## Provider-Neutral Completion
 - A new user turn resets turn-scoped tool maintenance budgets before model execution; tool retries within the same turn share that bounded budget.
