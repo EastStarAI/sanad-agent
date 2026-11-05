@@ -63,7 +63,10 @@ void main(List<String> arguments) async {
   // secrets (a gateway command such as `session list`) would only expose that
   // process to an OS authorization dialog it has no reason to show. Those
   // commands therefore never open it, and a process that skips the vault can
-  // never write a secret to a plaintext fallback.
+  // never write a secret to a plaintext fallback. `run` is one of them: it
+  // selects its runtime first, a gateway run reads no secret, and the
+  // in-process runtime opens the vault itself when it needs a provider key
+  // (which also clears the skip flag).
   final vaultRequired = SanadCommandRunner.requiresSecretVault(arguments);
   // A process may only start a Keychain dialog when a person is present to
   // answer it. The daemon keeps the prompt by design; a CLI is classified from

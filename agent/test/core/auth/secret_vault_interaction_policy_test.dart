@@ -1,6 +1,8 @@
 import 'dart:io';
 
 import 'package:sanad_agent/core/auth/agent_secret_store.dart';
+import 'package:sanad_agent/core/auth/secret_vault.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/secret_record.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
@@ -281,6 +283,92 @@ void main() {
         expect(store.read('instance-1')?.apiKey, 'sk-plain-0002');
       },
     );
+  });
+
+  group('Vault open clears the skip decision', () {
+    late Directory root;
+    late Directory home;
+
+    setUp(() async {
+      root = await Directory.systemTemp.createTemp('sanad-vault-open-');
+      home = Directory('${root.path}/home')..createSync(recursive: true);
+      selectSanadHome(home.path);
+      setSanadStateHomeOverride(home.path);
+      // A `run` process is classified before it knows which runtime it uses.
+      SecretVaultPolicy.apply(
+        const SecretVaultInteractionDecision(
+          SecretVaultInteraction.forbidden,
+          SecretVaultInteractionEvidence.noTerminal,
+        ),
+        vaultSkipped: true,
+      );
+    });
+
+    tearDown(() async {
+      await SecretVaults.closeAll();
+      setSanadHomeOverride(null);
+      setSanadStateHomeOverride(null);
+      if (await root.exists()) await root.delete(recursive: true);
+    });
+
+    test(
+      'a run that skipped the vault can write once its runtime opens it',
+      () async {
+        final store = SecureFileSecretStore(
+          storePath: '${root.path}/provider_secrets.json',
+        );
+        const record = SecretRecord(
+          instanceId: 'instance-1',
+          apiKey: 'sk-vault-0001',
+          authMethod: ProviderAuthMethod.apiKey,
+        );
+        // The guard is armed before the open, exactly as it is for a command
+        // that never opens the vault.
+        await expectLater(
+          store.write('instance-1', record),
+          throwsA(
+            isA<AgentSecretStoreUnavailable>().having(
+              (error) => error.reasonCode,
+              'reasonCode',
+              AgentSecretStoreUnavailableReason.plaintextFallbackBlocked,
+            ),
+          ),
+        );
+        expect(SecretVaultPolicy.vaultSkipped, isTrue);
+
+        // This is the only thing `run --standalone` does before it reads a
+        // provider key (`StandaloneCliTurnClient.start`).
+        await SecretVaults.open();
+
+        expect(
+          SecretVaultPolicy.vaultSkipped,
+          isFalse,
+          reason:
+              'a process with an open vault does have credential access, so '
+              'its secure-store writes must not be refused',
+        );
+        await store.write('instance-1', record);
+        expect(store.read('instance-1')?.apiKey, 'sk-vault-0001');
+      },
+    );
+
+    test('the decision stays cleared when the vault is already open', () async {
+      await SecretVaults.open();
+      // A late classification must not re-arm the guard for a process that
+      // already holds an open vault.
+      SecretVaultPolicy.apply(
+        const SecretVaultInteractionDecision(
+          SecretVaultInteraction.forbidden,
+          SecretVaultInteractionEvidence.noTerminal,
+        ),
+        vaultSkipped: true,
+      );
+      expect(SecretVaultPolicy.vaultSkipped, isTrue);
+
+      await SecretVaults.open();
+
+      expect(SecretVaultPolicy.vaultSkipped, isFalse);
+    });
   });
 
   group('Never-prompt authentication context', () {
