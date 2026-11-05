@@ -499,7 +499,7 @@ class ProviderCommandHandler {
           templateId: instance.templateId,
           protocol: instance.protocol,
         ),
-        ...discovery.toMap(),
+        ...discovery.toMap(instance),
       };
     }).toList();
 
@@ -965,7 +965,7 @@ class ProviderCommandHandler {
     ...instance.toMap(),
     if (withCredential)
       'credential': _credentialService.summary(instance.id).toMap(),
-    ...ProviderDiscoveryProjection.of(_repository, instance).toMap(),
+    ...ProviderDiscoveryProjection.of(_repository, instance).toMap(instance),
   };
 
   void _invalidateRuntimeCache() {

@@ -54,7 +54,14 @@ class ProviderInstanceTestNotice extends StatelessWidget {
         ),
       );
     }
-    return ProviderDiscoveryNotice(instanceId: instanceId, error: failure);
+    return ProviderDiscoveryNotice(
+      instanceId: instanceId,
+      error: failure,
+      // The persisted cause keeps `provider_discovery_*`; the Test failure
+      // owns its own prefix so both notices can coexist in one card without a
+      // duplicate key (issue 339 review 3).
+      keyPrefix: 'provider_test_failure',
+    );
   }
 
   String _successSummary(AppLocalizations l10n) {

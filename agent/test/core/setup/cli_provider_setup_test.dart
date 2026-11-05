@@ -217,6 +217,110 @@ OPENAI_MODEL=gpt-4o
       expect(out.toString(), isNot(contains(secret)));
     });
 
+    test('sanad providers demotes a legacy ready row on the same read', () {
+      final env = envWith('ACTIVE_PROVIDER=opencode-go\n');
+      final services = servicesWith(env);
+      final instance = ProviderInstance(
+        id: 'legacy-ready',
+        templateId: 'opencode-go',
+        displayName: 'Legacy Ready',
+        protocol: ProviderProtocol.openaiCompatible,
+        authMethod: ProviderAuthMethod.apiKey,
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        defaultModel: 'gpt-4o',
+        status: InstanceStatus.ready,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      services.instanceRepo.createInstance(instance);
+      // A row written before structured causes existed: raw text only, current
+      // revisions, and a stored status that still says ready (issue 339 review
+      // 3).
+      services.instanceRepo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final json = StringBuffer();
+      CliProviderSetup(services).listProviders(out: json, json: true);
+
+      final entry =
+          ((jsonDecode(json.toString()) as Map<String, dynamic>)['providers']
+                  as List)
+              .single
+              as Map<String, dynamic>;
+      expect(entry['status'], InstanceStatus.needsAuth);
+      expect(
+        (entry['discovery_error'] as Map<String, dynamic>)['kind'],
+        ProviderFailureCategory.invalidCredential,
+      );
+      expect(
+        services.instanceRepo.findById(instance.id)!.status,
+        InstanceStatus.needsAuth,
+      );
+
+      // The human form reads the same effective status, on a later read of the
+      // already-repaired row.
+      final text = StringBuffer();
+      CliProviderSetup(services).listProviders(out: text);
+      expect(text.toString(), contains('NEEDS_AUTH'));
+      expect(text.toString(), isNot(contains('READY')));
+    });
+
+    test('sanad setup status reconciles a legacy ready default on the same read', () {
+      final env = envWith('ACTIVE_PROVIDER=opencode-go\n');
+      final services = servicesWith(env);
+      final instance = ProviderInstance(
+        id: 'legacy-default',
+        templateId: 'opencode-go',
+        displayName: 'Legacy Default',
+        protocol: ProviderProtocol.openaiCompatible,
+        authMethod: ProviderAuthMethod.apiKey,
+        baseUrl: 'https://opencode.ai/zen/go/v1',
+        defaultModel: 'gpt-4o',
+        status: InstanceStatus.ready,
+        isDefault: true,
+        createdAt: DateTime.now(),
+        updatedAt: DateTime.now(),
+      );
+      services.instanceRepo.createInstance(instance);
+      services.instanceRepo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final out = StringBuffer();
+      CliProviderSetup(services).status(out: out);
+
+      final text = out.toString();
+      // Readiness is never true beside a definitive cause: the repaired status
+      // takes the sign-in branch instead of reporting a ready default.
+      expect(text, contains('runtime_ready:   false'));
+      expect(text, contains('reason:          Credential missing or expired.'));
+      final json = StringBuffer();
+      CliProviderSetup(services).status(out: json, json: true);
+      final decoded = jsonDecode(json.toString()) as Map<String, dynamic>;
+      expect(decoded['active_provider_status'], InstanceStatus.needsAuth);
+      expect(services.instanceRepo.findById(instance.id)!.status,
+          InstanceStatus.needsAuth);
+    });
+
     test('sanad setup status reports the cause as the readiness reason', () {
       final env = envWith('ACTIVE_PROVIDER=opencode-go\n');
       final services = servicesWith(env);

@@ -666,8 +666,17 @@ class CliProviderSetup {
 
   void _printReadiness() {
     final defaultInst = _s.instanceService.findDefault();
+    // The projection owns the effective status: a legacy row repaired on this
+    // read is already demoted, so readiness cannot announce `ready` beside its
+    // definitive cause (issue 339 review 3).
+    final discovery = defaultInst == null
+        ? null
+        : ProviderDiscoveryProjection.of(_s.instanceRepo, defaultInst);
+    final status = defaultInst == null
+        ? null
+        : discovery!.statusOf(defaultInst);
     print('');
-    if (defaultInst != null && defaultInst.status == InstanceStatus.ready) {
+    if (defaultInst != null && status == InstanceStatus.ready) {
       print('┌─────────────────────────────────────────────────────────┐');
       print('│  ✓ Default Provider is ready. You can start chatting.   │');
       print('└─────────────────────────────────────────────────────────┘');
@@ -675,9 +684,7 @@ class CliProviderSetup {
       print('  Active model:     ${defaultInst.defaultModel ?? "(none)"}');
     } else {
       print('⚠️ No default provider instance is ready yet.');
-      final failure = defaultInst == null
-          ? null
-          : ProviderDiscoveryProjection.of(_s.instanceRepo, defaultInst).error;
+      final failure = discovery?.error;
       if (failure != null) {
         print('  Cause: ${failure.summary}');
       }
@@ -708,26 +715,32 @@ class CliProviderSetup {
         jsonEncode({
           'providers': instances
               .map(
-                (inst) => {
-                  'id': inst.id,
-                  'template_id': inst.templateId,
-                  'display_name': inst.displayName,
-                  'protocol': inst.protocol,
-                  'auth_method': inst.authMethod,
-                  'base_url': inst.baseUrl,
-                  'default_model': inst.defaultModel,
-                  'status': inst.status,
-                  'is_default': inst.isDefault,
-                  // Every additive nullable field is emitted, as null, so a JSON
-                  // consumer never has to guard a missing key (issue 339
-                  // review 2).
-                  'discovery_error': projections[inst.id]?.error?.toMap(),
-                  'model_cache': projections[inst.id]?.source == null
-                      ? null
-                      : {
-                          'source': projections[inst.id]!.source,
-                          'verified': projections[inst.id]!.verified,
-                        },
+                (inst) {
+                  final discovery = projections[inst.id]!;
+                  return {
+                    'id': inst.id,
+                    'template_id': inst.templateId,
+                    'display_name': inst.displayName,
+                    'protocol': inst.protocol,
+                    'auth_method': inst.authMethod,
+                    'base_url': inst.baseUrl,
+                    'default_model': inst.defaultModel,
+                    // The projection owns the status on this read: a legacy row
+                    // repaired just now is already demoted here (issue 339
+                    // review 3).
+                    'status': discovery.statusOf(inst),
+                    'is_default': inst.isDefault,
+                    // Every additive nullable field is emitted, as null, so a
+                    // JSON consumer never has to guard a missing key (issue 339
+                    // review 2).
+                    'discovery_error': discovery.error?.toMap(),
+                    'model_cache': discovery.source == null
+                        ? null
+                        : {
+                            'source': discovery.source,
+                            'verified': discovery.verified,
+                          },
+                  };
                 },
               )
               .toList(),
@@ -747,15 +760,17 @@ class CliProviderSetup {
     );
     for (final inst in instances) {
       final marker = inst.isDefault ? ' *' : '  ';
+      final discovery = projections[inst.id]!;
       sink.writeln(
-        '$marker${inst.displayName.padRight(20)} ${inst.templateId.padRight(16)} ${inst.status.toUpperCase()}',
+        '$marker${inst.displayName.padRight(20)} '
+        '${inst.templateId.padRight(16)} '
+        '${discovery.statusOf(inst).toUpperCase()}',
       );
-      final discovery = projections[inst.id];
-      final error = discovery?.error;
+      final error = discovery.error;
       if (error != null) {
         sink.writeln('      Discovery error: ${error.summary}');
       }
-      if (discovery?.source == 'fallback') {
+      if (discovery.source == 'fallback') {
         sink.writeln('      Models: unverified fallback list');
       }
     }
@@ -774,8 +789,11 @@ class CliProviderSetup {
   /// `sanad setup status` — shows readiness and current provider/model.
   void status({StringSink? out, bool json = false}) {
     final sink = out ?? stdout;
-    final defaultInst = _s.instanceService.findDefault();
     final runtime = _s.readiness.runtimeCheck();
+    // Read the instance after the readiness check: that read owns the legacy
+    // cause repair, so the status reported beside it is the reconciled one
+    // (issue 339 review 3).
+    final defaultInst = _s.instanceService.findDefault();
 
     if (json) {
       sink.writeln(

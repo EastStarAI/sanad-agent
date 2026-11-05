@@ -456,6 +456,103 @@ void main() {
       );
     });
 
+    test('a legacy definitive cause demotes a ready row on the same read', () async {
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+      expect(ready.status, InstanceStatus.ready);
+
+      // The live shape a daemon before issue 339 left behind: raw `HTTP 401`,
+      // no structured detail, current revisions, and a card that still claimed
+      // `ready`.
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError: 'HTTP 401',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // Badge, cause, and stored row agree on the same read.
+      expect(payload['status'], InstanceStatus.needsAuth);
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.invalidCredential);
+      expect(discovery['definitive'], isTrue);
+      expect(discovery['message'], 'Invalid credential (HTTP 401)');
+
+      final demoted = h.repo.findById(instance.id)!;
+      expect(demoted.status, InstanceStatus.needsAuth);
+      expect(
+        h.repo.readModelCache(instance.id, 'models')!['last_error'],
+        'Invalid credential (HTTP 401)',
+      );
+
+      // One-shot: the repair rewrote the structured detail, so a second read
+      // takes the non-legacy path and touches nothing.
+      final demotedAt = demoted.updatedAt;
+      final second =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(second['status'], InstanceStatus.needsAuth);
+      expect(second['discovery_error'], isNotNull);
+      expect(h.repo.findById(instance.id)!.updatedAt, demotedAt);
+
+      // A row the owner has since fixed is never re-demoted: a clean discovery
+      // clears the cause and the next read restores `ready`.
+      h.seedVerifiedCache(instance.id);
+      final fixed =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(fixed['status'], InstanceStatus.ready);
+      expect(fixed['discovery_error'], isNull);
+    });
+
+    test('a legacy non-definitive cause keeps a ready row ready', () async {
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'live',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError:
+            'ClientException with SocketException: Connection refused '
+            '(OS Error: Connection refused, errno = 61), address = localhost, '
+            'port = 51790, uri=http://localhost:9000/v1/models',
+      );
+
+      final payload =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+
+      // A transport failure describes the moment, not the configuration.
+      expect(payload['status'], InstanceStatus.ready);
+      final discovery = Map<String, dynamic>.from(
+        payload['discovery_error'] as Map,
+      );
+      expect(discovery['kind'], ProviderFailureCategory.network);
+      expect(discovery['definitive'], isFalse);
+      expect(h.repo.findById(instance.id)!.status, InstanceStatus.ready);
+    });
+
     test('the instances-changed broadcast carries the same projection', () async {
       final instance = h.createInstance();
       final error = ProviderDiscoveryError.capture(

@@ -14,11 +14,20 @@ class ProviderDiscoveryNotice extends StatelessWidget {
   final ProviderModelCacheDto? modelCache;
   final String instanceId;
 
+  /// Prefix for this notice's stable widget keys.
+  ///
+  /// One card can show two notices for the same instance — the persisted cause
+  /// from the daemon projection and the transient connection-test failure — so
+  /// each rendering site owns a distinct prefix and a key lookup stays unique
+  /// (issue 339 review 3).
+  final String keyPrefix;
+
   const ProviderDiscoveryNotice({
     super.key,
     required this.error,
     required this.instanceId,
     this.modelCache,
+    this.keyPrefix = 'provider_discovery',
   });
 
   @override
@@ -42,7 +51,7 @@ class ProviderDiscoveryNotice extends StatelessWidget {
         : theme.colorScheme.error;
 
     return Container(
-      key: Key('provider_discovery_notice_$instanceId'),
+      key: Key('${keyPrefix}_notice_$instanceId'),
       width: double.infinity,
       margin: const EdgeInsets.only(top: 10),
       padding: const EdgeInsets.all(10),
@@ -61,14 +70,14 @@ class ProviderDiscoveryNotice extends StatelessWidget {
                       messageForFailure(l10n, discovery),
                     )
                   : messageForFailure(l10n, discovery),
-              key: Key('provider_discovery_message_$instanceId'),
+              key: Key('${keyPrefix}_message_$instanceId'),
               style: TextStyle(fontSize: 12, color: color, height: 1.35),
             ),
           if (discovery?.endpoint != null) ...[
             const SizedBox(height: 4),
             SelectableText(
               l10n.providerDiscoveryEndpoint(discovery!.endpoint!),
-              key: Key('provider_discovery_endpoint_$instanceId'),
+              key: Key('${keyPrefix}_endpoint_$instanceId'),
               style: TextStyle(
                 fontSize: 11,
                 color: theme.colorScheme.onSurfaceVariant,
@@ -80,7 +89,7 @@ class ProviderDiscoveryNotice extends StatelessWidget {
             if (discovery != null) const SizedBox(height: 4),
             Text(
               l10n.providerModelCacheUnverified,
-              key: Key('provider_discovery_fallback_$instanceId'),
+              key: Key('${keyPrefix}_fallback_$instanceId'),
               style: TextStyle(
                 fontSize: 11,
                 color: theme.colorScheme.onSurfaceVariant,

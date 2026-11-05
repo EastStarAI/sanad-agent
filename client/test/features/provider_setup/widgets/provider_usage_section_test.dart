@@ -125,6 +125,9 @@ void main() {
       );
       await tester.pump();
       expect(find.text('Usage & limits'), findsOneWidget);
+      // The section is addressable by key the moment it renders (issue 339
+      // review 3).
+      expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
       await tester.tap(find.text('Usage & limits'));
       await tester.pump(const Duration(milliseconds: 300));
       expect(find.text('Loading usage…'), findsOneWidget);
@@ -149,6 +152,7 @@ void main() {
                 providerInstanceId: 'a',
                 providerTemplateId: 'openai-codex',
                 source: 'chatgpt',
+                planName: 'Pro',
                 fetchedAt: DateTime.fromMillisecondsSinceEpoch(0, isUtc: true),
                 windows: const [
                   ProviderUsageWindowDto(
@@ -194,6 +198,18 @@ void main() {
         findsOneWidget,
         reason: 'footer Updated label must be present',
       );
+
+      // Every body line is reachable through a stable, locale-independent key.
+      expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
+      expect(find.byKey(const Key('provider_usage_plan_a')), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_window_a_weekly')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_window_a_monthly')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -228,6 +244,15 @@ void main() {
 
       expect(find.text('Retry'), findsOneWidget);
       expect(find.byIcon(Icons.error_outline), findsOneWidget);
+      // The action and the message are keyed, not text-addressed.
+      expect(find.byKey(const Key('provider_usage_retry_a')), findsOneWidget);
+      expect(find.byKey(const Key('provider_usage_reconnect_a')), findsNothing);
+      expect(
+        tester
+            .widget<Text>(find.byKey(const Key('provider_usage_message_a')))
+            .data,
+        'Usage information is temporarily unavailable. Please retry.',
+      );
       // The daemon's English text is never echoed; the status owns localized
       // copy so an RTL interface is fully translated (issue 339 review 2).
       expect(find.text('service busy'), findsNothing);
@@ -273,7 +298,7 @@ void main() {
       expect(find.textContaining('Account sign-in is required'), findsOneWidget);
       expect(find.byIcon(Icons.login), findsOneWidget);
 
-      await tester.tap(find.text('Reconnect'));
+      await tester.tap(find.byKey(const Key('provider_usage_reconnect_a')));
       await tester.pumpAndSettle();
 
       expect(reconnects, 1, reason: 'Reconnect must run the shared action');
@@ -314,6 +339,11 @@ void main() {
       find.text('يلزم تسجيل الدخول إلى الحساب لعرض حدود الاستخدام.'),
       findsOneWidget,
     );
+    // The keys do not translate with the interface: the same instance id is the
+    // counter under `en` and `ar` (issue 339 review 3).
+    expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
+    expect(find.byKey(const Key('provider_usage_reconnect_a')), findsOneWidget);
+    expect(find.byKey(const Key('provider_usage_message_a')), findsOneWidget);
   });
 
   testWidgets(

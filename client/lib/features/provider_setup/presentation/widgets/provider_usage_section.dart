@@ -79,6 +79,7 @@ class ProviderUsageSection extends StatelessWidget {
         return Padding(
           padding: const EdgeInsets.only(top: 8),
           child: Container(
+            key: Key('provider_usage_section_$instanceId'),
             decoration: BoxDecoration(
               borderRadius: BorderRadius.circular(10),
               border: Border.all(
@@ -224,6 +225,7 @@ class _UsageBody extends StatelessWidget {
     // below by [ProviderUsagePhase.fresh]; here we catch needsAttention.
     if (entry.phase == ProviderUsagePhase.needsAttention) {
       return _AttentionBody(
+        instanceId: instanceId,
         result: entry.attentionResult ?? result,
         isStaleRefreshing: isStaleRefreshing,
         hasStaleSnapshot: entry.hasVisibleSnapshot,
@@ -267,6 +269,7 @@ class _UsageBody extends StatelessWidget {
         if (snapshot.planName != null && snapshot.planName!.isNotEmpty) ...[
           Text(
             AppLocalizations.of(context)!.providerUsagePlan(snapshot.planName!),
+            key: Key('provider_usage_plan_$instanceId'),
             style: TextStyle(
               fontSize: 11,
               fontWeight: FontWeight.w500,
@@ -277,6 +280,9 @@ class _UsageBody extends StatelessWidget {
         ],
         for (final window in snapshot.windows)
           Padding(
+            // One key per reported window type, so the body is addressable by
+            // automation without reading rendered text (issue 339 review 3).
+            key: Key('provider_usage_window_${instanceId}_${window.type}'),
             padding: const EdgeInsets.only(bottom: 6),
             child: _WindowRow(window: window),
           ),
@@ -593,6 +599,7 @@ class _ResetControls extends StatelessWidget {
 }
 
 class _AttentionBody extends StatelessWidget {
+  final String instanceId;
   final ProviderUsageResultDto result;
   final bool isStaleRefreshing;
   final bool hasStaleSnapshot;
@@ -601,6 +608,7 @@ class _AttentionBody extends StatelessWidget {
   final VoidCallback onReconnect;
 
   const _AttentionBody({
+    required this.instanceId,
     required this.result,
     required this.isStaleRefreshing,
     required this.hasStaleSnapshot,
@@ -622,6 +630,7 @@ class _AttentionBody extends StatelessWidget {
         if (hasStaleSnapshot && staleSnapshot != null) ...[
           for (final window in staleSnapshot!.windows)
             Padding(
+              key: Key('provider_usage_window_${instanceId}_${window.type}'),
               padding: const EdgeInsets.only(bottom: 6),
               child: Opacity(
                 opacity: 0.55,
@@ -643,6 +652,7 @@ class _AttentionBody extends StatelessWidget {
             Expanded(
               child: Text(
                 message,
+                key: Key('provider_usage_message_$instanceId'),
                 style: TextStyle(
                   fontSize: 12,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
@@ -656,7 +666,13 @@ class _AttentionBody extends StatelessWidget {
           alignment: Alignment.centerRight,
           child: TextButton.icon(
             // Sign-in required runs the same account re-authentication the
-            // instance form exposes; anything else is a usage refresh.
+            // instance form exposes; anything else is a usage refresh. The key
+            // names the action, not its localized label (issue 339 review 3).
+            key: Key(
+              needsReconnect
+                  ? 'provider_usage_reconnect_$instanceId'
+                  : 'provider_usage_retry_$instanceId',
+            ),
             onPressed: isStaleRefreshing
                 ? null
                 : (needsReconnect ? onReconnect : onRetry),

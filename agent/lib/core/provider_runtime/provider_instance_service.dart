@@ -5,6 +5,7 @@ import '../../engine/adapters/provider_registry.dart';
 import 'provider_discovery_error.dart';
 import 'provider_discovery_projection.dart';
 import 'provider_endpoint_resolver.dart';
+import 'provider_failure_status.dart';
 import 'provider_instance.dart';
 import 'provider_model_id.dart';
 import 'provider_instance_repository.dart';
@@ -329,24 +330,11 @@ class ProviderInstanceService {
   /// Status a verified connection failure proves, or null when it proves
   /// nothing about the configuration and must leave the status untouched.
   ///
-  /// `needs_auth` is reserved for a rejected credential (`401`, or `403` when
-  /// discovery itself was refused) and `error` for a definitive endpoint
-  /// failure. Transport failures, timeouts, rate limits, outages, unusable
-  /// lists, and every warning-grade copy (a probe `403`, a model rejecting the
-  /// check request) attach their cause without naming a status.
-  static String? statusForFailure(ProviderDiscoveryError failure) {
-    if (!failure.isDefinitive) return null;
-    switch (failure.kind) {
-      case ProviderFailureCategory.invalidCredential:
-      case ProviderFailureCategory.forbidden:
-        return InstanceStatus.needsAuth;
-      case ProviderFailureCategory.endpointNotFound:
-      case ProviderFailureCategory.http:
-        return InstanceStatus.error;
-      default:
-        return null;
-    }
-  }
+  /// The mapping itself lives in [statusForDiscoveryFailure] so the legacy
+  /// read-repair applies exactly the same rule as a fresh verification (issue
+  /// 339 review 3).
+  static String? statusForFailure(ProviderDiscoveryError failure) =>
+      statusForDiscoveryFailure(failure);
 
   ProviderDiscoveryError? _discoveryFailure(ProviderInstance instance) =>
       ProviderDiscoveryProjection.of(_repo, instance).error;

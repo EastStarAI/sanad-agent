@@ -88,7 +88,12 @@ class ProviderReadinessService {
       );
     }
     final summary = _secretStore.summary(defaultInst.id);
-    if (defaultInst.status == InstanceStatus.needsAuth ||
+    // The typed projection repairs a legacy row and owns the effective status
+    // for this read, so readiness never reports `runtime_ready` beside a
+    // definitive cause (issue 339 review 3).
+    final discovery = ProviderDiscoveryProjection.of(_repo, defaultInst);
+    final status = discovery.statusOf(defaultInst);
+    if (status == InstanceStatus.needsAuth ||
         summary.status == 'relogin_required') {
       return ProviderReadiness(
         hasProvider: true,
@@ -102,15 +107,13 @@ class ProviderReadinessService {
     }
     return ProviderReadiness(
       hasProvider: true,
-      runtimeReady: defaultInst.status == InstanceStatus.ready,
+      runtimeReady: status == InstanceStatus.ready,
       activeProvider: defaultInst.id,
       activeModel: model,
-      reason: defaultInst.status != InstanceStatus.ready
+      reason: status != InstanceStatus.ready
           ? _incompleteReason(defaultInst)
           : null,
-      discoveryError: defaultInst.status != InstanceStatus.ready
-          ? _discoveryErrorOf(defaultInst)
-          : null,
+      discoveryError: status != InstanceStatus.ready ? discovery.error : null,
     );
   }
 

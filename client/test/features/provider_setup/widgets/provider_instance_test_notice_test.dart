@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_discovery_error_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_test_result_dto.dart';
+import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_discovery_notice.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_test_notice.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
@@ -151,7 +152,79 @@ void main() {
     );
     // The daemon's English summary is not echoed for a classified category.
     expect(find.text('Invalid credential (HTTP 401)'), findsNothing);
+
+    // The Test failure owns its own key namespace: the persisted-cause
+    // projection notice can sit in the same card without a duplicate key
+    // (issue 339 review 3).
+    expect(
+      find.byKey(const Key('provider_test_failure_notice_inst-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('provider_test_failure_message_inst-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('provider_test_failure_endpoint_inst-1')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const Key('provider_discovery_notice_inst-1')),
+      findsNothing,
+    );
   });
+
+  testWidgets(
+    'a persisted cause and a test failure coexist under distinct keys',
+    (tester) async {
+      await tester.pumpWidget(
+        MaterialApp(
+          locale: const Locale('en'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: Scaffold(
+            body: Center(
+              child: Column(
+                children: const [
+                  ProviderDiscoveryNotice(
+                    instanceId: 'inst-1',
+                    error: ProviderDiscoveryErrorDto(
+                      kind: 'invalid_credential',
+                      statusCode: 401,
+                      message: 'Invalid credential (HTTP 401)',
+                    ),
+                  ),
+                  ProviderInstanceTestNotice(
+                    instanceId: 'inst-1',
+                    result: _rejected,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // Each notice keeps its own unique key set; no lookup returns two nodes
+      // (round-2 observation O4).
+      expect(
+        find.byKey(const Key('provider_discovery_notice_inst-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_test_failure_notice_inst-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_discovery_message_inst-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_test_failure_message_inst-1')),
+        findsOneWidget,
+      );
+    },
+  );
 
   testWidgets('a failing test is localized in Arabic', (tester) async {
     final ar = await _l10nFor('ar');
