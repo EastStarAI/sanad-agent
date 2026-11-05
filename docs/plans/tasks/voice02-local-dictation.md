@@ -107,6 +107,43 @@ the whole utterance once.
 - [ ] **Preview policy control removed** (owner decision 2026-11-05): the sheet's Live/When-stopped switch promised a behaviour the batch path no longer has. `previewPolicy` stays internal (live by default) so a streaming model renders partials without any UI change.
 - [ ] Tests: daemon (single decode, no partial for batch, cap), cubit (one final, no partial for batch, insertion offsets), widget (no timer key, three-state affordance, text lands at the caret with surrounding draft preserved).
 
+### G7 — whisper.cpp engine behind the catalog (owner-requested 2026-11-05)
+
+**Why.** sherpa-onnx copies the full int8 weights into RAM and keeps one arena
+per thread: peak RSS for the Egyptian turbo model is 2.4–3.0 GB at 6 threads.
+Handy, using whisper.cpp with the same model, peaks at ~1.5 GB because ggml
+weights are `mmap`ed and there are no per-thread arenas. Owner priority: the
+agent also runs on low-resource machines, so memory is a first-class constraint.
+
+**Scope (in-process only, no sidecar/CLI/HTTP).**
+1. `SttCatalogEntry.engine` (`sherpa` | `whispercpp`), default `sherpa`; the
+   resolver picks the implementation, nothing else in the daemon changes.
+2. `dart:ffi` binding to `libwhisper` (init from file, full params, full,
+   segment text, free) behind the existing `SttEngine` contract, so
+   `DictationSession` keeps its event vocabulary.
+3. ggml artifacts hosted next to the ONNX ones (turbo `q5_0` ≈574 MB, `q8_0`
+   ≈874 MB) with sha256 in the catalog, installed by the same store.
+4. Threads from `stt.threads`; `enableTokenTimestamps`/`tailPaddings` mapped to
+   the whisper params we already tuned.
+
+**Acceptance.**
+- Same transcript quality as G2d on the Egyptian fixture (word-for-word check of
+  the recorded sample).
+- Peak RSS during a 30 s decode **below 1.6 GB** (vs 2.4–3.0 GB today) measured
+  by `stt_probe` on the same machine.
+- Load time below 0.7 s (mmap) and decode not slower than RTF 0.55 on 6 threads.
+- `agent` tests green including a fake-engine test of the catalog switch, and
+  no change in client behaviour (client is engine-agnostic by design).
+
+**Rollback.** The engine is chosen per catalog entry; deleting the entry (or
+flipping `engine` back to `sherpa`) restores today's behaviour with no code
+revert. If the FFI binding proves unstable, drop the binding commit — the
+`engine` field and the sherpa path stay intact.
+
+**Risk.** Native crashes under FFI, per-platform library builds (macOS arm64
+first, Linux/Windows later), and losing sherpa's ready-made silero VAD (the
+batch path does not need VAD, so this is acceptable for v1).
+
 ### G5 — Streaming path proven with a light English model (owner-approved, after G2d)
 - [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer`, selected by `mode: streaming`; the worker isolate is reused and no transport/UI fork is introduced.
 - [ ] Catalog entry with `mode: streaming` pointing at a public, sherpa-packaged, light English streaming model (English-only is acceptable and expected; no Arabic streaming model exists in sherpa today), installed through the same hosted download path.
@@ -175,7 +212,13 @@ observed), queue high-water 200 chunks (≈20 s) so the longest decode never dro
 audio.
 
 ## Current status
-- Current gate: **G2d** (single-pass batch, cursor insertion, state-driven mic UI) after live testing rejected the chunked VAD cadence; G5 (English streaming proof) follows it, and G3 closes v1.
-- Remaining work: G2d then G5 then G3 (v1, local macOS). G0b (Nawah) is deprioritized pending a sherpa-packaged Arabic artifact. Hosted delivery of the Egyptian artifacts is done (see G2c).
-- Uncommitted at handoff: G1 daemon runtime, catalog, store, settings, session, route, capability, 39 tests, probe tools.
-- Open owner decision: hosting URL for the Egyptian ONNX artifacts (see "Open decision"); the light public model unblocks the full download path meanwhile.
+- Current gate: **G7** (whisper.cpp engine behind the catalog) — G2d is
+  committed as `d8497896` after live acceptance (full transcript, meter, send
+  waits for the transcript). G5 (English streaming proof) and G3 close v1.
+- Memory baseline to beat (macOS arm64, Egyptian turbo int8): daemon idle 46 MB,
+  listening 448 MB, one model in a clean process 1.5–1.8 GB, peak with 6
+  threads + daemon ≈2.4–3.0 GB. Handy/whisper.cpp reference: ~1.5 GB.
+- Remaining work: G7 then G5 then G3 (v1, local macOS). G0b (Nawah) is
+  deprioritized pending a sherpa-packaged Arabic artifact.
+- TEMP diagnostics still enabled (`dictation level window`, `dictation audio
+  window`, `dictation final: audio_ms`) — removed in G3 after G7 acceptance.
