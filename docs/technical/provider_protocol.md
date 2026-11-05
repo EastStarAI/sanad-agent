@@ -98,7 +98,7 @@ adds two additive, nullable keys beside `status` and `credential`:
 
 | Key | Shape | Meaning |
 |---|---|---|
-| `discovery_error` | `{kind, status_code?, message, endpoint?, definitive}` or `null` | Sanitized cause of the last failed check for the instance's **current** config/credential revisions. `definitive` is the daemon's weight for that cause: only a definitive one may change the status or block setup. A row written for older revisions projects `null`: that failure is not the reason the instance is currently not ready. A legacy row (raw `last_error`, no `last_error_detail`) is re-derived from its text shape and rewritten in sanitized form on read; when that cause is definitive and the row still claimed `ready`, the same read demotes it once (see "Rows written by older daemons"). |
+| `discovery_error` | `{kind, status_code?, message, endpoint?, definitive}` or `null` | Sanitized cause of the last failed check for the instance's **current** config/credential revisions. `definitive` is the daemon's weight for that cause: only a definitive one may change the status or block setup. A row written for older revisions projects `null`: that failure is not the reason the instance is currently not ready. A legacy row (raw `last_error`, no `last_error_detail`) is re-derived from its text shape and rewritten in sanitized form on read; any current-revision definitive cause found beside a `ready` status demotes it once on that read (see "Rows written by older daemons"). |
 | `model_cache` | `{source, verified}` or `null` | `source` is `live`, `fallback`, `cache_stale`, or `failed`; `verified` is true only for a live answer to the current revisions. A `fallback` list is an unverified preset list and every surface must label it as such. |
 
 `model.snapshot_result` keeps its flat `cache_status`, `fetched_at`, and
@@ -146,25 +146,29 @@ sanitized summary plus its structured detail, so no local port, host, URL, or
 response body survives in storage.
 
 The same read also finishes the migration for a **definitive** cause: when the
-re-derived cause is definitive and the row still claimed `ready` at the current
-revisions, the reading path applies the category → status mapping above
-(`statusForDiscoveryFailure`, the mapping `reconcileStatus` uses) and persists
-the demotion durably. A legacy `HTTP 401` therefore leaves the read as
-`needs_auth` with its cause, and every surface receives that effective status in
-the same payload, so the badge, the CLI row, and the stored row never disagree
-about the same instance.
+current revisions still carry one while the row still claims `ready`, the reading
+path applies the category → status mapping above (`statusForDiscoveryFailure`,
+the mapping `reconcileStatus` uses) and persists the demotion durably. That
+covers both shapes a live Home produces — a cause re-derived from raw legacy text
+and a row an earlier build already rewrote into the structured form. A legacy
+`HTTP 401` therefore leaves the read as `needs_auth` with its cause, and every
+surface receives that effective status in the same payload, so the badge, the CLI
+row, and the stored row never disagree about the same instance.
 
-The repair is one-shot by construction and is not a second lifecycle authority:
+The reconciliation is one-shot by construction and is not a second lifecycle
+authority:
 
-- only a row without a usable structured detail is repaired; the same read
-  writes the structured detail, so a second read takes the non-legacy path and
-  changes nothing;
-- an instance the owner has since re-verified carries a clean or structured row
-  and is never re-demoted;
-- a non-definitive cause keeps its status;
-- a row whose config/credential revisions no longer match the instance is
-  sanitized but never demoted, because its cause does not describe the current
-  configuration.
+- only a **current-revision** cause counts; a stale one describes a configuration
+  the owner already changed, so it is sanitized but never demoted;
+- only a **definitive** cause names a status, so a non-definitive cause keeps the
+  row `ready`;
+- only a row that still claims `ready` is touched — the demoted status is itself
+  the one-shot marker, so a second read reconciles nothing and the pass cannot
+  loop;
+- a successful re-verification clears the cause, and a re-verified instance is
+  never demoted again;
+- the structured rewrite of the stored row stays legacy-only: a row that already
+  has a usable `last_error_detail` is not rewritten.
 
 `discovery_error` and the effective `status` travel together in the instance
 projection (`ProviderDiscoveryProjection.toMap`) and in `model.snapshot`; the

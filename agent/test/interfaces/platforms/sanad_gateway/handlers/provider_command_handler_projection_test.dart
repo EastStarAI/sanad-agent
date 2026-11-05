@@ -498,8 +498,8 @@ void main() {
         'Invalid credential (HTTP 401)',
       );
 
-      // One-shot: the repair rewrote the structured detail, so a second read
-      // takes the non-legacy path and touches nothing.
+      // One-shot: the demoted status is the marker, so a second read reconciles
+      // nothing and touches nothing.
       final demotedAt = demoted.updatedAt;
       final second =
           (h.payloadOf(await h.instancesList())['instances'] as List).single
@@ -516,6 +516,58 @@ void main() {
               as Map;
       expect(fixed['status'], InstanceStatus.ready);
       expect(fixed['discovery_error'], isNull);
+    });
+
+    test('a sanitized definitive cause still demotes a ready row', () async {
+      // The round-2 aftermath: an earlier build already rewrote the legacy row
+      // into the structured form, so only the status still contradicted it.
+      final instance = h.createInstance();
+      h.seedVerifiedCache(instance.id);
+      final ready = h.repo.findById(instance.id)!;
+      final error = ProviderDiscoveryError(
+        kind: ProviderFailureCategory.invalidCredential,
+        statusCode: 401,
+        message: 'Invalid credential (HTTP 401)',
+        definitive: true,
+      );
+      h.repo.upsertModelCache(
+        instanceId: instance.id,
+        cacheKey: 'models',
+        models: const [
+          {'value': 'gpt-4o'},
+        ],
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: 'fallback',
+        configRevision: ready.configRevision,
+        credentialRevision: ready.credentialRevision,
+        lastError: error.summary,
+        lastErrorDetail: error.toJson(),
+      );
+
+      final first =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(first['status'], InstanceStatus.needsAuth);
+      expect((first['discovery_error'] as Map)['definitive'], isTrue);
+      final demoted = h.repo.findById(instance.id)!;
+      expect(demoted.status, InstanceStatus.needsAuth);
+
+      // Idempotent: a demoted row is no longer ready, so nothing is rewritten.
+      final demotedAt = demoted.updatedAt;
+      final second =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(second['status'], InstanceStatus.needsAuth);
+      expect(h.repo.findById(instance.id)!.updatedAt, demotedAt);
+
+      // A successful re-verification clears the cause and restores `ready`; a
+      // fixed instance is never demoted again.
+      h.seedVerifiedCache(instance.id);
+      final third =
+          (h.payloadOf(await h.instancesList())['instances'] as List).single
+              as Map;
+      expect(third['status'], InstanceStatus.ready);
+      expect(third['discovery_error'], isNull);
     });
 
     test('a legacy non-definitive cause keeps a ready row ready', () async {

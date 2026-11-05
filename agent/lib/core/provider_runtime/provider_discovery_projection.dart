@@ -35,12 +35,12 @@ class ProviderDiscoveryProjection {
 
   /// Effective lifecycle status for [instance] on this read.
   ///
-  /// A legacy row that still only carried raw text is re-derived and repaired in
-  /// [ProviderDiscoveryProjection.of]; when the restored cause is definitive and
-  /// the row still claimed `ready`, the same reconciliation a fresh verification
-  /// runs has already demoted it. Projecting the stored status would then put a
-  /// `READY` badge beside a rejected credential for one read (issue 339 review
-  /// 3), so every surface reads the status from here.
+  /// A stored definitive cause must never sit beside `ready`: when the current
+  /// revisions still carry one, the same reconciliation a fresh verification
+  /// runs has already demoted the row in
+  /// [ProviderDiscoveryProjection.of]. Projecting the stored status would then
+  /// put a `READY` badge beside a rejected credential (issue 339 review 3), so
+  /// every surface reads the status from here.
   String statusOf(ProviderInstance instance) => status ?? instance.status;
 
   /// Builds the projection for [instance] from its stored cache row.
@@ -65,7 +65,6 @@ class ProviderDiscoveryProjection {
       legacyText: row['last_error'],
     );
     final error = restored.error;
-    String? repairedStatus;
     if (restored.legacy && error != null) {
       // Read-repair (issue 339 review 2): rows written by an older daemon keep
       // only the sanitized summary and its structured form, so a raw body, a
@@ -76,13 +75,13 @@ class ProviderDiscoveryProjection {
         lastError: error.summary,
         lastErrorDetail: error.toJson(),
       );
-      repairedStatus = _demoteIfDefinitive(
-        repository,
-        instance,
-        error,
-        revisionsMatch: revisionsMatch,
-      );
     }
+    final repairedStatus = _reconcileContradictedStatus(
+      repository,
+      instance,
+      error,
+      revisionsMatch: revisionsMatch,
+    );
     return ProviderDiscoveryProjection(
       error: revisionsMatch ? error : null,
       source: source,
@@ -91,23 +90,27 @@ class ProviderDiscoveryProjection {
     );
   }
 
-  /// Read-repair half of the migration: a definitive cause restored onto a row
-  /// that still claimed `ready` names the status the mutation paths would have
-  /// written, and persists it once (issue 339 review 3).
+  /// Read-repair half of the migration: a definitive cause that the current
+  /// revisions still carry names the status the mutation paths would have
+  /// written, so a row left behind by an older daemon (or by a daemon that
+  /// stopped between the cause and the status write) is reconciled once on read
+  /// (issue 339 review 3).
   ///
-  /// Only a legacy row reaches this — the repair above rewrites the structured
-  /// detail in the same call, so every later read takes the non-legacy path and
-  /// cannot re-demote an instance the owner has since fixed. The status write
-  /// reuses [statusForDiscoveryFailure], the same mapping
+  /// The write reuses [statusForDiscoveryFailure], the mapping
   /// `ProviderInstanceService.reconcileStatus` applies, and never calls back
-  /// into the projection, so there is no loop.
-  static String? _demoteIfDefinitive(
+  /// into the projection, so there is no loop. Three guards keep it from
+  /// overreaching: only a current-revision cause counts (a stale one describes a
+  /// configuration the owner already changed), only a definitive cause names a
+  /// status, and only a row that still claims `ready` is touched — the demoted
+  /// status is itself the one-shot marker. A successful re-verification clears
+  /// the cause, so a fixed instance is never demoted again.
+  static String? _reconcileContradictedStatus(
     ProviderInstanceRepository repository,
     ProviderInstance instance,
-    ProviderDiscoveryError error, {
+    ProviderDiscoveryError? error, {
     required bool revisionsMatch,
   }) {
-    if (!revisionsMatch) return null;
+    if (!revisionsMatch || error == null) return null;
     if (instance.status != InstanceStatus.ready) return null;
     final target = statusForDiscoveryFailure(error);
     if (target == null || target == instance.status) return null;
