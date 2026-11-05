@@ -17,6 +17,7 @@ import 'package:sanad_agent/evolution/compaction/model_context_projection.dart';
 import 'package:sanad_agent/evolution/models/session_route_transition.dart';
 import 'package:sanad_agent/evolution/models/compaction_operation_record.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/engine/runtime/compaction_failure_notice.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
@@ -244,7 +245,7 @@ class SessionQueryHandler {
     final queuedEvents = _orchestrator?.getQueuedEvents(sessionId) ?? const [];
     final runtimeNotice =
         _runtimeRecovery?.activeNotice(sessionId)?.toPayload() ??
-        _blockedPersistedNoticePayload(sessionId);
+        _persistedNoticePayload(sessionId);
     final pendingSteers =
         _persistedState?.pendingInputs
             .findForSession(sessionId)
@@ -660,9 +661,16 @@ class SessionQueryHandler {
     return event.runId;
   }
 
-  Map<String, dynamic>? _blockedPersistedNoticePayload(String sessionId) {
+  Map<String, dynamic>? _persistedNoticePayload(String sessionId) {
     final persisted = _orchestrator?.persistedState?.findNotice(sessionId);
-    if (persisted == null || persisted.status != 'blocked') {
+    if (persisted == null) return null;
+    // A non-recovery warning (a failed automatic compaction) is projected as
+    // it was stored: it describes a degraded session that kept running, so it
+    // offers no recovery action.
+    if (CompactionFailureNotice.isCompactionWarning(persisted)) {
+      return Map<String, dynamic>.from(persisted.toPayload());
+    }
+    if (persisted.status != 'blocked') {
       return null;
     }
     final payload = Map<String, dynamic>.from(persisted.toPayload());

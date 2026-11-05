@@ -43,6 +43,9 @@ This contract applies to `agent/`.
 - Provider adapters remain stateless and own wire translation only. Provider-specific endpoint/codec behavior must not leak into the runner.
 - Context-pressure recovery after daemon restart may reuse persisted provider input usage only after the active adapter remeasures the exact historical request prefix; the next request must still prove a strict wire extension on the same route.
 - Visible reasoning, final content, opaque provider continuation state, finish reason, and tool calls remain distinct typed data across streaming and persistence.
+- Context continuity anchors are line-oriented and never match inside another word: a label at line start (optional markdown list/quote, heading or emphasis prefix) followed by a colon is an anchor, a mid-paragraph label is prose, and a label value too long to be quoted verbatim is report-only rather than critical. One anchor exists per label key.
+- A summary repair instruction may name only `CompactionSummaryPrompt.allowedKeys`; continuity anchor labels are translated to their schema fields before any instruction is built, in the ordinary and the bounded recovery paths alike.
+- A failed automatic compaction is durable and visible: the runner's automatic-compaction path is the only writer of that non-recovery `warning` runtime notice, and a warning never becomes recovery state, retry classification, or admission input.
 - On echo-required Chat routes targeting thinking mode, same-route assistant tool turns replay the destination's interleaved reasoning field (empty string when the producer gave none) to satisfy provider protocol, while foreign and unrecorded turns remain unpadded.
 
 ### Protocol and Platform Authority
