@@ -24,10 +24,14 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
     with SingleTickerProviderStateMixin {
   /// Drives the travelling wave so the bars keep moving while a vowel is held
   /// (a static level would otherwise freeze the pattern).
+  ///
+  /// It only runs while a session is listening: an always-on ticker would keep
+  /// the app repainting at 60 fps when idle and make `pumpAndSettle` in widget
+  /// tests spin forever.
   late final AnimationController _wave = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 1500),
-  )..repeat();
+  );
 
   @override
   void dispose() {
@@ -35,10 +39,23 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
     super.dispose();
   }
 
+  void _syncTicker(bool listening) {
+    if (listening) {
+      if (!_wave.isAnimating) _wave.repeat();
+    } else if (_wave.isAnimating) {
+      _wave.stop();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = Theme.of(context).colorScheme;
-    return BlocBuilder<DictationCubit, DictationState>(
+    return BlocConsumer<DictationCubit, DictationState>(
+      listenWhen: (previous, current) =>
+          previous.status != current.status ||
+          previous.isActive != current.isActive,
+      listener: (context, state) =>
+          _syncTicker(state.status == DictationStatus.listening),
       // Rebuild on state changes only while the meter is actually visible.
       buildWhen: (previous, current) =>
           previous.isActive != current.isActive ||

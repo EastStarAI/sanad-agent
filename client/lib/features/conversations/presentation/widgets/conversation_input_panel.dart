@@ -261,8 +261,8 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     required MessageDeliveryIntent intent,
   }) async {
     if (_awaitingDictation) return;
-    final dictation = context.read<DictationCubit>();
-    if (dictation.state.isActive) {
+    final dictation = _dictationOrNull();
+    if (dictation != null && dictation.state.isActive) {
       _awaitingDictation = true;
       try {
         await dictation.stopAndWait();
@@ -280,6 +280,18 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
     final text = dispatchExport.plainText.trim();
     if (text.isEmpty) return;
     await _dispatchComposerText(text, intent: intent);
+  }
+
+  /// The dictation cubit, when this host provides one.
+  ///
+  /// Tests and hosts without dictation have no cubit above the composer, and
+  /// sending must keep working there instead of throwing.
+  DictationCubit? _dictationOrNull() {
+    try {
+      return context.read<DictationCubit>();
+    } on Object {
+      return null;
+    }
   }
 
   Future<void> _dispatchComposerText(
