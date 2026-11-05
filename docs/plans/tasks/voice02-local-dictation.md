@@ -293,14 +293,22 @@ checked, activated, next session on the new model.
 
 ## Verification facts recorded this session
 
-- Client CI job has been 7m27s–9m24s across all runs of this branch
-  (`cd139789` 7m27s → `b6826f25` 9m24s); the `Test client` step alone is
-  239–337 s. The suite grew to 2402 tests; the spread is runner variance, not a
-  code slowdown. Local full client suite: 2402 passed, 3 skipped, 4m11s.
+- **Client CI job history** (same workflow, `Test client` step in brackets):
+  2026-10-21 `6a832396` **5m15s** (189 s) · 2026-10-21 `7955d2d5` 7m10s (270 s) ·
+  2026-10-23 `4068255f` 11m51s (219 s) · 2026-10-24 `cb9df614` 8m21s (288 s) ·
+  2026-11-01 `23cfb0bc` 8m35s (308 s) · 2026-11-04 `5a0afc56` 9m15s (339 s) ·
+  2026-11-05 `aea502cf` 9m45s (351 s).
+  Cause of the jump, measured not guessed: client test files went **188 → 243 →
+  247** (`client/test/**/*_test.dart`) between Oct 21 and Oct 24 (the SRP
+  refactor series), and the `Web startup composition` step (34–67 s) appeared in
+  the same window. The voice work added 3 tests, so it did not cause the rise;
+  the spread between neighbouring runs is runner variance.
 - Two client regressions were introduced and fixed within the session: the send
   path read `DictationCubit` unconditionally (ProviderNotFound in every composer
   test, message never dispatched) and the backdrop ticker repeated forever
   (`pumpAndSettle` never settled, 60 fps repaint while idle).
+- A bogus `stt.model_path` used to be advertised as an installed model; the
+  status payload now resolves the path first and reports `installed: false`.
 - PR #337 is green on all platforms (agent, client, CLI automation and
   sanad-dev bootstrap on ubuntu/macos/windows) with `maintainer-reviewed` and
   `release-reviewed` applied.

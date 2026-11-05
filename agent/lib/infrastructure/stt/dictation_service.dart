@@ -130,9 +130,25 @@ class DictationService {
 
   void releaseSession() => _activeSessions = 0;
 
+  /// True when `stt.model_path` points at files the engine can actually load.
+  bool _resolveOverrideExists() {
+    try {
+      return _store.resolve(_settings) != null;
+    } on Object {
+      return false;
+    }
+  }
+
   Map<String, dynamic> statusPayload() {
     final readiness = this.readiness();
-    final installedOverrides = _settings.modelPath?.trim();
+    final overridePath = _settings.modelPath?.trim();
+    final installedOverrides = overridePath != null && overridePath.isNotEmpty
+        ? overridePath
+        : null;
+    // A path that does not resolve is not an installed model: reporting it as
+    // ready would start a session that fails at load time.
+    final overrideReady =
+        installedOverrides != null && _resolveOverrideExists();
     return {
       'supported': readiness.isSupported,
       if (readiness.reason != null) 'reason': readiness.reason,
@@ -144,7 +160,7 @@ class DictationService {
       'models': [
         // An explicit `stt.model_path` is a ready model even though it is not a
         // catalog entry; without this row the UI offers the setup sheet.
-        if (installedOverrides != null && installedOverrides.isNotEmpty)
+        if (installedOverrides != null)
           {
             'id': 'path-override',
             'label': 'نموذج محلي (stt.model_path)',
@@ -153,7 +169,7 @@ class DictationService {
             'language': _settings.language,
             'total_bytes': 0,
             'hosted': false,
-            'installed': true,
+            'installed': overrideReady,
             'engine': SttEngineKind.whisperCpp.name,
           },
         for (final entry in kSttCatalog)
