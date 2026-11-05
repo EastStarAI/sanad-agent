@@ -73,9 +73,10 @@ directory) and restored with `actions/cache`, keyed on the OS, `.fvmrc`, and
 every `pubspec.lock` in the repository. Lockfile changes produce a new key, so
 a stale cache can never resolve different dependency versions.
 
-The Linux desktop development packages (`libgtk-3-dev`, `libasound2-dev`) are
-not installed: every VM unit and widget test, the Web guard, and the AOT smoke
-run pass on the stock image without them.
+The client test shards and the Web guard install `libgtk-3-dev` and
+`libasound2-dev` because the `nativeapi` build hook compiles against GTK 3, X11,
+and Xi with `pkg-config`, and the image only ships those runtime libraries. The
+analysis and agent lanes do not build native assets and install nothing.
 
 ## Required Checks and Protected Labels
 

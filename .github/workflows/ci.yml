@@ -178,11 +178,7 @@ jobs:
           status=0
           fvm dart test "${files[@]}" \
             --file-reporter "json:$RUNNER_TEMP/agent-tests.jsonl" || status=$?
-          executed="$(jq -r 'select(.type == "testDone" and (.hidden | not)) | .id' \
-            "$RUNNER_TEMP/agent-tests.jsonl" | wc -l)"
-          skipped="$(jq -r 'select(.type == "testDone" and (.hidden | not) and .skipped) | .id' \
-            "$RUNNER_TEMP/agent-tests.jsonl" | wc -l)"
-          echo "Agent shard $SHARD/$TOTAL_SHARDS executed $executed tests ($skipped skipped)."
+          echo "Agent shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-tests.jsonl")."
           exit "$status"
 
   cli-automation:
@@ -267,6 +263,12 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      - name: Install native-asset build dependencies
+        run: |
+          # The nativeapi build hook needs the GTK 3, X11, and Xi development
+          # packages; the image only ships their runtime libraries.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
       - name: Test client shard ${{ matrix.shard }}/4
         working-directory: client
         run: |
@@ -280,11 +282,7 @@ jobs:
           status=0
           fvm flutter test "${files[@]}" \
             --file-reporter "json:$RUNNER_TEMP/client-tests.jsonl" || status=$?
-          executed="$(jq -r 'select(.type == "testDone" and (.hidden | not)) | .id' \
-            "$RUNNER_TEMP/client-tests.jsonl" | wc -l)"
-          skipped="$(jq -r 'select(.type == "testDone" and (.hidden | not) and .skipped) | .id' \
-            "$RUNNER_TEMP/client-tests.jsonl" | wc -l)"
-          echo "Client shard $SHARD/$TOTAL_SHARDS executed $executed tests ($skipped skipped)."
+          echo "Client shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/client-tests.jsonl")."
           exit "$status"
 
   client-web:
@@ -296,6 +294,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      - name: Install native-asset build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
       - name: Web startup composition
         working-directory: client
         run: |

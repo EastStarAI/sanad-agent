@@ -41,6 +41,12 @@ runs:
         # The SDK above is already cached by flutter-action, so this install only
         # registers the pinned version with FVM instead of downloading it again.
         dart pub global run fvm:main install
+    # PATH entries only apply to later steps, so the FVM version assertion runs
+    # in its own step instead of after the install above.
+    - shell: bash
+      run: |
+        set -euo pipefail
+        version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
         resolved="$(fvm flutter --version | head -n1)"
         case "$resolved" in
           *" $version "*) echo "FVM resolves Flutter $version" ;;
