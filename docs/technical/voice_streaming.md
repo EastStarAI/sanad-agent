@@ -14,6 +14,9 @@ Sanad contains a realtime duplex voice implementation built around Gemini
 Realtime. The path is retained for development and validation while text
 conversations remain the supported default.
 
+> Dictation (speech → text in the composer) is a separate, local-only feature:
+> see [Local Dictation](local_dictation.md).
+
 ## Components
 
 The experimental path consists of:

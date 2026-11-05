@@ -156,12 +156,12 @@ batch path does not need VAD, so this is acceptable for v1).
 - [ ] Decision: **model-specific work is not worth it** (~80% quality). Revisit only if an Arabic *sherpa-packaged* streaming/light model appears, or a chunked-encoder export with sherpa metadata is published. This gate closes on such an artifact, never on hand-written ONNX surgery.
 
 ### G3 — Documentation, verification, delivery
-- [ ] New `docs/technical/local_dictation.md` (ownership, transport, event contract, model lifecycle, platform gate) and a pointer from `docs/technical/voice_streaming.md`.
-- [ ] Update `docs/llms.txt`, `docs/product/features.md`, and the `agent`/`client` AGENTS.md ownership lines.
-- [ ] `fvm dart analyze` and `fvm flutter analyze` clean; focused tests green in both projects.
-- [ ] Live acceptance via `sanad-dev` on macOS arm64: press the mic, speak Arabic, watch text appear and finalize, verify draft preservation on cancel and on model failure.
-- [ ] Bounded live evidence recorded (first-final latency, RTF, RSS, load time) with no audio/transcript logging in the daemon.
-- [ ] Graph maintenance per `graphify` rules when code files change.
+- [x] New `docs/technical/local_dictation.md` (ownership, transport, event contract, model lifecycle, platform gate) and a pointer from `docs/technical/voice_streaming.md`.
+- [x] Update `docs/llms.txt`, `docs/product/features.md`, and the `agent`/`client` AGENTS.md ownership lines.
+- [x] `fvm dart analyze` and `fvm flutter analyze` clean; focused tests green in both projects (agent `test/stt` 53 passed, client dictation 34 passed).
+- [ ] Live acceptance via `sanad-dev` on macOS arm64: press the mic, speak Arabic, watch text appear and finalize, verify draft preservation on cancel and on model failure. — daemon path proven with real audio over the same socket; the microphone half needs the owner in front of the machine.
+- [x] Bounded live evidence recorded (first-final latency, RTF, RSS, load time) with no audio/transcript logging in the daemon.
+- [x] Graph maintenance per `graphify` rules when code files change (repo graph rebuilt: 43,984 nodes / 63,787 edges).
 - [ ] Commit inside the worktree with the `sanad-agent@eaststarai.com` identity and a plan-referenced message; open the PR with verification results.
 
 ## Acceptance Criteria

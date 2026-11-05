@@ -186,6 +186,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Linux Agent Service Lifecycle](docs/technical/linux_service_lifecycle.md): Capability-selected user/system systemd and OpenRC registration, typed status, ownership, conflict migration, and transactional rollback.
 - [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authentication, origin enforcement, filesystem ownership, secure startup, and runtime isolation for local Sanad data.
 - [Experimental Realtime Voice](docs/technical/voice_streaming.md): Current experimental Gemini Realtime voice path, transports, audio format, interruption behavior, and release boundaries.
+- [Local Dictation](docs/technical/local_dictation.md): In-process speech-to-text dictation — ownership boundary, WebSocket event contract, batch versus streaming, model catalog and lifecycle, and the macOS arm64 platform gate.
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.

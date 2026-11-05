@@ -18,7 +18,7 @@ This contract applies to `agent/`.
 - `agent/lib/capabilities/` owns tool/skill/MCP catalogs, runtime context, permission policy, and tool execution contracts.
 - `agent/lib/evolution/` owns sessions, memory, scheduling, titles, and durable runtime state.
 - `agent/lib/interfaces/` owns platform adapters, gateway delivery, admission/orchestration, and canonical client protocols.
-- `agent/lib/infrastructure/` owns OS/platform and voice infrastructure implementations.
+- `agent/lib/infrastructure/` owns OS/platform and voice infrastructure implementations. `agent/lib/infrastructure/stt/` owns local dictation end to end: the catalog, the model store, the session/transport contract, and both in-process recognizers (whisper.cpp through `dart:ffi`, sherpa-onnx for streaming). Audio and transcript text never reach the logs, the model is loaded per session and freed on stop, and nothing there may spawn a sidecar, CLI, or local HTTP server.
 - `agent/tool/` owns release preparation and contract tooling. It is the single writer of tracked release-identity literals, including the `sanad-client` CLI version constant, so release identity is never advanced by hand.
 - Generated-source tooling stays platform-neutral: manifest paths are validated in the POSIX context and joined with the platform separator, and every generated file or embedded asset is compared and hashed as canonical LF text, so Windows `core.autocrlf` checkout behavior can never report a clean tree as stale or embed different bytes per platform. `.gitattributes` pins `eol=lf` for those byte-sensitive paths.
 - `agent/lib/plugins/` owns generic lifecycle hooks only.
