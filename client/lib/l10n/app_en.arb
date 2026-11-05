@@ -969,5 +969,13 @@
         "type": "String"
       }
     }
+  },
+  "providerPickerSearchHint": "Search providers",
+  "@providerPickerSearchHint": {
+    "description": "Placeholder hint of the provider picker search field"
+  },
+  "providerPickerEmptyResults": "No providers match your search.",
+  "@providerPickerEmptyResults": {
+    "description": "Empty state shown when provider search filters out every provider"
   }
 }

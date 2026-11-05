@@ -22,6 +22,7 @@ import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_form_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_picker_view.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_setup_flow.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:toastification/toastification.dart';
 
@@ -401,10 +402,16 @@ ProviderDto _provider({
 }
 
 Widget _wrap(Widget child) => ToastificationWrapper(
-  child: MaterialApp(home: Scaffold(body: child)),
+  child: MaterialApp(
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: const [Locale('en'), Locale('ar')],
+    home: Scaffold(body: child),
+  ),
 );
 
 Widget _wrapInBoundedOverlay(Widget child) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: const [Locale('en'), Locale('ar')],
   home: Scaffold(
     body: Center(
       child: SizedBox(
@@ -427,6 +434,8 @@ Widget _wrapInBoundedOverlay(Widget child) => MaterialApp(
 );
 
 Widget _wrapInSettingsScroll(Widget child) => MaterialApp(
+  localizationsDelegates: AppLocalizations.localizationsDelegates,
+  supportedLocales: const [Locale('en'), Locale('ar')],
   home: Scaffold(
     body: SingleChildScrollView(
       padding: const EdgeInsets.all(24),
