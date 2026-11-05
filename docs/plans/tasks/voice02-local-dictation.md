@@ -145,10 +145,11 @@ first, Linux/Windows later), and losing sherpa's ready-made silero VAD (the
 batch path does not need VAD, so this is acceptable for v1).
 
 ### G5 — Streaming path proven with a light English model (owner-approved, after G2d)
-- [ ] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer`, selected by `mode: streaming`; the worker isolate is reused and no transport/UI fork is introduced.
-- [ ] Catalog entry with `mode: streaming` pointing at a public, sherpa-packaged, light English streaming model (English-only is acceptable and expected; no Arabic streaming model exists in sherpa today), installed through the same hosted download path.
-- [ ] Live A/B evidence: the streaming entry shows live text in the composer while the Arabic batch entry lands one text block at stop, both inserted at the caret.
-- [ ] Explicitly excluded: model-specific ONNX surgery for third-party exports (see G0b).
+- [x] `StreamingSttEngine` adapter over sherpa `OnlineRecognizer`, selected by `mode: streaming`; the worker isolate is reused and no transport/UI fork is introduced. Implemented inside the existing worker (`_initStreaming`, `_streamAudio`, `_closeStreamingSegment`, `_finishStreaming`); the engine only gained a `partial` message case, so the daemon/UI contract is unchanged.
+- [x] Catalog entry with `mode: streaming` pointing at a public, sherpa-packaged, light English streaming model (English-only is acceptable and expected; no Arabic streaming model exists in sherpa today), installed through the same hosted download path. Entry `en-streaming-zipformer-20m` (45 MB, 4 pinned files, sha256 verified); installed in-app-style with `tool/stt_install.dart` at 2.7 MB/s and `installed: true`.
+- [x] Live A/B evidence: the streaming entry shows live text in the composer while the Arabic batch entry lands one text block at stop, both inserted at the caret. Measured over the daemon socket (`tool/stt_daemon_ab.dart`, same `ws?type=dictation` transport the client uses) — see the G5 evidence table below.
+- [x] Explicitly excluded: model-specific ONNX surgery for third-party exports (see G0b).
+- [x] Consequence recorded: streaming works through sherpa, so sherpa is no longer a removable fallback — it is the streaming runtime, and whisper.cpp stays the batch runtime. Deleting either would remove a capability.
 
 ### G0b — Nawah (NeMo TDT, Arabic) — deprioritized
 - [x] Probed `oddadmix/Nawah-ASR-60M-Max-Arabic-ONNX` (69 MB int8). Not sherpa-packaged: the encoder lacks the `vocab_size` metadata sherpa requires, the blank convention is inverted (`<blk>` is id 0 inside the vocab while sherpa expects `1024` as the last `tokens.txt` line), and the encoder consumes full-context features, so it is not streaming despite the transducer architecture.
@@ -257,6 +258,27 @@ fallback until G5 decides whether streaming needs sherpa at all. The in-app
 install path was verified against the real host: 874 MB at 3.5 MB/s, sha
 checked, activated, next session on the new model.
 
+## G5 evidence (2026-11-05, macOS arm64)
+
+Same audio pipeline, same daemon, same socket (`ws?type=dictation`), one variable:
+the model. Both runs sent 100 ms frames paced like a live microphone.
+
+| Model | Partials | First partial | Finals | Wall for audio |
+|---|---|---|---|---|
+| `en-streaming-zipformer-20m` (streaming) | **16**, growing word by word | 1535 ms | 1 at stop (same `seq` as the last partial) | 7.8 s / 7.0 s audio |
+| `egy-whisper-turbo-ggml-q8` (batch) | **0** | — | 1 at stop (whole utterance) | 16.6 s / 10.7 s audio |
+
+- Streaming load: 224 ms, RSS 392 MB (Dart VM included), artifact 45 MB.
+- Streaming transcript of the English sample: "…THIS IS A LIVE STREAMING
+  DICTATION TEST THE WORDS SHOULD APPEAR WHILE I AM STILL SPEAKING NOT AFTER I
+  STOP" — the final replaced the partial, nothing duplicated.
+- Batch transcript of the Arabic sample: "هذا اختبار للأملاء الصوتي المحلي، النص
+  يجب أن يظهر كاملا بعد التوقف، وليس أثناء الكلام." (TTS audio; the voice
+  mispronounces إملاء as للأملاء).
+- The streaming entry is visible and labelled تجريبي so it is never mistaken for
+  the Arabic default; if the owner prefers a three-model sheet it flips to
+  `hidden: true` without touching code paths.
+
 ## Decisions taken in the 2026-11-05 session (all owner-approved)
 
 1. **Engine**: whisper.cpp replaces sherpa as the default runtime. sherpa stays
@@ -314,9 +336,14 @@ checked, activated, next session on the new model.
   `release-reviewed` applied.
 
 ## Current status
-- Current gate: **G7 complete and default** — whisper.cpp engine, hosted Egyptian
-  ggml models, three-model sheet, in-app install verified. Next: **G5** (English
-  streaming proof) then **G3** (docs, verification, delivery); G6 stays deferred.
+- Current gate: **G5 complete** — streaming proven end to end with a light English
+  zipformer; whisper.cpp stays the batch runtime and sherpa becomes the streaming
+  runtime. Next: **G3** (docs, verification, delivery); G6 stays deferred.
+- Model sheet today: `egy-whisper-turbo-ggml-q8` (default, ~1.2 GB),
+  `egy-whisper-turbo-ggml-q5` (~0.95 GB), `whisper-base-int8` (~0.76 GB) and
+  `en-streaming-zipformer-20m` (experimental, English streaming, ~0.2 GB).
+  `egy-whisper-turbo-ggml-f16` joins them as soon as its 1.6 GB artifact is
+  uploaded.
 - Memory facts (macOS arm64): daemon idle 46 MB; listening ~1.2 GB with the
   Egyptian q8 (vs 2.4–3.0 GB on the sherpa int8 path); back to ~0.6 GB after a
   session, flat across sessions (no leak). Egyptian q5 peaks ~0.95 GB, base

@@ -168,7 +168,57 @@ const List<SttCatalogEntry> kSttCatalog = [
       ),
     ],
   ),
+  // Streaming proof entry (English only) — see [kEnglishStreamingEntry].
+  kEnglishStreamingEntry,
 ];
+
+/// English streaming entry used to prove the streaming path end to end (G5).
+///
+/// English-only is a documented limitation, not an oversight: no
+/// sherpa-packaged Arabic streaming model exists yet (see G0b). The entry is
+/// visible because the proof requires the user to pick it, and it is labelled as
+/// experimental so it is never mistaken for the Arabic default.
+const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
+  id: 'en-streaming-zipformer-20m',
+  label: 'إنجليزي — بث مباشر (تجريبي)',
+  note: 'يستهلك ≈٠.٢ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
+  mode: SttModelMode.streaming,
+  language: 'en',
+  files: [
+    SttModelFile(
+      name: 'encoder-epoch-99-avg-1.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/encoder-epoch-99-avg-1.int8.onnx',
+      sizeBytes: 42845182,
+      sha256:
+          '3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3',
+    ),
+    SttModelFile(
+      name: 'decoder-epoch-99-avg-1.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/decoder-epoch-99-avg-1.onnx',
+      sizeBytes: 2092272,
+      sha256:
+          '45a7f940ecfb53d89fa270ad11b88b961e53a317203eb24b1c8e95ed208b0f30',
+    ),
+    SttModelFile(
+      name: 'joiner-epoch-99-avg-1.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/joiner-epoch-99-avg-1.int8.onnx',
+      sizeBytes: 259572,
+      sha256:
+          'e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e',
+    ),
+    SttModelFile(
+      name: 'tokens.txt',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/main/tokens.txt',
+      sizeBytes: 5048,
+      sha256:
+          '49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb',
+    ),
+  ],
+);
 
 /// The default entry: the first `isDefault`, else the first entry.
 SttCatalogEntry get defaultSttEntry => kSttCatalog.firstWhere(

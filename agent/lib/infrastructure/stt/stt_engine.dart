@@ -107,6 +107,14 @@ class SherpaSttEngine implements SttEngine {
           _readyEvent = ready;
           _emit(ready);
           if (!(_ready?.isCompleted ?? true)) _ready?.complete();
+        case 'partial':
+          if (_cancelled || _closed) return;
+          _emit(
+            SttPartialEvent(
+              seq: message['seq'] as int? ?? 0,
+              text: (message['text'] as String? ?? '').trim(),
+            ),
+          );
         case 'final':
           if (_cancelled || _closed) return;
           _emit(
@@ -177,6 +185,8 @@ class SherpaSttEngine implements SttEngine {
     _inbox!.send({
       'cmd': 'init',
       'modelId': modelId,
+      'mode': files.mode.name,
+      'joiner': files.joiner,
       'encoder': files.encoder,
       'decoder': files.decoder,
       'tokens': files.tokens,

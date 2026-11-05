@@ -21,6 +21,9 @@ Future<void> main(List<String> args) async {
   final vad = args[1];
   final language = args.length > 3 ? args[3] : 'ar';
   final threads = args.length > 4 ? int.parse(args[4]) : 2;
+  final mode = args.length > 5 && args[5] == 'streaming'
+      ? SttModelMode.streaming
+      : SttModelMode.batchVad;
 
   String find(String needle, String extension) {
     for (final file in modelDir.listSync().whereType<File>()) {
@@ -38,11 +41,13 @@ Future<void> main(List<String> args) async {
     tokens: find('tokens', '.txt'),
     vad: vad,
     language: language,
+    mode: mode,
+    joiner: mode == SttModelMode.streaming ? find('joiner', '.onnx') : '',
   );
 
   final pcm = _readWavPcm(args[2]);
   final seconds = pcm.length / 2 / 16000;
-  stdout.writeln('audio ${seconds.toStringAsFixed(1)}s');
+  stdout.writeln('audio ${seconds.toStringAsFixed(1)}s mode=${mode.name}');
 
   final engine = SherpaSttEngine();
   final done = Completer<void>();

@@ -244,6 +244,7 @@ class _DictationConnection {
   StreamSubscription<Uint8List>? _audio;
   StreamController<Uint8List>? _audioIn;
   bool _sessionReady = false;
+  bool _starting = false;
   bool _installing = false;
   bool _installCancelled = false;
   bool _closed = false;
@@ -366,6 +367,19 @@ class _DictationConnection {
   }
 
   Future<void> _startSession() async {
+    // A client may repeat `start` (a double press, or a reconnect) while the
+    // recognizer is still loading. The second command must be ignored, not
+    // answered with `dictation_busy`, which would look like a stuck session.
+    if (_session != null || _starting) return;
+    _starting = true;
+    try {
+      await _startSessionOnce();
+    } finally {
+      _starting = false;
+    }
+  }
+
+  Future<void> _startSessionOnce() async {
     if (_session != null) return;
     service._applySettingsFromDisk();
     final readiness = service.readiness();

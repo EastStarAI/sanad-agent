@@ -38,6 +38,15 @@ class _SttWorker {
 
   final SendPort _out;
   sherpa.OfflineRecognizer? _recognizer;
+
+  /// Streaming recognizer, built instead of [_recognizer] when the catalog entry
+  /// is `mode: streaming`. One long-lived stream carries the whole session so
+  /// partial text can be replaced in place.
+  sherpa.OnlineRecognizer? _online;
+  sherpa.OnlineStream? _onlineStream;
+  SttModelMode _mode = SttModelMode.batchVad;
+  String _lastPartial = '';
+  int _partialSeq = 0;
   sherpa.VoiceActivityDetector? _vad;
   String _modelId = '';
   int _seq = 0;
@@ -85,7 +94,21 @@ class _SttWorker {
   void _init(Map message) {
     final stopwatch = Stopwatch()..start();
     _modelId = message['modelId'] as String? ?? '';
+    _mode = message['mode'] == SttModelMode.streaming.name
+        ? SttModelMode.streaming
+        : SttModelMode.batchVad;
     sherpa.initBindings();
+    if (_mode == SttModelMode.streaming) {
+      _initStreaming(message);
+      stopwatch.stop();
+      _out.send({
+        'evt': 'ready',
+        'modelId': _modelId,
+        'loadMs': stopwatch.elapsedMilliseconds,
+      });
+      _out.send({'evt': 'idle'});
+      return;
+    }
     _recognizer = sherpa.OfflineRecognizer(
       sherpa.OfflineRecognizerConfig(
         model: sherpa.OfflineModelConfig(
@@ -134,7 +157,100 @@ class _SttWorker {
     _out.send({'evt': 'idle'});
   }
 
+  /// Builds the native streaming recognizer and its session-long stream.
+  ///
+  /// Endpointing is left to sherpa (rule1/rule2 trailing silence): a segment
+  /// closes on real silence, which is what makes the final replace the partial
+  /// instead of duplicating it.
+  void _initStreaming(Map message) {
+    final joiner = message['joiner'] as String? ?? '';
+    if (joiner.isEmpty) {
+      throw const SttException(
+        'model_incomplete',
+        'a streaming model needs encoder, decoder, joiner and tokens',
+      );
+    }
+    final recognizer = sherpa.OnlineRecognizer(
+      sherpa.OnlineRecognizerConfig(
+        model: sherpa.OnlineModelConfig(
+          transducer: sherpa.OnlineTransducerModelConfig(
+            encoder: message['encoder'] as String,
+            decoder: message['decoder'] as String,
+            joiner: joiner,
+          ),
+          tokens: message['tokens'] as String,
+          numThreads: message['threads'] as int? ?? 2,
+          modelType: 'zipformer',
+          debug: false,
+        ),
+        // 0.8 s of silence closes a segment: long enough not to split a
+        // sentence on a breath, short enough that the final feels immediate.
+        enableEndpoint: true,
+        rule1MinTrailingSilence: 2.4,
+        rule2MinTrailingSilence: 0.8,
+        rule3MinUtteranceLength: 20,
+      ),
+    );
+    _online = recognizer;
+    _onlineStream = recognizer.createStream();
+  }
+
   void _audio(Uint8List pcm16) {
+    if (_mode == SttModelMode.streaming) {
+      _streamAudio(pcm16);
+      return;
+    }
+    _audioBatch(pcm16);
+  }
+
+  /// Feeds one chunk to the streaming recognizer and publishes whatever the
+  /// decoder now believes the open segment says.
+  void _streamAudio(Uint8List pcm16) {
+    final recognizer = _online;
+    final stream = _onlineStream;
+    if (recognizer == null || stream == null) {
+      throw const SttException('not_ready', 'recognizer is not loaded');
+    }
+    stream.acceptWaveform(
+      samples: _pcm16ToFloat32(pcm16),
+      sampleRate: 16000,
+    );
+    while (recognizer.isReady(stream)) {
+      recognizer.decode(stream);
+    }
+    final text = recognizer.getResult(stream).text.trim();
+    if (text.isNotEmpty && text != _lastPartial) {
+      _lastPartial = text;
+      _out.send({'evt': 'partial', 'seq': _partialSeq, 'text': text});
+    }
+    if (recognizer.isEndpoint(stream)) {
+      _closeStreamingSegment(text);
+    }
+    _out.send({'evt': 'idle'});
+  }
+
+  /// Publishes the final for the open segment and starts a fresh one.
+  void _closeStreamingSegment(String text) {
+    final recognizer = _online;
+    final stream = _onlineStream;
+    if (recognizer == null || stream == null) return;
+    if (text.isNotEmpty) {
+      _out.send({
+        'evt': 'final',
+        'seq': _partialSeq,
+        'text': text,
+        // Streaming reports text as audio is consumed, so a closed segment has
+        // no decode pass of its own to measure.
+        'audioMs': 0,
+        'decodeMs': 0,
+      });
+      _partialSeq++;
+    }
+    _lastPartial = '';
+    recognizer.reset(stream);
+  }
+
+  void _audioBatch(Uint8List pcm16) {
     final vad = _vad;
     if (vad == null || _recognizer == null) {
       throw const SttException('not_ready', 'recognizer is not loaded');
@@ -167,6 +283,10 @@ class _SttWorker {
   }
 
   void _finish() {
+    if (_mode == SttModelMode.streaming) {
+      _finishStreaming();
+      return;
+    }
     final vad = _vad;
     if (vad == null || _recognizer == null) {
       _out.send({'evt': 'done', 'segments': 0});
@@ -243,9 +363,49 @@ class _SttWorker {
     return parts.join(' ').trim();
   }
 
+  /// Flushes the open streaming segment at stop.
+  ///
+  /// The last words live in the decoder's tail, so a short silence is pushed
+  /// through before reading the result; without it the final word of the
+  /// utterance is lost.
+  void _finishStreaming() {
+    final recognizer = _online;
+    final stream = _onlineStream;
+    if (recognizer == null || stream == null) {
+      _out.send({'evt': 'done', 'segments': 0});
+      return;
+    }
+    stream.acceptWaveform(
+      samples: Float32List(16000 ~/ 2),
+      sampleRate: 16000,
+    );
+    while (recognizer.isReady(stream)) {
+      recognizer.decode(stream);
+    }
+    final text = recognizer.getResult(stream).text.trim();
+    if (text.isNotEmpty) {
+      _out.send({
+        'evt': 'final',
+        'seq': _partialSeq,
+        'text': text,
+        'audioMs': 0,
+        'decodeMs': 0,
+      });
+      _partialSeq++;
+    }
+    _lastPartial = '';
+    recognizer.reset(stream);
+    _out.send({'evt': 'done', 'segments': text.isEmpty ? 0 : 1});
+    _out.send({'evt': 'idle'});
+  }
+
   void _dispose() {
     if (_disposed) return;
     _disposed = true;
+    _onlineStream?.free();
+    _onlineStream = null;
+    _online?.free();
+    _online = null;
     _vad?.free();
     _vad = null;
     _recognizer?.free();

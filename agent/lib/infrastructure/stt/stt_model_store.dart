@@ -27,6 +27,8 @@ class SttModelFiles {
     required this.language,
     this.engine = SttEngineKind.sherpa,
     this.model = '',
+    this.joiner = '',
+    this.mode = SttModelMode.batchVad,
   });
 
   final String modelId;
@@ -41,6 +43,12 @@ class SttModelFiles {
 
   /// The single ggml file, used only by [SttEngineKind.whisperCpp].
   final String model;
+
+  /// Transducer joiner, used only by a streaming sherpa entry.
+  final String joiner;
+
+  /// Batch VAD or native streaming; decides which sherpa recognizer is built.
+  final SttModelMode mode;
 }
 
 /// Installation state of one catalog entry.
@@ -283,7 +291,11 @@ class SttModelStore {
       decoder: '$dir/${_byKind(entry.files, 'decoder').name}',
       tokens: '$dir/${_byKind(entry.files, 'tokens').name}',
       vad: vadPath,
-      language: settings.language,
+      language: entry.language,
+      mode: entry.mode,
+      joiner: entry.mode == SttModelMode.streaming
+          ? '$dir/${_byKind(entry.files, 'joiner').name}'
+          : '',
     );
   }
 

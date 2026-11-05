@@ -134,6 +134,36 @@ void main() {
       await session.close();
     });
 
+    test('a streaming partial reaches the client before the final', () async {
+      final session = sessionWith();
+      await session.start();
+      engine.emit(const SttPartialEvent(seq: 0, text: 'hello wor'));
+      engine.emit(const SttPartialEvent(seq: 0, text: 'hello world'));
+      engine.emit(
+        const SttFinalEvent(seq: 0, text: 'hello world', audioMs: 0, decodeMs: 0),
+      );
+      await Future<void>.delayed(Duration.zero);
+
+      final partials = channel.eventsOf('dictation_partial');
+      expect(partials.map((event) => event['text']), ['hello wor', 'hello world']);
+      // The final reuses the partial's seq, so the client replaces rather than
+      // appends, and nothing is duplicated.
+      final finals = channel.eventsOf('dictation_final');
+      expect(finals.single['seq'], partials.last['seq']);
+      expect(channel.eventsOf('dictation_ready'), isEmpty);
+      await session.close();
+    });
+
+    test('a cancelled session publishes no partial', () async {
+      final session = sessionWith();
+      await session.start();
+      await session.close();
+
+      expect(engine.cancelCalled, isTrue);
+      expect(channel.eventsOf('dictation_partial'), isEmpty);
+      expect(channel.eventsOf('dictation_final'), isEmpty);
+    });
+
     test('replays readiness the engine reported before the session attached', () async {
       engine.readyEvent = const SttReadyEvent(loadMs: 321, modelId: 'test-model');
       final session = sessionWith();

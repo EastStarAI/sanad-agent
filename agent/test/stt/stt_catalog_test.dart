@@ -45,11 +45,15 @@ void main() {
       expect(sttEntryById('no-such-model'), isNull);
     });
 
-    test('v1 entries are batch+VAD because no Arabic streaming model exists', () {
-      expect(
-        kSttCatalog.every((entry) => entry.mode == SttModelMode.batchVad),
-        isTrue,
+    test('Arabic entries stay batch+VAD because no Arabic streaming model exists', () {
+      final arabic = kSttCatalog.where((entry) => entry.language == 'ar');
+      expect(arabic.every((entry) => entry.mode == SttModelMode.batchVad), isTrue);
+      // The only streaming entry is the English proof model (G5).
+      final streaming = kSttCatalog.where(
+        (entry) => entry.mode == SttModelMode.streaming,
       );
+      expect(streaming.map((entry) => entry.id), ['en-streaming-zipformer-20m']);
+      expect(streaming.single.language, 'en');
     });
 
     test('the egyptian default and the light fallback are both present', () {
