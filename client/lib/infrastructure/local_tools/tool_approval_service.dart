@@ -1,6 +1,6 @@
 import 'package:sanad_client/app.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 enum ToolApprovalScope {
   once,
@@ -65,7 +65,7 @@ class ToolApprovalService {
               children: [
                 Text(
                   'Sanad Agent wants to run a shell command in this workspace.',
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: colorScheme.onSurface,
                     fontSize: 13,
                     height: 1.5,
@@ -125,7 +125,7 @@ class _ApprovalDetail extends StatelessWidget {
       children: [
         Text(
           label,
-          style: GoogleFonts.inter(
+          style: AppTypography.text(context,
             color: colorScheme.onSurfaceVariant,
             fontSize: 11,
             fontWeight: FontWeight.w600,
@@ -143,12 +143,11 @@ class _ApprovalDetail extends StatelessWidget {
           child: Text(
             value,
             style: monospace
-                ? TextStyle(
+                ? AppTypography.mono(
                     color: colorScheme.onSurface,
                     fontSize: 12,
-                    fontFamily: 'monospace',
                   )
-                : GoogleFonts.inter(
+                : AppTypography.text(context,
                     color: colorScheme.onSurface,
                     fontSize: 12,
                     height: 1.4,

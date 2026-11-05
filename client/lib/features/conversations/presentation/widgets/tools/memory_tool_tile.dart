@@ -1,7 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 
@@ -69,7 +69,7 @@ class MemoryToolTile extends StatelessWidget {
                 ),
                 child: Text(
                   action.toUpperCase(),
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 10,
                     fontWeight: FontWeight.bold,
                     color: actionColor,
@@ -85,7 +85,7 @@ class MemoryToolTile extends StatelessWidget {
                 ),
                 child: Text(
                   targetLabel,
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
                     color: Theme.of(context).colorScheme.primary,
@@ -98,7 +98,7 @@ class MemoryToolTile extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Target Text to ${action == 'remove' ? 'Remove' : 'Replace'}:',
-              style: GoogleFonts.roboto(
+              style: AppTypography.text(context,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -114,7 +114,7 @@ class MemoryToolTile extends StatelessWidget {
               ),
               child: SelectableText(
                 oldText,
-                style: GoogleFonts.firaCode(
+                style: AppTypography.mono(
                   fontSize: 11,
                   color: Theme.of(context).colorScheme.error,
                 ),
@@ -126,7 +126,7 @@ class MemoryToolTile extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               action == 'replace' ? 'New Content:' : 'Content:',
-              style: GoogleFonts.roboto(
+              style: AppTypography.text(context,
                 fontSize: 11,
                 fontWeight: FontWeight.w600,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -145,7 +145,7 @@ class MemoryToolTile extends StatelessWidget {
               ),
               child: SelectableText(
                 content,
-                style: GoogleFonts.firaCode(
+                style: AppTypography.mono(
                   fontSize: 11,
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
@@ -192,7 +192,7 @@ class MemoryToolTile extends StatelessWidget {
           const SizedBox(width: 8),
           Text(
             'Updating persistent $target ($action)...',
-            style: GoogleFonts.roboto(
+            style: AppTypography.text(context,
               fontSize: 12,
               fontStyle: FontStyle.italic,
               color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -212,7 +212,7 @@ class MemoryToolTile extends StatelessWidget {
       ),
       child: Text(
         event.toolOutput?.toString() ?? 'Failed to perform memory operation.',
-        style: GoogleFonts.roboto(
+        style: AppTypography.text(context,
           fontSize: 12,
           color: Theme.of(context).colorScheme.error,
         ),

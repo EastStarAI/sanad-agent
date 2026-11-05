@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 
@@ -142,14 +143,13 @@ class _InstallCommandCard extends StatelessWidget {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const SizedBox(
+                  SizedBox(
                     width: _InstallGuideStyle.lineNumberWidth,
                     child: Text(
                       '1',
                       textAlign: TextAlign.right,
-                      style: TextStyle(
+                      style: AppTypography.mono(
                         color: _InstallGuideStyle.editorMutedText,
-                        fontFamily: 'monospace',
                         fontSize: _InstallGuideStyle.codeFontSize,
                         height: _InstallGuideStyle.codeLineHeight,
                       ),
@@ -161,9 +161,8 @@ class _InstallCommandCard extends StatelessWidget {
                       scrollDirection: Axis.horizontal,
                       child: SelectableText(
                         command,
-                        style: const TextStyle(
+                        style: AppTypography.mono(
                           color: _InstallGuideStyle.editorText,
-                          fontFamily: 'monospace',
                           fontSize: _InstallGuideStyle.codeFontSize,
                           height: _InstallGuideStyle.codeLineHeight,
                         ),

@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/conversations/domain/models/session_execution_snapshot.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_timeline_projection.dart';
@@ -158,7 +158,7 @@ class _ActivityRow extends StatelessWidget {
             Expanded(
               child: Text.rich(
                 TextSpan(
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 13,
                     letterSpacing: 0.5,
                   ),
@@ -191,7 +191,7 @@ class _ActivityRow extends StatelessWidget {
                 child: Text(
                   elapsedText!,
                   key: const Key('conversation_activity_elapsed'),
-                  style: GoogleFonts.outfit(
+                  style: AppTypography.text(context,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                     fontFeatures: const [FontFeature.tabularFigures()],

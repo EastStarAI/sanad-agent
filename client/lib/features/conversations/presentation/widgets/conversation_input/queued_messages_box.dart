@@ -1,3 +1,4 @@
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
@@ -109,7 +110,10 @@ class QueuedMessagesBox extends StatelessWidget {
                               style: TextButton.styleFrom(
                                 visualDensity: VisualDensity.compact,
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                textStyle: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                textStyle: AppTypography.text(context,
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                ),
                               ),
                             ),
                             Semantics(

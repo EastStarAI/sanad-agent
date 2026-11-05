@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
@@ -124,7 +125,7 @@ class ProviderUsageSection extends StatelessWidget {
                         style: TextButton.styleFrom(
                           visualDensity: VisualDensity.compact,
                           padding: const EdgeInsets.symmetric(horizontal: 6),
-                          textStyle: const TextStyle(fontSize: 11),
+                          textStyle: AppTypography.text(context, fontSize: 11),
                         ),
                       ),
                     ],

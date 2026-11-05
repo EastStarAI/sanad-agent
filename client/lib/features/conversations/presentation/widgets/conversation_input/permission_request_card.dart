@@ -3,7 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 import '../../../../../utils/app_platform.dart';
 import '../../../domain/models/device_suspended_request.dart';
@@ -135,7 +135,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
             const SizedBox(width: 8),
             Text(
               presentation.title,
-              style: GoogleFonts.inter(
+              style: AppTypography.text(context,
                 color: colorScheme.onSurface,
                 fontSize: 15,
                 fontWeight: FontWeight.w600,
@@ -175,7 +175,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
                         ),
                       TextSpan(
                         text: presentation.details[index].value,
-                        style: const TextStyle(fontFamily: 'monospace'),
+                        style: AppTypography.mono(),
                       ),
                     ],
                   ),
@@ -229,7 +229,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
             maxLines: 3,
             decoration: InputDecoration(
               hintText: 'Tell the agent what to do instead (optional)',
-              hintStyle: GoogleFonts.inter(fontSize: 13),
+              hintStyle: AppTypography.text(context, fontSize: 13),
               filled: true,
               fillColor: colorScheme.surfaceContainerHighest.withValues(
                 alpha: 0.25,
@@ -324,7 +324,7 @@ class _PermissionRequestCardState extends State<PermissionRequestCard> {
         ),
         child: Text(
           label,
-          style: GoogleFonts.inter(
+          style: AppTypography.text(context,
             color: colorScheme.onSurface,
             fontSize: 13,
             fontWeight: primary ? FontWeight.w600 : FontWeight.w500,

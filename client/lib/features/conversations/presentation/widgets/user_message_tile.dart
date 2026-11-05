@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
@@ -260,7 +260,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                               children: [
                                 Text(
                                   _isExpanded ? 'See less' : 'Read more',
-                                  style: GoogleFonts.roboto(
+                                  style: AppTypography.text(context,
                                     color: Theme.of(context).colorScheme.primary,
                                     fontSize: 12,
                                     fontWeight: FontWeight.w600,
@@ -294,7 +294,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                     ),
                     child: Text(
                       timestampText,
-                      style: GoogleFonts.roboto(
+                      style: AppTypography.text(context,
                         color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
                         fontSize: 11,
                       ),
@@ -305,7 +305,7 @@ class _UserMessageTileState extends State<UserMessageTile> with SingleTickerProv
                 if (isPending) ...[
                   Text(
                     'Pending',
-                    style: GoogleFonts.roboto(
+                    style: AppTypography.text(context,
                       color: Theme.of(context).colorScheme.primary,
                       fontSize: 11,
                       fontWeight: FontWeight.w600,

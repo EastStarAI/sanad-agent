@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 
 import '../../../../../utils/app_platform.dart';
 import '../../../domain/models/device_suspended_request.dart';
@@ -197,7 +197,7 @@ class _ClarifyingQuestionCardState extends State<ClarifyingQuestionCard> {
                 const SizedBox(width: 8),
                 Text(
                   'Clarifying Question (${_currentQuestionIndex + 1} of ${questionsList.length})',
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: colorScheme.onSurface,
                     fontSize: 15,
                     fontWeight: FontWeight.w600,
@@ -215,7 +215,7 @@ class _ClarifyingQuestionCardState extends State<ClarifyingQuestionCard> {
               ),
               child: Text(
                 'Dismiss',
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   color: colorScheme.onSurface.withValues(alpha: 0.5),
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
@@ -308,10 +308,10 @@ class _ClarifyingQuestionCardState extends State<ClarifyingQuestionCard> {
                   maxLines: 8,
                   textDirection: textDirection,
                   textAlign: textDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-                  style: GoogleFonts.inter(fontSize: 13),
+                  style: AppTypography.text(context, fontSize: 13),
                   decoration: InputDecoration(
                     hintText: 'Type your detailed answer here...',
-                    hintStyle: GoogleFonts.inter(
+                    hintStyle: AppTypography.text(context,
                       fontSize: 13,
                       color: colorScheme.onSurfaceVariant.withValues(alpha: 0.7),
                     ),
@@ -471,7 +471,7 @@ class _ClarifyingQuestionCardState extends State<ClarifyingQuestionCard> {
           label,
           textDirection: textDirection,
           textAlign: textDirection == TextDirection.rtl ? TextAlign.right : TextAlign.left,
-          style: GoogleFonts.inter(
+          style: AppTypography.text(context,
             color: colorScheme.onSurface,
             fontSize: 13,
             fontWeight: primary ? FontWeight.w600 : FontWeight.w500,

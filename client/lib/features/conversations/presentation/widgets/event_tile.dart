@@ -1,8 +1,8 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/conversation_clock_scope.dart';
 import 'package:sanad_client/utils/format_utils.dart';
 import 'package:sanad_client/utils/link_utils.dart';
@@ -285,7 +285,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
             Expanded(
               child: Text(
                 widget.event.text,
-                style: GoogleFonts.inter(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
@@ -365,7 +365,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   text: TextSpan(
-                    style: GoogleFonts.outfit(fontSize: 13, letterSpacing: 0.5),
+                    style: AppTypography.text(context, fontSize: 13, letterSpacing: 0.5),
                     children: [
                       TextSpan(
                         text: isArabic ? 'تفكير: ' : 'Thinking: ',
@@ -427,7 +427,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       widget.event.timestamp,
       context,
     );
-    final subTextStyle = GoogleFonts.roboto(
+    final subTextStyle = AppTypography.text(context,
       color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.8),
       fontSize: 11,
     );
@@ -576,7 +576,7 @@ class _EventTileState extends State<EventTile> with TickerProviderStateMixin {
       return const SizedBox.shrink();
     }
 
-    final textStyle = GoogleFonts.outfit(
+    final textStyle = AppTypography.text(context,
       fontSize: 11.5,
       fontWeight: FontWeight.w500,
       fontFeatures: const [FontFeature.tabularFigures()],

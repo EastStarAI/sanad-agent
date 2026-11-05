@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:get_it/get_it.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/devices/data/daemon/local_daemon_controller.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
@@ -182,14 +183,13 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
                   Expanded(
                     child: Text(
                       title,
-                      style: TextStyle(
+                      style: AppTypography.mono(
                         color: isActive
                             ? Colors.greenAccent
                             : isDone
                             ? Colors.white70
                             : Colors.grey,
                         fontSize: 14,
-                        fontFamily: 'monospace',
                       ),
                     ),
                   ),
@@ -213,9 +213,8 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
             const SizedBox(height: 8),
             Text(
               'Downloading: ${(_downloadProgress * 100).toStringAsFixed(1)}%',
-              style: const TextStyle(
+              style: AppTypography.mono(
                 color: Colors.greenAccent,
-                fontFamily: 'monospace',
                 fontSize: 12,
               ),
               textAlign: TextAlign.left,
@@ -241,9 +240,8 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
                       log,
-                      style: TextStyle(
+                      style: AppTypography.mono(
                         color: isError ? Colors.redAccent : Colors.lightGreen,
-                        fontFamily: 'monospace',
                         fontSize: 12,
                       ),
                       textDirection: TextDirection.ltr,
