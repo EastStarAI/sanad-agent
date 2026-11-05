@@ -8,6 +8,13 @@ delivery: own PR from fix/121-ci-label-event-runs
 
 # Task 121 — One CI Run per Pull Request
 
+> **Superseded (2026-11-05):** the `labeled`/`unlabeled` trigger described below
+> was replaced by an on-demand `workflow_dispatch` with a required `pr_number`
+> input, because GitHub still created one run per label event even when the job
+> skipped it. Current behaviour and the dispatch command live in
+> `docs/operations/community_governance.md`; the design record below is kept as
+> history.
+
 ## Problem
 
 PR 229 showed 9 Public CI runs within 15 seconds. The cause was verified from `.github/workflows/ci.yml` and the run list:

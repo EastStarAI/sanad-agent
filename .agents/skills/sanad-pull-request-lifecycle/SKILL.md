@@ -20,6 +20,15 @@ An unlabeled pull request is an incomplete deliverable, not a cosmetic gap: with
 3. Apply the mandatory minimum: exactly one `type/*` and at least one `comp/*`. Add `platform/*` only for platform-specific behavior and a `size/*` entry when the size is material.
 4. Apply non-protected labels with `gh pr edit <number> --add-label "<label>,<label>"`, then verify the applied set with `gh pr view <number> --json labels`. Re-verify before handoff whenever later commits change the diff, and repair the set in the same session.
 5. `All required checks pass` is never label evidence: the `Verify protected review labels` job checks protected labels only, so a green run can coexist with a pull request that carries no `type/*` or `comp/*` label.
+6. A protected review label (`maintainer-reviewed`, `security-reviewed`, `release-reviewed`) is honoured only after that job re-reads it, and label changes start no run of their own. After an authorized maintainer applies or removes one, dispatch the re-verification and watch it:
+
+   ```bash
+   gh workflow run protected-labels.yml -f pr_number=<number>
+   gh run list --workflow protected-labels.yml --limit 1
+   gh run watch <run-id> --exit-status --compact
+   ```
+
+   A protected label that was never followed by a dispatch leaves the aggregate check stale, so report it instead of treating the previous green result as current.
 
 ## Prepare
 
