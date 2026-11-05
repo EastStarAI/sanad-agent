@@ -58,12 +58,17 @@ runs:
         # registers the pinned version with FVM instead of downloading it again.
         dart pub global run fvm:main install
     # PATH entries only apply to later steps, so the FVM version assertion runs
-    # in its own step instead of after the install above.
+    # in its own step. On Windows the FVM shim is a batch file, which only the
+    # command interpreter resolves, so it is invoked through cmd there.
     - shell: bash
       run: |
         set -euo pipefail
         version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
-        resolved="$(fvm flutter --version | head -n1)"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          resolved="$(cmd //c fvm flutter --version | head -n1)"
+        else
+          resolved="$(fvm flutter --version | head -n1)"
+        fi
         case "$resolved" in
           *" $version "*) echo "FVM resolves Flutter $version" ;;
           *)
