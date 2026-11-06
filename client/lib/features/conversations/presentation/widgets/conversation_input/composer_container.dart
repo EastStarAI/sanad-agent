@@ -26,6 +26,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 
 import '../sidebar/sidebar_composition.dart';
 import 'composer_attachment_rail.dart';
@@ -34,6 +35,7 @@ import 'composer_model_chip.dart';
 import 'composer_permission_mode_chip.dart';
 import 'composer_send_stop_button.dart';
 import 'composer_workspace_warning.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_composer_backdrop.dart';
 
 /// The composer card: input field, attachment rail, and the bottom action row.
 class ComposerContainer extends StatelessWidget {
@@ -199,7 +201,20 @@ class ComposerContainer extends StatelessWidget {
       key: const Key('composer_focus_surface'),
       behavior: HitTestBehavior.opaque,
       onTap: chatFocusNode.requestFocus,
-      child: composerCard,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        // Dictation paints its meter across the whole card while listening, so
+        // the level is visible without watching the mic button.
+        child: Stack(
+          children: [
+            composerCard,
+            // The meter is translucent, so it sits on top of the card colour and
+            // still reads as the card's own background.
+            if (capabilities.supportsDictation)
+              const Positioned.fill(child: DictationComposerBackdrop()),
+          ],
+        ),
+      ),
     );
     return focusSurface;
   }
@@ -286,6 +301,20 @@ class ComposerContainer extends StatelessWidget {
       },
     );
 
+    final dictationMicButton = capabilities.supportsDictation &&
+            agentSlice.activeAgent != null
+        ? Padding(
+            padding: const EdgeInsetsDirectional.only(end: 6),
+            child: DictationMicButton(
+              chatController: chatController,
+              device: agentSlice.activeAgent,
+              scopeKey: sessionId,
+              focusNode: chatFocusNode,
+              dimTextColor: dimTextColor,
+            ),
+          )
+        : null;
+
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
       decoration: BoxDecoration(
@@ -348,6 +377,7 @@ class ComposerContainer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  if (dictationMicButton != null) dictationMicButton,
                   sendStopButton,
                 ],
               ),
@@ -362,6 +392,10 @@ class ComposerContainer extends StatelessWidget {
                 ],
                 if (thinkingModeChip != null) ...[
                   thinkingModeChip,
+                  const SizedBox(width: 8),
+                ],
+                if (dictationMicButton != null) ...[
+                  dictationMicButton,
                   const SizedBox(width: 8),
                 ],
                 sendStopButton,

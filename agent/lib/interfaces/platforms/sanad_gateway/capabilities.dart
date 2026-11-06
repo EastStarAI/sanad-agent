@@ -143,6 +143,13 @@ class AgentCapabilities {
   final bool supportsLocalToolRuntime;
   final bool supportsSlashCommands;
 
+  /// Local (daemon-side) dictation is available on this device.
+  ///
+  /// True even when no model is installed yet: the first mic press is what
+  /// installs one. Reasons for a false value are machine readable.
+  final bool supportsDictation;
+  final String? dictationUnavailableReason;
+
   final String modelSelectionScope;
   final String thinkingModeScope;
   final String thinkingStreamMode;
@@ -171,6 +178,8 @@ class AgentCapabilities {
     this.supportsToolPermissions = true,
     this.supportsLocalToolRuntime = true,
     this.supportsSlashCommands = true,
+    this.supportsDictation = false,
+    this.dictationUnavailableReason,
     this.modelSelectionScope = 'session',
     this.thinkingModeScope = 'session',
     this.thinkingStreamMode = 'delta',
@@ -201,6 +210,9 @@ class AgentCapabilities {
       'supports_tool_permissions': supportsToolPermissions,
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
+      'supports_dictation': supportsDictation,
+      if (dictationUnavailableReason != null)
+        'dictation_unavailable_reason': dictationUnavailableReason,
       'delivery_presence_v1': true,
       'supports_attachments': true,
       'attachment_media_v1': {

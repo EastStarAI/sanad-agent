@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          fvm dart pub get
+          fvm flutter pub get
           version="$(jq -r '.version' ../release/release-contract.json)"
           build="$(jq -r '.build_number' ../release/release-contract.json)"
           tag="${GITHUB_REF_NAME}"
@@ -146,7 +146,7 @@ jobs:
         working-directory: agent
         shell: bash
         run: |
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart run tool/generate_model_capability_defaults.dart --check
           fvm dart analyze
@@ -168,7 +168,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/generate_bundled_skills.dart --check
           fvm dart run tool/generate_model_capability_defaults.dart --check
           fvm dart analyze
@@ -703,7 +703,7 @@ jobs:
       - name: Generate and verify release metadata
         working-directory: agent
         run: |
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/release_tool.dart generate-manifest \
             --repo-root .. \
             --artifacts ../dist \

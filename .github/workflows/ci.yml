@@ -113,7 +113,7 @@ jobs:
       - name: Validate release contract
         working-directory: agent
         run: |
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
           fvm dart run tool/release_tool.dart check-preparation --repo-root ..
           version="$(jq -r '.version' ../release/release-contract.json)"
@@ -215,7 +215,7 @@ jobs:
       - uses: ./.github/actions/setup-fvm
       - name: Resolve agent dependencies
         working-directory: agent
-        run: fvm dart pub get
+        run: fvm flutter pub get
       - name: Verify isolated CLI contracts
         working-directory: agent
         run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart

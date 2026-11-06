@@ -1,6 +1,8 @@
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/appearance/appearance_store.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/interfaces/runtime/local_workspace_runtime_service.dart';
 
 import 'capabilities.dart';
@@ -22,10 +24,16 @@ Future<AgentCapabilities> loadSanadCapabilities({
     'Building device capabilities without provider-backed model discovery.',
   );
 
+  final dictationReadiness = DictationService(
+    sanadHome: getSanadHome(),
+  ).readiness();
+
   return AgentCapabilities(
     displayName: 'Sanad Agent',
     thinkingModes: const [],
     thinkingModeSource: 'model',
+    supportsDictation: dictationReadiness.isSupported,
+    dictationUnavailableReason: dictationReadiness.reason,
     modelSelectionScope: 'message',
     thinkingModeScope: 'message',
     appearance: appearance,
