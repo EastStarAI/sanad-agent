@@ -415,6 +415,25 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
   sanad-dev bootstrap on ubuntu/macos/windows) with `maintainer-reviewed` and
   `release-reviewed` applied.
 
+## Resume here (2026-11-06, end of session — owner closed the machine)
+
+State: everything is committed (`e60e1867`) and pushed on `voice/02-local-dictation`; the test runtime
+(`~/.sanad-test`) is stopped. Working tree clean.
+
+Owner's last finding: the new streaming model is **fast but inaccurate** for his speech, and he asked why a
+tiny model is used. Answer: nothing requires it any more — the small build was forced by the `modelType`
+bug, now fixed. Two candidates were downloaded to `/tmp` for the next session (not installed, not in the
+catalog yet):
+
+| Candidate | Files | Total | Notes |
+|---|---|---|---|
+| `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` | encoder 70.1 MB `d4881c57…`, decoder 617,488 B `455ba384…`, joiner 336,817 B `d406f616…`, tokens 6,310 B `396dbeb5…` | ≈71 MB | English only, same size as today's model but a much newer/stronger export |
+| `sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10` | encoder int8 296.6 MB `f9001ed7…`, decoder 33.8 MB `7ebc63f3…`, joiner int8 8.3 MB `db88e317…`, tokens 195,244 B `784f2495…` | ≈339 MB | **Real Arabic streaming** (ar + en + id/ja/ru/th/vi/zh), left-128 |
+
+Next actions, in order: probe both with `modelType: zipformer2` (and `zipformer` as fallback), confirm they
+load and transcribe, then add catalog entries with those shas, install, and measure first-partial latency
+plus accuracy before the owner's live pass. Do not ship a streaming entry that has not been probed.
+
 ## Current status
 - Current gate: **G5b complete** — `sherpa_onnx 2.0.1`, and the streaming entry is
   `en-streaming-zipformer-2023-06-26` (left-64 int8, 72.7 MB) passing its own `modelType:
