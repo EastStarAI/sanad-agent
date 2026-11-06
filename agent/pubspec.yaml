@@ -24,7 +24,7 @@ dependencies:
   mcp_client: ^2.0.0
   uuid: ^4.5.1
   ffi: ^2.1.2
-  sherpa_onnx: ^1.13.4
+  sherpa_onnx: ^2.0.1
   intl: ^0.20.0
   image: ^4.9.1
   sanad_release_contract:

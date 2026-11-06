@@ -194,6 +194,7 @@ class SherpaSttEngine implements SttEngine {
       'model': files.model,
       'language': files.language,
       'threads': threads,
+      'streamingModelType': files.streamingModelType,
     });
     await _ready!.future.timeout(
       const Duration(seconds: 60),

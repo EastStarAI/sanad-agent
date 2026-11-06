@@ -17,6 +17,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
 
@@ -32,47 +33,87 @@ class DictationComposerBackdrop extends StatefulWidget {
       _DictationComposerBackdropState();
 }
 
-class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
-    with SingleTickerProviderStateMixin {
+class _DictationComposerBackdropState extends State<DictationComposerBackdrop> {
+  /// Diagnostics, summary only: per-frame logging would flood the log during a
+  /// normal sentence, so the session reports its totals when it stops and a
+  /// single line when visibility flips.
+  static final _logger = Logger('DictationMeter');
+  int _shiftCount = 0;
+  double _maxSample = 0;
+
   /// Newest sample last; the painter reads it left-to-right.
-  final List<double> _samples = List<double>.filled(
-    DictationComposerBackdrop.barCount,
-    0,
+  ///
+  /// Held in a notifier instead of State fields because the cubit emits while
+  /// the composer is building, and a `setState` from that listener throws
+  /// "setState() called during build" and is dropped — which is exactly how the
+  /// meter stayed empty. A notifier can be written at any phase.
+  final ValueNotifier<List<double>> _samples = ValueNotifier<List<double>>(
+    List<double>.filled(DictationComposerBackdrop.barCount, 0),
   );
 
-  late final Ticker _ticker = createTicker(_onTick);
-
-  /// One bar enters every [_shiftInterval]; that is what produces the scroll.
-  static const Duration _shiftInterval = Duration(milliseconds: 70);
-
-  Duration _lastShift = Duration.zero;
-  double _latest = 0;
+  /// The daemon streams the level many times per second, and every event moves
+  /// the meter by one bar. A Ticker used to drive this, but it never fired a
+  /// single tick in the desktop runtime even while reported active and unmuted,
+  /// which left the meter frozen at zero; the level events are the real clock.
+  static const Duration _minShift = Duration(milliseconds: 40);
+  DateTime? _lastShiftAt;
+  bool _lastVisible = false;
 
   @override
   void dispose() {
-    _ticker.dispose();
+    _samples.dispose();
     super.dispose();
   }
 
-  void _onTick(Duration elapsed) {
-    if (elapsed - _lastShift < _shiftInterval) return;
-    _lastShift = elapsed;
-    setState(() {
-      _samples.removeAt(0);
-      _samples.add(_latest.clamp(0.0, 1.0));
-    });
+  @override
+  void initState() {
+    super.initState();
+    // Proves the log pipeline is live before anyone speaks: a missing mount line
+    // means the widget is not built at all, not that the bars are invisible.
+    _logger.info('meter mounted');
   }
 
-  void _syncTicker(bool listening) {
-    if (listening) {
-      if (!_ticker.isActive) _ticker.start();
-    } else if (_ticker.isActive) {
-      _ticker.stop();
-      _lastShift = Duration.zero;
-      for (var i = 0; i < _samples.length; i++) {
-        _samples[i] = 0;
-      }
+  /// Shifts one bar per level event, dropping bursts that arrive closer than
+  /// [_minShift] so a chatty stream cannot scroll the history away instantly.
+  void _pushLevel(double level) {
+    final now = DateTime.now();
+    final last = _lastShiftAt;
+    if (last != null && now.difference(last) < _minShift) return;
+    _lastShiftAt = now;
+    final next = List<double>.of(_samples.value)..removeAt(0);
+    next.add(level.clamp(0.0, 1.0));
+    _deliver(next);
+    _shiftCount++;
+    if (level > _maxSample) _maxSample = level;
+  }
+
+  void _resetSamples() {
+    if (_shiftCount > 0) {
+      _logger.info(
+        'meter session: shifts=$_shiftCount max=${_maxSample.toStringAsFixed(3)}',
+      );
     }
+    _lastShiftAt = null;
+    _shiftCount = 0;
+    _maxSample = 0;
+    _deliver(List<double>.filled(DictationComposerBackdrop.barCount, 0));
+  }
+
+  /// Delivers a new frame of samples.
+  ///
+  /// The cubit emits from inside the composer's build, and notifying a
+  /// [ValueListenableBuilder] there calls `setState` during build — the exact
+  /// throw that kept this meter blank. During build/layout the frame is
+  /// deferred to the end of the frame instead.
+  void _deliver(List<double> next) {
+    final phase = SchedulerBinding.instance.schedulerPhase;
+    if (phase == SchedulerPhase.persistentCallbacks) {
+      SchedulerBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _samples.value = next;
+      });
+      return;
+    }
+    _samples.value = next;
   }
 
   @override
@@ -84,21 +125,37 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop>
           previous.isActive != current.isActive ||
           previous.level != current.level,
       listener: (context, state) {
-        _latest = state.level;
-        _syncTicker(state.status == DictationStatus.listening);
+        final listening = state.status == DictationStatus.listening;
+        if (listening) {
+          _pushLevel(state.level);
+        } else if (_lastShiftAt != null) {
+          _resetSamples();
+        }
       },
       buildWhen: (previous, current) =>
           previous.status != current.status ||
           previous.isActive != current.isActive,
       builder: (context, state) {
         final visible = state.status == DictationStatus.listening;
+        if (visible != _lastVisible) {
+          _lastVisible = visible;
+          // A disabled TickerMode silences the ticker without any error, so it
+          // is logged next to visibility: muted ticks look exactly like a broken
+          // meter.
+          _logger.info(
+            'meter visible=$visible tickerMode=${TickerMode.valuesOf(context).enabled}',
+          );
+        }
         if (!visible) return const SizedBox.shrink();
         return IgnorePointer(
-          child: CustomPaint(
-            key: const Key('dictation_composer_meter'),
-            painter: DictationMeterPainter(
-              samples: List<double>.of(_samples),
-              color: colors.primary,
+          child: ValueListenableBuilder<List<double>>(
+            valueListenable: _samples,
+            builder: (context, samples, _) => CustomPaint(
+              key: const Key('dictation_composer_meter'),
+              painter: DictationMeterPainter(
+                samples: samples,
+                color: colors.primary,
+              ),
             ),
           ),
         );

@@ -55,6 +55,7 @@ class SttCatalogEntry {
     this.hosted = true,
     this.engine = SttEngineKind.sherpa,
     this.hidden = false,
+    this.streamingModelType = 'zipformer2',
   });
 
   final String id;
@@ -74,6 +75,14 @@ class SttCatalogEntry {
   /// The daemon keeps both behind one [SttEngine] contract, so switching an
   /// entry between engines is a catalog change, never a transport or UI one.
   final SttEngineKind engine;
+
+  /// sherpa's `modelType` for a streaming entry.
+  ///
+  /// It is part of the model, not of our code: exports from 2023-06-26 onward
+  /// are `zipformer2` and carry different metadata keys, and asking sherpa to
+  /// parse them as `zipformer` fails with "'attention_dims' does not exist in
+  /// the metadata" — the exact error that made G5 fall back to a weak model.
+  final String streamingModelType;
 
   /// Hidden entries stay usable through `stt.model_id` but never appear in the
   /// model sheet, so the user only sees the models we actually recommend.

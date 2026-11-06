@@ -48,12 +48,28 @@ void main() {
     test('Arabic entries stay batch+VAD because no Arabic streaming model exists', () {
       final arabic = kSttCatalog.where((entry) => entry.language == 'ar');
       expect(arabic.every((entry) => entry.mode == SttModelMode.batchVad), isTrue);
-      // The only streaming entry is the English proof model (G5).
+      // Streaming entries are English only: the 2023-06-26 model is the one a
+      // user picks, and the 20M build stays only so old installs still resolve.
       final streaming = kSttCatalog.where(
         (entry) => entry.mode == SttModelMode.streaming,
       );
-      expect(streaming.map((entry) => entry.id), ['en-streaming-zipformer-20m']);
-      expect(streaming.single.language, 'en');
+      expect(streaming.every((entry) => entry.language == 'en'), isTrue);
+      final visible = streaming.where((entry) => !entry.hidden);
+      expect(visible.map((entry) => entry.id), [
+        'en-streaming-zipformer-2023-06-26',
+      ]);
+      final retired = streaming.where((entry) => entry.hidden);
+      expect(retired.map((entry) => entry.id), ['en-streaming-zipformer-20m']);
+    });
+
+    test('the streaming entry supersedes the model that was measured unusable', () {
+      final model = sttEntryById('en-streaming-zipformer-2023-06-26')!;
+      expect(model.hosted, isTrue);
+      expect(model.mode, SttModelMode.streaming);
+      // 2023-06-26 left-64 int8: 71,082,637 B encoder + decoder, joiner, tokens.
+      expect(model.totalBytes, 72654256);
+      final retired = sttEntryById('en-streaming-zipformer-20m')!;
+      expect(retired.hidden, isTrue, reason: 'kept only for old installs');
     });
 
     test('the egyptian default and the light fallback are both present', () {

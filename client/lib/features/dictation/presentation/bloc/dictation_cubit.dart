@@ -48,6 +48,10 @@ class DictationCubit extends Cubit<DictationState> {
   int _lastLevelMs = 0;
   double _lastLevel = 0;
 
+  /// Metadata counters for the audio path: the level bars prove frames are
+  /// captured, these prove whether the same frames left the client.
+  int _sentChunks = 0;
+
   /// Completes when the recorder's own stream is done, so stop() can wait for
   /// the last frames to reach the daemon before asking it to decode.
   Completer<void>? _captureDrained;
@@ -110,6 +114,7 @@ class DictationCubit extends Cubit<DictationState> {
     if (_capturing) return;
     _capturing = true;
     _captureDrained = Completer<void>();
+    _sentChunks = 0;
     final stream = await _capture.start();
     _audioSubscription = stream.listen(
       (chunk) {
@@ -118,6 +123,13 @@ class DictationCubit extends Cubit<DictationState> {
         if (_clock.elapsed > sessionLimit) {
           unawaited(stopForLimit());
           return;
+        }
+        _sentChunks++;
+        if (_sentChunks == 1) {
+          _logger.info(
+            'dictation audio out: first chunk bytes=${chunk.length} '
+            'open=${transport.isOpen}',
+          );
         }
         transport.sendAudio(chunk);
         _publishLevel(chunk);

@@ -8,12 +8,20 @@ library;
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:logging/logging.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
 import 'stt_types.dart';
 
 /// Mandatory entry point for the dictation worker isolate.
 void sttWorkerEntry(SendPort out) {
+  // The daemon's log listener lives on the main isolate, so this worker wires
+  // its own: otherwise the streaming measurements are written into a void.
+  Logger.root.level = Level.INFO;
+  Logger.root.onRecord.listen((record) {
+    // ignore: avoid_print
+    print('${record.loggerName}: ${record.message}');
+  });
   final inbox = ReceivePort();
   out.send({'evt': 'port', 'port': inbox.sendPort});
   final worker = _SttWorker(out);
@@ -47,6 +55,30 @@ class _SttWorker {
   SttModelMode _mode = SttModelMode.batchVad;
   String _lastPartial = '';
   int _partialSeq = 0;
+
+  /// Streaming diagnostics: the owner reported the first word of a session
+  /// disappearing on streaming models only. Numbers only — never text — so the
+  /// log can tell a late first partial (audio path) from a short one (merge).
+  static final _logger = Logger('SttStreaming');
+  final Stopwatch _streamClock = Stopwatch()..start();
+  int _audioChunks = 0;
+  int _acceptedSamples = 0;
+  int _endpoints = 0;
+  int _partialCount = 0;
+
+  /// Automatic gain for the streaming path.
+  ///
+  /// sherpa's online recognizer applies no input normalisation, and this
+  /// microphone delivers speech around 0.08 peak: measured on a real session,
+  /// the recognizer produced its first character 3.5 s in, i.e. it skipped the
+  /// opening words entirely. The gain starts from the first chunk that carries
+  /// audible audio and then follows the level slowly, so the loudness a user
+  /// speaks at never decides whether their first word is transcribed.
+  double _streamGain = 1;
+  bool _gainSeeded = false;
+  double _streamPeak = 0;
+  static const double _targetLevel = 0.75;
+  static const double _maxStreamGain = 10;
   sherpa.VoiceActivityDetector? _vad;
   String _modelId = '';
   int _seq = 0;
@@ -180,7 +212,10 @@ class _SttWorker {
           ),
           tokens: message['tokens'] as String,
           numThreads: message['threads'] as int? ?? 2,
-          modelType: 'zipformer',
+          // The model's own dialect: 2023-06-26 exports are zipformer2 and
+          // reject the older metadata parsing with "'attention_dims' does not
+          // exist in the metadata".
+          modelType: message['streamingModelType'] as String? ?? 'zipformer2',
           debug: false,
         ),
         // 0.8 s of silence closes a segment: long enough not to split a
@@ -211,16 +246,30 @@ class _SttWorker {
     if (recognizer == null || stream == null) {
       throw const SttException('not_ready', 'recognizer is not loaded');
     }
-    stream.acceptWaveform(
-      samples: _pcm16ToFloat32(pcm16),
-      sampleRate: 16000,
-    );
+    final samples = _pcm16ToFloat32(pcm16);
+    _audioChunks++;
+    _acceptedSamples += samples.length;
+    final gain = _applyStreamGain(samples);
+    if (_audioChunks == 1) {
+      _logger.info(
+        'streaming first audio atMs=${_streamClock.elapsedMilliseconds} '
+        'samples=${samples.length} gain=${gain.toStringAsFixed(2)}x',
+      );
+    }
+    stream.acceptWaveform(samples: samples, sampleRate: 16000);
     while (recognizer.isReady(stream)) {
       recognizer.decode(stream);
     }
     final text = _sentenceCase(recognizer.getResult(stream).text);
     if (text.isNotEmpty && text != _lastPartial) {
       _lastPartial = text;
+      _partialCount++;
+      if (_partialCount == 1 || _partialCount % 20 == 0) {
+        _logger.info(
+          'streaming partial n=$_partialCount '
+          'atMs=${_streamClock.elapsedMilliseconds} chars=${text.length}',
+        );
+      }
       _out.send({'evt': 'partial', 'seq': _partialSeq, 'text': text});
     }
     if (recognizer.isEndpoint(stream)) {
@@ -235,6 +284,11 @@ class _SttWorker {
     final stream = _onlineStream;
     if (recognizer == null || stream == null) return;
     if (text.isNotEmpty) {
+      _endpoints++;
+      _logger.info(
+        'streaming endpoint n=$_endpoints '
+        'atMs=${_streamClock.elapsedMilliseconds} chars=${text.length}',
+      );
       _out.send({
         'evt': 'final',
         'seq': _partialSeq,
@@ -248,6 +302,45 @@ class _SttWorker {
     }
     _lastPartial = '';
     recognizer.reset(stream);
+  }
+
+  /// Scales the chunk in place for the recognizer and returns the gain used.
+  ///
+  /// The first chunk that carries audible audio seeds the gain, so the opening
+  /// word is already normalised; afterwards the gain follows changes slowly so
+  /// a breath cannot pump the whole stream.
+  double _applyStreamGain(Float32List samples) {
+    var peak = 0.0;
+    for (var i = 0; i < samples.length; i++) {
+      final magnitude = samples[i].abs();
+      if (magnitude > peak) peak = magnitude;
+    }
+    if (peak > _streamPeak) _streamPeak = peak;
+    if (!_gainSeeded && peak > 0.01) {
+      _gainSeeded = true;
+      _streamGain = (_targetLevel / peak).clamp(1.0, _maxStreamGain);
+      _logger.info(
+        'streaming agc seeded: chunkPeak=${peak.toStringAsFixed(4)} '
+        'gain=${_streamGain.toStringAsFixed(2)}x',
+      );
+    } else if (_gainSeeded && peak > 0.01) {
+      final wanted = (_targetLevel / peak).clamp(1.0, _maxStreamGain);
+      if (wanted < _streamGain) {
+        // Instant attack: a louder syllable must never be clipped, and clipping
+        // itself adds the harmonics that make recognition worse.
+        _streamGain = wanted;
+      } else {
+        // 15% per chunk release: follows a turn away from the mic without
+        // modulating on every syllable.
+        _streamGain = _streamGain + (wanted - _streamGain) * 0.15;
+      }
+    }
+    if (_streamGain > 1.01) {
+      for (var i = 0; i < samples.length; i++) {
+        samples[i] = (samples[i] * _streamGain).clamp(-1.0, 1.0);
+      }
+    }
+    return _streamGain;
   }
 
   void _audioBatch(Uint8List pcm16) {
@@ -383,6 +476,13 @@ class _SttWorker {
       recognizer.decode(stream);
     }
     final text = _sentenceCase(recognizer.getResult(stream).text);
+    _logger.info(
+      'streaming done: chunks=$_audioChunks '
+      'audioMs=${_acceptedSamples * 1000 ~/ 16000} '
+      'partials=$_partialCount endpoints=$_endpoints '
+      'tailChars=${text.length} peak=${_streamPeak.toStringAsFixed(4)} '
+      'gain=${_streamGain.toStringAsFixed(2)}x',
+    );
     if (text.isNotEmpty) {
       _out.send({
         'evt': 'final',

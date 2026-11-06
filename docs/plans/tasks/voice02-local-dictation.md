@@ -151,6 +151,16 @@ batch path does not need VAD, so this is acceptable for v1).
 - [x] Explicitly excluded: model-specific ONNX surgery for third-party exports (see G0b).
 - [x] Consequence recorded: streaming works through sherpa, so sherpa is no longer a removable fallback — it is the streaming runtime, and whisper.cpp stays the batch runtime. Deleting either would remove a capability.
 
+### G5b — Runtime upgrade and a real streaming model (owner decision 2026-11-06)
+- **Owner rule, permanent:** a model's capability dictates its treatment. A batch model is transcribed as batch; a streaming model is fed as a stream. Pseudo-streaming (decoding a growing buffer to fake live text) is explicitly rejected and must never be reintroduced.
+- **The mistake named by the owner:** pinning `sherpa_onnx ^1.13.4`. That runtime cannot read the metadata of current streaming exports (`attention_dims` / `encoder_dims`), which is why G5 fell back to the weakest available model (`en-streaming-zipformer-20m`) instead of the intended `sherpa-onnx-streaming-zipformer-en-2023-06-26`.
+- [x] Upgrade `sherpa_onnx` to `^2.0.1` (published 2026-10-26); `dart pub get` resolved 10 dependencies and `dart analyze` is clean with **no source change** (the `Online*` API we use is unchanged).
+- [x] **Real root cause found while loading the intended model:** the runtime version was not the blocker. `sherpa-onnx-streaming-zipformer-en-2023-06-26` is a **zipformer2** export, and our worker hard-coded `modelType: 'zipformer'` (the dialect of the 20M build), so sherpa parsed the wrong metadata keys and refused with `'attention_dims' does not exist in the metadata`. With `modelType: 'zipformer2'` the same model loads and transcribes correctly. The model type now travels with the entry: `SttCatalogEntry.streamingModelType` → `SttModelFiles` → worker `init` payload.
+- [x] Added `en-streaming-zipformer-2023-06-26` (left-64 int8: encoder 71,082,637 B `0d072fd4…`, decoder 1,307,236 B `98da299f…`, joiner 259,335 B `d944208d…`, tokens 5,048 B `49e3c264…`; total 72,654,256 B) and installed it through the normal hosted path.
+- [x] Measured end to end through the daemon (`tool/stt_daemon_ab.dart`, 6.6 s WAV): `ready load_ms=432`, **first partial after 1.52 s** with the correct opening word, 16 partials, one final, `audio=6625ms` — i.e. no audio loss and no missing first word, versus 3.5–5 s and `"Hello world" → T` before.
+- [x] Retired the 20M build: still in the catalog (hidden) so an old install resolves its files, and the selection guard falls back to the default when a hidden entry is the stored choice, so it can never remain active.
+- [x] Keep the two engines as they are: whisper.cpp = batch runtime, sherpa = streaming runtime. Both engines and both model kinds stay supported — that is the task's goal.
+
 ### G0b — Nawah (NeMo TDT, Arabic) — deprioritized
 - [x] Probed `oddadmix/Nawah-ASR-60M-Max-Arabic-ONNX` (69 MB int8). Not sherpa-packaged: the encoder lacks the `vocab_size` metadata sherpa requires, the blank convention is inverted (`<blk>` is id 0 inside the vocab while sherpa expects `1024` as the last `tokens.txt` line), and the encoder consumes full-context features, so it is not streaming despite the transducer architecture.
 - [ ] Decision: **model-specific work is not worth it** (~80% quality). Revisit only if an Arabic *sherpa-packaged* streaming/light model appears, or a chunked-encoder export with sherpa metadata is published. This gate closes on such an artifact, never on hand-written ONNX surgery.
@@ -175,6 +185,43 @@ batch path does not need VAD, so this is acceptable for v1).
 - [x] Dictation notices (`no_speech`, `session_limit`, `microphone_denied`, `dictation_busy`) now use `ToastUtils.showInfo`; no `SnackBar` remains in the dictation feature.
 - [ ] Audit the rest of the client for `ScaffoldMessenger.showSnackBar` / `SnackBar(` and move each one to `ToastUtils` (`showInfo` / `showSuccess` / `showError`), keeping the message text and localized strings unchanged.
 - [ ] Record the decision in `client/AGENTS.md`: the toast surface owns transient user feedback; a SnackBar is only acceptable where a toast would be hidden (e.g. a full-screen modal barrier), and that exception must be stated at the call site.
+
+## Live debugging session (2026-11-06): meter, batch gate, streaming
+
+Everything below was measured on the owner's machine through `sanad-dev logs`, never guessed.
+
+### The composer meter never drew (fixed)
+- `meter ticker started … active=true muted=false tickerMode=true` yet `stopped after 0 ticks`
+  and every paint reported `max=0.000`: the `Ticker` never fired in the desktop runtime.
+  Replaced it with level-event-driven shifts (no ticker at all).
+- That exposed the second fault, thrown and swallowed on every level event:
+  `setState() called during build` — the cubit emits while the composer builds. Samples now live in a
+  `ValueNotifier` and are delivered from a post-frame callback when the phase is
+  `persistentCallbacks`. Measured after the fix: `meter session: shifts=181 max=0.506`, no exceptions.
+- Root cause of the earlier edits going nowhere: hot reload cannot change a `State`'s mixin list, so the
+  widget silently stopped building. A class-shape change needs `sanad-dev restart client`, not `reload`.
+
+### "No Speech Detected" on the whisper path (fixed, root cause)
+- The gate compared the **absolute** share of frames above `0.02` against a fixed threshold. Measured on
+  four real sessions: `loudShare` swung 0.024–0.078 while `peak/rms` (crest) stayed 6.8–10.6 in all of them.
+  The failing sessions were rejected purely because the microphone level was lower — a gain-dependent gate.
+- Fix: `evaluateSpeechGate` in `stt_speech_gate.dart`. Scale-invariant decision (`peak >= 0.004` and
+  `crest >= 3.5`) plus `decodeGain` normalising the utterance to `peak = 0.85` before `whisper_full`
+  (whisper.cpp has no AGC; sherpa's batch path normalises features internally, which is why the same
+  microphone never failed there). 9 unit tests pin the measured numbers, including the two failing sessions.
+- After the fix: four consecutive sessions `segments=1` and `dictation final: audio_ms=9400 decode_ms=3177`,
+  with `gate passed: peak=0.0795 rms=0.0092 crest=8.66 gain=10.69x`.
+
+### First word lost on the streaming path (diagnosed; model-level)
+- Audio is delivered, not lost: `streaming first audio atMs=311 samples=1600`, `audioMs=6000` for a 6 s session.
+- The recognizer itself produces nothing for the opening seconds:
+  `streaming partial n=1 atMs=3006..4397 chars=1` and an endpoint closing a **1-character** segment.
+  Reproduced with "Hello world" → `T`.
+- Added a level-normalising AGC to the streaming feed (seeded from the first audible chunk, instant attack,
+  15% release). It removed the clipping found in the first version (peak 0.177 × gain 9.08 exceeded full scale)
+  but did not change the latency: the 20M English model is the limit.
+- Conclusion: the runtime pin was the original fault (G5b). No amount of gain tuning fixes a model that
+  cannot parse the export metadata, which is why the runtime is now 2.0.1 and a real streaming model is next.
 
 ## Acceptance Criteria
 - [ ] Given a macOS arm64 device with dictation supported and no model installed, when the user presses the mic button, then one sheet offers the catalog entries, and after a confirmed download the session starts without leaving the composer.
@@ -332,13 +379,16 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
 
 ## Open items and follow-ups (state at 2026-11-05)
 
-- [ ] Upload `ggml-egy-turbo-f16.bin` (1.6 GB) to the ggml repo, verify the sha,
-      then flip `hidden: false` on `egy-whisper-turbo-ggml-f16`.
+- [x] Upload `ggml-egy-turbo-f16.bin` (1.6 GB) to the ggml repo, verify the sha,
+      then flip `hidden: false` on `egy-whisper-turbo-ggml-f16` — done 2026-11-06:
+      1,624,555,275 bytes, sha `917a13f1…0690a8` matches the hosted digest, entry visible with a test.
+- [ ] G5b: load the 2023-06-26 streaming model on `sherpa_onnx 2.0.1`, measure the first partial, then
+      decide the fate of `en-streaming-zipformer-20m`.
 - [ ] Decide whether the prebuilt dylibs stay in git (`agent/native/macos`, 2.2 MB,
       requires the `release-reviewed` label on every PR) or are built in CI from
       whisper.cpp source (~2 min per build, clean repo).
-- [ ] Owner verdict on the composer-wide meter; keep or revert to the in-button
-      bars.
+- [ ] Owner verdict on the composer-wide meter; it now paints (`meter session: shifts=181 max=0.506`)
+      and the remaining question is aesthetic only.
 - [ ] Optional CI speed-up: shard `Test client` into two parallel jobs
       (~5 min wall instead of ~9).
 - [ ] Optional: default to `q5` instead of `q8` on devices with little free RAM.
@@ -366,17 +416,24 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
   `release-reviewed` applied.
 
 ## Current status
-- Current gate: **G5 complete** — streaming proven end to end with a light English
-  zipformer; whisper.cpp stays the batch runtime and sherpa becomes the streaming
-  runtime. Next: **G3** (docs, verification, delivery); G6 stays deferred.
+- Current gate: **G5b complete** — `sherpa_onnx 2.0.1`, and the streaming entry is
+  `en-streaming-zipformer-2023-06-26` (left-64 int8, 72.7 MB) passing its own `modelType:
+  zipformer2`. Measured through the daemon: load 432 ms, first partial 1.52 s, 16 partials, one
+  final, no audio loss. The 20M build is retired (hidden) and can never stay selected.
+  Next: **G3** (docs, verification, delivery) and the owner's live pass; G6 deferred.
+- Engine contract, unchanged and now explicit: whisper.cpp is the **batch** runtime, sherpa is the
+  **streaming** runtime; a model is treated exactly as its own capability declares (owner rule 2026-11-06).
 - Model sheet today: `egy-whisper-turbo-ggml-q8` (default, ~1.2 GB),
-  `egy-whisper-turbo-ggml-q5` (~0.95 GB), `whisper-base-int8` (~0.76 GB) and
-  `en-streaming-zipformer-20m` (experimental, English streaming, ~0.2 GB).
-  `egy-whisper-turbo-ggml-f16` joins them as soon as its 1.6 GB artifact is
-  uploaded.
+  `egy-whisper-turbo-ggml-q5` (~0.95 GB), `whisper-base-int8` (~0.76 GB),
+  `egy-whisper-turbo-ggml-f16` (~1.6 GB, uploaded and visible) and `en-streaming-zipformer-20m`
+  (English streaming, ~0.2 GB, known to need ~5 s before its first partial).
+- Fixed this session, all measured: composer meter (ticker + setState-during-build), batch speech gate
+  (absolute → crest, plus decode normalisation), streaming AGC clipping.
+- Test counts now: client 38 dictation tests, agent 73 STT tests (9 of them the new speech gate).
+  `dart analyze` / `flutter analyze` clean on both projects.
 - Memory facts (macOS arm64): daemon idle 46 MB; listening ~1.2 GB with the
   Egyptian q8 (vs 2.4–3.0 GB on the sherpa int8 path); back to ~0.6 GB after a
   session, flat across sessions (no leak). Egyptian q5 peaks ~0.95 GB, base
   ~0.76 GB, f16 ~1.9 GB.
-- Diagnostic logs are removed; only metadata lines remain (`session started`,
-  `drained`, `final: audio_ms/decode_ms`).
+- Logging contract: metadata only (levels, counts, durations, sizes, gains). Never audio, never
+  transcript text. Per-frame logs are summaries — `meter session`, `gate passed/blocked`, `streaming done`.

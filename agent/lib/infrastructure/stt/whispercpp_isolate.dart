@@ -7,13 +7,24 @@ library;
 
 import 'dart:ffi';
 import 'dart:isolate';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'package:logging/logging.dart';
+
+import 'stt_speech_gate.dart';
 import 'stt_types.dart';
 import 'whispercpp_bindings.dart';
 
 /// Mandatory entry point for the whisper.cpp worker isolate.
 void whisperCppWorkerEntry(SendPort out) {
+  // The daemon's log listener lives on the main isolate, so this worker wires
+  // its own: otherwise every gate measurement is written into a void.
+  Logger.root.level = Level.INFO;
+  Logger.root.onRecord.listen((record) {
+    // ignore: avoid_print
+    print('${record.loggerName}: ${record.message}');
+  });
   final inbox = ReceivePort();
   out.send({'evt': 'port', 'port': inbox.sendPort});
   final worker = _WhisperCppWorker(out);
@@ -33,6 +44,10 @@ class _WhisperCppWorker {
   _WhisperCppWorker(this._out);
 
   final SendPort _out;
+
+  /// The gate logs numbers only (share, peak, rms): a rejected session must name
+  /// its own measurement, and no audio or text ever reaches the log.
+  static final _logger = Logger('WhisperCppWorker');
   Pointer<Void> _context = nullptr;
   WhisperCppLibrary? _library;
   String _modelId = '';
@@ -112,14 +127,32 @@ class _WhisperCppWorker {
       return;
     }
     final audioSamples = _bufferedSamples;
-    if (!_hasSpeech()) {
+    final stats = _stats();
+    final gate = evaluateSpeechGate(peak: stats.peak, rms: stats.rms);
+    if (!gate.decode) {
       // whisper invents text on silence ("شكراً للمشاهدة" and friends), which
-      // would insert junk into the composer. A silent session has no transcript.
+      // would insert junk into the composer. The guard is scale-invariant: a
+      // muted mic has no peak, and steady noise is not peaky.
+      _logger.info(
+        'dictation gate blocked: reason=${gate.reason} '
+        'samples=$audioSamples ms=${audioSamples * 1000 ~/ 16000} '
+        'peak=${gate.peak.toStringAsFixed(4)} '
+        'rms=${gate.rms.toStringAsFixed(4)} '
+        'crest=${gate.crest.toStringAsFixed(2)} minCrest=$kSpeechMinCrest '
+        'minPeak=$kSpeechMinPeak',
+      );
       _speech.clear();
       _bufferedSamples = 0;
       _out.send({'evt': 'done', 'segments': 0});
       return;
     }
+    final gain = _normaliseForDecode(stats.peak);
+    _logger.info(
+      'dictation gate passed: samples=$audioSamples '
+      'peak=${gate.peak.toStringAsFixed(4)} '
+      'rms=${gate.rms.toStringAsFixed(4)} '
+      'crest=${gate.crest.toStringAsFixed(2)} gain=${gain.toStringAsFixed(2)}x',
+    );
     final decode = Stopwatch()..start();
     final text = _transcribeAll(library, threads);
     decode.stop();
@@ -144,26 +177,42 @@ class _WhisperCppWorker {
   /// A plain average is not enough: steady room noise (music, a fan, traffic)
   /// lifts the mean while containing no speech. So this counts the share of
   /// loud frames instead — speech always has peaks, noise does not.
-  bool _hasSpeech() {
-    if (_speech.isEmpty) return false;
-    var loud = 0;
-    var total = 0;
+  /// Peak and RMS over the buffered utterance.
+  ///
+  /// Sampling every 8th frame is plenty for a level decision and keeps the
+  /// measurement cheaper than the decode it guards.
+  ({double peak, double rms}) _stats() {
+    var peak = 0.0;
+    var sum = 0.0;
+    var count = 0;
     for (final chunk in _speech) {
-      // Sampling every 8th frame is plenty for an energy decision.
       for (var i = 0; i < chunk.length; i += 8) {
-        if (chunk[i].abs() > _peakFloor) loud++;
-        total++;
+        final value = chunk[i];
+        final magnitude = value.abs();
+        if (magnitude > peak) peak = magnitude;
+        sum += value * value;
+        count++;
       }
     }
-    if (total == 0) return false;
-    return (loud / total) > _minLoudShare;
+    return (peak: peak, rms: count == 0 ? 0.0 : math.sqrt(sum / count));
   }
 
-  /// Amplitude a frame must exceed to count as speech-like.
-  static const double _peakFloor = 0.02;
-
-  /// Share of loud frames a session needs before it is worth decoding.
-  static const double _minLoudShare = 0.06;
+  /// Scales the buffered utterance to a fixed peak and returns the gain used.
+  ///
+  /// Applied in place before decoding: whisper.cpp has no automatic gain, so a
+  /// quiet take (this microphone delivers peaks around 0.05–0.09) reached the
+  /// decoder at a level it transcribes poorly.
+  double _normaliseForDecode(double peak) {
+    if (peak <= 0) return 1;
+    final gain = decodeGain(peak);
+    if ((gain - 1).abs() < 0.01) return 1;
+    for (final chunk in _speech) {
+      for (var i = 0; i < chunk.length; i++) {
+        chunk[i] = chunk[i] * gain;
+      }
+    }
+    return gain;
+  }
 
   /// Decodes the buffered utterance in groups and joins the results into the
   /// single transcript the user sees.

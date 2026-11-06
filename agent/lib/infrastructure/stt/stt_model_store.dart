@@ -29,6 +29,7 @@ class SttModelFiles {
     this.model = '',
     this.joiner = '',
     this.mode = SttModelMode.batchVad,
+    this.streamingModelType = 'zipformer2',
   });
 
   final String modelId;
@@ -49,6 +50,9 @@ class SttModelFiles {
 
   /// Batch VAD or native streaming; decides which sherpa recognizer is built.
   final SttModelMode mode;
+
+  /// sherpa `modelType` for a streaming entry (exports differ per generation).
+  final String streamingModelType;
 }
 
 /// Installation state of one catalog entry.
@@ -296,6 +300,7 @@ class SttModelStore {
       joiner: entry.mode == SttModelMode.streaming
           ? '$dir/${_byKind(entry.files, 'joiner').name}'
           : '',
+      streamingModelType: entry.streamingModelType,
     );
   }
 

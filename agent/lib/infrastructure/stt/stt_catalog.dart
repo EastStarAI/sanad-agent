@@ -167,22 +167,74 @@ const List<SttCatalogEntry> kSttCatalog = [
       ),
     ],
   ),
-  // Streaming proof entry (English only) — see [kEnglishStreamingEntry].
+  // Streaming entries (English only) — see [kEnglishStreamingEntry].
   kEnglishStreamingEntry,
+  // Retained hidden so an existing 20M install still resolves its files.
+  _enStreamingZipformer20m,
 ];
 
-/// English streaming entry used to prove the streaming path end to end (G5).
+/// The streaming entry: `sherpa-onnx-streaming-zipformer-en-2023-06-26`
+/// (left-64 int8, ≈72 MB).
 ///
 /// English-only is a documented limitation, not an oversight: no
 /// sherpa-packaged Arabic streaming model exists yet (see G0b). The entry is
-/// visible because the proof requires the user to pick it, and it is labelled as
-/// experimental so it is never mistaken for the Arabic default.
+/// visible because the streaming path needs a model a user can actually pick.
 const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
-  id: 'en-streaming-zipformer-20m',
-  label: 'إنجليزي — بث مباشر (تجريبي)',
-  note: 'يستهلك ≈٠.٢ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
+  id: 'en-streaming-zipformer-2023-06-26',
+  label: 'إنجليزي — بث مباشر',
+  note: 'يستهلك ≈٠.٠٧ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
   mode: SttModelMode.streaming,
   language: 'en',
+  files: [
+    SttModelFile(
+      name: 'encoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main/encoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      sizeBytes: 71082637,
+      sha256:
+          '0d072fd4ef956294ba9db9e9a71a541ac70659095ec4934c8453d8b2fe740187',
+    ),
+    SttModelFile(
+      name: 'decoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main/decoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      sizeBytes: 1307236,
+      sha256:
+          '98da299f471e38bb4e1a8df579b8cc9122d6039576a77e357b3c60f17dd83b02',
+    ),
+    SttModelFile(
+      name: 'joiner-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main/joiner-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
+      sizeBytes: 259335,
+      sha256:
+          'd944208d660d67c8d72cd2acaeac971fa5ceb8c80e76c1968148846fedd6e297',
+    ),
+    SttModelFile(
+      name: 'tokens.txt',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-2023-06-26/resolve/main/tokens.txt',
+      sizeBytes: 5048,
+      sha256:
+          '49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb',
+    ),
+  ],
+);
+
+/// The 20M build that G5 shipped. Kept hidden: measured on the owner's machine
+/// it produced its first character only after 3–5 s and rendered "Hello world"
+/// as `T`, because the runtime it was pinned to could not load the model above.
+/// It stays in the catalog so an existing install still resolves its files.
+const SttCatalogEntry _enStreamingZipformer20m = SttCatalogEntry(
+  id: 'en-streaming-zipformer-20m',
+  label: 'إنجليزي — بث مباشر (٢٠ مليون، ضعيف)',
+  note: 'محفوظ للتوافق فقط — يقاس أنه لا ينتج نصًا قبل ٣–٥ ثوانٍ',
+  mode: SttModelMode.streaming,
+  language: 'en',
+  hidden: true,
+  // The 20M build is a first-generation zipformer export, unlike every later
+  // one, so it keeps the older metadata dialect.
+  streamingModelType: 'zipformer',
   files: [
     SttModelFile(
       name: 'encoder-epoch-99-avg-1.int8.onnx',

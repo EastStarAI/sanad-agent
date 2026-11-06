@@ -110,7 +110,15 @@ class DictationService {
   String get selectedModelId {
     if (_settings.modelPath?.trim().isNotEmpty ?? false) return 'path-override';
     if (_settings.modelId.isNotEmpty) return _settings.modelId;
-    return _readSelection() ?? defaultSttEntry.id;
+    final selection = _readSelection();
+    if (selection != null) {
+      // A retired entry stays in the catalog so an old install still resolves
+      // its files, but it must never remain the active choice: the 20M streaming
+      // build is hidden precisely because it cannot transcribe a first word.
+      final entry = sttEntryById(selection);
+      if (entry != null && !entry.hidden) return selection;
+    }
+    return defaultSttEntry.id;
   }
 
   SttCatalogEntry? get selectedEntry => sttEntryById(selectedModelId);
@@ -249,6 +257,10 @@ class _DictationConnection {
   bool _installCancelled = false;
   bool _closed = false;
 
+  /// Metadata counters only — never audio content — so a session that decodes
+  /// nothing can be traced to the side that dropped the frames.
+  int _inChunks = 0;
+
   Future<void> run() async {
     transport.send('stt_status', service.statusPayload());
     _commands = transport.commands.listen((message) {
@@ -267,7 +279,15 @@ class _DictationConnection {
   }
 
   void _onAudio(Uint8List chunk) {
-    if (_closed || chunk.isEmpty) return;
+    if (chunk.isEmpty) return;
+    _inChunks++;
+    if (_inChunks == 1) {
+      _logger.info(
+        'dictation audio in: first chunk bytes=${chunk.length} '
+        'ready=$_sessionReady closed=$_closed',
+      );
+    }
+    if (_closed) return;
     final controller = _audioIn;
     if (_sessionReady && controller != null && !controller.isClosed) {
       controller.add(chunk);
