@@ -167,24 +167,25 @@ const List<SttCatalogEntry> kSttCatalog = [
       ),
     ],
   ),
-  // Streaming entries (English only) — see [kEnglishStreamingEntry].
+  // Streaming entries (English and Arabic) — see the entries below.
   kEnglishStreamingEntry,
-  // Retained hidden so an existing 20M install still resolves its files.
+  kMultilingualStreamingEntry,
+  // Retired streaming builds stay resolvable for existing installs.
+  _enStreaming20230626,
   _enStreamingZipformer20m,
 ];
 
-/// The streaming entry: `sherpa-onnx-streaming-zipformer-en-2023-06-26`
-/// (left-64 int8, ≈72 MB).
+/// English streaming entry, superseded but kept resolvable for old installs.
 ///
-/// English-only is a documented limitation, not an oversight: no
-/// sherpa-packaged Arabic streaming model exists yet (see G0b). The entry is
-/// visible because the streaming path needs a model a user can actually pick.
-const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
+/// Measured on the owner's machine: fast but inaccurate on his speech, and the
+/// kroko export below is the same size with a much newer model.
+const SttCatalogEntry _enStreaming20230626 = SttCatalogEntry(
   id: 'en-streaming-zipformer-2023-06-26',
-  label: 'إنجليزي — بث مباشر',
-  note: 'يستهلك ≈٠.٠٧ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
+  label: 'إنجليزي — بث مباشر (٢٠٢٣)',
+  note: 'مهجور لصالح نموذج kroko بنفس الحجم',
   mode: SttModelMode.streaming,
   language: 'en',
+  hidden: true,
   files: [
     SttModelFile(
       name: 'encoder-epoch-99-avg-1-chunk-16-left-64.int8.onnx',
@@ -267,6 +268,101 @@ const SttCatalogEntry _enStreamingZipformer20m = SttCatalogEntry(
       sizeBytes: 5048,
       sha256:
           '49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb',
+    ),
+  ],
+);
+
+/// English streaming entry: `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06`.
+///
+/// Same download size as the 2023 build (≈71 MB) and far newer. Probed with a
+/// 6.6 s WAV: loads with `modelType: zipformer2` and transcribes correctly from
+/// the first word.
+const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
+  id: 'en-streaming-zipformer-kroko-2025-08-06',
+  label: 'إنجليزي — بث مباشر (kroko ٢٠٢٥)',
+  note: 'يستهلك ≈٠.٠٧ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
+  mode: SttModelMode.streaming,
+  language: 'en',
+  files: [
+    SttModelFile(
+      name: 'encoder.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06/resolve/main/encoder.onnx',
+      sizeBytes: 70092599,
+      sha256:
+          'd4881c57449d581e0770fd53fa66c2fdc6cd167d92ece7c715e603defc96d9d4',
+    ),
+    SttModelFile(
+      name: 'decoder.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06/resolve/main/decoder.onnx',
+      sizeBytes: 617488,
+      sha256:
+          '455ba38466fce8d5a57e7db68a323b684079ca4d9e1dd93a740d9b2429aae3b1',
+    ),
+    SttModelFile(
+      name: 'joiner.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06/resolve/main/joiner.onnx',
+      sizeBytes: 336817,
+      sha256:
+          'd406f616736350e2a7df3e39398b78eb2fc1a2ca6973a19d3853fa3227e25b52',
+    ),
+    SttModelFile(
+      name: 'tokens.txt',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06/resolve/main/tokens.txt',
+      sizeBytes: 6310,
+      sha256:
+          '396dbeb5f4858875690716084f54e90d339679d0ba3e6b5b584f3d7589254d2d',
+    ),
+  ],
+);
+
+/// The first genuinely Arabic-capable streaming entry:
+/// `sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10`.
+///
+/// Left-128 int8, ≈339 MB. Probed with an Arabic 16 kHz WAV and `modelType:
+/// zipformer2`: it produces Arabic text as the audio arrives, so Arabic
+/// dictation no longer has to be batch-only.
+const SttCatalogEntry kMultilingualStreamingEntry = SttCatalogEntry(
+  id: 'multilingual-streaming-zipformer-2025-02-10',
+  label: 'عربي + إنجليزي — بث مباشر',
+  note: 'يستهلك ≈٠.٣٤ جيجابايت — نص فوري أثناء الكلام بالعربية والإنجليزية',
+  mode: SttModelMode.streaming,
+  language: 'ar',
+  files: [
+    SttModelFile(
+      name: 'encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/resolve/main/encoder-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
+      sizeBytes: 296583597,
+      sha256:
+          'f9001ed7a9e46d0294438c1a30cd7c72d1cc4bdd4e7880edbcda36f67081e32e',
+    ),
+    SttModelFile(
+      name: 'decoder-epoch-75-avg-11-chunk-16-left-128.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/resolve/main/decoder-epoch-75-avg-11-chunk-16-left-128.onnx',
+      sizeBytes: 33837085,
+      sha256:
+          '7ebc63f34b21c8efb4a41a5a2eee7fe1448829ce0230ecc5369e67fc14d90d48',
+    ),
+    SttModelFile(
+      name: 'joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/resolve/main/joiner-epoch-75-avg-11-chunk-16-left-128.int8.onnx',
+      sizeBytes: 8257421,
+      sha256:
+          'db88e3172323551abaa99b91b18fb422a27ea4a834fd0db10389f9478816f917',
+    ),
+    SttModelFile(
+      name: 'tokens.txt',
+      url:
+          'https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10/resolve/main/tokens.txt',
+      sizeBytes: 195244,
+      sha256:
+          '784f24950f6bcce1b0021035632dd60fd4617ecd8ca0581ab57d7b39d77ba5ab',
     ),
   ],
 );

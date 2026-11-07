@@ -415,24 +415,34 @@ the model. Both runs sent 100 ms frames paced like a live microphone.
   sanad-dev bootstrap on ubuntu/macos/windows) with `maintainer-reviewed` and
   `release-reviewed` applied.
 
+## Streaming catalog after G5b (2026-11-07)
+
+Two entries were probed offline with `modelType: zipformer2`, installed through the normal hosted path, and
+measured end to end through the daemon with `tool/stt_daemon_ab.dart`:
+
+| Entry | Size | Probe | Through the daemon |
+|---|---|---|---|
+| `en-streaming-zipformer-kroko-2025-08-06` | 71,222,214 B | correct transcript from the first word | `first_partial=2013ms` (load included), 4 partials, 1 final |
+| `multilingual-streaming-zipformer-2025-02-10` | 338,633,347 B | Arabic text while the audio plays | `first_partial=1163ms`, 13 partials, 2 finals, Arabic text |
+
+Retired (hidden, still resolvable): `en-streaming-zipformer-20m` and `en-streaming-zipformer-2023-06-26`
+(the latter superseded by kroko at the same size after the owner judged it fast-but-inaccurate).
+
+**This closes the "no Arabic streaming model exists" limitation.** Arabic dictation can now run in either
+mode, and the rule stands: the model's own capability decides how it is treated.
+
 ## Resume here (2026-11-06, end of session — owner closed the machine)
 
-State: everything is committed (`e60e1867`) and pushed on `voice/02-local-dictation`; the test runtime
-(`~/.sanad-test`) is stopped. Working tree clean.
+State: committed and pushed on `voice/02-local-dictation`; the test runtime (`~/.sanad-test`) is running.
+Working tree clean.
 
-Owner's last finding: the new streaming model is **fast but inaccurate** for his speech, and he asked why a
-tiny model is used. Answer: nothing requires it any more — the small build was forced by the `modelType`
-bug, now fixed. Two candidates were downloaded to `/tmp` for the next session (not installed, not in the
-catalog yet):
+Owner's last finding: the 2023-06-26 streaming model was **fast but inaccurate** for his speech, and he asked
+why a tiny model was used. Answer: nothing requires it any more — the small build was forced by the
+`modelType` bug, now fixed. Result (implemented and measured, see the section above): kroko replaces it at
+the same size, and the multilingual export brings **real Arabic streaming** at 339 MB.
 
-| Candidate | Files | Total | Notes |
-|---|---|---|---|
-| `sherpa-onnx-streaming-zipformer-en-kroko-2025-08-06` | encoder 70.1 MB `d4881c57…`, decoder 617,488 B `455ba384…`, joiner 336,817 B `d406f616…`, tokens 6,310 B `396dbeb5…` | ≈71 MB | English only, same size as today's model but a much newer/stronger export |
-| `sherpa-onnx-streaming-zipformer-ar_en_id_ja_ru_th_vi_zh-2025-02-10` | encoder int8 296.6 MB `f9001ed7…`, decoder 33.8 MB `7ebc63f3…`, joiner int8 8.3 MB `db88e317…`, tokens 195,244 B `784f2495…` | ≈339 MB | **Real Arabic streaming** (ar + en + id/ja/ru/th/vi/zh), left-128 |
-
-Next actions, in order: probe both with `modelType: zipformer2` (and `zipformer` as fallback), confirm they
-load and transcribe, then add catalog entries with those shas, install, and measure first-partial latency
-plus accuracy before the owner's live pass. Do not ship a streaming entry that has not been probed.
+Next actions: the owner's live pass on both new entries (Arabic streaming first), then G3 (docs, verification,
+delivery) and the PR. Do not ship a streaming entry that has not been probed.
 
 ## Current status
 - Current gate: **G5b complete** — `sherpa_onnx 2.0.1`, and the streaming entry is

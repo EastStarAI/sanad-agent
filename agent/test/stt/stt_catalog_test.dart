@@ -45,21 +45,47 @@ void main() {
       expect(sttEntryById('no-such-model'), isNull);
     });
 
-    test('Arabic entries stay batch+VAD because no Arabic streaming model exists', () {
+    test('Arabic now has one honest streaming entry and batch stays batch', () {
       final arabic = kSttCatalog.where((entry) => entry.language == 'ar');
-      expect(arabic.every((entry) => entry.mode == SttModelMode.batchVad), isTrue);
-      // Streaming entries are English only: the 2023-06-26 model is the one a
-      // user picks, and the 20M build stays only so old installs still resolve.
-      final streaming = kSttCatalog.where(
+      final batch = arabic.where((entry) => entry.mode == SttModelMode.batchVad);
+      final streaming = arabic.where(
         (entry) => entry.mode == SttModelMode.streaming,
       );
-      expect(streaming.every((entry) => entry.language == 'en'), isTrue);
-      final visible = streaming.where((entry) => !entry.hidden);
-      expect(visible.map((entry) => entry.id), [
-        'en-streaming-zipformer-2023-06-26',
+      // whisper.cpp remains the Arabic runtime for the default and the lighter
+      // builds; the sherpa int8 batch entry is still there as a fallback.
+      expect(batch, isNotEmpty);
+      expect(
+        batch.any((entry) => entry.engine == SttEngineKind.whisperCpp),
+        isTrue,
+      );
+      // ...and exactly one Arabic entry streams, because a sherpa-packaged
+      // Arabic export exists (measured: it transcribes Arabic while audio plays).
+      expect(streaming.map((entry) => entry.id), [
+        'multilingual-streaming-zipformer-2025-02-10',
       ]);
-      final retired = streaming.where((entry) => entry.hidden);
-      expect(retired.map((entry) => entry.id), ['en-streaming-zipformer-20m']);
+      expect(streaming.single.streamingModelType, 'zipformer2');
+    });
+
+    test('visible streaming entries are the probed ones only', () {
+      final visible = kSttCatalog
+          .where(
+            (entry) =>
+                entry.mode == SttModelMode.streaming && !entry.hidden,
+          )
+          .map((entry) => entry.id)
+          .toList();
+      expect(visible, [
+        'en-streaming-zipformer-kroko-2025-08-06',
+        'multilingual-streaming-zipformer-2025-02-10',
+      ]);
+      for (final entry in kSttCatalog.where(
+        (entry) => entry.mode == SttModelMode.streaming && !entry.hidden,
+      )) {
+        // Every shipped streaming model declares its own export dialect, which is
+        // what made the 2023 failure possible in the first place.
+        expect(entry.streamingModelType, isNotEmpty);
+        expect(entry.hosted, isTrue);
+      }
     });
 
     test('the streaming entry supersedes the model that was measured unusable', () {
