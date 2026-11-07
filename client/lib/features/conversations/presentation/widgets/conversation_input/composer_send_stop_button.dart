@@ -35,6 +35,26 @@ class ComposerSendStopButton extends StatelessWidget {
     this.sessionId,
   });
 
+  /// Sends the draft, but never an empty one.
+  ///
+  /// While dictation is running the button is enabled on purpose — the user may
+  /// want to finish speaking and send in one press. Stopping first means the
+  /// final transcript is what gets sent, and a session that recognised nothing
+  /// sends nothing at all instead of an empty message.
+  Future<void> _send(
+    BuildContext context, {
+    required bool isDictating,
+  }) async {
+    if (isDictating) {
+      await maybeDictationCubit(context)?.stop();
+      if (chatController.exportPlainText().trim().isEmpty) return;
+    } else if (chatController.exportPlainText().trim().isEmpty) {
+      // Attachments can be sent alone; text cannot be empty otherwise.
+      return;
+    }
+    onSendAttempt(intent: MessageDeliveryIntent.auto);
+  }
+
   @override
   Widget build(BuildContext context) {
     final isEmpty = chatController.exportPlainText().trim().isEmpty;
@@ -48,9 +68,11 @@ class ComposerSendStopButton extends StatelessWidget {
       (attachment) => attachment.status == DraftAttachmentStatus.ready,
     );
     final hasContent = !isEmpty || attachments.isNotEmpty;
+    final dictation = maybeDictationCubit(context);
+    final dictating = dictation?.state.isActive ?? false;
     final canSend =
         agentSlice.isOnline &&
-        hasContent &&
+        (hasContent || dictating) &&
         attachmentsReady &&
         hasWorkspace &&
         inputSlice.pendingSuspendedRequest == null;
@@ -178,7 +200,9 @@ class ComposerSendStopButton extends StatelessWidget {
         tooltip: executionSnapshot?.isExecuting == true
             ? 'Press Enter to steer • Ctrl/Cmd+Enter to queue'
             : 'Send message',
-        onPressed: canSend ? () => onSendAttempt(intent: MessageDeliveryIntent.auto) : null,
+        onPressed: canSend
+            ? () => _send(context, isDictating: dictating)
+            : null,
         style: IconButton.styleFrom(
           backgroundColor: canSend ? Theme.of(context).colorScheme.onSurface : dimTextColor.withValues(alpha: 0.1),
           disabledBackgroundColor: dimTextColor.withValues(alpha: 0.1),

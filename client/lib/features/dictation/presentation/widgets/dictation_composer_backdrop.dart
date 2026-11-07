@@ -59,6 +59,17 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop> {
   DateTime? _lastShiftAt;
   bool _lastVisible = false;
 
+  /// Level below which a frame is drawn as a resting tick.
+  ///
+  /// The bar curve is generous (`sqrt`) and the microphone picks up room noise,
+  /// so without a floor a breath reads as a loud word. The transcribed audio is
+  /// untouched: this only decides how much of it is drawn.
+  static const double _displayFloor = 0.12;
+
+  /// How many shifts the strip takes to reach full height after a session
+  /// starts, so it rises instead of appearing at full size.
+  static const int _growShifts = 8;
+
   @override
   void dispose() {
     _samples.dispose();
@@ -80,11 +91,15 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop> {
     final last = _lastShiftAt;
     if (last != null && now.difference(last) < _minShift) return;
     _lastShiftAt = now;
+    // Grow in: the first shifts of a session scale up, so the strip rises into
+    // place instead of popping at full height.
+    final growIn = (_shiftCount / _growShifts).clamp(0.0, 1.0);
+    final gated = level < _displayFloor ? 0.0 : level;
     final next = List<double>.of(_samples.value)..removeAt(0);
-    next.add(level.clamp(0.0, 1.0));
+    next.add(gated * growIn);
     _deliver(next);
     _shiftCount++;
-    if (level > _maxSample) _maxSample = level;
+    if (gated > _maxSample) _maxSample = gated;
   }
 
   void _resetSamples() {
@@ -186,29 +201,19 @@ class DictationMeterPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeCap = StrokeCap.round
       ..strokeWidth = barWidth;
-    final loudest = samples.fold<double>(0, (m, s) => math.max(m, s));
 
-    // Silence: a quiet baseline so the card does not look broken, no fake bars.
-    if (loudest < 0.02) {
-      paint
-        ..color = color.withValues(alpha: 0.22)
-        ..strokeWidth = 2;
-      canvas.drawLine(
-        Offset(0, centerY),
-        Offset(size.width, centerY),
-        paint,
-      );
-      return;
-    }
-
+    // No flat baseline: silence is drawn as the same row of small ticks, so the
+    // meter reads as one continuous strip instead of a line that turns into
+    // dots when someone speaks.
     for (var i = 0; i < count; i++) {
       // sqrt gives quiet speech visible movement without a loud word clipping.
       final amplitude = math.sqrt(samples[i].clamp(0.0, 1.0));
-      final halfHeight = math.max(2.0, amplitude * size.height * 0.45);
+      final halfHeight = math.max(1.6, amplitude * size.height * 0.45);
       final x = i * slot + slot / 2;
       final freshness = 0.35 + 0.65 * (i / (count - 1));
-      // Low alpha keeps the text above the bars readable at any level.
-      paint.color = color.withValues(alpha: 0.20 + 0.26 * freshness);
+      // Faint on purpose: the text above the strip must stay the loudest thing
+      // in the card.
+      paint.color = color.withValues(alpha: 0.10 + 0.18 * freshness);
       canvas.drawLine(
         Offset(x, centerY - halfHeight),
         Offset(x, centerY + halfHeight),

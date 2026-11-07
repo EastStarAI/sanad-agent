@@ -444,6 +444,13 @@ the same size, and the multilingual export brings **real Arabic streaming** at 3
 Next actions: the owner's live pass on both new entries (Arabic streaming first), then G3 (docs, verification,
 delivery) and the PR. Do not ship a streaming entry that has not been probed.
 
+## Later tasks (owner-requested, not started)
+
+- **A better English streaming model.** The multilingual export is **average in Arabic and very poor in English**
+  (owner's verdict 2026-11-07). Find and probe a streaming English model with real accuracy; keep the
+  multilingual entry exactly as it is — do not remove or replace it. Rules that still apply: probe before adding,
+  carry the model's own `modelType`, and ship only what measured well.
+
 ## Current status
 - Current gate: **G5b complete** — `sherpa_onnx 2.0.1`, and the streaming entry is
   `en-streaming-zipformer-2023-06-26` (left-64 int8, 72.7 MB) passing its own `modelType:

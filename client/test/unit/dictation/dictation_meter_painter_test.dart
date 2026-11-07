@@ -42,22 +42,23 @@ int _maxAlpha(ByteData pixels) {
 
 void main() {
   group('dictation meter painter', () {
-    test('silence draws a single faint baseline, not a row of bars', () async {
+    test('silence draws small ticks, never a flat line', () async {
       final pixels = await _paint(List<double>.filled(64, 0));
-      final baselineAlpha = _alphaAt(pixels, 200, 100, 40);
-      expect(baselineAlpha, greaterThan(0));
-      // The resting line is deliberately quiet: it must not dominate the card.
-      expect(baselineAlpha, lessThan(90));
-      // Nothing above the line: a silent session shows no fake activity.
+      // A tick exists at the centre of every slot...
+      final centreAlpha = _alphaAt(pixels, 200, 100, 40);
+      expect(centreAlpha, greaterThan(0));
+      // ...and it is faint: the strip must not compete with the text above it.
+      expect(centreAlpha, lessThan(90));
+      // Nothing tall anywhere: silence is a row of dots, not a baseline plus dots.
       expect(_alphaAt(pixels, 200, 100, 20), 0);
       expect(_alphaAt(pixels, 200, 100, 60), 0);
     });
 
     test('speech grows the bars around the centre line', () async {
       final pixels = await _paint(List<double>.filled(64, 0.7));
-      // The meter sits behind text, so it tops out around 46% opacity.
-      expect(_maxAlpha(pixels), greaterThan(100));
-      // Bars are centred: both above and below the centre carry ink.
+      // The meter sits behind text, so it stays translucent (≤28% opacity).
+      expect(_maxAlpha(pixels), greaterThan(55));
+      expect(_maxAlpha(pixels), lessThan(110));
       expect(_alphaAt(pixels, 200, 100, 30), greaterThan(0));
       expect(_alphaAt(pixels, 200, 100, 50), greaterThan(0));
     });
