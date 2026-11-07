@@ -7,6 +7,7 @@ library;
 
 import 'dart:async';
 import 'dart:collection';
+import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
 
@@ -72,7 +73,41 @@ class SherpaSttEngine implements SttEngine {
   bool _cancelled = false;
   int _droppedChunks = 0;
   Completer<void>? _finished;
+
+  /// Completes when the worker reports it freed its native handles.
+  ///
+  /// Killing the isolate first skipped the worker's `free()` calls, so every
+  /// session leaked its model: measured 661 → 1045 → 1332 MB across three
+  /// consecutive multilingual sessions, roughly one model per session.
+  final Completer<void> _workerClosed = Completer<void>();
   int _threads = 0;
+
+  /// `malloc_zone_pressure_relief(NULL, 0)`.
+  ///
+  /// Freeing a 300 MB model marks its malloc regions empty, but the allocator
+  /// keeps them resident: measured 669 MB → 1.2 GB over six consecutive
+  /// sessions even after the worker freed everything. Asking the system to
+  /// relieve the pressure hands those pages back instead of letting them
+  /// accumulate for the lifetime of the daemon.
+  static final int Function(Pointer<Void>, int) _pressureRelief = () {
+    try {
+      return DynamicLibrary.process()
+          .lookupFunction<
+            IntPtr Function(Pointer<Void>, IntPtr),
+            int Function(Pointer<Void>, int)
+          >('malloc_zone_pressure_relief');
+    } on Object {
+      return (_, _) => 0;
+    }
+  }();
+
+  static void _releaseFreedPages() {
+    try {
+      _pressureRelief(nullptr, 0);
+    } on Object {
+      // Not fatal: the pages are free, the process just keeps them longer.
+    }
+  }
 
   @override
   Stream<SttEvent> get events => _events.stream;
@@ -150,6 +185,7 @@ class SherpaSttEngine implements SttEngine {
             );
           }
         case 'closed':
+          if (!_workerClosed.isCompleted) _workerClosed.complete();
           _closeEvents();
       }
     });
@@ -258,13 +294,23 @@ class SherpaSttEngine implements SttEngine {
     if (_closed) return;
     _closed = true;
     _queue.clear();
-    _inbox?.send({'cmd': 'dispose'});
+    final inbox = _inbox;
+    inbox?.send({'cmd': 'dispose'});
+    // Give the worker the chance to free the model. The isolate kill is only a
+    // fallback: a killed isolate never runs its `free()` calls and the native
+    // memory stays allocated until the daemon exits.
+    try {
+      await _workerClosed.future.timeout(const Duration(seconds: 5));
+    } on Object {
+      // The worker is gone or unresponsive; the kill below still reclaims it.
+    }
     _isolate?.kill(priority: Isolate.beforeNextEvent);
     _isolate = null;
     _inbox = null;
     _outbox?.close();
     _outbox = null;
     await _closeEvents();
+    _releaseFreedPages();
   }
 
   void _emit(SttEvent event) {

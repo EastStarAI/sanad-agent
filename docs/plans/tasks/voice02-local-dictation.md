@@ -471,5 +471,18 @@ delivery) and the PR. Do not ship a streaming entry that has not been probed.
   Egyptian q8 (vs 2.4–3.0 GB on the sherpa int8 path); back to ~0.6 GB after a
   session, flat across sessions (no leak). Egyptian q5 peaks ~0.95 GB, base
   ~0.76 GB, f16 ~1.9 GB.
+- **Per-session memory leak found and fixed (2026-11-07).** Measured over three
+  consecutive multilingual sessions: 661 → 1045 → 1332 MB, i.e. roughly one
+  model (≈340 MB) leaked per session. Two causes, both fixed in `stt_engine.dart`:
+  1. `dispose()` sent `dispose` and immediately killed the isolate, so the
+     worker never ran its `free()` calls. `dispose()` now waits for the worker's
+     `closed` event (bounded to 5 s) before the kill.
+  2. Even with the native free, the macOS allocator kept the pages resident
+     (`Malloc * (empty)` grew to 673 MB). Every `dispose()` now calls
+     `malloc_zone_pressure_relief(NULL, 0)`.
+  After both: nine consecutive sessions stayed at 886 → 926 MB with the
+  resident malloc regions back to ~1.3 MB, and the footprint drops again under
+  pressure (`1.2 GB` → `603 MB`). Verified through the daemon socket with
+  `tool/stt_daemon_ab.dart`, no microphone needed.
 - Logging contract: metadata only (levels, counts, durations, sizes, gains). Never audio, never
   transcript text. Per-frame logs are summaries — `meter session`, `gate passed/blocked`, `streaming done`.
