@@ -133,7 +133,10 @@ Owner decisions:
       Android `RECORD_AUDIO`; Windows/Linux use the OS privacy setting.
 - [x] Client test: button reacts to the daemon capability, not a platform check
       (`conversation_input_composer_toggle_test.dart`: `supportsDictation: false` + active agent ⇒ mic rendered).
-- [ ] Live permission pass on Windows/Linux/web/mobile (macOS done).
+- [x] Live permission pass on macOS (owner, 2026-11-08).
+- [ ] Live permission pass on Windows/Linux/web/mobile.
+- [x] `native-stt` green on macOS, Linux and Windows (run 42458788755) and listed in `all-required`.
+- [x] Branch merged with `main` and `ci.yml` conflicts resolved.
 
 ### G9 — App-wide toast (done 2026-11-08)
 - [x] Dictation notices use `ToastUtils.showInfo`; no `SnackBar` in the feature.
@@ -170,8 +173,8 @@ Owner decisions:
 
 - Targets: macOS arm64, Windows x64/arm64, Linux x64/arm64; loader picks
   `libsanad_whisper.dylib` / `sanad_whisper.dll` / `libsanad_whisper.so` (`SANAD_WHISPER_LIBRARY` override).
-- **Verified:** macOS arm64. **Not yet verified:** Windows/Linux compile — the `native-stt` job exists
-  and needs a green run before support is claimed.
+- **Verified:** macOS arm64 locally; Windows x64 and Linux x64 compile in CI (`native-stt` green on
+  `ubuntu-24.04`, `macos-26`, `windows-2025`). ARM runners are not exercised yet.
 - **Binaries are not tracked.** `.gitignore` excludes `agent/native/*/*.{dylib,so,dll}`;
   `tool/ensure_native_stt.dart` verifies checksums → downloads (`--base-url`) → builds from a
   discovered or `--whisper-src` tree → else exits 2 with instructions. It refuses incomplete builds,
@@ -183,7 +186,8 @@ Owner decisions:
 
 - A genuinely accurate English streaming model (keep the multilingual entry untouched; probe first).
 - Daemon idle-memory work: measure AOT vs JIT first, then an old-gen heap cap, then post-session retention.
-- After G8: `macos-x64` (Intel) — build job, checksums, artifact, platform gate.
+- [ ] After G8: `macos-x64` (Intel) — build job, checksums, artifact, platform gate. Recorded here
+      deliberately: it is a separate follow-up, not dropped.
 - Optional: shard `Test client`; default to `q5` on low-RAM devices; owner's verdict on the
   composer-wide meter (it paints: `shifts=181 max=0.506`).
 - Separate task: cloud relay for dictation (`voice02-dictation-cloud-relay.md`); local relay is done.
