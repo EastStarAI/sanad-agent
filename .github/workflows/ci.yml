@@ -232,15 +232,22 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so the arm64
+      # lane installs the standalone Dart SDK at exactly the same version.
+      DART: ${{ matrix.os == 'ubuntu-24.04-arm' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.os == 'ubuntu-24.04-arm'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.os != 'ubuntu-24.04-arm'
       - name: Resolve agent dependencies
         working-directory: agent
-        run: fvm dart pub get
+        run: $DART pub get
       - name: Verify isolated CLI contracts
         working-directory: agent
-        run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
+        run: $DART test test/guards/e2e_state_isolation_contract_test.dart
       - name: Build packaged Windows no-console launcher
         if: runner.os == 'Windows'
         working-directory: agent
@@ -258,7 +265,7 @@ jobs:
         working-directory: agent
         env:
           SANAD_CLI_AOT_SUCCESS_FILE: .dart_tool/cli-aot-smoke-success
-        run: fvm dart run tool/cli_aot_smoke.dart
+        run: $DART run tool/cli_aot_smoke.dart
       - name: Require AOT smoke success marker
         if: runner.os != 'Windows'
         working-directory: agent
@@ -455,6 +462,12 @@ jobs:
                           .sort
             official = %w[linux/arm64 linux/x64 macos/arm64 macos/x64 windows/x64]
             abort("Agent release matrix drifted: #{targets.inspect}") unless targets == official
+            # The pinned Flutter SDK ships no Linux arm64 archive, so that target
+            # needs the pinned standalone Dart SDK and a per-lane executable.
+            job = YAML.load_file(".github/workflows/release.yml").dig("jobs", "agent")
+            uses = job["steps"].map { |step| step["uses"] }.compact
+            abort("Linux arm64 must install the pinned standalone Dart SDK") unless uses.include?("./.github/actions/setup-dart")
+            abort("The Agent matrix must select its Dart executable per lane") unless job.dig("env", "DART").to_s.include?("arm64")
           '
           grep -F 'workflow_call:' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml

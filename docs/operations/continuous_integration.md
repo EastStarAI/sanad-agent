@@ -44,7 +44,12 @@ check is a coverage hole, so both edits belong to the same change.
 `CLI automation (ubuntu-24.04-arm)` runs the Agent AOT smoke on GitHub's arm64
 runner, so a native arm64 executable is proved at pull-request time on the same
 runner family the release matrix uses for the official Linux arm64 Agent
-artifact.
+artifact. The pinned Flutter SDK publishes no Linux arm64 archive, so that lane
+installs the standalone Dart SDK through `.github/actions/setup-dart` at the
+version declared by `scripts/ci/dart_sdk_version.txt`; every other lane keeps the
+FVM-managed Flutter SDK, `DART` selects the executable per lane, and
+`agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes when the
+pin and the Flutter-bundled Dart version diverge.
 
 ### Cross-Component Contract Fixtures
 

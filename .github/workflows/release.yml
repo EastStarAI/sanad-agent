@@ -148,26 +148,34 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     environment: ${{ matrix.environment }}
+    env:
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so that job
+      # installs the standalone Dart SDK at exactly the same version instead.
+      # Every other job keeps the FVM-managed Flutter SDK.
+      DART: ${{ matrix.platform == 'linux' && matrix.architecture == 'arm64' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.platform == 'linux' && matrix.architecture == 'arm64'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.platform != 'linux' || matrix.architecture != 'arm64'
       - name: Install dependencies and test
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
-          fvm dart pub get
-          fvm dart run tool/generate_bundled_skills.dart --check
-          fvm dart run tool/generate_model_capability_defaults.dart --check
-          fvm dart analyze
-          fvm dart test
+          $DART pub get
+          $DART run tool/generate_bundled_skills.dart --check
+          $DART run tool/generate_model_capability_defaults.dart --check
+          $DART analyze
+          $DART test
       - name: Compile agent
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
           mkdir -p ../dist
-          fvm dart compile exe \
+          $DART compile exe \
             -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} \
             bin/sanad_agent.dart \
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"

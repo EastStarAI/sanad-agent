@@ -1,0 +1,65 @@
+name: Set up the pinned standalone Dart SDK
+description: Installs the Dart SDK declared by scripts/ci/dart_sdk_version.txt on Linux arm64, where the pinned Flutter SDK publishes no Linux arm64 archive, and restores the pub cache.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          arm64|aarch64) ;;
+          *)
+            echo "::error::This action serves Linux arm64 lanes; this runner is $(uname -m)."
+            exit 1
+            ;;
+        esac
+        version="$(tr -d '[:space:]' < scripts/ci/dart_sdk_version.txt)"
+        if [ -z "$version" ]; then
+          echo "::error::scripts/ci/dart_sdk_version.txt does not declare a version"
+          exit 1
+        fi
+        # The publisher's checksum for exactly this release and architecture,
+        # read from the `.sha256sum` served beside the archive. A version bump
+        # must re-read that file: an unpinned archive is never accepted.
+        case "$version" in
+          3.13.0) expected="20141a0653327939bb20c4b87b231226beba1128d8a9aedbb30cb5af1a2790d4" ;;
+          *)
+            echo "::error::No pinned checksum for Dart SDK $version."
+            echo "Read https://storage.googleapis.com/dart-archive/channels/stable/release/$version/sdk/dartsdk-linux-arm64-release.zip.sha256sum"
+            exit 1
+            ;;
+        esac
+        archive="$RUNNER_TEMP/dartsdk-linux-arm64-$version.zip"
+        curl --fail --silent --show-error --location --retry 3 \
+          --proto '=https' --tlsv1.2 \
+          --output "$archive" \
+          "https://storage.googleapis.com/dart-archive/channels/stable/release/$version/sdk/dartsdk-linux-arm64-release.zip"
+        printf '%s  %s\n' "$expected" "$archive" | sha256sum --strict --check
+        # The archive extracts one `dart-sdk` directory; no other content is
+        # accepted, so a changed layout fails instead of publishing a stale SDK.
+        rm -rf "$HOME/dart-sdk"
+        unzip -q "$archive" -d "$HOME"
+        test -x "$HOME/dart-sdk/bin/dart"
+        echo "$HOME/dart-sdk/bin" >> "$GITHUB_PATH"
+        echo "DART_SDK_VERSION=$version" >> "$GITHUB_ENV"
+    - uses: actions/cache@v6
+      with:
+        path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/ci/dart_sdk_version.txt', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-${{ runner.os }}-${{ runner.arch }}-
+    # PATH entries only apply to later steps, so the pin assertion runs in its
+    # own step, exactly like the Flutter setup action.
+    - shell: bash
+      run: |
+        set -euo pipefail
+        version="$(tr -d '[:space:]' < scripts/ci/dart_sdk_version.txt)"
+        echo "${PUB_CACHE:-$HOME/.pub-cache}/bin" >> "$GITHUB_PATH"
+        resolved="$(dart --version 2>&1)"
+        case "$resolved" in
+          *" $version "*) echo "Dart SDK $version resolves from the pinned archive." ;;
+          *)
+            echo "::error::Dart resolved '$resolved' instead of $version"
+            exit 1
+            ;;
+        esac

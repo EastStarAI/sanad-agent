@@ -41,6 +41,20 @@ that has no asset for that machine.
       enumerate contract artifacts generically.
 - [x] Confirm the Agent updater and the Client bootstrap installer derive
       `arm64` from the running platform and need no per-release change.
+- [x] Confirm the pinned Flutter SDK publishes **no** Linux arm64 archive
+      (`flutter_infra_release/releases/releases_linux.json` has zero arm64
+      entries), so no Agent lane on `ubuntu-24.04-arm` can use the FVM-managed
+      Flutter SDK. The Dart SDK does publish `dartsdk-linux-arm64-release.zip`,
+      which is what an Agent build actually needs.
+
+### Locked decisions added after G0
+
+- Linux arm64 lanes install the standalone Dart SDK through
+  `.github/actions/setup-dart`, pinned by `scripts/ci/dart_sdk_version.txt` and a
+  publisher checksum, and verify `dart --version`. `DART` selects `dart` or
+  `fvm dart` per lane, so every other step stays identical.
+- `agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes when the
+  pin and the Dart SDK bundled with `.fvmrc`'s Flutter diverge.
 
 ### G1 — Release contract and validators
 
@@ -57,6 +71,8 @@ that has no asset for that machine.
 - [x] Add the `ubuntu-24.04-arm` Agent matrix entry to `.github/workflows/release.yml`.
 - [x] Add `ubuntu-24.04-arm` to the pull-request `CLI automation` matrix so an
       arm64 AOT smoke runs before merge.
+- [x] Install the pinned standalone Dart SDK on those two lanes and keep every
+      other step identical through a `DART` indirection.
 - [x] Add a pull-request rejection case that fails `validate-contract` when the
       contract drops the Linux arm64 Agent artifact.
 - [x] Guard the release matrix itself in the release-security lane, so the

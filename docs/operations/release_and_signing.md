@@ -67,10 +67,23 @@ contract row and the release job together. The public installer resolves the
 Agent by platform plus architecture only, so it reports the requested target
 instead of substituting a different architecture's binary.
 
+The pinned Flutter SDK publishes no Linux arm64 archive, so the arm64 job cannot
+use the FVM-managed Flutter SDK that every other Agent job installs. The Agent
+build needs the Dart AOT compiler only, so that job installs the standalone Dart
+SDK through `.github/actions/setup-dart`: the version comes from
+`scripts/ci/dart_sdk_version.txt`, the archive is the publisher's
+`dartsdk-linux-arm64-release.zip` verified against the checksum pinned in that
+action, and the action fails unless `dart --version` reports the pin. The pin and
+the Dart SDK bundled with `.fvmrc`'s Flutter must match, and
+`agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes as soon as
+they diverge. No lane may install an unpinned or architecture-mismatched SDK.
+
 The official Agent target list is a build-matrix statement, not a statement
 about packaging. A Linux arm64 **Client** package (`.deb` and portable `tar.gz`)
 remains a separate follow-up: it needs an arm64 Linux build gate, an arm64
-`flutter build linux` verification, and its own manifest and alias handling.
+`flutter build linux` verification, and its own manifest and alias handling,
+and it cannot reuse this Dart-only path because the Flutter SDK itself has no
+Linux arm64 distribution.
 
 Generated sources are compared and hashed as canonical LF text.
 `agent/tool/generate_bundled_skills.dart` and
