@@ -141,24 +141,23 @@ export function createTimelineObserver(ctx) {
         });
       }
 
-      if (type === 'tool_use' || event.part?.type === 'tool' || event.tool_executions) {
-        const taskState = ctx.manifest.tasks[task.id];
-        if (taskState) {
-          const progressAt = event.timestamp || null;
-          if (!progressAt) return;
-          if (taskState.status === 'resuming') {
-            ctx.transition(task, 'running', {
-              cause: null,
-              stateSince: progressAt,
-              lastProgressAt: progressAt,
-            });
-          } else {
-            // Tool boundaries are meaningful progress and low-frequency.
-            // Assistant text can arrive per token, so it must never trigger
-            // persistent manifest writes here.
-            taskState.lastProgressAt = progressAt;
-            ctx.persist();
-          }
+      // Every record the task publishes is progress evidence, not only a tool
+      // boundary: a headless Sanad turn emits lifecycle records while it streams
+      // its case to stdout, and counting only `tool_use` made that turn look
+      // silent for its whole length (2026-11-08, run12). The value is kept in
+      // memory here and persisted by the monitor tick, so a token-level stream
+      // never rewrites the manifest once per line.
+      const taskState = ctx.manifest.tasks[task.id];
+      const progressAt = event.timestamp || null;
+      if (taskState && progressAt && ['running', 'resuming'].includes(taskState.status)) {
+        if (taskState.status === 'resuming') {
+          ctx.transition(task, 'running', {
+            cause: null,
+            stateSince: progressAt,
+            lastProgressAt: progressAt,
+          });
+        } else {
+          taskState.lastProgressAt = progressAt;
         }
       }
     };
