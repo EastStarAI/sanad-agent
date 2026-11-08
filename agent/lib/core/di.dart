@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:sanad_agent/core/app_config.dart';
 import 'package:sanad_agent/core/provider_runtime/vault_secret_store.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/auth/agent_secret_store.dart';
@@ -8,6 +11,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
+import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/core/e2e_agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
@@ -356,8 +360,19 @@ void setupDI() {
   // the capability projection, and the Device settings projection all resolve
   // this instance, so the session lease, engine residency, and catalog state can
   // never diverge.
+  //
+  // The runtime re-install retry is injected from the update layer: a failed
+  // `agent-runtime` download or verification disables dictation only, and the
+  // readiness reason is what the owner retries from the Client.
   getIt.registerLazySingleton<DictationService>(
-    () => DictationService(sanadHome: getSanadHome()),
+    () => DictationService(
+      sanadHome: getSanadHome(),
+      runtimeInstaller: () => AgentUpdateService(
+        currentVersion: getIt<Config>().version,
+        executablePath: Platform.resolvedExecutable,
+        isSourceManaged: AppConfig.isSourceRun,
+      ).refreshRuntime(),
+    ),
   );
 
   getIt.registerLazySingleton<AgentRuntimeService>(

@@ -412,6 +412,16 @@ class StandaloneDaemonController implements LocalDaemonController {
         onProgress: onProgress,
       );
       if (!bootstrap.isSuccess) return _bootstrapResult(bootstrap);
+      final runtimeCause = bootstrap.runtimeFailureCause;
+      if (runtimeCause != null) {
+        // Dictation only: the verified Agent is installed and will run, and the
+        // daemon reports this reason as its dictation readiness until the
+        // runtime installs.
+        _logger.warning(
+          'Verified agent installed without its dictation runtime '
+          '($runtimeCause).',
+        );
+      }
     } catch (error) {
       _logger.severe('Verified agent bootstrap failed (${error.runtimeType}).');
       return AgentLifecycleResult(

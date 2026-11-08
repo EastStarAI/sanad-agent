@@ -318,6 +318,35 @@ contract's trust policy for an `agent-runtime` component; the launcher readiness
 native arch/target contract; and the Gateway must not retire an origin claim at `dictation_end`
 receipt, because the drain results follow it.
 
+## G13 — Narrowed closure (owner decision 2026-11-08)
+
+Ship local + cloud dictation with the scope narrowed to what is already built. No
+new tooling, refactors, or distribution features. Recorded here so the decision
+outlives the branch.
+
+- [x] **Packaged-runtime failure is dictation-only.** A failure to download or
+      verify the `agent-runtime` archive never fails or blocks an Agent install or
+      update: the installer, the Agent self-updater, the Client bootstrap, and the
+      `sanad-dev` probe all continue, and dictation reports the reason instead.
+      Trust strictness is unchanged — an unverified library is never extracted or
+      loaded. Owning record:
+      [native_stt_runtime_platforms.md](../../technical/native_stt_runtime_platforms.md#failure-policy-dictation-only).
+- [x] **Machine-readable reason + retry.** The failing component records one code in
+      `<exe dir>/native/.runtime-install-failed`
+      (`release/contract/lib/src/native_runtime_install.dart`); readiness reports
+      `native_runtime_install_failed`; the Client localizes it and offers the same
+      setup action, which re-fetches the verified runtime for a released Agent.
+- [x] **STT suite hang fixed at its owner.** `HostedDictationChannel` exposed a
+      single-subscription command stream to two readers (the connection and the
+      session), so every hosted session died with "Stream has already been
+      listened to", and `close()` awaited a `done` future that can never complete
+      without a subscriber. Both are product defects in that one file; the suite
+      now finishes in seconds instead of timing out per test.
+
+Deferred and **not claimed** by this closure: Windows/Linux packaging proof,
+signing/notarization/attestation proof, and test-tooling enhancements beyond the
+archive fixture that was corrected.
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

@@ -461,6 +461,18 @@ RUNTIME_DIR="$BIN_DIR/native/$RUNTIME_TAG"
 RUNTIME_BACKUP="$RUNTIME_DIR.rollback"
 RUNTIME_REPLACED=0
 ROLLBACK_INCOMPLETE=0
+# The packaged runtime is a dictation companion, not part of the Agent contract:
+# a failure to fetch or verify it disables dictation only and never fails the
+# install. The reason is recorded beside the runtime so the daemon's dictation
+# readiness can name it until a later install or update succeeds.
+RUNTIME_FAILURE_MARKER="$BIN_DIR/native/.runtime-install-failed"
+record_runtime_failure() {
+  mkdir -p "$BIN_DIR/native" 2>/dev/null || true
+  printf '%s\n' "$1" > "$RUNTIME_FAILURE_MARKER" 2>/dev/null || true
+}
+clear_runtime_failure() {
+  rm -f "$RUNTIME_FAILURE_MARKER" 2>/dev/null || true
+}
 restore_previous_installation() {
   if [ "$PAIRING_PREPARED" -eq 1 ] && [ -x "$TARGET" ]; then
     "$TARGET" login --cancel-pairing >/dev/null 2>&1 || true
@@ -633,8 +645,22 @@ if [ -f "$TARGET" ]; then mv "$TARGET" "$BACKUP"; fi
 if ! mv "$STAGED" "$TARGET"; then
   fail_installation "Unable to install the verified executable" 74
 fi
+RUNTIME_FAILED=0
 if ! install_native_runtime; then
-  fail_installation "Native dictation runtime installation failed" 74
+  # The Agent is already verified and in place; only dictation is lost, so the
+  # installation continues and the reason stays visible in readiness.
+  RUNTIME_FAILED=1
+  if [ "$RUNTIME_REPLACED" -eq 1 ] && [ -d "$RUNTIME_BACKUP" ] &&
+    [ ! -d "$RUNTIME_DIR" ]; then
+    # This run moved the predecessor aside and could not install its successor:
+    # restore it so a transient failure never costs a working runtime.
+    mv "$RUNTIME_BACKUP" "$RUNTIME_DIR" || true
+  fi
+  RUNTIME_REPLACED=0
+  record_runtime_failure "runtime_install_failed"
+  echo "Native dictation runtime installation failed; the Agent is installed and runs, and dictation stays unavailable until the next install or update re-fetches it." >&2
+else
+  clear_runtime_failure
 fi
 if [ "$RUNTIME_PRESENT" -eq 0 ]; then
   if [ -d "$RUNTIME_DIR" ]; then
@@ -705,7 +731,14 @@ fi
 # Commit: the new executable already runs and the whole transaction succeeded,
 # so this is the first moment both backups are disposable.
 rm -f "$BACKUP"
-if [ -d "$RUNTIME_BACKUP" ]; then rm -rf "$RUNTIME_BACKUP"; fi
+if [ -d "$RUNTIME_BACKUP" ]; then
+  if [ "$RUNTIME_FAILED" -eq 1 ]; then
+    # The predecessor runtime could not be restored; it is the only copy left.
+    echo "The previous native runtime is kept at $RUNTIME_BACKUP." >&2
+  else
+    rm -rf "$RUNTIME_BACKUP"
+  fi
+fi
 echo "Sanad Agent installed successfully."
 if [ -n "$PAIRING_TOKEN" ]; then
   echo "Device pairing completed and the Agent is online."

@@ -264,14 +264,112 @@ void main() {
       );
     });
 
-    test('a not-published manifest is a terminal success', () {
-      const result = AgentRuntimeBundleResult(AgentRuntimeBundleStatus.notPublished);
+    test('a runtime failure is a dictation problem, never a success status', () {
+      expect(AgentRuntimeBundleStatus.notPublished.isFailure, isFalse);
+      expect(AgentRuntimeBundleStatus.installed.isFailure, isFalse);
+      expect(AgentRuntimeBundleStatus.stagedForRestart.isFailure, isFalse);
+      for (final status in const [
+        AgentRuntimeBundleStatus.downloadFailed,
+        AgentRuntimeBundleStatus.checksumFailed,
+        AgentRuntimeBundleStatus.trustFailed,
+        AgentRuntimeBundleStatus.layoutRejected,
+        AgentRuntimeBundleStatus.replaceFailed,
+      ]) {
+        expect(status.isFailure, isTrue);
+        expect(NativeRuntimeInstall.isKnownCause(status.failureCause!), isTrue);
+      }
+      expect(AgentRuntimeBundleStatus.installed.failureCause, isNull);
+    });
+  });
 
-      expect(result.isTerminalSuccess, isTrue);
+  group('runtime install failure record', () {
+    Directory nativeRoot() => Directory('${installDir.path}/native');
+
+    test('a verified install clears the recorded reason', () async {
+      final archive = archiveWith('linux-x64', {'libsanad_whisper.so': 'shim'});
+      final manifest = await manifestFor(archive);
+      await NativeRuntimeInstall.record(
+        nativeRoot(),
+        NativeRuntimeInstall.downloadFailed,
+      );
+
+      final result = await bundleFor(archive).refresh(
+        manifest: manifest,
+        executablePath: executable.path,
+      );
+
+      expect(result.status, AgentRuntimeBundleStatus.installed);
+      expect(NativeRuntimeInstall.read(nativeRoot()), isNull);
+    });
+
+    test('a checksum mismatch records its own cause', () async {
+      final archive = archiveWith('linux-x64', {'libsanad_whisper.so': 'new'});
+      final manifest = await manifestFor(archive, sha256: 'b' * 64);
+
+      final result = await bundleFor(archive).refresh(
+        manifest: manifest,
+        executablePath: executable.path,
+      );
+
+      expect(result.status, AgentRuntimeBundleStatus.checksumFailed);
       expect(
-        const AgentRuntimeBundleResult(AgentRuntimeBundleStatus.checksumFailed)
-            .isTerminalSuccess,
-        isFalse,
+        NativeRuntimeInstall.read(nativeRoot()),
+        NativeRuntimeInstall.checksumFailed,
+        reason: 'readiness names the cause instead of a generic failure',
+      );
+    });
+
+    test('a download error records its own cause', () async {
+      final archive = archiveWith('linux-x64', {'libsanad_whisper.so': 'new'});
+      final manifest = await manifestFor(archive);
+
+      final result = await AgentRuntimeBundle(
+        client: MockClient((request) async => http.Response('', 503)),
+        operatingSystem: 'linux',
+        architecture: 'x64',
+      ).refresh(manifest: manifest, executablePath: executable.path);
+
+      expect(result.status, AgentRuntimeBundleStatus.downloadFailed);
+      expect(
+        NativeRuntimeInstall.read(nativeRoot()),
+        NativeRuntimeInstall.downloadFailed,
+      );
+    });
+
+    test('a refused layout records its own cause', () async {
+      final archive = archiveWith('linux-x64', {'ggml-tiny.bin': 'model'});
+      final manifest = await manifestFor(archive);
+
+      final result = await bundleFor(archive).refresh(
+        manifest: manifest,
+        executablePath: executable.path,
+      );
+
+      expect(result.status, AgentRuntimeBundleStatus.layoutRejected);
+      expect(
+        NativeRuntimeInstall.read(nativeRoot()),
+        NativeRuntimeInstall.layoutRejected,
+      );
+    });
+
+    test('a release that publishes no runtime clears the record', () async {
+      final archive = archiveWith('linux-x64', {'libsanad_whisper.so': 'new'});
+      final manifest = await manifestFor(archive, published: false);
+      await NativeRuntimeInstall.record(
+        nativeRoot(),
+        NativeRuntimeInstall.downloadFailed,
+      );
+
+      final result = await bundleFor(archive).refresh(
+        manifest: manifest,
+        executablePath: executable.path,
+      );
+
+      expect(result.status, AgentRuntimeBundleStatus.notPublished);
+      expect(
+        NativeRuntimeInstall.read(nativeRoot()),
+        isNull,
+        reason: 'publishing nothing is a missing runtime, not a failure',
       );
     });
   });

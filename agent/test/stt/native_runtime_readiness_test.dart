@@ -1,7 +1,9 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
+import 'package:sanad_release_contract/release_contract.dart';
 import 'package:test/test.dart';
 
 import '../support/native_binary_fixture.dart';
@@ -39,11 +41,16 @@ void main() {
     }
   });
 
-  DictationService service() {
+  DictationService service({String? nativeRuntimeRoot, Future<void> Function()? runtimeInstaller}) {
     File('${home.path}/config.yaml').writeAsStringSync(
       'stt:\n  model_id: egy-whisper-turbo-ggml-q8\n',
     );
-    return DictationService(sanadHome: home.path, platformSupported: true);
+    return DictationService(
+      sanadHome: home.path,
+      platformSupported: true,
+      nativeRuntimeRoot: nativeRuntimeRoot,
+      runtimeInstaller: runtimeInstaller,
+    );
   }
 
   test('a missing native runtime is reported as such', () {
@@ -99,5 +106,89 @@ void main() {
     ).writeAsBytesSync(nativeBinaryFor(target.os, otherCpu));
 
     expect(service().readiness().reason, 'native_runtime_missing');
+  });
+
+  test('a recorded install failure is its own readiness reason', () async {
+    final nativeRoot = Directory('${home.path}/native');
+    await NativeRuntimeInstall.record(
+      nativeRoot,
+      NativeRuntimeInstall.checksumFailed,
+    );
+
+    final readiness = service(nativeRuntimeRoot: nativeRoot.path).readiness();
+    expect(
+      readiness.reason,
+      NativeRuntimeInstall.readinessReason,
+      reason: 'an install failure must not read as a fresh checkout',
+    );
+    expect(
+      readiness.isSupported,
+      isTrue,
+      reason: 'the device can dictate once the runtime installs',
+    );
+  });
+
+  test('an unknown marker value is ignored', () async {
+    final nativeRoot = Directory('${home.path}/native')
+      ..createSync(recursive: true);
+    File('${nativeRoot.path}/${NativeRuntimeInstall.failureMarkerName}')
+        .writeAsStringSync('some prose the daemon must never surface\n');
+
+    expect(
+      service(nativeRuntimeRoot: nativeRoot.path).readiness().reason,
+      'native_runtime_missing',
+    );
+  });
+
+  test('the retry installs the runtime and clears the reason', () async {
+    final target = SttNativeTarget.tryCurrent();
+    if (target == null) {
+      markTestSkipped('no native dictation runtime target for this ABI');
+      return;
+    }
+    final nativeRoot = Directory('${home.path}/native');
+    await NativeRuntimeInstall.record(
+      nativeRoot,
+      NativeRuntimeInstall.downloadFailed,
+    );
+    final gate = Completer<void>();
+    var attempts = 0;
+    final dictation = service(
+      nativeRuntimeRoot: nativeRoot.path,
+      runtimeInstaller: () async {
+        attempts++;
+        await gate.future;
+        File(
+          '${workdir.path}/native/${target.nativeDirectory}/${target.shimFileName}',
+        ).writeAsBytesSync(nativeBinaryFor(target.os, target.cpu));
+        await NativeRuntimeInstall.clear(nativeRoot);
+      },
+    );
+
+    expect(dictation.prepareNativeRuntime(), isTrue);
+    expect(
+      dictation.readiness().reason,
+      'native_runtime_preparing',
+      reason: 'an in-flight retry is preparing, not still failed',
+    );
+
+    gate.complete();
+    for (var attempt = 0; attempt < 100 && !dictation.readiness().isReady; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+    }
+
+    expect(attempts, 1);
+    expect(dictation.readiness().isReady, isTrue);
+    expect(NativeRuntimeInstall.read(nativeRoot), isNull);
+  });
+
+  test('a checkout without an installer reports no retry', () {
+    final nativeRoot = Directory('${home.path}/native');
+
+    expect(
+      service(nativeRuntimeRoot: nativeRoot.path).prepareNativeRuntime(),
+      isFalse,
+      reason: 'the caller must not be told a retry started',
+    );
   });
 }

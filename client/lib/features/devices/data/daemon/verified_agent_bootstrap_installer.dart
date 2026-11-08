@@ -19,9 +19,10 @@ enum AgentBootstrapStatus {
 
 /// Outcome of the packaged runtime step that follows a verified Agent install.
 ///
-/// A published runtime that cannot be installed is a failed install, not a
-/// warning: the whole point is that an ordinary user path never yields a bare
-/// binary that can never dictate.
+/// The runtime is a dictation companion, not part of the Agent payload's
+/// contract: a published runtime that cannot be installed disables dictation and
+/// is recorded beside the runtime, and it never turns a verified Agent install
+/// into a failed one.
 enum AgentRuntimeBundleStatus {
   /// The manifest declares no `agent-runtime` for this target.
   notPublished,
@@ -30,7 +31,28 @@ enum AgentRuntimeBundleStatus {
   checksumFailed,
   trustFailed,
   layoutRejected,
-  replaceFailed,
+  replaceFailed;
+
+  /// True when this status has to be reported as a dictation problem.
+  bool get isFailure => switch (this) {
+    notPublished || installed => false,
+    downloadFailed ||
+    checksumFailed ||
+    trustFailed ||
+    layoutRejected ||
+    replaceFailed => true,
+  };
+
+  /// The machine-readable cause recorded beside the runtime, or null when this
+  /// status is not a failure.
+  String? get failureCause => switch (this) {
+    downloadFailed => NativeRuntimeInstall.downloadFailed,
+    checksumFailed => NativeRuntimeInstall.checksumFailed,
+    trustFailed => NativeRuntimeInstall.trustFailed,
+    layoutRejected => NativeRuntimeInstall.layoutRejected,
+    replaceFailed => NativeRuntimeInstall.replaceFailed,
+    notPublished || installed => null,
+  };
 }
 
 class AgentBootstrapResult {
@@ -46,10 +68,11 @@ class AgentBootstrapResult {
   final AgentRuntimeBundleStatus runtimeStatus;
   final String? runtimeMessage;
 
-  bool get isSuccess =>
-      status == AgentBootstrapStatus.installed &&
-      (runtimeStatus == AgentRuntimeBundleStatus.notPublished ||
-          runtimeStatus == AgentRuntimeBundleStatus.installed);
+  bool get isSuccess => status == AgentBootstrapStatus.installed;
+
+  /// The recorded dictation-only failure, or null when the runtime installed or
+  /// the release publishes none. It never affects [isSuccess].
+  String? get runtimeFailureCause => runtimeStatus.failureCause;
 }
 
 class VerifiedAgentBootstrapInstaller {
@@ -209,9 +232,34 @@ class VerifiedAgentBootstrapInstaller {
   /// tag derived from the artifact's own metadata, and the previous directory is
   /// kept as `.rollback` until the new one is in place. Nothing here runs for a
   /// manifest that publishes no runtime for this target.
+  ///
+  /// A failure is recorded beside the runtime (so the daemon's dictation
+  /// readiness names it) and returned as an outcome: the Agent is already
+  /// verified and installed, and an optional dictation artifact must not undo it.
   Future<_RuntimeOutcome> _installRuntime({
     required ReleaseManifest manifest,
     required String platform,
+  }) async {
+    final executableDir = File(targetPath).parent;
+    final nativeRoot = Directory('${executableDir.path}/native');
+    final outcome = await _installRuntimeArchive(
+      manifest: manifest,
+      platform: platform,
+      nativeRoot: nativeRoot,
+    );
+    final cause = outcome.status.failureCause;
+    if (cause != null) {
+      await NativeRuntimeInstall.record(nativeRoot, cause);
+    } else {
+      await NativeRuntimeInstall.clear(nativeRoot);
+    }
+    return outcome;
+  }
+
+  Future<_RuntimeOutcome> _installRuntimeArchive({
+    required ReleaseManifest manifest,
+    required String platform,
+    required Directory nativeRoot,
   }) async {
     final artifact = manifest.findArtifact(
       component: 'agent-runtime',
@@ -228,8 +276,6 @@ class VerifiedAgentBootstrapInstaller {
       platform: artifact.platform,
       architecture: artifact.architecture,
     );
-    final executableDir = File(targetPath).parent;
-    final nativeRoot = Directory('${executableDir.path}/native');
     final stagedArchive = File('${nativeRoot.path}/.$tag.bootstrap.tar.gz');
     final stagedDir = Directory('${nativeRoot.path}/.$tag.staged');
     try {

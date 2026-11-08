@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:archive/archive.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -75,24 +76,23 @@ void main() {
       String tag,
       Map<String, String> members,
     ) async {
-      final staging = Directory('${temporaryDirectory.path}/runtime-staging');
-      final root = Directory('${staging.path}/native/$tag')
-        ..createSync(recursive: true);
-      members.forEach((name, contents) {
-        final file = File('${root.path}/$name');
-        file.parent.createSync(recursive: true);
-        file.writeAsStringSync(contents);
-      });
-      final archive = File('${temporaryDirectory.path}/runtime.tar.gz');
-      final tar = await Process.run('tar', [
-        '-czf',
-        archive.path,
-        '-C',
-        staging.path,
-        'native/$tag',
-      ]);
-      expect(tar.exitCode, 0, reason: '${tar.stderr}');
-      return archive;
+      // The release pipeline writes a deterministic ustar gzip with no extended
+      // headers (`agent/tool/stt_native_archive.dart`), so the fixture is built
+      // with a standard encoder instead of the host `tar`: bsdtar emits PAX
+      // records a published runtime archive never contains, and the Client
+      // decoder rightly refuses them.
+      final archive = Archive();
+      for (final entry in members.entries) {
+        final name = 'native/$tag/${entry.key}';
+        final bytes = utf8.encode(entry.value);
+        archive.addFile(ArchiveFile(name, bytes.length, bytes));
+      }
+      final file = File('${temporaryDirectory.path}/runtime.tar.gz');
+      file.writeAsBytesSync(
+        GZipEncoder().encode(TarEncoder().encode(archive)),
+        flush: true,
+      );
+      return file;
     }
 
     Map<String, dynamic> manifestWithRuntime({
@@ -170,7 +170,11 @@ void main() {
       final result = await installer.install(targetVersion: '1.1.0');
 
       expect(result.status, AgentBootstrapStatus.installed);
-      expect(result.runtimeStatus, AgentRuntimeBundleStatus.installed);
+      expect(
+        result.runtimeStatus,
+        AgentRuntimeBundleStatus.installed,
+        reason: result.runtimeMessage,
+      );
       expect(result.isSuccess, isTrue);
       final installed = File(
         '${temporaryDirectory.path}/bin/native/linux-x64/libsanad_whisper.so',
@@ -205,7 +209,7 @@ void main() {
       );
     });
 
-    test('a runtime checksum mismatch fails the whole install', () async {
+    test('a runtime checksum mismatch never fails the install', () async {
       final agentBytes = utf8.encode('verified-agent');
       final runtime = await runtimeArchive('linux-x64', {
         'libsanad_whisper.so': 'shim',
@@ -228,13 +232,30 @@ void main() {
       expect(result.runtimeStatus, AgentRuntimeBundleStatus.checksumFailed);
       expect(
         result.isSuccess,
-        isFalse,
-        reason: 'a published-but-uninstallable runtime is a failed install',
+        isTrue,
+        reason: 'the verified Agent installs; only dictation is unavailable',
+      );
+      expect(
+        result.runtimeFailureCause,
+        NativeRuntimeInstall.checksumFailed,
+        reason: 'readiness has to name the recorded cause',
+      );
+      expect(
+        File('${temporaryDirectory.path}/bin/sanad').existsSync(),
+        isTrue,
+        reason: 'the Agent binary is installed',
       );
       expect(
         Directory('${temporaryDirectory.path}/bin/native/linux-x64')
             .existsSync(),
         isFalse,
+        reason: 'an unverified archive is never extracted',
+      );
+      expect(
+        NativeRuntimeInstall.read(
+          Directory('${temporaryDirectory.path}/bin/native'),
+        ),
+        NativeRuntimeInstall.checksumFailed,
       );
     });
 
@@ -260,15 +281,21 @@ void main() {
       final result = await installer.install(targetVersion: '1.1.0');
 
       expect(result.runtimeStatus, AgentRuntimeBundleStatus.layoutRejected);
-      expect(result.isSuccess, isFalse);
+      expect(result.isSuccess, isTrue);
       expect(
         Directory('${temporaryDirectory.path}/bin/native/linux-x64')
             .existsSync(),
         isFalse,
       );
+      expect(
+        NativeRuntimeInstall.read(
+          Directory('${temporaryDirectory.path}/bin/native'),
+        ),
+        NativeRuntimeInstall.layoutRejected,
+      );
     });
 
-    test('a runtime download failure fails the whole install', () async {
+    test('a runtime download failure never fails the install', () async {
       final agentBytes = utf8.encode('verified-agent');
       final runtime = await runtimeArchive('linux-x64', {
         'libsanad_whisper.so': 'shim',
@@ -289,7 +316,21 @@ void main() {
       final result = await installer.install(targetVersion: '1.1.0');
 
       expect(result.runtimeStatus, AgentRuntimeBundleStatus.downloadFailed);
-      expect(result.isSuccess, isFalse);
+      expect(
+        result.isSuccess,
+        isTrue,
+        reason: 'a transient runtime download must not block the Agent',
+      );
+      expect(
+        File('${temporaryDirectory.path}/bin/sanad').existsSync(),
+        isTrue,
+      );
+      expect(
+        NativeRuntimeInstall.read(
+          Directory('${temporaryDirectory.path}/bin/native'),
+        ),
+        NativeRuntimeInstall.downloadFailed,
+      );
     });
   });
 

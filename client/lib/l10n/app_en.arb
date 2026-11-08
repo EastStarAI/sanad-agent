@@ -670,6 +670,7 @@
   "dictationUnavailableTitle": "Dictation is not available on this device",
   "dictationRuntimePreparing": "Preparing the dictation engine (download or build in progress)…",
   "dictationRuntimeMissing": "The dictation engine is not installed yet. Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.",
+  "dictationRuntimeInstallFailed": "The dictation engine could not be installed with this Agent. The Agent itself is installed and running; use Set up now to retry the download.",
   "dictationUnsupportedPlatform": "This platform is not supported yet.",
   "dictationNotReadyTooltip": "Dictation is not ready · press for details",
   "dictationPrepareNow": "Set up now",

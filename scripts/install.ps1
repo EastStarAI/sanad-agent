@@ -49,6 +49,12 @@ $RuntimeDir = Join-Path $BinDir "native/windows-x64"
 $RuntimeBackup = "$RuntimeDir.rollback"
 $RuntimeReplaced = $false
 $RuntimeInstalled = $false
+# The packaged runtime is a dictation companion, not part of the Agent contract:
+# a failure to fetch or verify it disables dictation only and never fails the
+# install. The reason is recorded beside the runtime so the daemon's dictation
+# readiness can name it until a later install or update succeeds.
+$RuntimeFailureMarker = Join-Path $BinDir "native/.runtime-install-failed"
+$RuntimeFailed = $false
 
 try {
     $ManifestPath = Join-Path $TempDirectory "release-manifest.json"
@@ -125,60 +131,80 @@ try {
             if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) {
                 Write-Warning "tar is required to install the native dictation runtime; dictation stays unavailable."
             } else {
-                $RuntimeArchive = Join-Path $TempDirectory $RuntimeArtifact.filename
-                Invoke-WebRequest -Uri $RuntimeArtifact.url -OutFile $RuntimeArchive -UseBasicParsing
-                if ((Get-Item -LiteralPath $RuntimeArchive).Length -ne [int64]$RuntimeArtifact.size) {
-                    throw "Native runtime size verification failed."
-                }
-                $RuntimeHash = (Get-FileHash -LiteralPath $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
-                if ($RuntimeHash -ne $RuntimeArtifact.sha256.ToLowerInvariant()) {
-                    throw "Native runtime SHA-256 verification failed."
-                }
-                $Extract = Join-Path $TempDirectory "runtime"
-                New-Item -ItemType Directory -Path $Extract -Force | Out-Null
-                & tar.exe -xzf $RuntimeArchive -C $Extract
-                if ($LASTEXITCODE -ne 0) { throw "Native runtime extraction failed." }
-                $RuntimeRoot = Join-Path $Extract "native"
-                $ExpectedRuntime = Join-Path $RuntimeRoot "windows-x64"
-                $Unexpected = @(Get-ChildItem -LiteralPath $RuntimeRoot -Force |
-                    Where-Object { $_.Name -ne "windows-x64" })
-                if (-not (Test-Path -LiteralPath $ExpectedRuntime -PathType Container) -or
-                    $Unexpected.Count -ne 0) {
-                    throw "Native runtime archive has an unexpected layout."
-                }
-                if (@(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -Directory).Count -ne 0) {
-                    throw "Native runtime archive has an unexpected layout."
-                }
-                $RuntimeEntries = @(Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force)
-                if (@($RuntimeEntries | Where-Object { $_.Name -like '.*' }).Count -ne 0) {
-                    throw "Native runtime archive contains a hidden entry."
-                }
-                if (@($RuntimeEntries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -ne 0) {
-                    throw "Native runtime archive contains a link or reparse point."
-                }
-                $Foreign = @(Get-ChildItem -LiteralPath $ExpectedRuntime -File |
-                    Where-Object { $_.Name -notmatch '\.(dll|dylib|so(\.\d+(\.\d+)*)?)$' })
-                if ($Foreign.Count -ne 0) {
-                    throw "Native runtime archive contains a file outside the library allowlist."
-                }
-                New-Item -ItemType Directory -Path (Join-Path $BinDir "native") -Force | Out-Null
-                if (Test-Path -LiteralPath $RuntimeDir) {
-                    if (Test-Path -LiteralPath $RuntimeBackup) {
-                        Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
+                try {
+                    $RuntimeArchive = Join-Path $TempDirectory $RuntimeArtifact.filename
+                    Invoke-WebRequest -Uri $RuntimeArtifact.url -OutFile $RuntimeArchive -UseBasicParsing
+                    if ((Get-Item -LiteralPath $RuntimeArchive).Length -ne [int64]$RuntimeArtifact.size) {
+                        throw "Native runtime size verification failed."
                     }
-                    Move-Item -LiteralPath $RuntimeDir -Destination $RuntimeBackup -Force
-                    $RuntimeReplaced = $true
+                    $RuntimeHash = (Get-FileHash -LiteralPath $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($RuntimeHash -ne $RuntimeArtifact.sha256.ToLowerInvariant()) {
+                        throw "Native runtime SHA-256 verification failed."
+                    }
+                    $Extract = Join-Path $TempDirectory "runtime"
+                    New-Item -ItemType Directory -Path $Extract -Force | Out-Null
+                    & tar.exe -xzf $RuntimeArchive -C $Extract
+                    if ($LASTEXITCODE -ne 0) { throw "Native runtime extraction failed." }
+                    $RuntimeRoot = Join-Path $Extract "native"
+                    $ExpectedRuntime = Join-Path $RuntimeRoot "windows-x64"
+                    $Unexpected = @(Get-ChildItem -LiteralPath $RuntimeRoot -Force |
+                        Where-Object { $_.Name -ne "windows-x64" })
+                    if (-not (Test-Path -LiteralPath $ExpectedRuntime -PathType Container) -or
+                        $Unexpected.Count -ne 0) {
+                        throw "Native runtime archive has an unexpected layout."
+                    }
+                    if (@(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -Directory).Count -ne 0) {
+                        throw "Native runtime archive has an unexpected layout."
+                    }
+                    $RuntimeEntries = @(Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force)
+                    if (@($RuntimeEntries | Where-Object { $_.Name -like '.*' }).Count -ne 0) {
+                        throw "Native runtime archive contains a hidden entry."
+                    }
+                    if (@($RuntimeEntries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -ne 0) {
+                        throw "Native runtime archive contains a link or reparse point."
+                    }
+                    $Foreign = @(Get-ChildItem -LiteralPath $ExpectedRuntime -File |
+                        Where-Object { $_.Name -notmatch '\.(dll|dylib|so(\.\d+(\.\d+)*)?)$' })
+                    if ($Foreign.Count -ne 0) {
+                        throw "Native runtime archive contains a file outside the library allowlist."
+                    }
+                    New-Item -ItemType Directory -Path (Join-Path $BinDir "native") -Force | Out-Null
+                    if (Test-Path -LiteralPath $RuntimeDir) {
+                        if (Test-Path -LiteralPath $RuntimeBackup) {
+                            Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
+                        }
+                        Move-Item -LiteralPath $RuntimeDir -Destination $RuntimeBackup -Force
+                        $RuntimeReplaced = $true
+                    }
+                    Move-Item -LiteralPath $ExpectedRuntime -Destination $RuntimeDir -Force
+                    $RuntimeInstalled = $true
+                    # The previous runtime stays in $RuntimeBackup until every later
+                    # step (pairing, sign-in, service, cloud health) has committed.
+                } catch {
+                    # Dictation only: the verified Agent is installed, so the
+                    # installation continues and readiness names the reason.
+                    $RuntimeFailed = $true
+                    if ($RuntimeReplaced -and (Test-Path -LiteralPath $RuntimeBackup) -and
+                        -not (Test-Path -LiteralPath $RuntimeDir)) {
+                        # This run moved the predecessor aside and could not install
+                        # its successor: restore it so a transient failure never
+                        # costs a working runtime.
+                        Move-Item -LiteralPath $RuntimeBackup -Destination $RuntimeDir -Force
+                    }
+                    $RuntimeReplaced = $false
+                    New-Item -ItemType Directory -Path (Join-Path $BinDir "native") -Force | Out-Null
+                    Set-Content -LiteralPath $RuntimeFailureMarker -Value "runtime_install_failed"
+                    Write-Warning "Native dictation runtime installation failed ($($_.Exception.Message)); the Agent is installed and runs, and dictation stays unavailable until the next install or update re-fetches it."
                 }
-                Move-Item -LiteralPath $ExpectedRuntime -Destination $RuntimeDir -Force
-                $RuntimeInstalled = $true
-                # The previous runtime stays in $RuntimeBackup until every later
-                # step (pairing, sign-in, service, cloud health) has committed.
             }
         } else {
             if (Test-Path -LiteralPath $RuntimeDir) {
                 Write-Warning "This release publishes no native dictation runtime for Windows x64; keeping the runtime already installed in $RuntimeDir."
             } else {
                 Write-Warning "This release publishes no native dictation runtime for Windows x64 and none is installed; dictation stays unavailable."
+            }
+            if (Test-Path -LiteralPath $RuntimeFailureMarker) {
+                Remove-Item -LiteralPath $RuntimeFailureMarker -Force
             }
         }
         $PortalLogin = $Login.IsPresent
@@ -256,7 +282,12 @@ try {
 
     # Commit: every later step succeeded, so the replaced runtime is disposable.
     if (Test-Path -LiteralPath $RuntimeBackup) {
-        Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
+        if ($RuntimeFailed) {
+            # The predecessor could not be restored; it is the only copy left.
+            Write-Warning "The previous native runtime is kept at $RuntimeBackup."
+        } else {
+            Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
+        }
     }
 
     Write-Host "Sanad Agent installed successfully." -ForegroundColor Green

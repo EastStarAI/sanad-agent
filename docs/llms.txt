@@ -42,6 +42,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/conversations/domain/AGENTS.md): Rules governing ./client/lib/features/conversations/domain.
 - [AGENTS](./client/lib/features/conversations/presentation/AGENTS.md): Rules governing ./client/lib/features/conversations/presentation.
 - [AGENTS](./client/lib/features/devices/AGENTS.md): Rules governing ./client/lib/features/devices.
+- [AGENTS](./client/lib/features/dictation/AGENTS.md): Rules governing ./client/lib/features/dictation.
 - [AGENTS](./client/lib/features/home/AGENTS.md): Rules governing ./client/lib/features/home.
 - [AGENTS](./client/lib/features/mcp/AGENTS.md): Rules governing ./client/lib/features/mcp.
 - [AGENTS](./client/lib/features/provider_setup/AGENTS.md): Rules governing ./client/lib/features/provider_setup.
@@ -190,6 +191,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Experimental Realtime Voice](docs/technical/voice_streaming.md): Current experimental Gemini Realtime voice path, transports, audio format, interruption behavior, and release boundaries.
 - [Local Dictation](docs/technical/local_dictation.md): In-process speech-to-text dictation — ownership boundary, WebSocket event contract, batch versus streaming, model catalog and lifecycle, and the macOS arm64 platform gate.
 - [Dictation Transport Protocol](docs/technical/dictation_transport_protocol.md): Authoritative wire contract for dictation on both channels — session/request/route/seq identity, hosted relay envelopes, binary PCM framing, origin-only delivery, admission, limits, TTL and cleanup, capability schema, and legacy voice origin correlation.
+- [Native Dictation Runtime Platforms](docs/technical/native_stt_runtime_platforms.md): Platform tag, directory layout, verification rules, install-failure policy, retry path, and release staging for the in-process whisper.cpp dictation runtime, including macOS Intel (x64).
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.

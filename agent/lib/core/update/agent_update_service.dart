@@ -31,7 +31,6 @@ enum AgentUpdateStatus {
   scheduleFailed('schedule_failed'),
   replacementFailed('replacement_failed'),
   rollbackCompleted('rollback_completed'),
-  runtimeFailed('runtime_failed'),
   startFailed('start_failed'),
   healthFailed('health_failed'),
   versionFailed('version_failed'),
@@ -309,25 +308,20 @@ class AgentUpdateService {
         preserveStagedFile = true;
         // The runtime cannot be swapped in-process on Windows: a loaded DLL
         // stays locked, so the verified directory is staged and the restart
-        // script moves it next to the replaced executable.
+        // script moves it next to the replaced executable. A runtime failure
+        // here never blocks the Agent update: it disables dictation only, and
+        // the outcome is recorded beside the runtime for readiness to report.
         final runtime = await _runtimeBundle.refresh(
           manifest: manifest,
           executablePath: executablePath,
         );
-        if (!runtime.isTerminalSuccess) {
-          return _result(
-            AgentUpdateStatus.runtimeFailed,
-            available,
-            message:
-                'The packaged runtime could not be verified or staged: '
-                '${runtime.message ?? runtime.status.name}',
-          );
-        }
         return AgentUpdateResult(
           status: AgentUpdateStatus.restartRequired,
           currentVersion: currentVersion,
           availableVersion: available,
-          message: 'Verified update staged for replacement during restart.',
+          message:
+              'Verified update staged for replacement during restart.'
+              '${_runtimeNote(runtime)}',
           stagedPath: staged.path,
           runtimeStatus: runtime.status,
           runtimeStagedPath: runtime.stagedPath,
@@ -336,20 +330,13 @@ class AgentUpdateService {
 
       // Runtime first: a new executable must never sit next to an unverified or
       // stale runtime. The tag carries no version, so the directory is refreshed
-      // from this same release before the binary is replaced.
+      // from this same release before the binary is replaced. A runtime that
+      // cannot be downloaded or verified is not an update failure: the Agent
+      // replaces itself and dictation reports the recorded reason.
       final runtime = await _runtimeBundle.refresh(
         manifest: manifest,
         executablePath: executablePath,
       );
-      if (!runtime.isTerminalSuccess) {
-        return _result(
-          AgentUpdateStatus.runtimeFailed,
-          available,
-          message:
-              'The packaged runtime could not be verified or installed: '
-              '${runtime.message ?? runtime.status.name}',
-        );
-      }
 
       final backup = File('$executablePath.rollback');
       if (backup.existsSync()) await backup.delete();
@@ -379,7 +366,9 @@ class AgentUpdateService {
         status: AgentUpdateStatus.restartRequired,
         currentVersion: currentVersion,
         availableVersion: available,
-        message: 'Verified update installed. Restart the Sanad service.',
+        message:
+            'Verified update installed. Restart the Sanad service.'
+            '${_runtimeNote(runtime)}',
         runtimeStatus: runtime.status,
       );
     } on FormatException catch (error) {
@@ -402,6 +391,35 @@ class AgentUpdateService {
       }
     }
   }
+
+  /// Re-attempts the packaged runtime install for the release this Agent runs.
+  ///
+  /// This is the retry path behind the dictation readiness reason: a failed
+  /// `agent-runtime` download, verification, or extraction disables dictation
+  /// only, and the owner can retry it without reinstalling or updating the
+  /// Agent. It never touches the executable and never relaxes verification.
+  Future<AgentRuntimeBundleResult> refreshRuntime() async {
+    if (isSourceManaged) {
+      return const AgentRuntimeBundleResult(
+        AgentRuntimeBundleStatus.notPublished,
+        message:
+            'This agent runs from source; its runtime is developer-managed.',
+      );
+    }
+    final manifest = await _fetchManifest();
+    return _runtimeBundle.refresh(
+      manifest: manifest,
+      executablePath: executablePath,
+    );
+  }
+
+  /// Appends the dictation consequence of a runtime outcome to a success
+  /// message. A runtime failure is a status detail, never a failed update.
+  static String _runtimeNote(AgentRuntimeBundleResult runtime) =>
+      runtime.status.isFailure
+      ? ' Dictation stays unavailable until the runtime installs: '
+            '${runtime.message ?? runtime.status.name}'
+      : '';
 
   AgentUpdateResult? _targetGate(String? targetVersion) {
     if (targetVersion == null) return null;

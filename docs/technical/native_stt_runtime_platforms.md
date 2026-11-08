@@ -272,7 +272,10 @@ Rules:
 
 The Agent artifact is a single executable on every platform, so a directory
 cannot travel inside it. The runtime therefore ships in the two places that
-actually reach a user, and both are **required**, never advisory:
+actually reach a user. **Release publication is required; installation is not:**
+a release that declares the archive must produce it, while a user whose download
+or verification fails loses dictation only and keeps a working Agent (see
+[Failure policy](#failure-policy-dictation-only)).
 
 1. **Inside the per-platform Agent payload.** The `agent` matrix job in
    `.github/workflows/release.yml` builds, verifies, and stages the runtime into
@@ -304,13 +307,48 @@ deliberately **not** added; that must stay an explicit decision, not a packaging
 side effect. A local development Agent is not hardened, so locally built
 libraries keep loading without a signature.
 
-**What does not pick up a runtime yet.** `agent_update_service.dart` replaces
-only the executable, and the Client bootstrap installer only fetches the Agent
-executable. Both leave an installed `native/<tag>/` directory untouched, which
-means a self-updated Agent keeps the runtime it already had. Refreshing it there
-is an owning-code change; the exact insertion points are reported in
-`REPORT.md` §6. Publication of the archive happens only through the normal
+**What consumes the runtime.** `agent_runtime_bundle.dart` refreshes it during
+Agent self-update, `verified_agent_bootstrap_installer.dart` installs it for a
+Client-bootstrapped Agent, and `scripts/install.sh` / `scripts/install.ps1`
+install it for shell installs. The updater refreshes the runtime **before** the
+executable replacement on POSIX and stages it for the same elevated restart
+transaction on Windows, so a new executable never sits next to a runtime from
+another release. Publication of the archive happens only through the normal
 reviewed release flow: no workflow uploads it outside a release.
+
+### Failure policy (dictation-only)
+
+A failure to download, verify, extract, or replace the `agent-runtime` archive
+**never fails or blocks an Agent install or update**. It disables dictation and
+nothing else. Trust strictness is unchanged: size, SHA-256, and the declared
+platform trust policy are still verified before any byte is extracted, and an
+unverified library is never extracted or loaded.
+
+| Surface | On runtime failure |
+|---|---|
+| `scripts/install.sh` / `scripts/install.ps1` | Warn, continue the install, keep the verified Agent and any predecessor runtime. The predecessor is restored locally when the failure happened after it was moved aside. |
+| Agent self-update (`agent_update_service.dart`) | Replace the executable and report `restart_required`; the outcome travels as `runtime_status` and a message suffix. There is no `runtime_failed` update status. |
+| Client bootstrap (`verified_agent_bootstrap_installer.dart`) | `isSuccess` depends only on the verified Agent; the runtime outcome is reported as `runtimeFailureCause`. |
+| `sanad-dev` launcher probe | A missing or unbuildable runtime only prints guidance and keeps the run going; dictation becomes available when the build finishes. |
+
+The reason is machine-readable and durable. The failing component records one
+code in `<exe dir>/native/.runtime-install-failed`
+(`release/contract/lib/src/native_runtime_install.dart` owns the name and the
+vocabulary: `runtime_download_failed`, `runtime_checksum_failed`,
+`runtime_trust_failed`, `runtime_layout_rejected`, `runtime_replace_failed`,
+`runtime_install_failed`). The daemon reads it only when the shim is absent and
+reports `native_runtime_install_failed` as its dictation readiness reason; the
+Client localizes that code and offers the same "Set up now" action. An unknown
+or prose value is ignored rather than surfaced, and a release that publishes no
+runtime clears the record so the reason stays `native_runtime_missing`.
+
+**Retry path.** `prepareRuntime` is the one action: a source checkout starts
+`tool/ensure_native_stt.dart`, and a released Agent re-fetches the verified
+`agent-runtime` archive through `AgentUpdateService.refreshRuntime()` without
+touching the executable or the version. While a retry is in flight readiness
+reports `native_runtime_preparing`, and a successful install clears the record.
+Re-running the installer or an Agent update re-attempts the same verified
+download.
 
 **Installer rules for the runtime step.** Both installers verify size then
 SHA-256 from the manifest, extract into a private temporary root, and refuse the
@@ -368,29 +406,36 @@ live acceptance run on Intel hardware.
 | Test | Covers |
 |---|---|
 | `agent/test/stt/stt_native_platform_test.dart` | ABI matrix, Intel platform scope, Metal per architecture, required files, legacy alias bounds, candidate order, Mach-O/ELF/PE inspection |
-| `agent/test/stt/native_runtime_readiness_test.dart` | missing/preparing readiness, the native-root marker, foreign-architecture rejection |
+| `agent/test/stt/native_runtime_readiness_test.dart` | missing/preparing readiness, the native-root marker, foreign-architecture rejection, the recorded install-failure reason, and the packaged retry path |
+| `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh`: a runtime failure, checksum mismatch, or download error still installs the Agent, restores the predecessor runtime, and records the reason; transaction rollback; verified install clears the record |
+| `agent/test/core/update/agent_update_runtime_policy_test.dart` | Agent self-update completes with `restart_required` on a runtime download error or checksum mismatch and records the cause; a verified runtime installs and clears it |
+| `agent/test/core/update/agent_runtime_bundle_test.dart` | verification order, layout allowlist, Windows staging, and the recorded failure cause per status |
+| `client/test/unit/services/verified_agent_bootstrap_installer_test.dart` | Client bootstrap: a runtime download/checksum/layout failure never fails the install and records the cause; a verified runtime installs |
+| `scripts/sanad_dev/test/runtime/lifecycle/native_runtime_probe_test.dart` | architecture-qualified probe, one bounded legacy alias, unknown host pair, and a failing installer that never blocks `run` |
 | `agent/test/stt/native_runtime_smoke_test.dart` | real load of the built runtime (skips without one, fails when `SANAD_STT_REQUIRE_NATIVE=1`) |
 | `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
 | `agent/test/tool/stt_native_archive_test.dart` | reproducible tar.gz bytes, header fields, checksums, entry order |
 | `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection |
 | `agent/test/tool/native_runtime_package_contract_test.dart` | release contract ↔ archive layout ↔ installers ↔ workflow agreement, including the 35-minute budget, the pwsh-twin rule, and a scan that fails on any `bash` step in a Windows-capable job |
-| `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh` in a sandbox: failed final move keeps the previous executable and runtime, a later service failure restores the runtime this run replaced, a failed restore keeps the backup and never reports a clean rollback, symlink and hidden members are refused, a release without a runtime keeps the installed one |
+| `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh` in a sandbox: a later service failure restores the runtime this run replaced, a failed restore keeps the backup and never reports a clean rollback, symlink and hidden members are refused, a release without a runtime keeps the installed one |
 
-## Integration hook for the daemon platform gate
+## Deferred — not claimed in this change
 
-`DictationService` still narrows macOS to Apple Silicon. Electing Intel there is
-a one-line change against this helper, using the constructor seam that already
-exists (`bool? platformSupported`):
+The narrowed closure ships local and cloud dictation on the platforms below with
+the failure policy above. These items are explicitly **not** done and must not be
+read as delivered:
 
-```dart
-// agent/lib/infrastructure/stt/dictation_service.dart
-static bool _isSupportedPlatform() =>
-    SttNativeTarget.tryCurrent()?.dictationSupported ?? false;
-```
-
-The constructor already accepts `platformSupported:` for tests, so the change
-does not need a new seam. `_isSupportedPlatform()` and the now-unused `dart:ffi`
-import are the only edits; this file belongs to the dictation-service owner.
-
-Until that lands, Intel macOS advertises `unsupported_platform` regardless of
-the built runtime; everything else in this page is already in place.
+- **Windows and Linux packaging proof.** The installers, the updater, and the
+  Client bootstrap implement the same policy on all three platforms, and the
+  Windows staged-restart transaction has unit coverage, but no Windows or Linux
+  release install, update, or dictation session was executed for this change.
+  Only macOS Apple Silicon was exercised locally.
+- **Signing proof.** No notarized Agent, Developer-ID-signed runtime library, or
+  GitHub attestation was produced or verified here. The release pipeline owns
+  signing; this change asserts only that verification stays mandatory.
+- **Test-tooling enhancements.** The Client archive fixture now builds its
+  archive with a standard encoder instead of the host `tar`, because bsdtar emits
+  PAX records the release writer never produces. No broader archive-fixture or
+  cross-platform test harness work is included.
+- **Genuine Intel decode.** Unchanged: it needs a model download and a live
+  acceptance run on Intel hardware.

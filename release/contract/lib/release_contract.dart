@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 
 import 'src/platform_trust.dart';
 
+export 'src/native_runtime_install.dart';
 export 'src/platform_trust.dart';
 
 const sanadReleaseRepository = 'EastStarAI/sanad-agent';

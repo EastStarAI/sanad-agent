@@ -132,6 +132,7 @@ class DictationSettingsCard extends StatelessWidget {
     return switch (reason) {
       'native_runtime_preparing' => l10n.dictationRuntimePreparing,
       'native_runtime_missing' => l10n.dictationRuntimeMissing,
+      'native_runtime_install_failed' => l10n.dictationRuntimeInstallFailed,
       'unsupported_platform' => l10n.dictationUnsupportedPlatform,
       'dictation_disabled' => l10n.dictationDisabled,
       'model_not_installed' => l10n.dictationModelRequired,

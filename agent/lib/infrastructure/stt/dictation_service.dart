@@ -7,6 +7,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:logging/logging.dart';
+import 'package:sanad_release_contract/release_contract.dart';
 
 import 'dictation_session.dart';
 import 'stt_engine.dart';
@@ -166,9 +167,16 @@ class DictationService {
     SttEngine Function(SttModelFiles files)? engineFor,
     HttpClient Function()? httpClient,
     bool? platformSupported,
+    Future<void> Function()? runtimeInstaller,
+    String? nativeRuntimeRoot,
   }) : _engineFactory = engineFactory ?? SherpaSttEngine.new,
        _engineFor = engineFor,
-       _platformSupported = platformSupported ?? _nativeTargetSupported() {
+       _platformSupported = platformSupported ?? _nativeTargetSupported(),
+       _runtimeInstaller = runtimeInstaller,
+       _nativeRoot = Directory(
+         nativeRuntimeRoot ??
+             '${File(Platform.resolvedExecutable).parent.path}/native',
+       ) {
     _store = SttModelStore(httpClient: httpClient, sanadHome: sanadHome);
     _control = DictationControl(this);
     try {
@@ -188,6 +196,21 @@ class DictationService {
   /// test can exercise the real lease/start path without loading native code.
   final SttEngine Function(SttModelFiles files)? _engineFor;
   final bool _platformSupported;
+
+  /// Re-installs the packaged native runtime for a released Agent.
+  ///
+  /// The update layer owns the manifest and the executable path, so the retry is
+  /// injected instead of duplicated here: a failed runtime install disables
+  /// dictation only, and this is the path back. Null means the checkout has no
+  /// packaged installer (a source run, which uses the developer tool instead).
+  final Future<void> Function()? _runtimeInstaller;
+
+  /// Directory the packaged installers write beside (`<exe dir>/native`).
+  final Directory _nativeRoot;
+
+  /// True while an injected runtime re-install is in flight, so readiness says
+  /// "preparing" instead of repeating the failure it is retrying.
+  bool _runtimeRetryInFlight = false;
 
   late final SttModelStore _store;
   late final DictationControl _control;
@@ -229,44 +252,92 @@ class DictationService {
         entry.engine == SttEngineKind.whisperCpp &&
         !WhisperCppLibrary.isAvailable) {
       return SttReadiness.unavailable(
-        WhisperCppLibrary.isBeingPrepared
-            ? 'native_runtime_preparing'
-            : 'native_runtime_missing',
+        _nativeRuntimeReason(),
         isSupported: true,
       );
     }
     return const SttReadiness.ready();
   }
 
+  /// Why the native shim is not on disk, as a stable machine code.
+  ///
+  /// A recorded install failure is its own reason: "the packaged runtime could
+  /// not be installed" is actionable (retry it), while "missing" reads like a
+  /// fresh checkout that only needs the developer tool.
+  String _nativeRuntimeReason() {
+    if (_runtimeRetryInFlight || WhisperCppLibrary.isBeingPrepared) {
+      return 'native_runtime_preparing';
+    }
+    final cause = NativeRuntimeInstall.read(_nativeRoot);
+    if (cause != null) {
+      _logger.warning('dictation runtime install failed: $cause');
+      return NativeRuntimeInstall.readinessReason;
+    }
+    return 'native_runtime_missing';
+  }
+
   /// Starts `tool/ensure_native_stt.dart` in the background.
   ///
-  /// Only meaningful in a dev checkout: packaged builds ship the shim beside the
-  /// executable. Returns false when the tool is not present in this checkout, so
-  /// the caller reports the manual instruction instead of pretending a retry
-  /// started.
+  /// A source checkout builds the shim with the developer tool; a released Agent
+  /// has no such tool and re-installs the verified release runtime instead. Both
+  /// are non-blocking retries: the caller answers with status, and readiness
+  /// reports `native_runtime_preparing` until the attempt settles.
+  ///
+  /// Returns false when this checkout can neither build nor re-install the
+  /// runtime, so the caller reports the manual instruction instead of pretending
+  /// a retry started.
   bool prepareNativeRuntime() {
     final workingDirectory = Directory.current.path;
     final tool = File('$workingDirectory/tool/ensure_native_stt.dart');
-    if (!tool.existsSync()) {
-      _logger.warning('native dictation prepare unavailable: tool not found');
+    if (tool.existsSync()) {
+      final logFile = 'native/.stt-prepare.log';
+      final command = 'fvm dart run tool/ensure_native_stt.dart >> $logFile 2>&1';
+      try {
+        unawaited(
+          Process.start(
+            Platform.isWindows ? 'cmd' : '/bin/sh',
+            Platform.isWindows ? ['/c', command] : ['-c', command],
+            workingDirectory: workingDirectory,
+            mode: ProcessStartMode.detached,
+          ),
+        );
+        _logger.info('native dictation prepare requested');
+        return true;
+      } on Object catch (error) {
+        _logger.warning('native dictation prepare unavailable: $error');
+        return false;
+      }
+    }
+    final installer = _runtimeInstaller;
+    if (installer == null) {
+      _logger.warning('native dictation prepare unavailable: no installer');
       return false;
     }
-    final logFile = 'native/.stt-prepare.log';
-    final command = 'fvm dart run tool/ensure_native_stt.dart >> $logFile 2>&1';
-    try {
-      unawaited(
-        Process.start(
-          Platform.isWindows ? 'cmd' : '/bin/sh',
-          Platform.isWindows ? ['/c', command] : ['-c', command],
-          workingDirectory: workingDirectory,
-          mode: ProcessStartMode.detached,
-        ),
-      );
-      _logger.info('native dictation prepare requested');
+    if (_runtimeRetryInFlight) {
+      _logger.info('native dictation runtime re-install already running');
       return true;
+    }
+    _runtimeRetryInFlight = true;
+    unawaited(_retryPackagedRuntime(installer));
+    _logger.info('native dictation runtime re-install requested');
+    return true;
+  }
+
+  Future<void> _retryPackagedRuntime(Future<void> Function() installer) async {
+    try {
+      await installer();
+      final cause = NativeRuntimeInstall.read(_nativeRoot);
+      if (cause == null) {
+        _logger.info('native dictation runtime re-install succeeded');
+      } else {
+        _logger.warning('native dictation runtime re-install failed: $cause');
+      }
     } on Object catch (error) {
-      _logger.warning('native dictation prepare unavailable: $error');
-      return false;
+      _logger.warning(
+        'native dictation runtime re-install failed: ${error.runtimeType}',
+      );
+    } finally {
+      _runtimeRetryInFlight = false;
     }
   }
 

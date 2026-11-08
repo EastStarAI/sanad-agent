@@ -83,6 +83,10 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
           ),
         );
       case 'native_runtime_missing':
+      case 'native_runtime_install_failed':
+        // Both are retryable from here: a source checkout builds the shim, a
+        // released Agent re-fetches the verified runtime. The daemon decides
+        // which, and answers `prepare_unavailable` when it can do neither.
         return Align(
           alignment: AlignmentDirectional.centerEnd,
           child: TextButton(
@@ -377,6 +381,7 @@ String _reasonLabel(AppLocalizations l10n, String reason) {
   return switch (reason) {
     'native_runtime_preparing' => l10n.dictationRuntimePreparing,
     'native_runtime_missing' => l10n.dictationRuntimeMissing,
+    'native_runtime_install_failed' => l10n.dictationRuntimeInstallFailed,
     'unsupported_platform' => l10n.dictationUnsupportedPlatform,
     'dictation_disabled' => l10n.dictationDisabled,
     'model_not_installed' => l10n.dictationModelRequired,

@@ -27,7 +27,29 @@ enum AgentRuntimeBundleStatus {
   checksumFailed,
   trustFailed,
   layoutRejected,
-  replaceFailed,
+  replaceFailed;
+
+  /// True when this status is a dictation-only problem the readiness surface has
+  /// to report, never an install or update failure.
+  bool get isFailure => switch (this) {
+    notPublished || installed || stagedForRestart => false,
+    downloadFailed ||
+    checksumFailed ||
+    trustFailed ||
+    layoutRejected ||
+    replaceFailed => true,
+  };
+
+  /// The machine-readable cause recorded beside the runtime, or null when this
+  /// status is not a failure.
+  String? get failureCause => switch (this) {
+    downloadFailed => NativeRuntimeInstall.downloadFailed,
+    checksumFailed => NativeRuntimeInstall.checksumFailed,
+    trustFailed => NativeRuntimeInstall.trustFailed,
+    layoutRejected => NativeRuntimeInstall.layoutRejected,
+    replaceFailed => NativeRuntimeInstall.replaceFailed,
+    notPublished || installed || stagedForRestart => null,
+  };
 }
 
 class AgentRuntimeBundleResult {
@@ -38,11 +60,6 @@ class AgentRuntimeBundleResult {
 
   /// Absolute directory the replacement will move, for the restart path.
   final String? stagedPath;
-
-  bool get isTerminalSuccess =>
-      status == AgentRuntimeBundleStatus.notPublished ||
-      status == AgentRuntimeBundleStatus.installed ||
-      status == AgentRuntimeBundleStatus.stagedForRestart;
 }
 
 class AgentRuntimeBundle {
@@ -75,11 +92,43 @@ class AgentRuntimeBundle {
   /// byte is extracted. On POSIX the directory is swapped with a `.rollback`
   /// sibling; on Windows the verified directory is left staged because a loaded
   /// DLL cannot be replaced in-process, and the restart script moves it.
+  ///
+  /// A failure is reported, never thrown into the caller's install or update:
+  /// the outcome is written beside the runtime so dictation readiness can name
+  /// it, and any successful install clears that record.
   Future<AgentRuntimeBundleResult> refresh({
     required ReleaseManifest manifest,
     required String executablePath,
   }) async {
     final platform = operatingSystem == 'macos' ? 'macos' : operatingSystem;
+    final nativeRoot = Directory('${File(executablePath).parent.path}/native');
+    final result = await _refresh(
+      manifest: manifest,
+      platform: platform,
+      nativeRoot: nativeRoot,
+    );
+    await _recordOutcome(nativeRoot, result);
+    return result;
+  }
+
+  /// Keeps the readiness reason truthful for the *next* daemon read.
+  static Future<void> _recordOutcome(
+    Directory nativeRoot,
+    AgentRuntimeBundleResult result,
+  ) async {
+    final cause = result.status.failureCause;
+    if (cause != null) {
+      await NativeRuntimeInstall.record(nativeRoot, cause);
+      return;
+    }
+    await NativeRuntimeInstall.clear(nativeRoot);
+  }
+
+  Future<AgentRuntimeBundleResult> _refresh({
+    required ReleaseManifest manifest,
+    required String platform,
+    required Directory nativeRoot,
+  }) async {
     final artifact = manifest.findArtifact(
       component: 'agent-runtime',
       platform: platform,
@@ -92,7 +141,6 @@ class AgentRuntimeBundle {
     }
 
     final tag = '${artifact.platform}-${artifact.architecture}';
-    final nativeRoot = Directory('${File(executablePath).parent.path}/native');
     final stagedArchive = File('${nativeRoot.path}/.$tag.${manifest.version}.tar.gz');
     final stagedDir = Directory('${nativeRoot.path}/.$tag.staged');
     try {

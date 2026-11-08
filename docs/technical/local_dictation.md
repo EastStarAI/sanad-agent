@@ -110,6 +110,11 @@ action stays reachable. Conflating the two is what made the runtime states
 unreachable in the composer: a supported device could not explain itself, and a
 pressing user was told "not ready" with no way forward.
 
+A recorded packaged-runtime failure reports `native_runtime_install_failed`
+instead, which is the same setup action with a truthful reason: the runtime could
+not be downloaded or verified, and `prepareRuntime` retries the verified download
+without touching the Agent itself.
+
 The same `reason` string is projected twice — as the platform verdict when
 `supported` is false and as the readiness reason when it is true. There is no
 second status field on the wire.

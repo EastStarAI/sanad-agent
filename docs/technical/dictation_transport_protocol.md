@@ -103,6 +103,18 @@ Validation rules:
   readiness, so a missing model can never fail `register_device`.
 - Limits are the Agent's own declaration and never grant admission by
   themselves. The Gateway's bounds in §6.5 still apply and win when smaller.
+- Capability discovery never costs a device its registration. The Agent builds
+  this envelope from several sources (workspace runtime, appearance store,
+  dictation service); a source that is missing or fails degrades **that one
+  capability** — an unresolvable dictation service advertises
+  `supports_dictation: false` and no `dictation_relay_v1` — while the device
+  still registers. Validation strictness is unchanged: the Gateway still rejects
+  a malformed recognized field, and the producer never emits one it could not
+  compute.
+- A consumer parses limits defensively. A bound of the wrong type or a
+  non-integer is malformed, so the Client falls back to the contract maximum
+  instead of throwing or truncating: one bad advertisement can never break
+  capability parsing for the whole device list.
 - Capabilities never carry transient state. Model install progress and native
   runtime preparation are reported only through live events.
 
@@ -558,7 +570,14 @@ Recognition failures keep their daemon codes (`unavailable`, `model_unknown`,
 `model_not_installed`, `dictation_busy`, `session_limit`, `no_speech`,
 `install_in_progress`, `prepare_unavailable`, `internal`, `audio_gap`, plus the
 readiness reasons `dictation_disabled`, `unsupported_platform`,
-`native_runtime_missing`, `native_runtime_preparing`).
+`native_runtime_missing`, `native_runtime_preparing`,
+`native_runtime_install_failed`).
+
+`native_runtime_install_failed` means a packaged `agent-runtime` download,
+verification, or extraction failed for this Agent. It never fails the Agent
+install or update: it disables dictation only, and `prepareRuntime` re-attempts
+the verified download (a source checkout starts the developer tool instead). See
+[native_stt_runtime_platforms.md](native_stt_runtime_platforms.md#failure-policy-dictation-only).
 
 ## 9. Compatibility and fail-closed policy
 

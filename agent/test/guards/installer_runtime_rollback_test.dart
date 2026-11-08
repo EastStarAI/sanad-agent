@@ -24,7 +24,7 @@ void main() {
   }
 
   group('runtime install', () {
-    test('a failed final move keeps the previous executable and runtime', () {
+    test('a runtime that cannot be installed never fails the install', () {
       final sandbox = _Sandbox.create(
         libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
         failFinalMove: true,
@@ -33,25 +33,123 @@ void main() {
         final result = sandbox.run();
         final stderr = result.stderr as String;
 
-        expect(result.exitCode, isNot(0));
-        expect(stderr, contains('Native dictation runtime installation failed'));
-        expect(stderr, contains('rollback completed'));
-        expect(stderr, isNot(contains('could not be restored')));
+        expect(result.exitCode, 0, reason: stderr);
+        expect(
+          stderr,
+          contains('Native dictation runtime installation failed'),
+          reason: 'the dictation-only failure is still reported',
+        );
+        expect(stderr, isNot(contains('rollback completed')));
         expect(
           sandbox.targetFile.readAsStringSync(),
-          sandbox.previousAgent,
-          reason: 'the previous executable must be restored',
+          isNot(sandbox.previousAgent),
+          reason: 'the verified Agent installs and runs regardless',
         );
         expect(
           File('${sandbox.runtimeDir.path}/OLD-MARKER').existsSync(),
           isTrue,
-          reason: 'the previous runtime must survive the failed install',
+          reason: 'the previous runtime is restored, not lost to the failure',
+        );
+        expect(
+          sandbox.runtimeFailureMarker.readAsStringSync().trim(),
+          'runtime_install_failed',
+          reason: 'dictation readiness has to name the failure',
         );
         expect(
           Directory('${sandbox.runtimeDir.path}.rollback').existsSync(),
           isFalse,
         );
         expect(File('${sandbox.targetFile.path}.rollback').existsSync(), isFalse);
+      } finally {
+        sandbox.dispose();
+      }
+    });
+
+    test('a runtime checksum mismatch never fails the install', () {
+      final sandbox = _Sandbox.create(
+        libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
+        runtimeShaMismatch: true,
+      );
+      try {
+        final result = sandbox.run();
+        final stderr = result.stderr as String;
+
+        expect(result.exitCode, 0, reason: stderr);
+        expect(stderr, contains('Native runtime SHA-256 verification failed'));
+        expect(
+          sandbox.targetFile.readAsStringSync(),
+          isNot(sandbox.previousAgent),
+          reason: 'the Agent update is independent of the runtime',
+        );
+        expect(
+          File('${sandbox.runtimeDir.path}/OLD-MARKER').existsSync(),
+          isTrue,
+          reason: 'an unverified archive never replaces the installed runtime',
+        );
+        expect(
+          File('${sandbox.runtimeDir.path}/libsanad_whisper.dylib').existsSync(),
+          isFalse,
+          reason: 'nothing from the rejected archive is extracted',
+        );
+        expect(
+          sandbox.runtimeFailureMarker.readAsStringSync().trim(),
+          'runtime_install_failed',
+        );
+      } finally {
+        sandbox.dispose();
+      }
+    });
+
+    test('a runtime download error never fails the install', () {
+      final sandbox = _Sandbox.create(
+        libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
+        runtimeDownloadFails: true,
+      );
+      try {
+        final result = sandbox.run();
+        final stderr = result.stderr as String;
+
+        expect(result.exitCode, 0, reason: stderr);
+        expect(
+          sandbox.targetFile.readAsStringSync(),
+          isNot(sandbox.previousAgent),
+          reason: 'a transient download error must not block the Agent',
+        );
+        expect(
+          File('${sandbox.runtimeDir.path}/OLD-MARKER').existsSync(),
+          isTrue,
+        );
+        expect(
+          sandbox.runtimeFailureMarker.readAsStringSync().trim(),
+          'runtime_install_failed',
+        );
+      } finally {
+        sandbox.dispose();
+      }
+    });
+
+    test('a verified runtime installs and clears a previous failure', () {
+      final sandbox = _Sandbox.create(
+        libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
+      );
+      File(sandbox.runtimeFailureMarker.path)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('runtime_download_failed\n');
+      try {
+        final result = sandbox.run();
+        final stderr = result.stderr as String;
+
+        expect(result.exitCode, 0, reason: stderr);
+        expect(
+          File('${sandbox.runtimeDir.path}/libsanad_whisper.dylib').existsSync(),
+          isTrue,
+          reason: 'the verified runtime is installed beside the Agent',
+        );
+        expect(
+          sandbox.runtimeFailureMarker.existsSync(),
+          isFalse,
+          reason: 'a successful install clears the recorded reason',
+        );
       } finally {
         sandbox.dispose();
       }
@@ -237,7 +335,7 @@ void main() {
         final result = sandbox.run();
         final stderr = result.stderr as String;
 
-        expect(result.exitCode, isNot(0));
+        expect(result.exitCode, 0, reason: stderr);
         expect(
           stderr,
           contains('entry that is not a regular file'),
@@ -250,6 +348,10 @@ void main() {
         expect(
           File('${sandbox.runtimeDir.path}/libevil.dylib').existsSync(),
           isFalse,
+        );
+        expect(
+          sandbox.runtimeFailureMarker.readAsStringSync().trim(),
+          'runtime_install_failed',
         );
       } finally {
         sandbox.dispose();
@@ -264,11 +366,15 @@ void main() {
         final result = sandbox.run();
         final stderr = result.stderr as String;
 
-        expect(result.exitCode, isNot(0));
+        expect(result.exitCode, 0, reason: stderr);
         expect(stderr, contains('hidden entry'), reason: stderr);
         expect(
           File('${sandbox.runtimeDir.path}/OLD-MARKER').existsSync(),
           isTrue,
+        );
+        expect(
+          sandbox.runtimeFailureMarker.readAsStringSync().trim(),
+          'runtime_install_failed',
         );
       } finally {
         sandbox.dispose();
@@ -280,6 +386,9 @@ void main() {
         libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
         declareRuntime: false,
       );
+      File(sandbox.runtimeFailureMarker.path)
+        ..createSync(recursive: true)
+        ..writeAsStringSync('runtime_download_failed\n');
       try {
         final result = sandbox.run();
         final stderr = result.stderr as String;
@@ -294,6 +403,11 @@ void main() {
           sandbox.targetFile.readAsStringSync(),
           isNot(sandbox.previousAgent),
           reason: 'the new executable is installed even without a runtime',
+        );
+        expect(
+          sandbox.runtimeFailureMarker.existsSync(),
+          isFalse,
+          reason: 'publishing no runtime is not a recorded failure',
         );
       } finally {
         sandbox.dispose();
@@ -322,6 +436,8 @@ class _Sandbox {
     bool failRestoreMove = false,
     bool failRuntimeRemoval = false,
     bool noPreviousRuntime = false,
+    bool runtimeShaMismatch = false,
+    bool runtimeDownloadFails = false,
   }) {
     final root = Directory.systemTemp.createTempSync('installer-runtime-');
     final home = Directory('${root.path}/home')..createSync(recursive: true);
@@ -364,6 +480,9 @@ class _Sandbox {
     Process.runSync('chmod', ['755', agentArtifact.path]);
 
     final runtimeName = 'sanad-agent-runtime-1.0.20-macos-arm64.tar.gz';
+    final runtimeUrl = runtimeDownloadFails
+        ? '${root.uri}missing/runtime.tar.gz'
+        : archive.uri.toString();
     final manifest = <String, Object?>{
       'schema_version': 1,
       'version': '1.0.20',
@@ -391,8 +510,10 @@ class _Sandbox {
             'filename': runtimeName,
             'public': true,
             'signature_type': 'github-attestation',
-            'url': archive.uri.toString(),
-            'sha256': _sha256(archive.readAsBytesSync()),
+            'url': runtimeUrl,
+            'sha256': runtimeShaMismatch
+                ? '0' * 64
+                : _sha256(archive.readAsBytesSync()),
             'size': archive.lengthSync(),
           },
       ],
@@ -465,6 +586,11 @@ class _Sandbox {
   final String previousAgent;
   final File manifestPath;
   final Directory shims;
+
+  /// The machine-readable reason the installer records for a dictation-only
+  /// runtime failure.
+  File get runtimeFailureMarker =>
+      File('${home.path}/bin/native/.runtime-install-failed');
 
   ProcessResult run() {
     final environment = Map<String, String>.from(Platform.environment)
