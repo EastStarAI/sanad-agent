@@ -130,6 +130,16 @@ jobs:
             architecture: x64
             extension: ''
             environment: release-build
+          # GitHub-hosted arm64 runner. Linux carries SHA-256 plus GitHub
+          # attestation and no platform code signature, so arm64 uses the same
+          # trust policy, Environment, and gates as Linux x64; the public
+          # installer resolves the Agent by platform plus architecture and never
+          # substitutes another target.
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+            extension: ''
+            environment: release-build
           - runner: windows-2025
             platform: windows
             architecture: x64
@@ -138,26 +148,34 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     environment: ${{ matrix.environment }}
+    env:
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so that job
+      # installs the standalone Dart SDK at exactly the same version instead.
+      # Every other job keeps the FVM-managed Flutter SDK.
+      DART: ${{ matrix.platform == 'linux' && matrix.architecture == 'arm64' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.platform == 'linux' && matrix.architecture == 'arm64'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.platform != 'linux' || matrix.architecture != 'arm64'
       - name: Install dependencies and test
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
-          fvm dart pub get
-          fvm dart run tool/generate_bundled_skills.dart --check
-          fvm dart run tool/generate_model_capability_defaults.dart --check
-          fvm dart analyze
-          fvm dart test
+          ${{ env.DART }} pub get
+          ${{ env.DART }} run tool/generate_bundled_skills.dart --check
+          ${{ env.DART }} run tool/generate_model_capability_defaults.dart --check
+          ${{ env.DART }} analyze
+          ${{ env.DART }} test
       - name: Compile agent
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
           mkdir -p ../dist
-          fvm dart compile exe \
+          ${{ env.DART }} compile exe \
             -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} \
             bin/sanad_agent.dart \
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"

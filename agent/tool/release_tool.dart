@@ -153,6 +153,7 @@ Future<_ReleaseIdentity> _validateContract(
       throw FormatException('Invalid or duplicate filename: $filename');
     }
   }
+  validateRequiredAgentTargets(declaredAgentTargets(artifacts));
   stdout.writeln(
     'Release contract valid: $selectedTag+$build ($derivedChannel)',
   );

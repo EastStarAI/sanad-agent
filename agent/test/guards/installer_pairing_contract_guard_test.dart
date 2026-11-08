@@ -84,4 +84,24 @@ void main() {
       expect(windows, isNot(contains('device_token')));
     },
   );
+
+  test('installers name a target this release does not publish', () {
+    final posix = File('../scripts/install.sh').readAsStringSync();
+
+    // `aarch64` and `arm64` are the same target, and the asset is selected by
+    // platform plus architecture only: a missing target must never be replaced
+    // by another architecture's binary.
+    expect(posix, contains('arm64|aarch64) ARCHITECTURE="arm64"'));
+    expect(posix, contains('x86_64|amd64) ARCHITECTURE="x64"'));
+    expect(posix, contains('select_agent_metadata'));
+    expect(posix, contains(r'select_agent_metadata >"$SELECTION_FILE"'));
+    expect(posix, contains('Published Agent targets'));
+    expect(posix, contains('No official Sanad Agent build is published for %s'));
+    expect(posix, contains(r'exit "$SELECTION_STATUS"'));
+    // The requested target is reported before anything is downloaded.
+    expect(
+      posix.indexOf('No official Sanad Agent build is published'),
+      lessThan(posix.indexOf(r'STAGED="$TEMP_DIR/$FILENAME"')),
+    );
+  });
 }

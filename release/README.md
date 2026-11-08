@@ -20,6 +20,11 @@ Public assets use:
 
 `<component>-<release-version>-<platform>-<architecture>.<extension>`
 
+The official Agent targets are macOS arm64 and x64, Linux x64 and arm64, and
+Windows x64. Each target has one contract row and one release job, and
+`requiredAgentReleaseTargets` in `release/contract/lib/release_contract.dart`
+fails contract validation when a target is missing.
+
 For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share the same marketing version.
 
 Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa` until the documented Authenticode transition is completed. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.

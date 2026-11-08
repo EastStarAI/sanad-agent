@@ -126,7 +126,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, stable signing identifier with a matching designated requirement, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
-| Agent Linux x64 | analyzer, installer transaction/failure injection, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted build, provenance, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
+| Agent Linux x64/arm64 | analyzer, installer transaction/failure injection, arm64 asset selection and a named missing-target failure, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted builds on `ubuntu-24.04` and `ubuntu-24.04-arm`, provenance for both artifacts, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
@@ -134,6 +134,13 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
+
+A Linux arm64 Agent is built and published, but the hosted arm64 job proves the
+build, the shipped-binary smoke, and provenance, not a host install. Clean
+arm64 systemd/OpenRC lifecycle, upgrade, and rollback evidence must be recorded
+separately from the x64 evidence and is never inferred from it. The Client keeps
+Linux x64 packaging only: a Linux arm64 Client package remains a follow-up, and
+no arm64 Client result may be inferred from the arm64 Agent.
 
 Linux candidate installer testing may override manifest and artifact URLs only
 with `SANAD_INSTALL_ALLOW_TEST_URL=1`. This explicit harness switch is forbidden

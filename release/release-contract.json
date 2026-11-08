@@ -41,6 +41,15 @@
     },
     {
       "component": "agent",
+      "platform": "linux",
+      "architecture": "arm64",
+      "format": "executable",
+      "filename": "sanad-agent-1.0.21-linux-arm64",
+      "public": true,
+      "signature_type": "github-attestation"
+    },
+    {
+      "component": "agent",
       "platform": "windows",
       "architecture": "x64",
       "format": "executable",
