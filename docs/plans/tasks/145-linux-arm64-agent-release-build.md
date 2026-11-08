@@ -94,8 +94,25 @@ that has no asset for that machine.
       verification matrix.
 - [x] Leave `docs/llms.txt` untouched: the generator excludes `docs/plans/`, and
       regenerating it would rewrite unrelated entries that this task does not own.
-- [ ] Commit, push, and open a pull request that requests `maintainer-reviewed`
+- [x] Commit, push, and open a pull request that requests `maintainer-reviewed`
       and `release-reviewed`.
+
+## Hosted evidence (pull request 359)
+
+Every lane passed except the protected-label gate, which fails closed until a
+maintainer applies `maintainer-reviewed` and `release-reviewed`:
+
+- `CLI automation (ubuntu-24.04-arm)`: pass (native arm64 AOT smoke).
+- `CLI automation (ubuntu-24.04)`, `(macos-26)`, `(windows-2025)`: pass.
+- `Agent contract checks and analyze`, `Validate release and security
+  boundaries`, `Test agent (1-4/4)`, `Test client (1-4/4)`, `Analyze client`,
+  `Web startup composition`, `sanad-dev bootstrap (all)`, `Validate docs and
+  governance`, `Verify branch history`: pass.
+- `Verify protected review labels`: fail (labels intentionally not applied).
+
+Two defects were found and fixed by that evidence rather than by guessing: the
+Flutter-action arm64 SDK lookup (see the locked decisions above) and a shell
+expansion of `$DART` that broke the Windows lane.
 
 ## Acceptance Criteria
 
@@ -144,4 +161,4 @@ that has no asset for that machine.
 | G1 — Release contract and validators | complete | 0% |
 | G2 — Release and pull-request workflows | complete | 0% |
 | G3 — Installer diagnostics | complete | 0% |
-| G4 — Documentation and delivery | in progress | 15% (hosted CI on the pull request) |
+| G4 — Documentation and delivery | complete | 0% (protected-label review is the remaining maintainer decision) |
