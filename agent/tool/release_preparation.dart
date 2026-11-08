@@ -202,8 +202,15 @@ class ReleasePreparation {
       throw const FormatException('Release contract artifacts are required.');
     }
     for (final rawArtifact in artifacts) {
-      if (rawArtifact is! Map ||
-          !(rawArtifact['filename']?.toString().contains(version) ?? false)) {
+      if (rawArtifact is! Map) {
+        throw const FormatException(
+          'Every artifact filename must contain the release version.',
+        );
+      }
+      // Named before the generic identity check so a stale runtime archive is
+      // reported as that archive, not as an anonymous filename.
+      _requireCanonicalRuntimeFilename(rawArtifact, version);
+      if (!(rawArtifact['filename']?.toString().contains(version) ?? false)) {
         throw const FormatException(
           'Every artifact filename must contain the release version.',
         );
@@ -222,6 +229,27 @@ class ReleasePreparation {
     if (!RegExp('^## ${RegExp.escape(version)}\r?\n').hasMatch(firstSection) ||
         firstSection.contains('TODO')) {
       throw const FormatException('Agent changelog is stale or unfinished.');
+    }
+  }
+
+  /// Rejects an `agent-runtime` archive whose declared name does not carry the
+  /// release identity.
+  ///
+  /// The runtime archives are the one artifact group that is published by a
+  /// separate workflow, so a stale literal in the contract would otherwise be
+  /// accepted until the contract validator ran and reported it as a duplicate
+  /// filename. Checking the canonical shape here names the artifact instead.
+  void _requireCanonicalRuntimeFilename(Map<Object?, Object?> artifact, String version) {
+    if (artifact['component'] != 'agent-runtime') return;
+    final platform = artifact['platform']?.toString() ?? '';
+    final architecture = artifact['architecture']?.toString() ?? '';
+    final expected =
+        'sanad-agent-runtime-$version-$platform-$architecture.tar.gz';
+    if (artifact['filename'] != expected) {
+      throw FormatException(
+        'agent-runtime filename must track the release identity: '
+        '${artifact['filename']} (expected $expected)',
+      );
     }
   }
 

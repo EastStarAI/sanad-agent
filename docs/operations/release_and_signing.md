@@ -24,7 +24,12 @@ source surface before writing, and updates Agent/Client package metadata, the
 Windows version resources, the canonical contract/tag/artifact filenames,
 release-note identity, changelog slot, and this current-release statement.
 `check-preparation` then rejects stale or unfinished release identity before a
-pull request can pass CI. Release prose remains derived from merged Git history
+pull request can pass CI. The artifact filenames it owns include the
+`agent-runtime` archives (`sanad-agent-runtime-<version>-<platform>-<arch>.tar.gz`),
+which are published by the native-runtime workflow rather than the Agent
+installer: they are renamed with every other versioned artifact, and a stale
+literal is rejected by name instead of surfacing later as a duplicate-filename
+contract error. Release prose remains derived from merged Git history
 by the skill rather than invented by the mechanical command.
 
 A release-preparation pull request may pass without `release-reviewed` only when

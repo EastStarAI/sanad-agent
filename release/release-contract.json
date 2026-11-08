@@ -53,7 +53,7 @@
       "platform": "macos",
       "architecture": "arm64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.20-macos-arm64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.21-macos-arm64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -62,7 +62,7 @@
       "platform": "macos",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.20-macos-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.21-macos-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -71,7 +71,7 @@
       "platform": "linux",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.20-linux-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.21-linux-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -80,7 +80,7 @@
       "platform": "windows",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.20-windows-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.21-windows-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },

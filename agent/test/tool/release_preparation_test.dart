@@ -100,6 +100,13 @@ void main() {
       readFixture('release/release-contract.json'),
       contains('sanad-agent-$nextVersion'),
     );
+    // The runtime archives are published by their own workflow, so a stale
+    // literal there would only surface as a duplicate-filename error at
+    // validation time. Preparation must rename them with everything else.
+    expect(
+      readFixture('release/release-contract.json'),
+      contains('sanad-agent-runtime-$nextVersion-macos-arm64.tar.gz'),
+    );
     expect(
       readFixture('release/release-notes.md'),
       startsWith('# Sanad $nextVersion'),
@@ -115,6 +122,40 @@ void main() {
       ),
     );
     preparation.check();
+  });
+
+  test('check rejects a stale agent-runtime archive filename', () {
+    final preparation = ReleasePreparation(fixture);
+    final original = readFixture('release/release-contract.json');
+    for (final replacement in [
+      // A stale version and a non-canonical suffix are both wrong, and both
+      // must name the runtime archive instead of a generic filename error.
+      (
+        from: 'sanad-agent-runtime-$currentVersion-macos-arm64.tar.gz',
+        to: 'sanad-agent-runtime-0.0.1-macos-arm64.tar.gz',
+      ),
+      (
+        from: 'sanad-agent-runtime-$currentVersion-macos-arm64.tar.gz',
+        to: 'sanad-agent-runtime-$currentVersion-macos-arm64.zip',
+      ),
+    ]) {
+      writeFixture(
+        'release/release-contract.json',
+        original.replaceFirst(replacement.from, replacement.to),
+      );
+
+      expect(
+        preparation.check,
+        throwsA(
+          isA<FormatException>().having(
+            (error) => error.message,
+            'message',
+            contains('agent-runtime filename must track the release identity'),
+          ),
+        ),
+        reason: replacement.to,
+      );
+    }
   });
 
   test('rejects non-increasing identity before changing files', () async {
