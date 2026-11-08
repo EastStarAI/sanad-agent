@@ -131,7 +131,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Provider Account Usage Limits QA Matrix](docs/qa_maintenance/provider_account_usage_limits_qa.md): Regression coverage for provider-instance usage parsing, protocol isolation, freshness, stale responses, and card presentation.
 - [Provider-Aware Thinking Mode QA](docs/qa_maintenance/provider_aware_thinking_mode_qa.md): Focused matrix for model-scoped thinking controls, fail-closed unknown routes, sync/stream payload parity, and composer selector states.
 - [Plan 29 Provider Setup Regression Matrix](docs/qa_maintenance/provider_setup_plan29_regression_matrix.md): Regression coverage targets for the instance-first provider setup runtime.
-- [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, and rollback.
+- [Release Verification Matrix](docs/qa_maintenance/release_verification.md): Required local and hosted evidence for Sanad release, signing, installation, update, rollback, and post-release Production surface verification.
 - [Remote Device Control QA](docs/qa_maintenance/remote_device_control_qa.md): Gate-linked pass/fail coverage for remote Agent update, restart, managed workspaces, and redacted MCP management.
 - [Remote MCP Management Boundary QA](docs/qa_maintenance/remote_mcp_management_qa.md): Regression matrix for cloud MCP configuration management with redacted snapshots, confirmation tickets, and preserved MCP tool permission policy.
 - [Runtime Source Switch QA](docs/qa_maintenance/runtime_source_switch_qa.md): Regression matrix for moving one active sanad-dev pair between source worktrees without changing its durable runtime identity.
