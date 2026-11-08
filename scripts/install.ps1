@@ -153,7 +153,13 @@ try {
                         $Unexpected.Count -ne 0) {
                         throw "Native runtime archive has an unexpected layout."
                     }
-                    if (@(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -Directory).Count -ne 0) {
+                    # The engine's sherpa subtree is the only allowed nesting; it
+                    # mirrors the loader-relative paths `sherpa_onnx` appends to
+                    # the directory it is handed. Windows keeps its libraries
+                    # flat, so a nested directory there is still a defect.
+                    $UnexpectedDirs = @(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -Directory |
+                        Where-Object { $_.Parent.FullName -ne $ExpectedRuntime -or $_.Name -ne "sherpa" })
+                    if ($UnexpectedDirs.Count -ne 0) {
                         throw "Native runtime archive has an unexpected layout."
                     }
                     $RuntimeEntries = @(Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force)
@@ -163,7 +169,7 @@ try {
                     if (@($RuntimeEntries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -ne 0) {
                         throw "Native runtime archive contains a link or reparse point."
                     }
-                    $Foreign = @(Get-ChildItem -LiteralPath $ExpectedRuntime -File |
+                    $Foreign = @(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -File |
                         Where-Object { $_.Name -notmatch '\.(dll|dylib|so(\.\d+(\.\d+)*)?)$' })
                     if ($Foreign.Count -ne 0) {
                         throw "Native runtime archive contains a file outside the library allowlist."

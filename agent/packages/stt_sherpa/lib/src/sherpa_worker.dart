@@ -3,6 +3,11 @@
 /// Speech recognition is CPU bound (≈0.5× real time for the Egyptian model), so
 /// it must never run on the daemon's event-loop isolate. The worker owns all
 /// native handles; the daemon only forwards audio and reads typed events.
+///
+/// This file is the **real** engine behind `package:sanad_stt_sherpa`. A build
+/// that cannot resolve `sherpa_onnx` links the stand-in package instead, which
+/// exposes the same entry point and reports the engine unavailable, so the
+/// daemon-side protocol below is the only shared contract.
 library;
 
 import 'dart:isolate';
@@ -11,10 +16,23 @@ import 'dart:typed_data';
 import 'package:logging/logging.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
-import 'stt_types.dart';
+/// Typed failure raised inside the worker and reported as one error event.
+///
+/// The daemon maps `code` onto its own exception type, so this package never
+/// imports daemon types (that would make the two packages depend on each
+/// other).
+class SherpaWorkerException implements Exception {
+  const SherpaWorkerException(this.code, this.message);
+
+  final String code;
+  final String message;
+
+  @override
+  String toString() => 'SherpaWorkerException($code): $message';
+}
 
 /// Mandatory entry point for the dictation worker isolate.
-void sttWorkerEntry(SendPort out) {
+void sherpaWorkerEntry(SendPort out) {
   // The daemon's log listener lives on the main isolate, so this worker wires
   // its own: otherwise the streaming measurements are written into a void.
   Logger.root.level = Level.INFO;
@@ -29,7 +47,7 @@ void sttWorkerEntry(SendPort out) {
     if (message is! Map) return;
     try {
       worker.handle(message);
-    } on SttException catch (error) {
+    } on SherpaWorkerException catch (error) {
       out.send({'evt': 'error', 'code': error.code, 'message': error.message});
     } on Object catch (error) {
       out.send({
@@ -52,7 +70,12 @@ class _SttWorker {
   /// partial text can be replaced in place.
   sherpa.OnlineRecognizer? _online;
   sherpa.OnlineStream? _onlineStream;
-  SttModelMode _mode = SttModelMode.batchVad;
+
+  /// True when this session drives the streaming recognizer.
+  ///
+  /// The mode arrives as the daemon's `SttModelMode.name`; the package keeps a
+  /// bool so it stays independent of the daemon's type catalog.
+  bool _streaming = false;
   String _lastPartial = '';
   int _partialSeq = 0;
 
@@ -139,11 +162,12 @@ class _SttWorker {
   void _init(Map message) {
     final stopwatch = Stopwatch()..start();
     _modelId = message['modelId'] as String? ?? '';
-    _mode = message['mode'] == SttModelMode.streaming.name
-        ? SttModelMode.streaming
-        : SttModelMode.batchVad;
-    sherpa.initBindings();
-    if (_mode == SttModelMode.streaming) {
+    _streaming = message['mode'] == 'streaming';
+    // The packaged runtime ships the sherpa libraries beside the whisper shim,
+    // so the worker is told exactly where they are. A source checkout passes
+    // null and sherpa resolves the library from the pub cache itself.
+    sherpa.initBindings(message['sherpaNativeDir'] as String?);
+    if (_streaming) {
       _initStreaming(message);
       stopwatch.stop();
       _out.send({
@@ -210,7 +234,7 @@ class _SttWorker {
   void _initStreaming(Map message) {
     final joiner = message['joiner'] as String? ?? '';
     if (joiner.isEmpty) {
-      throw const SttException(
+      throw const SherpaWorkerException(
         'model_incomplete',
         'a streaming model needs encoder, decoder, joiner and tokens',
       );
@@ -244,7 +268,7 @@ class _SttWorker {
   }
 
   void _audio(Uint8List pcm16) {
-    if (_mode == SttModelMode.streaming) {
+    if (_streaming) {
       _streamAudio(pcm16);
       return;
     }
@@ -257,7 +281,7 @@ class _SttWorker {
     final recognizer = _online;
     final stream = _onlineStream;
     if (recognizer == null || stream == null) {
-      throw const SttException('not_ready', 'recognizer is not loaded');
+      throw const SherpaWorkerException('not_ready', 'recognizer is not loaded');
     }
     final samples = _pcm16ToFloat32(pcm16);
     _audioChunks++;
@@ -359,7 +383,7 @@ class _SttWorker {
   void _audioBatch(Uint8List pcm16) {
     final vad = _vad;
     if (vad == null || _recognizer == null) {
-      throw const SttException('not_ready', 'recognizer is not loaded');
+      throw const SherpaWorkerException('not_ready', 'recognizer is not loaded');
     }
     if (_bufferedSamples >= _maxBufferedSamples) {
       // The session ceiling is enforced by the caller too; this is the last
@@ -389,7 +413,7 @@ class _SttWorker {
   }
 
   void _finish() {
-    if (_mode == SttModelMode.streaming) {
+    if (_streaming) {
       _finishStreaming();
       return;
     }

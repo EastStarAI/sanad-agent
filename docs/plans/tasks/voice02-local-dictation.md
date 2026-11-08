@@ -30,7 +30,7 @@ locally, and transcript events stream back into the composer. No cloud provider 
 
 ### G0 — Discovery and feasibility
 - [x] `sherpa_onnx` resolves in `agent`; `dart compile exe` still builds the daemon.
-- [x] In-process load on macOS arm64 proven with zero Flutter imports (`tool/stt_probe.dart`).
+- [x] In-process load on macOS arm64 proven with zero Flutter imports (`agent/packages/stt_sherpa/tool/stt_probe.dart`).
 - [x] Egyptian checkpoint exported to sherpa ONNX int8 with pinned sizes and SHAs.
 - [x] Light base model resolved from the public sherpa tree with pinned SHAs.
 - [x] Arabic fixture decoded; transcript matches the ggml reference.
@@ -371,6 +371,38 @@ The dictation surface is the composer's own action row, not its background.
       `dictation_composer_meter` key are gone; the composer card is a plain clipped
       column.
 
+## G15 — Linux arm64 ships whisper-only (owner decision 2026-11-09)
+
+`sherpa_onnx` requires the Flutter SDK, and the Linux arm64 Agent is built with
+the standalone Dart SDK because Flutter publishes no Linux arm64 host SDK. The
+owner chose to keep the arm64 target and give it the whisper.cpp engine rather
+than drop the target, install Flutter on those lanes, or write our own FFI
+binding now.
+
+- [x] **The engine is a swappable package.** The recognizer moved to
+      `agent/packages/stt_sherpa` (package name `sanad_stt_sherpa`), and
+      `agent/packages/stt_sherpa_stub` exposes the same library and public names
+      with `sherpaEngineAvailable = false`. The arm64 lanes copy
+      `agent/tool/pubspec_overrides.no_sherpa.yaml` over
+      `agent/pubspec_overrides.yaml` before `pub get`, so the Agent resolves,
+      compiles, and passes its lanes with the standalone Dart SDK.
+- [x] **Capability, not a crash.** `SttEngineAvailability` reports streaming/VAD
+      as absent on that build: sherpa catalog entries are not offered, a stored
+      sherpa selection falls back to the default, `select` refuses one with
+      `model_unavailable`, and local dictation runs the whisper.cpp path
+      (batch only). Both builds are unit-tested on one machine
+      (`agent/test/stt/engine_availability_test.dart`).
+- [x] **Every other platform keeps sherpa streaming and VAD unchanged.**
+- [x] **Native loading is fixed for the sherpa platforms.** The engine libraries
+      ship inside the per-tag `agent-runtime` archive under `sherpa/`, the daemon
+      passes that directory to the engine, and release staging plus the PR lane
+      load the library from the packaged archive rather than from a pub cache.
+      This was a real defect, not a packaging nicety: `initBindings()` with no
+      path only worked in a developer checkout.
+
+Revisit later: our own pure-Dart FFI binding over `libsherpa-onnx-c-api` would
+remove the Flutter dependency from the Agent entirely and give arm64 streaming
+back. That is a separate task, deliberately not started here.
 
 ## Definition of done
 

@@ -85,6 +85,38 @@ class SttModelStore {
   String modelDir(String id) => '$modelsRoot/$id';
   String get vadPath => '$sharedDir/${kSileroVadFile.name}';
 
+  /// The persisted per-device model choice, beside the models it names.
+  String get selectionPath => '$modelsRoot/selection.json';
+
+  /// The stored model id, or null when the file is absent or names nothing the
+  /// catalog still has.
+  ///
+  /// Reading is deliberately tolerant: a corrupt or retired selection must fall
+  /// back to the caller's default, never fail a status request. Whether the
+  /// entry is *usable on this build* is the caller's question, not this store's.
+  String? readSelectionId() {
+    final file = File(selectionPath);
+    if (!file.existsSync()) return null;
+    try {
+      final decoded = jsonDecode(file.readAsStringSync());
+      if (decoded is Map && decoded['model_id'] is String) {
+        final id = decoded['model_id'] as String;
+        return sttEntryById(id) == null ? null : id;
+      }
+    } on Object {
+      // A corrupt selection falls back to the catalog default.
+    }
+    return null;
+  }
+
+  /// Persists [modelId] as this device's choice.
+  Future<void> writeSelectionId(String modelId) async {
+    await Directory(modelsRoot).create(recursive: true);
+    await File(
+      selectionPath,
+    ).writeAsString(jsonEncode({'model_id': modelId}));
+  }
+
   /// Whether every catalog file plus the shared VAD asset already exists with
   /// the declared byte size. Checksums are verified at install time only.
   SttModelStatus statusOf(SttCatalogEntry entry) {

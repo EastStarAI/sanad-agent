@@ -56,17 +56,37 @@ class AgentRuntimeArchive {
     for (final name in members) {
       if (!name.startsWith(prefix)) return 'unexpected_member';
       final base = name.substring(prefix.length);
-      if (base.isEmpty || base.contains('/') || base.contains('\\')) {
-        return 'unexpected_member';
-      }
+      if (base.isEmpty || base.contains('\\')) return 'unexpected_member';
       if (base == '.' || base == '..' || base.startsWith('.')) {
         return 'unexpected_member';
       }
       if (base.contains(':')) return 'unexpected_member';
-      if (!_isLibraryName(base)) return 'unexpected_member';
+      final relative = _runtimeRelativePath(base);
+      if (relative == null) return 'unexpected_member';
+      if (!_isLibraryName(relative.split('/').last)) return 'unexpected_member';
       if (!seen.add(base)) return 'duplicate_member';
     }
     return null;
+  }
+
+  /// Accepts a flat library member or one under the engine's `sherpa/` subtree.
+  ///
+  /// The whisper libraries sit directly in `native/<tag>/`. The sherpa-onnx
+  /// libraries keep the loader-relative paths the engine appends to the
+  /// directory it is handed, which for macOS is four directories deep; the depth
+  /// is bounded and every segment is validated, so a bundle still cannot carry a
+  /// tree, a dotfile, or a model payload into the installed runtime.
+  static String? _runtimeRelativePath(String base) {
+    if (!base.contains('/')) return base;
+    final segments = base.split('/');
+    if (segments.length < 2 || segments.length > 6) return null;
+    if (segments.first != 'sherpa') return null;
+    for (final segment in segments) {
+      if (segment.isEmpty || segment == '.' || segment == '..') return null;
+      if (segment.startsWith('.')) return null;
+      if (segment.contains(':')) return null;
+    }
+    return segments.skip(1).join('/');
   }
 
   /// True for a native library file name only (`libx.dylib`, `x.dll`,

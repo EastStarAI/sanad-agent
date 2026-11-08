@@ -1,6 +1,6 @@
 /// Background isolate that owns a whisper.cpp context.
 ///
-/// Same protocol as the sherpa worker (`stt_isolate.dart`), so the daemon-side
+/// Same protocol as the sherpa worker (`package:sanad_stt_sherpa`), so the daemon-side
 /// engine, session and events are unchanged: only the decode call differs.
 /// Recognition is CPU bound and must never run on the daemon's event loop.
 library;

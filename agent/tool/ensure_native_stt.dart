@@ -38,6 +38,7 @@ library;
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
 
 import 'stt_native_archive.dart';
@@ -259,6 +260,11 @@ Future<int> _stageAndArchive({
         nativeRoot: nativeRoot,
         target: target,
         manifest: manifest,
+        // Staging produces the payload a released Agent loads, so the sherpa
+        // libraries must be present here even though a developer checkout keeps
+        // them in the pub cache.
+        requireSherpa:
+            options.stageDirectory != null || options.archiveDirectory != null,
       );
   if (verification == null) _printVerification(checked, version);
   if (!checked.ok) return 1;
@@ -275,6 +281,7 @@ Future<int> _stageAndArchive({
         stageRoot: Directory(stageRootPath),
         manifest: manifest,
         verification: checked,
+        sherpaSource: sherpaNativeSourceDirectory(),
       );
     } on SttRuntimeStageException catch (error) {
       stderr.writeln(error.message);
@@ -337,6 +344,20 @@ Future<SttRuntimeArchive> _writeArchive({
   for (final name in target.requiredLibraries) {
     entries['native/${target.nativeDirectory}/$name'] =
         await File('$sourceDirectory/$name').readAsBytes();
+  }
+  // The sherpa subtree is part of the payload for a build that links that
+  // engine; its member names keep the loader-relative paths, which is why the
+  // archive writer supports the ustar prefix field.
+  if (sherpaEngineAvailable) {
+    for (final relative in target.sherpaLibraries) {
+      final path =
+          '$sourceDirectory/${target.sherpaNativeSubdirectory}/$relative';
+      final file = File(path);
+      if (!file.existsSync()) continue;
+      entries['native/${target.nativeDirectory}'
+          '/${target.sherpaNativeSubdirectory}/$relative'] =
+          await file.readAsBytes();
+    }
   }
   final bytes = buildDeterministicTarGz(
     entries,

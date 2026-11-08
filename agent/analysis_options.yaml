@@ -20,6 +20,12 @@ analyzer:
     - windows/**
     - macos/**
     - linux/**
+    # The dictation engine is a swappable local package: exactly one of
+    # `packages/stt_sherpa` (real) and `packages/stt_sherpa_stub` is in the
+    # dependency graph, and the other one cannot resolve its imports. Each is
+    # analyzed on its own by the lane that selected it, so walking this tree here
+    # would report the engine that is deliberately not part of this build.
+    - packages/**
 include: package:lints/recommended.yaml
 
 # Uncomment the following section to specify additional rules.

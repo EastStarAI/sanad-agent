@@ -28,7 +28,6 @@ void main() {
       if (directory.existsSync()) directory.deleteSync(recursive: true);
     }
   });
-
   Directory runtimeDirectory([SttNativeTarget value = target]) {
     final directory = Directory('${nativeRoot.path}/${value.nativeDirectory}')
       ..createSync(recursive: true);
@@ -352,10 +351,20 @@ void main() {
   group('stage', () {
     test('copies exactly the required libraries and records real hashes', () async {
       final runtime = runtimeDirectory();
-      final hashes = writeFakeRuntime(directory: runtime, target: target);
+      final whisperHashes = writeFakeRuntime(directory: runtime, target: target);
       // Model weights and build leftovers must never travel with the Agent.
       File('${runtime.path}/ggml-model-q8.bin').writeAsBytesSync([1, 2, 3]);
       File('${runtime.path}/libggml.0.dylib.bak').writeAsBytesSync([4, 5, 6]);
+
+      // The sherpa libraries come from the engine's own resolution, so the test
+      // hands staging a source directory exactly as the tool does.
+      final sherpaSource = Directory('${nativeRoot.parent.path}'
+          '/stt-sherpa-source-${DateTime.now().microsecondsSinceEpoch}');
+      final sherpaHashes = writeFakeSherpaRuntime(
+        directory: sherpaSource,
+        target: target,
+      );
+      final hashes = {...whisperHashes, ...sherpaHashes};
 
       final verification = await verifySttRuntime(
         nativeRoot: nativeRoot,
@@ -368,12 +377,20 @@ void main() {
         stageRoot: stageRoot,
         manifest: manifestWith(hashes),
         verification: verification,
+        sherpaSource: sherpaSource.path,
       );
 
-      final staged = Directory(stage.directory).listSync().whereType<File>();
+      final staged = <String>{};
+      for (final entity
+          in Directory(stage.directory).listSync(recursive: true)) {
+        if (entity is! File) continue;
+        staged.add(
+          entity.path.substring(stage.directory.length + 1),
+        );
+      }
       expect(
-        staged.map((file) => file.uri.pathSegments.last).toSet(),
-        target.requiredLibraries.toSet(),
+        staged,
+        {...target.requiredLibraries, ...sherpaHashes.keys},
       );
       expect(
         File('${stage.directory}/ggml-model-q8.bin').existsSync(),

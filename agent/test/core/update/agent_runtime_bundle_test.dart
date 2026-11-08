@@ -84,12 +84,16 @@ void main() {
     );
   }
 
-  AgentRuntimeBundle bundleFor(File archive) => AgentRuntimeBundle(
+  AgentRuntimeBundle bundleFor(
+    File archive, {
+    String operatingSystem = 'linux',
+    String architecture = 'x64',
+  }) => AgentRuntimeBundle(
     client: MockClient(
       (request) async => http.Response.bytes(archive.readAsBytesSync(), 200),
     ),
-    operatingSystem: 'linux',
-    architecture: 'x64',
+    operatingSystem: operatingSystem,
+    architecture: architecture,
   );
 
   group('agent runtime bundle', () {
@@ -215,6 +219,65 @@ void main() {
       );
 
       expect(result.status, AgentRuntimeBundleStatus.layoutRejected);
+    });
+
+    test('the engine subtree is accepted, deeper nesting is not', () async {
+      // The packaged runtime carries the sherpa-onnx libraries under `sherpa/`
+      // with the loader-relative macOS layout, so that subtree must install.
+      const sherpa =
+          'sherpa/sherpa_onnx_macos/sherpa-onnx.xcframework/'
+          'macos-arm64_x86_64/libsherpa-onnx-c-api.dylib';
+      // The rule is about member names, not about the platform: linux-arm64
+      // keeps the case free of macOS platform-signing setup while proving the
+      // same four-directory layout.
+      final accepted = archiveWith('linux-arm64', {
+        'libsanad_whisper.so': 'shim',
+        sherpa: 'sherpa',
+      });
+      final acceptedResult = await bundleFor(
+        accepted,
+        operatingSystem: 'linux',
+        architecture: 'arm64',
+      ).refresh(
+        manifest: await manifestFor(
+          accepted,
+          platform: 'linux',
+          architecture: 'arm64',
+        ),
+        executablePath: executable.path,
+      );
+      expect(acceptedResult.status, AgentRuntimeBundleStatus.installed);
+      expect(
+        File('${installDir.path}/native/linux-arm64/$sherpa').readAsStringSync(),
+        'sherpa',
+      );
+
+      // A tree that is not the engine subtree, or that nests deeper than the
+      // engine's own layout, is still refused.
+      for (final members in [
+        {'libsanad_whisper.so': 'shim', 'other/libsherpa.so': 'x'},
+        {'libsanad_whisper.so': 'shim', 'sherpa/a/b/c/d/e/libsherpa.so': 'x'},
+        {'libsanad_whisper.so': 'shim', 'sherpa/model.onnx': 'x'},
+      ]) {
+        final archive = archiveWith('linux-arm64', members);
+        final result = await bundleFor(
+          archive,
+          operatingSystem: 'linux',
+          architecture: 'arm64',
+        ).refresh(
+          manifest: await manifestFor(
+            archive,
+            platform: 'linux',
+            architecture: 'arm64',
+          ),
+          executablePath: executable.path,
+        );
+        expect(
+          result.status,
+          AgentRuntimeBundleStatus.layoutRejected,
+          reason: members.keys.join(', '),
+        );
+      }
     });
 
     test('an unreachable download never touches the installed runtime',

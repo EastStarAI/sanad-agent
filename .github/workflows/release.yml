@@ -159,6 +159,15 @@ jobs:
         if: matrix.platform == 'linux' && matrix.architecture == 'arm64'
       - uses: ./.github/actions/setup-fvm
         if: matrix.platform != 'linux' || matrix.architecture != 'arm64'
+      - name: Select the whisper-only dictation engine
+        if: matrix.platform == 'linux' && matrix.architecture == 'arm64'
+        working-directory: agent
+        shell: bash
+        # `sherpa_onnx` requires the Flutter SDK, and this lane installs the
+        # standalone Dart SDK. The overlay swaps the engine for a stand-in with
+        # the same package name, so the arm64 Agent is a complete build: whisper
+        # batch dictation, no streaming or VAD.
+        run: cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml
       - name: Fetch whisper.cpp
         uses: actions/checkout@v6
         with:
@@ -195,6 +204,18 @@ jobs:
           ${{ env.DART }} run tool/generate_model_capability_defaults.dart --check
           ${{ env.DART }} analyze
           ${{ env.DART }} test
+      - name: Analyze the dictation engine package
+        if: matrix.platform != 'windows'
+        working-directory: agent
+        shell: bash
+        # The engine is a swappable local package excluded from the package-wide
+        # analysis (only one of the two can resolve), so the lane that selected it
+        # analyzes it explicitly.
+        run: |
+          set -euo pipefail
+          engine=packages/stt_sherpa
+          if [ -f pubspec_overrides.yaml ]; then engine=packages/stt_sherpa_stub; fi
+          ${{ env.DART }} analyze "$engine"
       - name: Compile agent
         if: matrix.platform != 'windows'
         working-directory: agent
@@ -217,6 +238,9 @@ jobs:
           fvm dart run tool/generate_model_capability_defaults.dart --check
           fvm dart analyze
           fvm dart test test/core/update/release_manifest_test.dart
+          $engine = 'packages/stt_sherpa'
+          if (Test-Path pubspec_overrides.yaml) { $engine = 'packages/stt_sherpa_stub' }
+          fvm dart analyze $engine
       - name: Compile Windows agent and no-console launcher
         if: matrix.platform == 'windows'
         working-directory: agent
@@ -432,6 +456,29 @@ jobs:
         env:
           SANAD_STT_REQUIRE_NATIVE: '1'
         run: ${{ env.DART }} test test/stt/native_runtime_smoke_test.dart
+      - name: Load the packaged sherpa runtime in a real process
+        if: matrix.platform != 'windows'
+        working-directory: agent
+        shell: bash
+        # The engine ships inside the archive this job just staged, so the smoke
+        # proves the packaged layout, not the pub cache a developer has. The
+        # linux-arm64 lane links the whisper-only stand-in and asserts that
+        # instead.
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+          SANAD_STT_RUNTIME_DIR: ${{ github.workspace }}/dist/native/${{ matrix.platform }}-${{ matrix.architecture }}/sherpa
+        run: ${{ env.DART }} test test/stt/sherpa_runtime_smoke_test.dart
+      - name: Load the packaged sherpa runtime in a real process
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+          SANAD_STT_RUNTIME_DIR: ${{ github.workspace }}/dist/native/${{ matrix.platform }}-${{ matrix.architecture }}/sherpa
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/sherpa_runtime_smoke_test.dart
       - name: Load the packaged runtime in a real process
         if: matrix.platform == 'windows'
         working-directory: agent

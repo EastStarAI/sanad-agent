@@ -1,7 +1,7 @@
 /// Dictation engine: the daemon-facing handle for one recognition session.
 ///
 /// The engine never touches native handles itself. It owns a worker isolate
-/// (see `stt_isolate.dart`), forwards audio with bounded backpressure, and
+/// (see `package:sanad_stt_sherpa`), forwards audio with bounded backpressure, and
 /// republishes the worker's messages as [SttEvent]s.
 library;
 
@@ -12,8 +12,8 @@ import 'dart:isolate';
 import 'dart:typed_data';
 
 import 'package:logging/logging.dart';
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart';
 
-import 'stt_isolate.dart';
 import 'stt_model_store.dart';
 import 'stt_types.dart';
 import 'whispercpp_isolate.dart';
@@ -29,11 +29,16 @@ abstract class SttEngine {
   SttReadyEvent? get ready;
 
   /// Spawns the worker and loads the recognizer.
+  ///
+  /// [sherpaNativeDir] is the directory the packaged sherpa libraries live in,
+  /// or null when the worker must resolve the library itself (a source run).
+  /// The whisper.cpp engine ignores it.
   Future<void> start(
     SttModelFiles files, {
     required String modelId,
     int threads = 2,
     bool useGpu = true,
+    String? sherpaNativeDir,
   });
 
   /// Queues 16 kHz mono PCM16 little-endian audio.
@@ -57,10 +62,10 @@ abstract class SttEngine {
 class SherpaSttEngine implements SttEngine {
   SherpaSttEngine({
     this.maxQueuedChunks = 200,
-    this.entryPoint = sttWorkerEntry,
+    this.entryPoint = sherpaWorkerEntry,
   });
 
-  /// The isolate body: `sttWorkerEntry` for sherpa, `whisperCppWorkerEntry` for
+  /// The isolate body: `sherpaWorkerEntry` for sherpa, `whisperCppWorkerEntry` for
   /// the whisper.cpp engine. Everything above this line is engine-agnostic.
   final void Function(SendPort) entryPoint;
 
@@ -136,6 +141,7 @@ class SherpaSttEngine implements SttEngine {
     required String modelId,
     int threads = 2,
     bool useGpu = true,
+    String? sherpaNativeDir,
   }) async {
     final outbox = ReceivePort();
     _outbox = outbox;
@@ -251,6 +257,7 @@ class SherpaSttEngine implements SttEngine {
       'threads': threads,
       'streamingModelType': files.streamingModelType,
       'useGpu': useGpu,
+      'sherpaNativeDir': sherpaNativeDir,
     });
     await _ready!.future.timeout(
       const Duration(seconds: 60),

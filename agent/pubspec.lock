@@ -504,6 +504,13 @@ packages:
       relative: true
     source: path
     version: "1.0.21"
+  sanad_stt_sherpa:
+    dependency: "direct main"
+    description:
+      path: "packages/stt_sherpa"
+      relative: true
+    source: path
+    version: "1.0.0"
   sanad_windows_path:
     dependency: "direct main"
     description:
@@ -544,7 +551,7 @@ packages:
     source: hosted
     version: "3.0.0"
   sherpa_onnx:
-    dependency: "direct main"
+    dependency: transitive
     description:
       name: sherpa_onnx
       sha256: fce38e628bacdd0ff9dd3e11011657b96611158685ef08985a3203cef6e0d171

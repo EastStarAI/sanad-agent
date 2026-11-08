@@ -71,6 +71,23 @@ Streaming exists to keep the contract honest, not because Arabic streaming is
 available: no sherpa-packaged Arabic streaming model exists today, so the only
 streaming entry is English and labelled experimental.
 
+### Builds without the sherpa engine
+
+The sherpa engine is a swappable package, and the Linux arm64 Agent is built
+without it (see
+[Native Dictation Runtime Platforms](native_stt_runtime_platforms.md#engine-availability)).
+On that build:
+
+- the catalog's sherpa entries are not offered — not in the model rows, not as a
+  selection, and a stored selection that names one falls back to the default;
+- `SttEngineAvailability.streaming` is false, so readiness and the surface report
+  batch-only behaviour;
+- local dictation runs the whisper.cpp path unchanged, and `select` refuses a
+  sherpa model with `model_unavailable` instead of persisting it.
+
+No new Client UI is involved: the Client already renders a session that produces
+finals only, and the missing rows simply are not there.
+
 ## Model catalog and lifecycle
 
 The catalog is data, not code: adding a model is an entry with pinned URL, size

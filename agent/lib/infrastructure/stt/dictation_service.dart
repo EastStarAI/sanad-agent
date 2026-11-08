@@ -2,7 +2,6 @@
 library;
 
 import 'dart:async';
-import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -169,10 +168,12 @@ class DictationService {
     bool? platformSupported,
     Future<void> Function()? runtimeInstaller,
     String? nativeRuntimeRoot,
+    SttEngineAvailability availability = const SttEngineAvailability.build(),
   }) : _engineFactory = engineFactory ?? SherpaSttEngine.new,
        _engineFor = engineFor,
        _platformSupported = platformSupported ?? _nativeTargetSupported(),
        _runtimeInstaller = runtimeInstaller,
+       _availability = availability,
        _nativeRoot = Directory(
          nativeRuntimeRoot ??
              '${File(Platform.resolvedExecutable).parent.path}/native',
@@ -196,6 +197,12 @@ class DictationService {
   /// test can exercise the real lease/start path without loading native code.
   final SttEngine Function(SttModelFiles files)? _engineFor;
   final bool _platformSupported;
+
+  /// Which engines this build can run. Injected so both builds are testable.
+  final SttEngineAvailability _availability;
+
+  /// The engines this build can run.
+  SttEngineAvailability get availability => _availability;
 
   /// Re-installs the packaged native runtime for a released Agent.
   ///
@@ -244,6 +251,12 @@ class DictationService {
     }
     if (!_platformSupported) {
       return const SttReadiness.unavailable('unsupported_platform');
+    }
+    // A build with no usable engine cannot dictate at all. It reports the same
+    // stable code a device without dictation reports, because from the Client's
+    // point of view there is nothing to start.
+    if (defaultUsableSttEntry(_availability) == null) {
+      return const SttReadiness.unavailable('dictation_unavailable');
     }
     // Whisper needs its native shim on disk. Report that as its own reason so a
     // fresh clone shows "run ensure_native_stt" instead of a generic failure.
@@ -353,31 +366,22 @@ class DictationService {
     if (!_settings.keepsModelWarm) unawaited(unloadWarmEngine());
   }
 
-  String get _selectionPath => '${_store.modelsRoot}/selection.json';
-
-  String? _readSelection() {
-    final file = File(_selectionPath);
-    if (!file.existsSync()) return null;
-    try {
-      final decoded = jsonDecode(file.readAsStringSync());
-      if (decoded is Map && decoded['model_id'] is String) {
-        final id = decoded['model_id'] as String;
-        return sttEntryById(id) == null ? null : id;
-      }
-    } on Object {
-      // A corrupt selection falls back to the catalog default.
-    }
-    return null;
-  }
-
   Future<void> _writeSelection(String modelId) async {
-    if (sttEntryById(modelId) == null) {
+    final entry = sttEntryById(modelId);
+    if (entry == null) {
       throw SttException('model_unknown', 'model "$modelId" is not in the catalog');
     }
-    await Directory(_store.modelsRoot).create(recursive: true);
-    await File(
-      _selectionPath,
-    ).writeAsString(jsonEncode({'model_id': modelId}));
+    if (!_availability.supports(entry.engine)) {
+      // The model sheet never offers such a row, so this only answers a stale
+      // client or a hand-written command: say why instead of writing a selection
+      // that the next session cannot load.
+      throw SttException(
+        'model_unavailable',
+        'model "$modelId" needs the ${entry.engine.name} engine, which this '
+            'build does not include',
+      );
+    }
+    await _store.writeSelectionId(modelId);
   }
 
   /// Persists the selected model — the same owner the `select` command uses, so
@@ -408,18 +412,31 @@ class DictationService {
   }
 
   /// Explicit config beats a per-device selection, which beats the default.
+  ///
+  /// Every answer is filtered through this build's engine availability: a
+  /// selection that names a model whose engine was not compiled in falls back to
+  /// the default usable entry instead of failing at load time.
   String get selectedModelId {
     if (_settings.modelPath?.trim().isNotEmpty ?? false) return 'path-override';
-    if (_settings.modelId.isNotEmpty) return _settings.modelId;
-    final selection = _readSelection();
+    if (_settings.modelId.isNotEmpty) return _usableIdOrFallback(_settings.modelId);
+    final selection = _store.readSelectionId();
     if (selection != null) {
       // A retired entry stays in the catalog so an old install still resolves
       // its files, but it must never remain the active choice: the 20M streaming
       // build is hidden precisely because it cannot transcribe a first word.
       final entry = sttEntryById(selection);
-      if (entry != null && !entry.hidden) return selection;
+      if (entry != null && !entry.hidden && _availability.supports(entry.engine)) {
+        return selection;
+      }
     }
-    return defaultSttEntry.id;
+    return defaultUsableSttEntry(_availability)?.id ?? defaultSttEntry.id;
+  }
+
+  /// [id] when this build can run it, else the default usable entry.
+  String _usableIdOrFallback(String id) {
+    final entry = sttEntryById(id);
+    if (entry != null && _availability.supports(entry.engine)) return id;
+    return defaultUsableSttEntry(_availability)?.id ?? id;
   }
 
   SttCatalogEntry? get selectedEntry => sttEntryById(selectedModelId);
@@ -463,6 +480,23 @@ class DictationService {
   /// True while a recogniser is kept loaded but idle.
   bool get hasWarmEngine => _warmEngine != null;
 
+  /// Directory the packaged sherpa libraries were installed into, or null.
+  ///
+  /// A released Agent ships them in `native/<tag>/sherpa/` beside the executable
+  /// (see [SttNativeTarget.sherpaLibraries]); a source checkout has no such
+  /// directory, so the engine resolves the library from the pub cache itself.
+  /// The answer is computed, never cached: the runtime can be installed while
+  /// the daemon is running.
+  String? get sherpaNativeDirectory {
+    if (!_availability.sherpa) return null;
+    final target = SttNativeTarget.tryCurrent();
+    if (target == null) return null;
+    final directory = '${_nativeRoot.path}/${target.nativeDirectory}'
+        '/${target.sherpaNativeSubdirectory}';
+    final probe = target.sherpaLibraries.first;
+    return File('$directory/$probe').existsSync() ? directory : null;
+  }
+
   /// Starts (or reuses) the engine for [files].
   Future<SttEngine> acquireEngine(SttModelFiles files) async {
     final warm = _warmEngine;
@@ -486,6 +520,7 @@ class DictationService {
         modelId: files.modelId,
         threads: _settings.threads,
         useGpu: _settings.useGpu,
+        sherpaNativeDir: sherpaNativeDirectory,
       );
     } on Object {
       await engine.dispose();
@@ -564,7 +599,7 @@ class DictationService {
           'installed': overrideReady,
           'engine': SttEngineKind.whisperCpp.name,
         },
-      for (final entry in kSttCatalog)
+      for (final entry in usableSttEntries(_availability))
         if (!entry.hidden)
           {
             'id': entry.id,

@@ -373,6 +373,32 @@ SttCatalogEntry get defaultSttEntry => kSttCatalog.firstWhere(
   orElse: () => kSttCatalog.first,
 );
 
+/// Every catalog entry this build can actually run, in catalog order.
+///
+/// A build without the sherpa engine keeps the whisper.cpp entries and drops
+/// the rest: offering a model whose engine was not compiled in would fail at
+/// load time instead of explaining itself. Hidden entries are kept — the caller
+/// filters those — so this is about capability, not presentation.
+List<SttCatalogEntry> usableSttEntries(SttEngineAvailability availability) => [
+  for (final entry in kSttCatalog)
+    if (availability.supports(entry.engine)) entry,
+];
+
+/// The entry a fresh install should use on this build.
+///
+/// The catalog default is the recommended model; when its engine is not part of
+/// this build, the first usable entry takes its place so a device never starts
+/// with an impossible selection.
+SttCatalogEntry? defaultUsableSttEntry(SttEngineAvailability availability) {
+  final usable = usableSttEntries(availability);
+  if (usable.isEmpty) return null;
+  final preferred = defaultSttEntry;
+  for (final entry in usable) {
+    if (entry.id == preferred.id) return entry;
+  }
+  return usable.first;
+}
+
 SttCatalogEntry? sttEntryById(String id) {
   for (final entry in kSttCatalog) {
     if (entry.id == id) return entry;

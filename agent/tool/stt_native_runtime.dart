@@ -20,6 +20,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart';
 
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
 
@@ -169,6 +170,12 @@ class SttRuntimeVerification {
 /// Only the canonical architecture-qualified directory is checked by default:
 /// staging and verification must never accept the bounded Apple Silicon legacy
 /// alias as a build output.
+///
+/// [requireSherpa] additionally demands the sherpa-onnx libraries that the
+/// packaged runtime ships under `sherpa/`. It is on for staging and archiving —
+/// the only paths that produce a payload a released Agent loads — and off for a
+/// developer checkout, where those libraries come from the pub cache and the
+/// build never copies them into `agent/native/`.
 Future<SttRuntimeVerification> verifySttRuntime({
   required Directory nativeRoot,
   required SttNativeTarget target,
@@ -176,6 +183,7 @@ Future<SttRuntimeVerification> verifySttRuntime({
   bool requireManifestEntry = true,
   bool requirePinnedHashes = false,
   bool comparePinnedHashes = true,
+  bool requireSherpa = false,
   String? directoryPath,
 }) async {
   final directory =
@@ -192,52 +200,73 @@ Future<SttRuntimeVerification> verifySttRuntime({
     problems.add('manifest_entry_missing:${target.tag}');
   }
 
-  for (final name in target.requiredLibraries) {
-    final path = '$directory/$name';
+  /// The whisper libraries and the sherpa libraries are verified the same way;
+  /// only their directory and their manifest key differ.
+  void verifyLibrary(String path, String manifestKey) {
     final file = File(path);
     if (!file.existsSync()) {
-      missing.add(name);
-      problems.add('missing_library:$name');
-      continue;
+      missing.add(manifestKey);
+      problems.add('missing_library:$manifestKey');
+      return;
     }
     // The whole file is read so the macOS deployment target can be checked as
     // well; native libraries are a few megabytes at most.
     final info = inspectNativeLibraryFile(path);
     if (!info.isRecognized) {
-      problems.add('unrecognized_native_binary:$name');
-      continue;
+      problems.add('unrecognized_native_binary:$manifestKey');
+      return;
     }
     if (!info.supports(target.cpu)) {
-      problems.add('architecture_mismatch:$name');
+      problems.add('architecture_mismatch:$manifestKey');
     }
     final minimum = info.minimumMacOsVersion;
     final ceiling = target.macosDeploymentTarget;
     if (ceiling != null) {
       if (minimum == null) {
-        warnings.add('deployment_target_unknown:$name');
+        warnings.add('deployment_target_unknown:$manifestKey');
       } else if (compareVersions(minimum, ceiling) > 0) {
-        problems.add('deployment_target_too_high:$name:$minimum>$ceiling');
+        problems.add(
+          'deployment_target_too_high:$manifestKey:$minimum>$ceiling',
+        );
       }
     }
-    final digest = await sha256OfFile(file);
-    hashes[name] = digest;
-    final want = entry?[name];
+    final digest = sha256OfFileSync(file);
+    hashes[manifestKey] = digest;
+    final want = entry?[manifestKey];
     if (want is! String || want.length != 64) {
-      unpinned.add(name);
+      unpinned.add(manifestKey);
       // A strict gate that accepts a missing pin is not strict. The download
       // path sets [requirePinnedHashes], so an entry without per-file hashes
       // must fail there instead of degrading to a warning.
       if (requirePinnedHashes) {
-        problems.add('pinned_hash_missing:$name');
+        problems.add('pinned_hash_missing:$manifestKey');
       }
-      continue;
+      return;
     }
     if (comparePinnedHashes && digest != want) {
       if (requirePinnedHashes) {
-        problems.add('checksum_mismatch:$name');
+        problems.add('checksum_mismatch:$manifestKey');
       } else {
-        warnings.add('checksum_differs_from_pinned:$name');
+        warnings.add('checksum_differs_from_pinned:$manifestKey');
       }
+    }
+  }
+
+  for (final name in target.requiredLibraries) {
+    verifyLibrary('$directory/$name', name);
+  }
+
+  // A build that links the sherpa engine must ship its libraries; a build
+  // without it ships none, and its archive simply has no `sherpa/` subtree.
+  if (sherpaEngineAvailable) {
+    final sherpaRoot = '$directory/${target.sherpaNativeSubdirectory}';
+    for (final relative in target.sherpaLibraries) {
+      final key = '${target.sherpaNativeSubdirectory}/$relative';
+      if (!requireSherpa && !File('$sherpaRoot/$relative').existsSync()) {
+        // A source checkout legitimately has no packaged copy.
+        continue;
+      }
+      verifyLibrary('$sherpaRoot/$relative', key);
     }
   }
 
@@ -287,12 +316,18 @@ class SttRuntimeStage {
 /// The copy is an allowlist, never a directory copy: model files and build
 /// leftovers (`*.bin`, `ggml-model-*`, markers, logs) can never be bundled with
 /// the Agent. An unverified or foreign-architecture runtime is refused.
+///
+/// The whisper libraries come from `agent/native/<tag>/`; the sherpa-onnx
+/// libraries come from the engine package's own resolution (the pub cache), which
+/// is why [sherpaSource] is asked for rather than guessed. They are copied into
+/// `native/<tag>/sherpa/` with their loader-relative paths preserved.
 Future<SttRuntimeStage> stageSttRuntime({
   required Directory nativeRoot,
   required SttNativeTarget target,
   required Directory stageRoot,
   required SttRuntimeManifest manifest,
   required SttRuntimeVerification verification,
+  String? sherpaSource,
 }) async {
   if (!verification.ok) {
     throw SttRuntimeStageException(
@@ -310,6 +345,29 @@ Future<SttRuntimeStage> stageSttRuntime({
     final to = File('${destination.path}/$name');
     await from.copy(to.path);
     hashes[name] = verification.hashes[name] ?? await sha256OfFile(to);
+  }
+  if (sherpaEngineAvailable) {
+    if (sherpaSource == null || sherpaSource.isEmpty) {
+      throw const SttRuntimeStageException(
+        'the sherpa engine is part of this build but its libraries were not '
+        'found; a packaged runtime must ship them',
+      );
+    }
+    for (final relative in target.sherpaLibraries) {
+      final from = File('$sherpaSource/$relative');
+      if (!from.existsSync()) {
+        throw SttRuntimeStageException(
+          'the sherpa engine is missing $relative in $sherpaSource',
+        );
+      }
+      final key = '${target.sherpaNativeSubdirectory}/$relative';
+      final to = File(
+        '${destination.path}/${target.sherpaNativeSubdirectory}/$relative',
+      );
+      await to.parent.create(recursive: true);
+      await from.copy(to.path);
+      hashes[key] = verification.hashes[key] ?? await sha256OfFile(to);
+    }
   }
   return SttRuntimeStage(
     target: target,
@@ -382,6 +440,14 @@ Future<String> sha256OfFile(File file) async {
   final digest = await sha256.bind(file.openRead()).first;
   return digest.toString();
 }
+
+/// sha256 of [file], read in one pass.
+///
+/// Used inside the verification closure, where an await would force the whole
+/// check to be async per file for no benefit: the largest library here is tens
+/// of megabytes.
+String sha256OfFileSync(File file) =>
+    sha256.convert(file.readAsBytesSync()).toString();
 
 /// Compares dotted versions such as `12.0` and `10.15.7`.
 int compareVersions(String a, String b) {

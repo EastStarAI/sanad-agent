@@ -173,6 +173,35 @@ class SttNativeTarget {
     SttNativeOs.linux => _linuxLibraries,
   };
 
+  /// Directory name under `native/<tag>/` that holds the sherpa-onnx runtime.
+  ///
+  /// It is a separate subdirectory because `package:sherpa_onnx` is given a
+  /// directory and appends its own per-platform relative path to it (see
+  /// [sherpaLibraries]); keeping the whisper shim flat beside it means the
+  /// whisper loader is untouched.
+  String get sherpaNativeSubdirectory => 'sherpa';
+
+  /// Files `package:sherpa_onnx` opens inside [sherpaNativeSubdirectory],
+  /// relative to that directory, in the order the loader probes them.
+  ///
+  /// These are the exact strings `loadDylib()` in sherpa_onnx 2.0.1 appends to
+  /// the directory it is handed, so the packaged layout and the loader cannot
+  /// disagree. The macOS entry is the xcframework path the library hard-codes.
+  List<String> get sherpaLibraries => switch (os) {
+    SttNativeOs.macos => const [
+      'sherpa_onnx_macos/sherpa-onnx.xcframework/macos-arm64_x86_64/'
+          'libsherpa-onnx-c-api.dylib',
+    ],
+    SttNativeOs.windows => const [
+      'sherpa-onnx-c-api.dll',
+      'onnxruntime.dll',
+    ],
+    SttNativeOs.linux => const [
+      'libsherpa-onnx-c-api.so',
+      'libonnxruntime.so',
+    ],
+  };
+
   /// CMake architecture for a macOS build, or null when the platform does not
   /// take one (Linux and Windows build for the host toolchain).
   String? get cmakeArchitecture => os == SttNativeOs.macos

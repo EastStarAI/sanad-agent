@@ -156,3 +156,29 @@ Map<String, String> writeFakeRuntime({
   }
   return hashes;
 }
+
+/// Writes the sherpa-onnx libraries into [directory] with their loader-relative
+/// paths, returning their manifest keys and hashes.
+///
+/// The packaged layout puts them under `sherpa/` because `package:sherpa_onnx` is
+/// handed a directory and appends its own per-platform relative path; the keys
+/// therefore start with `sherpa/`.
+Map<String, String> writeFakeSherpaRuntime({
+  required Directory directory,
+  required SttNativeTarget target,
+}) {
+  final hashes = <String, String>{};
+  for (final relative in target.sherpaLibraries) {
+    final bytes = fakeLibraryBytes(
+      target: target,
+      fileName: relative.split('/').last,
+    );
+    final file = File('${directory.path}/$relative');
+    file.parent.createSync(recursive: true);
+    file.writeAsBytesSync(bytes);
+    hashes['${target.sherpaNativeSubdirectory}/$relative'] =
+        sha256.convert(bytes).toString();
+  }
+  return hashes;
+}
+

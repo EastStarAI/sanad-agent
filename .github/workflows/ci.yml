@@ -171,6 +171,16 @@ jobs:
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
+      - name: Analyze the dictation engine package
+        working-directory: agent
+        # The engine is a swappable local package excluded from the package-wide
+        # analysis (only one of the two can resolve), so the lane that selected it
+        # analyzes it explicitly.
+        run: |
+          set -o pipefail
+          engine=packages/stt_sherpa
+          if [ -f pubspec_overrides.yaml ]; then engine=packages/stt_sherpa_stub; fi
+          fvm dart analyze "$engine"
       - name: Test CWD-sensitive suites in isolation
         working-directory: agent
         run: |
@@ -242,6 +252,14 @@ jobs:
         if: matrix.os == 'ubuntu-24.04-arm'
       - uses: ./.github/actions/setup-fvm
         if: matrix.os != 'ubuntu-24.04-arm'
+      - name: Select the whisper-only dictation engine
+        if: matrix.os == 'ubuntu-24.04-arm'
+        working-directory: agent
+        # `sherpa_onnx` requires the Flutter SDK and this lane installs the
+        # standalone Dart SDK, so the overlay swaps the engine for a stand-in
+        # with the same package name. The Agent still compiles and dictates
+        # through whisper.cpp; only streaming and VAD are absent.
+        run: cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml
       - name: Resolve agent dependencies
         working-directory: agent
         run: ${{ env.DART }} pub get
@@ -336,6 +354,10 @@ jobs:
       - name: Set up MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - name: Select the whisper-only dictation engine
+        if: matrix.os == 'ubuntu-24.04-arm'
+        working-directory: agent
+        run: cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml
       - name: Resolve agent dependencies
         working-directory: agent
         run: ${{ env.DART }} pub get
@@ -405,6 +427,27 @@ jobs:
           if ($archives.Count -ne 1) {
             throw "Expected exactly one staged runtime archive."
           }
+      # The archive above is what a released Agent installs. This loads the
+      # engine out of that staged payload, so a layout the loader cannot read
+      # fails here instead of in the field. The linux-arm64 lane links the
+      # whisper-only stand-in and asserts that instead.
+      - name: Load the packaged sherpa runtime in a real process
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+        run: ${{ env.DART }} test test/stt/sherpa_runtime_smoke_test.dart
+      - name: Load the packaged sherpa runtime in a real process
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/sherpa_runtime_smoke_test.dart
 
   client-analyze:
     name: Analyze client

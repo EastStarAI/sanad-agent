@@ -103,6 +103,7 @@ class FakeSttEngine implements SttEngine {
     required String modelId,
     int threads = 2,
     bool useGpu = true,
+    String? sherpaNativeDir,
   }) async {
     started = true;
     final gate = startGate;

@@ -381,6 +381,57 @@ void main() {
       }
     });
 
+    test('the engine subtree installs, a deeper one is refused', () {
+      // The packaged runtime carries the sherpa-onnx libraries under `sherpa/`
+      // with the loader-relative macOS layout; that is the only nesting the
+      // installer accepts.
+      const macosSherpa =
+          'sherpa/sherpa_onnx_macos/sherpa-onnx.xcframework/'
+          'macos-arm64_x86_64/libsherpa-onnx-c-api.dylib';
+      final accepted = _Sandbox.create(
+        libraries: {
+          'libsanad_whisper.dylib': 'fake-whisper',
+          macosSherpa: 'fake-sherpa',
+        },
+      );
+      try {
+        final result = accepted.run();
+        expect(result.exitCode, 0, reason: result.stderr as String);
+        expect(
+          File('${accepted.runtimeDir.path}/$macosSherpa').existsSync(),
+          isTrue,
+          reason: 'the engine subtree is installed beside the shim',
+        );
+        expect(
+          accepted.runtimeFailureMarker.existsSync(),
+          isFalse,
+          reason: result.stderr as String,
+        );
+      } finally {
+        accepted.dispose();
+      }
+
+      final refused = _Sandbox.create(
+        libraries: {
+          'libsanad_whisper.dylib': 'fake-whisper',
+          'sherpa/a/b/c/d/e/libsherpa-onnx-c-api.dylib': 'too-deep',
+        },
+      );
+      try {
+        final result = refused.run();
+        final stderr = result.stderr as String;
+        expect(result.exitCode, 0, reason: stderr);
+        expect(stderr, contains('unexpected layout'), reason: stderr);
+        expect(
+          File('${refused.runtimeDir.path}/OLD-MARKER').existsSync(),
+          isTrue,
+          reason: 'a refused archive never replaces the installed runtime',
+        );
+      } finally {
+        refused.dispose();
+      }
+    });
+
     test('a release without a runtime keeps the installed one', () {
       final sandbox = _Sandbox.create(
         libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
@@ -458,7 +509,11 @@ class _Sandbox {
     final stage = Directory('${root.path}/stage/native/macos-arm64')
       ..createSync(recursive: true);
     for (final entry in libraries.entries) {
-      File('${stage.path}/${entry.key}').writeAsStringSync(entry.value);
+      // A key may carry a relative path (the engine's `sherpa/` subtree keeps
+      // the loader-relative layout), so the parent is created here.
+      final file = File('${stage.path}/${entry.key}');
+      file.parent.createSync(recursive: true);
+      file.writeAsStringSync(entry.value);
     }
     for (final link in extraLinks.entries) {
       Link('${stage.path}/${link.key}').createSync(link.value);

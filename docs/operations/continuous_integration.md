@@ -58,6 +58,14 @@ whisper runtime on arm64 Linux for the same reason: the release matrix publishes
 from an x64 host. It uses the same per-lane `DART` selector and a whisper build
 cache keyed by the runner label.
 
+Both arm64 lanes first copy `agent/tool/pubspec_overrides.no_sherpa.yaml` to
+`agent/pubspec_overrides.yaml`: `sherpa_onnx` requires the Flutter SDK, which
+those lanes do not install, so the Agent links the whisper-only engine stand-in.
+The lane then analyzes the engine package it selected, because
+`agent/analysis_options.yaml` excludes `packages/**` (only one variant can
+resolve). A lane that forgets the overlay fails at `pub get` instead of shipping
+a half-configured build.
+
 ### Cross-Component Contract Fixtures
 
 A path is classified by the component that *consumes* it, not only by the

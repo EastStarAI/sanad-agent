@@ -86,16 +86,45 @@ const int _tarChecksumOffset = 148;
 const int _tarChecksumWidth = 8;
 
 Uint8List _tarHeader(String name, int size, int epochSeconds) {
-  final encoded = Uint8List.fromList(name.codeUnits);
-  if (encoded.length > 100) {
-    throw ArgumentError.value(
-      name,
-      'entries',
-      'ustar name field is limited to 100 bytes',
-    );
+  // POSIX ustar splits a long path into a 155-byte `prefix` and a 100-byte
+  // `name`; readers join them with `/`. The macOS sherpa library lives four
+  // directories deep and its member name passes 100 bytes, so the split is
+  // required, not optional. Both halves are still byte-bounded and the member is
+  // never truncated.
+  var entryName = name;
+  var prefix = '';
+  if (name.codeUnits.length > 100) {
+    final split = name.lastIndexOf('/', 100);
+    if (split <= 0) {
+      throw ArgumentError.value(
+        name,
+        'entries',
+        'ustar name field is limited to 100 bytes and the path cannot be split',
+      );
+    }
+    prefix = name.substring(0, split);
+    entryName = name.substring(split + 1);
+    if (prefix.codeUnits.length > 155) {
+      throw ArgumentError.value(
+        name,
+        'entries',
+        'ustar prefix field is limited to 155 bytes',
+      );
+    }
+    if (entryName.codeUnits.length > 100) {
+      throw ArgumentError.value(
+        name,
+        'entries',
+        'ustar name field is limited to 100 bytes',
+      );
+    }
   }
+  final encoded = Uint8List.fromList(entryName.codeUnits);
   final header = Uint8List(_tarBlockSize);
   _writeText(header, 0, 100, encoded);
+  if (prefix.isNotEmpty) {
+    _writeText(header, 345, 155, Uint8List.fromList(prefix.codeUnits));
+  }
   _writeOctal(header, 100, 8, _tarModeFile);
   _writeOctal(header, 108, 8, 0); // uid
   _writeOctal(header, 116, 8, 0); // gid

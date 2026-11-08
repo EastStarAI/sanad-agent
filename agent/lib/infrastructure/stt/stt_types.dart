@@ -4,6 +4,8 @@
 /// the recognizer is an in-process native binding, never a sidecar.
 library;
 
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart' show sherpaEngineAvailable;
+
 /// How a catalog model turns audio into text.
 enum SttModelMode {
   /// Batch recognizer driven by a VAD: one final transcript per speech segment.
@@ -41,6 +43,46 @@ enum SttEngineKind {
 
   /// whisper.cpp through dart:ffi: one ggml file, mmap'd.
   whisperCpp,
+}
+
+/// Which in-process engines **this build** can actually run.
+///
+/// The sherpa engine is a swappable package: lanes that cannot resolve
+/// `sherpa_onnx` (it requires the Flutter SDK) link a stand-in instead, and the
+/// resulting Agent is a complete build with less capability, not a broken one.
+/// Model selection, the model rows, and readiness all ask this object, so no
+/// other file tests the platform or the build mode.
+///
+/// Streaming and VAD are sherpa-only today: the whisper.cpp path has no online
+/// recognizer and no silero VAD, so a build without sherpa is batch-only.
+class SttEngineAvailability {
+  const SttEngineAvailability({bool? sherpa, bool? whisperCpp})
+    : sherpa = sherpa ?? sherpaEngineAvailable,
+      whisperCpp = whisperCpp ?? true;
+
+  /// The engines this build was compiled with.
+  const SttEngineAvailability.build()
+    : sherpa = sherpaEngineAvailable,
+      whisperCpp = true;
+
+  final bool sherpa;
+  final bool whisperCpp;
+
+  /// True when a catalog entry's engine exists in this build.
+  bool supports(SttEngineKind kind) => switch (kind) {
+    SttEngineKind.sherpa => sherpa,
+    SttEngineKind.whisperCpp => whisperCpp,
+  };
+
+  /// True when partial transcripts and VAD-driven segmentation exist.
+  ///
+  /// Both are sherpa features, so this is exactly [sherpa]: a build without it
+  /// publishes finals only, and the Client already renders that.
+  bool get streaming => sherpa;
+
+  @override
+  String toString() =>
+      'SttEngineAvailability(sherpa=$sherpa, whisperCpp=$whisperCpp)';
 }
 
 class SttCatalogEntry {

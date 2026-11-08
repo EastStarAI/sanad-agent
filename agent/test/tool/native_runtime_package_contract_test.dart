@@ -239,6 +239,36 @@ void main() {
       );
     });
 
+    test('the arm64 lane builds without the Flutter-only engine', () {
+      // `sherpa_onnx` declares `environment: flutter`, and the arm64 lane has no
+      // Flutter SDK. The lane must therefore swap the engine for the stand-in
+      // before `pub get`; without this the whole target stops resolving.
+      for (final path in [
+        '../.github/workflows/release.yml',
+        '../.github/workflows/ci.yml',
+      ]) {
+        final workflow = File(path).readAsStringSync();
+        expect(
+          workflow,
+          contains(
+            'cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml',
+          ),
+          reason: '$path never selects the whisper-only engine',
+        );
+      }
+      // The overlay and the stand-in exist and are wired to each other.
+      final overlay = File('tool/pubspec_overrides.no_sherpa.yaml');
+      expect(overlay.existsSync(), isTrue);
+      expect(overlay.readAsStringSync(), contains('packages/stt_sherpa_stub'));
+      final stub = File('packages/stt_sherpa_stub/pubspec.yaml');
+      expect(stub.readAsStringSync(), contains('name: sanad_stt_sherpa'));
+      final stubLibrary = File('packages/stt_sherpa_stub/lib/sanad_stt_sherpa.dart');
+      expect(
+        stubLibrary.readAsStringSync(),
+        contains('const bool sherpaEngineAvailable = false;'),
+      );
+    });
+
     test('no bash step can execute on a Windows runner', () {
       for (final path in [
         '../.github/workflows/release.yml',

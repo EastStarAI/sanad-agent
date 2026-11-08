@@ -639,7 +639,12 @@ install_native_runtime() {
       return 1
     fi
   done
-  if find "$expected" -type d -mindepth 1 | grep -q .; then
+  if find "$expected" -type d -mindepth 1 \
+    ! -path "$expected/sherpa" \
+    ! -path "$expected/sherpa/sherpa_onnx_macos" \
+    ! -path "$expected/sherpa/sherpa_onnx_macos/sherpa-onnx.xcframework" \
+    ! -path "$expected/sherpa/sherpa_onnx_macos/sherpa-onnx.xcframework/macos-arm64_x86_64" \
+    | grep -q .; then
     echo "Native runtime archive has an unexpected layout." >&2
     return 1
   fi
@@ -647,7 +652,10 @@ install_native_runtime() {
     echo "Native runtime archive contains a hidden entry." >&2
     return 1
   fi
-  if find "$expected" -mindepth 1 ! -type f | grep -q .; then
+  # Directories are allowed only where the layout check above accepted them;
+  # anything that is neither a file nor a directory (a link, a socket, a device)
+  # is still refused.
+  if find "$expected" -mindepth 1 ! -type f ! -type d | grep -q .; then
     echo "Native runtime archive contains an entry that is not a regular file." >&2
     return 1
   fi

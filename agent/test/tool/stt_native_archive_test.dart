@@ -52,6 +52,34 @@ void main() {
     expect(zeroEntries.first.mtime, 0);
   });
 
+  test('a member name past 100 bytes uses the ustar prefix field', () {
+    // The macOS sherpa library lives four directories deep, and its member name
+    // is 113 bytes; without the prefix split the writer would have to truncate
+    // the path (refused) and the archive could never ship the engine.
+    const long =
+        'native/macos-arm64/sherpa/sherpa_onnx_macos/'
+        'sherpa-onnx.xcframework/macos-arm64_x86_64/'
+        'libsherpa-onnx-c-api.dylib';
+    expect(long.length, greaterThan(100));
+    final tar = _gunzip(buildDeterministicTarGz({long: [1, 2, 3]}));
+    final entries = _readTar(tar);
+    expect(entries.single.name, long);
+    expect(entries.single.checksumIsValid, isTrue);
+    // The split is real, not a single 100-byte field holding a truncated path.
+    final header = tar.sublist(0, 512);
+    expect(_text(header, 345, 155), isNotEmpty);
+  });
+
+  test('a path that cannot be split is refused instead of truncated', () {
+    // One slash early in the name leaves a 150-byte tail, which fits neither
+    // field; the writer must refuse rather than write a truncated path.
+    final name = 'a/${'b' * 150}';
+    expect(
+      () => buildDeterministicTarGz({name: [1]}),
+      throwsA(isA<ArgumentError>()),
+    );
+  });
+
   test('entries are sorted, terminated, and checksummed', () {
     final tar = _gunzip(buildDeterministicTarGz(libraries));
     expect(tar.length % 512, 0);
@@ -138,7 +166,7 @@ List<_TarEntry> _readTar(Uint8List tar) {
     final size = _octal(header, 124, 12);
     entries.add(
       _TarEntry(
-        name: _text(header, 0, 100),
+        name: _joinedName(header),
         mode: _text(header, 100, 8),
         uid: _text(header, 108, 8),
         gid: _text(header, 116, 8),
@@ -158,6 +186,13 @@ String _text(List<int> header, int offset, int width) {
   final bytes = header.sublist(offset, offset + width);
   final end = bytes.indexOf(0);
   return String.fromCharCodes(end < 0 ? bytes : bytes.sublist(0, end));
+}
+
+/// ustar joins the 155-byte `prefix` field and the 100-byte `name` with `/`.
+String _joinedName(List<int> header) {
+  final name = _text(header, 0, 100);
+  final prefix = _text(header, 345, 155);
+  return prefix.isEmpty ? name : '$prefix/$name';
 }
 
 int _octal(List<int> header, int offset, int width) =>

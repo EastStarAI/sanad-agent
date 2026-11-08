@@ -264,6 +264,10 @@ class AgentRuntimeBundle {
         // Tar writers record the `native/` and `native/<tag>/` directory entries;
         // they hold no bytes and are the only accepted non-library names.
         .where((line) => line != 'native/' && line != 'native/$tag/')
+        // A nested directory entry (`…/sherpa/`) is the same thing one level
+        // down: tar records it, it carries no bytes, and the extraction check
+        // below still refuses any file the archive did not declare.
+        .where((line) => !line.endsWith('/'))
         .toList(growable: false);
     final rejection = _memberRejection(names, tag);
     if (rejection != null) {
@@ -311,19 +315,43 @@ class AgentRuntimeBundle {
         return 'The runtime archive contains a member outside native/$tag/.';
       }
       final base = name.substring(prefix.length);
-      if (base.isEmpty || base.contains('/') || base.contains('\\')) {
+      if (base.isEmpty || base.contains('\\')) {
         return 'The runtime archive nests or escapes its layout.';
       }
       if (base == '.' || base == '..' || base.startsWith('.')) {
         return 'The runtime archive contains a hidden member.';
       }
       if (base.contains(':')) return 'The runtime archive contains a drive path.';
-      if (!_isLibraryName(base)) {
+      final relative = _runtimeRelativePath(base);
+      if (relative == null) {
+        return 'The runtime archive nests or escapes its layout.';
+      }
+      if (!_isLibraryName(relative.split('/').last)) {
         return 'The runtime archive contains a non-library member.';
       }
       if (!seen.add(base)) return 'The runtime archive repeats a member.';
     }
     return null;
+  }
+
+  /// Accepts a flat library member or one under the engine's `sherpa/` subtree.
+  ///
+  /// The whisper libraries sit directly in `native/<tag>/`; the sherpa-onnx
+  /// libraries keep the loader-relative paths `package:sherpa_onnx` appends to
+  /// the directory it is given, which for macOS is four directories deep. The
+  /// depth is bounded and every segment is validated, so this cannot be used to
+  /// smuggle a tree into the installed runtime.
+  static String? _runtimeRelativePath(String base) {
+    if (!base.contains('/')) return base;
+    final segments = base.split('/');
+    if (segments.length < 2 || segments.length > 6) return null;
+    if (segments.first != 'sherpa') return null;
+    for (final segment in segments) {
+      if (segment.isEmpty || segment == '.' || segment == '..') return null;
+      if (segment.startsWith('.')) return null;
+      if (segment.contains(':')) return null;
+    }
+    return segments.skip(1).join('/');
   }
 
   static bool _isLibraryName(String name) {

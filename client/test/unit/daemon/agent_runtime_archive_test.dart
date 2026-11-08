@@ -52,6 +52,42 @@ void main() {
     }
   });
 
+  test('accepts the engine subtree with its loader-relative paths', () {
+    // `package:sherpa_onnx` is handed a directory and appends this exact path on
+    // macOS, so the packaged archive must be allowed to carry it.
+    const sherpa =
+        'sherpa/sherpa_onnx_macos/sherpa-onnx.xcframework/'
+        'macos-arm64_x86_64/libsherpa-onnx-c-api.dylib';
+    expect(
+      AgentRuntimeArchive.rejectionFor([
+        'native/$tag/libx.dylib',
+        'native/$tag/$sherpa',
+      ], tag: tag),
+      isNull,
+    );
+  });
+
+  test('rejects nesting that is not the engine subtree, or too deep', () {
+    final cases = <(String, List<String>)>[
+      // Only `sherpa/` may nest; a library under any other directory is a tree
+      // smuggled into the runtime.
+      ('unexpected_member', ['native/$tag/other/libx.dylib']),
+      // The engine's own layout is four directories deep; six is a defect.
+      ('unexpected_member', ['native/$tag/sherpa/a/b/c/d/e/libx.dylib']),
+      // A non-library payload inside the subtree is still refused.
+      ('unexpected_member', ['native/$tag/sherpa/model.onnx']),
+      ('unexpected_member', ['native/$tag/sherpa/../libx.dylib']),
+      ('unexpected_member', ['native/$tag/sherpa/.hidden/libsherpa.so']),
+    ];
+    for (final (reason, names) in cases) {
+      expect(
+        AgentRuntimeArchive.rejectionFor(names, tag: tag),
+        reason,
+        reason: names.join(', '),
+      );
+    }
+  });
+
   test('refuses an archive with no file members', () {
     expect(
       AgentRuntimeArchive.rejectionFor(['native/', 'native/$tag/'], tag: tag),

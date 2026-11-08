@@ -1,12 +1,14 @@
 ---
 title: "Native Dictation Runtime Platforms"
-description: "Platform tag, directory layout, verification rules, and release staging for the in-process whisper.cpp dictation runtime, including macOS Intel (x64)."
+description: "Platform tag, directory layout, verification rules, and release staging for the in-process whisper.cpp and sherpa-onnx dictation runtimes, including macOS Intel (x64) and the whisper-only Linux arm64 build."
 ---
 
 # Native Dictation Runtime Platforms
 
-The local dictation engine is a native whisper.cpp shim (`libsanad_whisper`)
-loaded through `dart:ffi` inside the agent daemon. Its binaries are per-OS and
+The local dictation engine is native code loaded through `dart:ffi` inside the
+agent daemon. Two runtimes share one packaged directory: the whisper.cpp shim
+(`libsanad_whisper`) and, where the build includes it, the sherpa-onnx engine
+(`libsherpa-onnx-c-api`). Their binaries are per-OS and
 **per-CPU-architecture** build products, are not tracked in git, and must be
 reproducible on the machine that will load them.
 
@@ -14,6 +16,26 @@ This page owns the platform matrix, where each build lives, what a verification
 proves, and how a packaged Agent receives the runtime. It does not own the
 dictation transport or model catalog; see
 [Local Dictation](local_dictation.md) for those.
+
+## Engine availability
+
+The sherpa-onnx engine is a swappable local package
+(`agent/packages/stt_sherpa`), because `package:sherpa_onnx` declares
+`environment: flutter` and the Linux arm64 Agent is built with the standalone
+Dart SDK. That lane selects `agent/packages/stt_sherpa_stub` through
+`agent/tool/pubspec_overrides.no_sherpa.yaml`, so the Agent still builds and
+still dictates — through whisper.cpp only.
+
+| Build | Engines | Local modes | Streaming/VAD |
+|---|---|---|---|
+| macOS arm64/x64, Windows x64, Linux x64 | whisper.cpp + sherpa-onnx | batch + streaming | yes |
+| Linux arm64 | whisper.cpp | batch only | no |
+
+`SttEngineAvailability` in `agent/lib/infrastructure/stt/stt_types.dart` is the
+single answer the daemon asks: model selection, the model rows, and readiness
+all read it, and `agent/test/stt/engine_availability_test.dart` proves both
+builds on one machine. A build without sherpa is not a degraded error state —
+the Client already renders a stream that publishes finals only.
 
 ## Platform matrix
 
@@ -34,11 +56,41 @@ runs the CPU baseline: the Metal library is not built, not required, and not
 verified, so a packaged Intel Agent has no GPU dependency. `use_gpu` remains
 accepted on Intel; whisper.cpp simply has no GPU backend to bind.
 
+### The engine subtree
+
+The sherpa-onnx libraries live in a `sherpa/` subdirectory of the same tag
+directory, because `package:sherpa_onnx` is handed **one directory** and appends
+its own per-platform path to it. `SttNativeTarget.sherpaLibraries` owns that
+list; the packaged layout is:
+
+| Tag | Members under `native/<tag>/sherpa/` |
+|---|---|
+| `macos-arm64`, `macos-x64` | `sherpa_onnx_macos/sherpa-onnx.xcframework/macos-arm64_x86_64/libsherpa-onnx-c-api.dylib` (universal) |
+| `windows-x64`, `windows-arm64` | `sherpa-onnx-c-api.dll`, `onnxruntime.dll` |
+| `linux-x64` | `libsherpa-onnx-c-api.so`, `libonnxruntime.so` |
+| `linux-arm64` | none — the build has no sherpa engine |
+
+`DictationService.sherpaNativeDirectory` passes that directory to the engine, and
+`agent/test/stt/sherpa_runtime_smoke_test.dart` loads the library from the
+staged payload in release staging and in the pull-request lane, so a layout the
+loader cannot read fails before publication. On Windows the runtime is preloaded
+by path first: Windows resolves a DLL's imports from the process search path,
+not from the DLL's own directory — the same rule the whisper shim follows.
+
+The archive contract allows exactly this nesting and nothing else: members are
+`native/<tag>/<library>` or `native/<tag>/sherpa/<loader-relative library>`, at
+most six segments, library names only. The agent's own updater, the Client
+bootstrap installer, `scripts/install.sh`, and `scripts/install.ps1` each enforce
+it, and the macOS member is long enough that the archive writer uses the ustar
+`prefix` field instead of truncating the path.
+
 ### Ownership
 
 | Concern | Owner |
 |---|---|
 | Tag, directory, required files, Metal per architecture, deployment target | `agent/lib/infrastructure/stt/stt_native_platform.dart` |
+| The engine's own directory and loader-relative libraries | `SttNativeTarget.sherpaNativeSubdirectory`, `SttNativeTarget.sherpaLibraries` |
+| Which engines a build can run | `SttEngineAvailability` (`stt_types.dart`) over `package:sanad_stt_sherpa` |
 | Discovery of the shim at runtime, readiness probe, `dart:ffi` entry points | `agent/lib/infrastructure/stt/whispercpp_bindings.dart` |
 | Install, verify, stage, and archive | `agent/tool/ensure_native_stt.dart`, `stt_native_runtime.dart`, `stt_native_archive.dart` |
 | Build from a whisper.cpp tree | `agent/tool/build_whispercpp.sh`, `agent/tool/build_whispercpp.ps1` |
@@ -238,6 +290,7 @@ The stage contains:
 
 ```text
 <stage-dir>/native/<tag>/<required libraries>   # ships beside the executable
+<stage-dir>/native/<tag>/sherpa/<engine libraries>   # engine, loader-relative
 <stage-dir>/stt-runtime-<tag>.json              # tag, version, pin state, real sha256 per file
 <stage-dir>/sanad-agent-runtime-<release>-<platform>-<arch>.tar.gz   # from --archive
 ```
@@ -290,7 +343,8 @@ or verification fails loses dictation only and keeps a working Agent (see
    declared archive is missing, so the archive is part of the release candidate
    and its real sha256 and size land in the release manifest. `scripts/install.sh`
    and `scripts/install.ps1` select that entry, verify size and sha256, reject an
-   archive whose layout is not exactly `native/<tag>/` with library files only,
+   archive whose layout is not `native/<tag>/` plus the bounded `sherpa/`
+   subtree with library files only,
    and install it as `<home>/bin/native/<tag>/` — the first location the loader
    searches relative to the installed executable.
 
