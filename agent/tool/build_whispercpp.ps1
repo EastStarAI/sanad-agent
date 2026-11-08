@@ -35,27 +35,30 @@ try {
 
     New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-    # MSVC puts import libraries under build\lib\Release and DLLs under
-    # build\bin\Release; search both so the link step does not depend on the
-    # generator's layout.
-    $includeArgs = @("/I", "$WhisperSrc\include", "/I", "$WhisperSrc\ggml\include")
-    $libDirs = @("$WhisperSrc\build\bin\Release", "$WhisperSrc\build\lib\Release")
-    $linkArgs = @()
-    foreach ($dir in $libDirs) {
-        if (Test-Path $dir) { $linkArgs += "/LIBPATH:$dir" }
+    # MSVC's import libraries and DLLs do not share one directory (for example
+    # build\src\Release\whisper.lib versus build\bin\Release\whisper.dll), and
+    # the layout differs per generator. Search the build tree once instead of
+    # hardcoding paths.
+    function Find-BuildFile([string]$name) {
+        Get-ChildItem -Path "$WhisperSrc\build" -Recurse -File -Filter $name -ErrorAction SilentlyContinue |
+            Select-Object -First 1 -ExpandProperty FullName
     }
-    $linkArgs += @("whisper.lib", "ggml.lib", "ggml-base.lib", "ggml-cpu.lib", "/OUT:$out\sanad_whisper.dll")
+
+    $importLibs = @("whisper.lib", "ggml.lib", "ggml-base.lib", "ggml-cpu.lib") |
+        ForEach-Object { Find-BuildFile $_ }
+    if ($importLibs -contains $null -or $importLibs.Count -ne 4) {
+        throw "missing import libraries: $($importLibs -join ', ')"
+    }
+
+    $includeArgs = @("/I", "$WhisperSrc\include", "/I", "$WhisperSrc\ggml\include")
+    $linkArgs = $importLibs + @("/OUT:$out\sanad_whisper.dll")
 
     cl.exe /nologo /O2 /LD @includeArgs "$here\native\whispercpp\sanad_whisper.c" /link @linkArgs
     if ($LASTEXITCODE -ne 0) { throw "shim build failed" }
 
-    $libs = @("whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")
-    foreach ($dir in $libDirs) {
-        if (-not (Test-Path $dir)) { continue }
-        foreach ($lib in $libs) {
-            $src = Join-Path $dir $lib
-            if (Test-Path $src) { Copy-Item -Force $src $out }
-        }
+    foreach ($lib in @("whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")) {
+        $src = Find-BuildFile $lib
+        if ($src) { Copy-Item -Force $src $out }
     }
 
     Write-Host "built: $out\sanad_whisper.dll"
