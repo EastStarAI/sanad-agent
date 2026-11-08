@@ -244,10 +244,10 @@ jobs:
         if: matrix.os != 'ubuntu-24.04-arm'
       - name: Resolve agent dependencies
         working-directory: agent
-        run: $DART pub get
+        run: ${{ env.DART }} pub get
       - name: Verify isolated CLI contracts
         working-directory: agent
-        run: $DART test test/guards/e2e_state_isolation_contract_test.dart
+        run: ${{ env.DART }} test test/guards/e2e_state_isolation_contract_test.dart
       - name: Build packaged Windows no-console launcher
         if: runner.os == 'Windows'
         working-directory: agent
@@ -265,7 +265,7 @@ jobs:
         working-directory: agent
         env:
           SANAD_CLI_AOT_SUCCESS_FILE: .dart_tool/cli-aot-smoke-success
-        run: $DART run tool/cli_aot_smoke.dart
+        run: ${{ env.DART }} run tool/cli_aot_smoke.dart
       - name: Require AOT smoke success marker
         if: runner.os != 'Windows'
         working-directory: agent

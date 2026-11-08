@@ -164,18 +164,18 @@ jobs:
         working-directory: agent
         shell: bash
         run: |
-          $DART pub get
-          $DART run tool/generate_bundled_skills.dart --check
-          $DART run tool/generate_model_capability_defaults.dart --check
-          $DART analyze
-          $DART test
+          ${{ env.DART }} pub get
+          ${{ env.DART }} run tool/generate_bundled_skills.dart --check
+          ${{ env.DART }} run tool/generate_model_capability_defaults.dart --check
+          ${{ env.DART }} analyze
+          ${{ env.DART }} test
       - name: Compile agent
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
           mkdir -p ../dist
-          $DART compile exe \
+          ${{ env.DART }} compile exe \
             -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} \
             bin/sanad_agent.dart \
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
