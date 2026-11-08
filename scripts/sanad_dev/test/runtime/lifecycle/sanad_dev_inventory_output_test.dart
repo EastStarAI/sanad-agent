@@ -128,6 +128,8 @@ void main() {
         'caller_worktree_id',
         'agent_probe_timed_out',
         'client_probe_timed_out',
+        'pull_request_lookup',
+        'pull_request_unavailable_reason',
         'summary',
         'worktrees',
         'runtimes',
@@ -144,6 +146,8 @@ void main() {
         'clients': 0,
         'test_homes': 0,
         'orphans': 0,
+        'removal_safe': 0,
+        'removal_keep': 1,
       });
       expect((document['worktrees']! as List).single.keys, [
         'path',
@@ -164,6 +168,19 @@ void main() {
         'worktree_id',
         'home',
         'recorded_home',
+        'disk_bytes',
+        'disk_scan',
+        'last_commit_at',
+        'last_commit_age_seconds',
+        'upstream',
+        'upstream_state',
+        'upstream_ahead',
+        'upstream_behind',
+        'pull_request',
+        'pull_request_source',
+        'pull_request_lookup',
+        'removal',
+        'removal_reason',
       ]);
       expect((document['runtimes']! as List).single.keys, [
         'worktree_id',

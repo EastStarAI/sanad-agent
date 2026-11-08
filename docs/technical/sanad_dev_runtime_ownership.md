@@ -129,6 +129,8 @@ mismatch, rejection, timeout, or post-drain evidence preserves the lease.
 dead recorded launcher, no target Agent, exact client nonce/profile identity,
 and a target Agent port different from the requester/source. IDE-owned,
 ambiguous, cross-owned, and source-attached clients are refused.
+`cleanup-orphans` is a different scope: it deletes only orphaned dev-area records
+and Homes, never a process, and never anything a live runtime still claims.
 
 ## Standalone clones
 
@@ -547,26 +549,33 @@ hand-kept list of runtimes that goes stale — in one command:
 ```bash
 sanad-dev inventory            # compact table, one line per item
 sanad-dev inventory --all      # expands every row with its detail
-sanad-dev inventory --json     # stable machine-readable document
+sanad-dev inventory --json     # stable machine-readable document (schema 2)
+sanad-dev inventory --pr       # also ask gh for each worktree pull request
 ```
 
 `inventory` is strictly read-only: it never starts, stops, restarts, repairs,
 deletes, or rewrites runtime state, and it prints the cleanup command for every
-orphan instead of running it. Pruning stays a separate, human-owned decision.
+orphan instead of running it. Pruning stays a separate, human-owned decision:
+`cleanup-orphans` below is dry-run by default and deletes only with `--confirm`.
+The optional pull-request column is the single exception to "writes nothing", and
+only when `--pr` is passed explicitly (see below).
 
 **Sources.** `git worktree list --porcelain` (identity, branch, HEAD, lock,
 prunable), one `git --no-optional-locks status --porcelain` and one
-`git rev-list --left-right --count origin/main...HEAD` per worktree, the
-deterministic Home derivation, every launcher lease under each known Home
-(`readRuntimeLauncherRecord`, a plain read with no permission repair), every
-`~/.sanad/dev/runtimes/<worktree id>/startup-attempt.json` locator, every
-`~/.sanad-test*` Home, and each Home's `.local_gateway_endpoint.json`.
+`git rev-list --left-right --count origin/main...HEAD` per worktree, one
+`git log -1 --format=%ct` for the commit age, one
+`git rev-parse --abbrev-ref --symbolic-full-name @{upstream}` plus
+`git rev-list --left-right --count @{upstream}...HEAD` for the upstream state, one
+bounded size walk, the deterministic Home derivation, every launcher lease under
+each known Home (`readRuntimeLauncherRecord`, a plain read with no permission
+repair), every `~/.sanad/dev/runtimes/<worktree id>/startup-attempt.json` locator,
+every `~/.sanad-test*` Home, and each Home's `.local_gateway_endpoint.json`.
 
 **Sections.** Empty sections are hidden.
 
 | Section | One line per item |
 | --- | --- |
-| Worktrees | worktree id, branch, short HEAD, `dirty=`, `ahead=`, `behind=` of `origin/main`, Home, runtime class |
+| Worktrees | worktree id, branch, short HEAD, `dirty=`, `ahead=`/`behind=` of `origin/main`, commit `age=`, `disk=`, `upstream=`, `pr=` (only when the lookup ran), `remove=safe|keep`, Home, runtime class |
 | Runtimes | live and leased runtime groups: class, Agent port, Agent PID with liveness, VM-service port, source commit, attached Client count and devices, lease owner and status, Home, `primary` marker |
 | Clients | every discovered Client attributed to the worktree id it is registered under: device, VM-service port, PID, gateway port, lease ownership, `lease-pid-drift` |
 | Test Homes | worktrees whose Home is an absolute `~/.sanad-test*` path, with the recorded port and running/stopped state |
@@ -574,8 +583,59 @@ deterministic Home derivation, every launcher lease under each known Home
 
 `--all` adds the full HEAD, the absolute path, the lock/prunable reason, the
 derived and recorded Home, the lease identity and liveness, the full source
-commit, Client source and Home, and each orphan's absolute target, detail, and
-cleanup command.
+commit, Client source and Home, each orphan's absolute target, detail, and
+cleanup command, and the worktree health detail: `last commit:`,
+`disk:` with its measurement state, `upstream:` with ahead/behind, the reported
+pull request, and `removal:` with its reason.
+
+**Worktree health.** Every worktree row carries four pieces of evidence beside
+the Git identity, and every one of them degrades to a marker instead of failing
+the report:
+
+- **Disk size.** One bounded walk that never follows a symbolic link and never
+  leaves the worktree. A row stops at `inventoryDiskScanRowBudget`, the whole pass
+  stops at `inventoryDiskScanBudget`, and a walk that hits either deadline or
+  `inventoryDiskScanEntryLimit` reports `disk_scan: skipped` with no byte count.
+  The primary checkout is measured last so the shared budget first serves the
+  linked worktrees whose removal decision depends on it. A missing directory
+  reports `missing`.
+- **Last-commit age.** `last_commit_at` is the committer timestamp of `HEAD` and
+  `last_commit_age_seconds` is its age at projection time.
+- **Upstream state.** `none` when the branch configures no upstream, `tracking`
+  when the upstream ref resolves (with `upstream_ahead`/`upstream_behind`), and
+  `gone` when the branch still configures an upstream whose ref no longer exists.
+- **Pull request (opt-in).** `--pr` asks `gh pr list --head <branch> --state all`
+  once per branch under one shared budget
+  (`inventoryPullRequestBudget`, `inventoryPullRequestCommandTimeout` per child,
+  at most `inventoryPullRequestConcurrency` children). A fresh answer is cached
+  in the caller worktree's gitignored `.sanad-dev/inventory/pr-cache.json` for
+  `inventoryPullRequestCacheTtl` and reused only while the branch head still
+  matches; "no pull request" is cached too. A missing `gh`, an unauthenticated
+  `gh`, no network, or a child that overruns each produce
+  `pull_request_lookup: unavailable|timeout` and a bounded reason at the top
+  level, so the projection keeps working offline. Without `--pr` the lookup is
+  `not_requested` and no file is written.
+
+**Removal verdict.** `removal` is advisory: it never removes a worktree. `safe`
+means clean, merged or pushed, no live runtime, and no Test Home; every other
+case is `keep` with the first blocking reason in operator order:
+
+| Verdict | Reason | Meaning |
+| --- | --- | --- |
+| `keep` | `primary checkout` | the primary checkout is never a removal candidate |
+| `keep` | `worktree directory is missing` | nothing left to measure; `git worktree prune` territory |
+| `keep` | `worktree is locked` | Git refuses to remove a locked worktree |
+| `keep` | `detached HEAD` | a detached worktree has no branch to verify |
+| `keep` | `live runtime` | an Agent or Client is still running for that worktree |
+| `keep` | `Test Home` | the worktree uses an absolute `~/.sanad-test*` Home |
+| `keep` | `uncommitted changes (N)` | uncommitted work would be lost |
+| `keep` | `N commits not pushed to <upstream>` | local commits are not on the upstream |
+| `keep` | `upstream <name> is gone` / `… and N commits are not in origin/main` | the tracked remote branch disappeared |
+| `keep` | `N commits not pushed` | no upstream and commits are not in `origin/main` |
+| `keep` | `tracking state is unknown` | neither `origin/main` nor an upstream could be read |
+| `safe` | `clean and merged via PR #N` | a merged pull request proves the work landed |
+| `safe` | `clean and merged into origin/main` | no commit is missing from `origin/main` |
+| `safe` | `clean and pushed to <upstream>` | the branch is in sync with its pushed upstream |
 
 **Runtime classes.** `managed` requires a live launcher lease whose status is
 `running`, `agent-only`, `client-only`, or `switching`; `manual` means live
@@ -613,40 +673,87 @@ record rather than a second runtime. Windows prints `Remove-Item` instead of
 a runtime that is still running; a deleted worktree's Test Home record appears
 once as an orphan.
 
-**`--json` schema.** `schema` is `1`. Top level:
+**`--json` schema.** `schema` is `2`; every schema-1 key is unchanged. Top level:
 `schema`, `generated_at`, `user_home`, `primary_home`, `repository_root`,
 `caller_worktree_id`, `agent_probe_timed_out`, `client_probe_timed_out`,
-`summary` (`worktrees`, `runtimes`, `live_runtimes`, `clients`, `test_homes`,
-`orphans`), `worktrees`, `runtimes`, `clients`, `test_homes`, `orphans`.
+`pull_request_lookup`, `pull_request_unavailable_reason`, `summary`
+(`worktrees`, `runtimes`, `live_runtimes`, `clients`, `test_homes`, `orphans`,
+`removal_safe`, `removal_keep`), `worktrees`, `runtimes`, `clients`,
+`test_homes`, `orphans`.
 
 | Array | Keys |
 | --- | --- |
-| `worktrees` | `path`, `branch`, `detached`, `head`, `short_head`, `locked`, `lock_reason`, `prunable`, `prunable_reason`, `missing`, `is_linked`, `primary_checkout`, `dirty_count`, `ahead`, `behind`, `worktree_id`, `home`, `recorded_home` |
+| `worktrees` | `path`, `branch`, `detached`, `head`, `short_head`, `locked`, `lock_reason`, `prunable`, `prunable_reason`, `missing`, `is_linked`, `primary_checkout`, `dirty_count`, `ahead`, `behind`, `worktree_id`, `home`, `recorded_home`, `disk_bytes`, `disk_scan`, `last_commit_at`, `last_commit_age_seconds`, `upstream`, `upstream_state`, `upstream_ahead`, `upstream_behind`, `pull_request`, `pull_request_source`, `pull_request_lookup`, `removal`, `removal_reason` |
 | `runtimes` | `worktree_id`, `worktree_path`, `home`, `primary`, `class`, `agent_port`, `agent_pid`, `agent_alive`, `vm_service_port`, `source_commit`, `lease_owner`, `lease_status`, `lease_pid`, `lease_alive`, `detail`, `clients` |
 | `clients` | `worktree_id`, `source`, `device`, `vm_service_port`, `pid`, `gateway_port`, `home`, `managed`, `lease_pid_mismatch` |
 | `test_homes` | `worktree_id`, `home`, `agent_port`, `state` |
 | `orphans` | `kind`, `target`, `reason`, `cleanup_command`, `detail` |
 
+A `pull_request` object carries `number`, `state` (`OPEN`, `CLOSED`, `MERGED`),
+`url`, `source` (`gh` or `cache`), and `checked_at`. `disk_scan` is `measured`,
+`skipped`, or `missing`; `upstream_state` is `none`, `tracking`, or `gone`;
+`removal` is `safe` or `keep`; `pull_request_lookup` is `not_requested`, `ok`,
+`unavailable`, or `timeout`.
+
 The document is stable: a key is added rather than renamed or removed, and the
-`class`, `state`, and `kind` values are the lowercase names used by the text
-table. `worktree_id` and `branch` are `null` when Git reports no branch
+`class`, `state`, `kind`, and `removal` values are the lowercase names used by
+the text table. `worktree_id` and `branch` are `null` when Git reports no branch
 (detached) and when no lease, record, or source path identifies the worktree.
 
-**Performance.** The report must stay under two seconds for about ten worktrees
-and forty records. Git children and Home reads run through one bounded pool,
-only ports named by a lease or a record are probed (capped at
+**Performance.** The Git, Home, and probe passes stay under two seconds for about
+ten worktrees and forty records. Git children and Home reads run through one
+bounded pool, only ports named by a lease or a record are probed (capped at
 `inventoryMaxProbePorts`), and no request leaves loopback: the only network
 traffic is the existing authenticated `GET /health` on each candidate port. The
 Agent probe and the Client process scan each carry a deadline
 (`inventoryAgentProbeTimeout`), so a hung port is abandoned and reported
 (`agent_probe_timed_out` / `client_probe_timed_out`) instead of blocking the
-command. Neither probe mutates state, and inventory never binds a port of its
-own: the runtime it builds for credential discovery carries zero ports.
+command. Two optional passes are additive and separately capped: the disk walk by
+`inventoryDiskScanBudget` and the `gh` lookup by `inventoryPullRequestBudget`.
+Neither probe mutates state, and inventory never binds a port of its own: the
+runtime it builds for credential discovery carries zero ports.
 
 Discovery accepts additional Homes (`additionalHomes`) so inventory can read the
 Test Home and recorded Homes a worktree-scoped command would never consider;
 the credential candidate set stays read-only evidence, and no ownership rule is
 relaxed.
+
+### `sanad-dev cleanup-orphans` prunes only the dev area, only on demand
+
+`inventory` reports; `cleanup-orphans` deletes. The two are separate commands on
+purpose, and the second one is inert until the operator types `--confirm`:
+
+```bash
+sanad-dev cleanup-orphans              # dry run: list and refuse, delete nothing
+sanad-dev cleanup-orphans --confirm    # delete exactly the listed targets
+sanad-dev cleanup-orphans --json       # the same plan as a stable document
+```
+
+The plan is built from the same read-only projection, so the two commands can
+never disagree about what an orphan is. One target is deletable only when all of
+the following hold:
+
+- it is strictly inside `<primary home>/dev` (the sanad-dev dev area) and at
+  least one segment below the `homes`/`runtimes` group directory;
+- it is not the primary Home, not the dev area itself, not a group directory, and
+  not inside a `~/.sanad-test*` Test Home (the Home directory and everything in
+  it stay untouched);
+- it is not a symbolic link, and its parent resolves consistently, so a link
+  created after the plan cannot redirect the deletion;
+- no live runtime group claims the same Home or worktree id.
+
+Every other target is listed as `refuse` with its named reason —
+`target is the primary Home`, `target is a Test Home`, `outside the sanad-dev
+dev area`, `target is the dev area itself`, `target is a dev-area group
+directory`, `target is a symbolic link`, or `live runtime (<agent port>)`. A
+refusal is never retried and never becomes a deletion.
+
+`--confirm` re-reads the projection immediately before deleting, so a runtime,
+lease, or worktree that appeared after the dry run is honoured instead of
+removed. Deletion stops at the first failure, reports the error, reports every
+remaining target as not attempted, and returns nonzero; a target that is already
+absent is reported as `absent` and is not a failure. Nothing is signalled: no
+process, Test Home, or runtime is started or stopped by either command.
 
 ### `doctor` driver-host checks
 

@@ -30,6 +30,8 @@ class SanadDevCliInvocation {
     this.refreshAt,
     this.showAll = false,
     this.jsonOutput = false,
+    this.pullRequestLookup = false,
+    this.confirm = false,
   });
 
   final String command;
@@ -66,6 +68,12 @@ class SanadDevCliInvocation {
 
   /// Print the stable machine-readable `inventory` document.
   final bool jsonOutput;
+
+  /// Query `gh` for each worktree's pull request (opt-in, cached).
+  final bool pullRequestLookup;
+
+  /// Actually delete the planned orphan targets instead of a dry run.
+  final bool confirm;
 }
 
 SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
@@ -111,6 +119,9 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
   String? refreshAt;
   bool showAll = false;
   bool jsonOutput = false;
+  bool pullRequestLookup = false;
+  bool skipPullRequestLookup = false;
+  bool confirm = false;
 
   for (int i = 0; i < args.length; i++) {
     final arg = args[i];
@@ -182,6 +193,12 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
       showAll = true;
     } else if (arg == '--json') {
       jsonOutput = true;
+    } else if (arg == '--pr') {
+      pullRequestLookup = true;
+    } else if (arg == '--no-pr') {
+      skipPullRequestLookup = true;
+    } else if (arg == '--confirm') {
+      confirm = true;
     } else if (arg == '--at' && i + 1 < args.length) {
       refreshAt = args[i + 1];
     } else if (arg.startsWith('--at=')) {
@@ -222,5 +239,8 @@ SanadDevCliInvocation? parseSanadDevInvocation(List<String> args) {
     refreshAt: refreshAt,
     showAll: showAll,
     jsonOutput: jsonOutput,
+    // `--no-pr` is the default and only exists to override an earlier `--pr`.
+    pullRequestLookup: pullRequestLookup && !skipPullRequestLookup,
+    confirm: confirm,
   );
 }

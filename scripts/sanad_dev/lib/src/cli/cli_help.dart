@@ -11,7 +11,10 @@ void printUsage() {
     '  status                    Show the runtime source and all attached clients.',
   );
   print(
-    '  inventory [--all] [--json] Show every worktree, runtime, client and orphaned record (read-only).',
+    '  inventory [--all] [--pr] [--json] Show every worktree, runtime, client and orphaned record (read-only).',
+  );
+  print(
+    '  cleanup-orphans [--confirm] [--json] List the dev-area orphans it can prune; delete only with --confirm.',
   );
   print(
     '  stop [all|agent|client]   Stop all components (default) or one component.',
@@ -75,6 +78,14 @@ void printUsage() {
     '  --all                     Expand every inventory row with its full detail.',
   );
   print('  --json                    Print the stable inventory JSON document.');
+  print(
+    '  --pr                      Also query gh for each worktree pull request '
+    '(cached, never required).',
+  );
+  print('  --no-pr                   Skip the pull request lookup (the default).');
+  print(
+    '  --confirm                 Actually delete the listed orphan targets.',
+  );
   print('  --runtime current         Select the requester runtime for switch.');
   print('  --driver                  Run client/lib/driver_main.dart.');
   print(
@@ -127,6 +138,9 @@ void printUsage() {
   print('  sanad-dev inventory');
   print('  sanad-dev inventory --all');
   print('  sanad-dev inventory --json');
+  print('  sanad-dev inventory --pr');
+  print('  sanad-dev cleanup-orphans');
+  print('  sanad-dev cleanup-orphans --confirm');
   print('  sanad-dev run agent');
   print('  sanad-dev run client -d macos');
   print('  sanad-dev stop client -d macos');
