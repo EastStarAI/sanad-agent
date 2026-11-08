@@ -1,8 +1,8 @@
 ---
 title: "Codex Responses prompt-cache routing affinity"
 status: "in progress"
-current_gate: "G2 verification — fixture matrix green; live cached-token gate blocked pending an owner-authorized isolated Codex route"
-remaining_estimate: "live cached-token evidence, Draft PR delivery, and CI closeout"
+current_gate: "G2 verification — fixture matrix green; Draft PR #356 delivered; live cached-token gate blocked pending an owner-authorized isolated Codex route"
+remaining_estimate: "live cached-token evidence only"
 ---
 
 # Goal (Task 145)
@@ -87,12 +87,13 @@ into a dispatch failure.
 - [x] `fvm dart analyze` clean for the changed source and test files.
 - [x] `fvm dart test test/engine/adapters test/guards/file_size_ratchet_guard_test.dart --reporter expanded`
   green: 298 tests.
-- [ ] `git diff --check` clean after final edits.
-- [ ] `graphify update .` after the source edits.
+- [x] `git diff --check` clean after final edits.
+- [x] `graphify update .` after the source edits.
+- [x] Draft PR #356 created with `type/feature`, `comp/agent`,
+  `comp/providers`, and `size/medium`; implementation-head CI green and the
+  PR re-queried for Draft state, head, labels, and checks.
 - [ ] Live cached-token before/after evidence: blocked pending an
   owner-authorized isolated authenticated Codex route.
-- [ ] Draft PR created with the required labels, exact-head CI green, and the
-  PR re-queried for Draft state, head, labels, and checks.
 
 ## Acceptance criteria
 
@@ -129,8 +130,7 @@ graphify update .
 
 ## Remaining work
 
-1. Run `git diff --check` and `graphify update .`.
-2. Commit and push the branch, then open a Draft PR with the required labels.
-3. Watch the exact pushed head and repair any in-scope CI failure.
-4. Obtain or explicitly record the live cached-token gate result without
+1. Obtain or explicitly record the live cached-token gate result without
    crossing the credential/Home/runtime boundary.
+2. Update this plan and the PR body with that evidence.
+3. Keep the PR in Draft until the owner explicitly authorizes the next step.
