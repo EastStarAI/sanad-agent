@@ -415,6 +415,44 @@ To eliminate cross-job interference while maintaining strict safety boundaries:
    The job's own release surface verification (exact payload bytes, SHA-256
    digests, version markers) is strictly verified and never relaxed.
 
+## Release announcement handoff
+
+`discord-notifications.yml` publishes the Discord release announcement, and it
+never announces a Release before Production. A GitHub Release is published with
+the repository `GITHUB_TOKEN`, and GitHub starts no workflow from an event that
+token produced, so the previous `release: published` subscription announced
+nothing after `v1.0.0-rc.1`.
+
+The workflow therefore follows the completing `Prepare stable release` run
+(`workflow_run`, `completed`) on the default branch instead of a Release event,
+and it sends an announcement only when every condition below holds:
+
+- the release run concluded `success`;
+- that same run published a Stable Release: the newest Release that is neither a
+  Draft nor a pre-release, whose tag matches `vX.Y.Z`, whose tag commit equals
+  the run's commit, and whose `published_at` falls inside the run's lifetime;
+- the reusable Production deployment of that run reported `success` for all
+  three serialized asset jobs, `Deploy Stable Production assets / updates`,
+  `/ web`, and `/ installers`.
+
+An RC candidate, a validation-only dispatch, a rejected publication approval, a
+failed release run, and a Production asset failure therefore never announce. A
+Production failure is recovered by re-running the failed jobs of the same
+release run, and the announcement then fires once, for the successful attempt.
+
+Announcements are idempotent per tag. After a successful send the workflow
+stores a `discord-announcement-<tag>` ledger artifact, and any later re-run of
+the release workflow or of the announcement workflow skips a tag that already
+owns a live ledger entry. The ledger is retained for 90 days, so a manual re-run
+of the same successful release run after that window is the only path that could
+repeat a notification.
+
+The notification contract itself is unchanged: one embed, mentions suppressed,
+`DISCORD_WEBHOOK_URL` read only by the final send step, and no protected
+environment, signing credential, or deployment authority. The completing-run
+checks add only `actions: read` to the existing `contents: read` and
+`pull-requests: read` scopes.
+
 ## Readiness and live handoff
 
 Local verification proves the release contract, manifest/checksum generation,
