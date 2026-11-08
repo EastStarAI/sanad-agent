@@ -294,7 +294,6 @@ jobs:
         working-directory: agent
         run: fvm dart run tool/ensure_native_stt.dart
 
-  client:
   client-analyze:
     name: Analyze client
     needs: classify
