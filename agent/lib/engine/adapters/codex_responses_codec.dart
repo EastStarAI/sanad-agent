@@ -1,4 +1,7 @@
 import 'dart:convert';
+import 'dart:collection';
+
+import 'package:crypto/crypto.dart';
 
 import '../../capabilities/models/tool_schema.dart';
 import '../../core/models/agent_response.dart';
@@ -29,6 +32,9 @@ class CodexResponsesException implements Exception {
 class CodexResponsesCodec {
   static const providerStateNamespace = 'codex_responses';
   static const _maxReplayItemIdLength = 64;
+
+  /// Provider-safe upper bound for `prompt_cache_key`.
+  static const _maxPromptCacheKeyLength = 64;
   static final _toolCallLeak = RegExp(
     r'(?:assistant\s+)?to=functions\.[A-Za-z0-9_.-]+',
     caseSensitive: false,
@@ -50,6 +56,72 @@ class CodexResponsesCodec {
     required this.issuer,
     required this.defaultProvider,
   });
+
+  /// Content-addressed prompt-cache routing key.
+  ///
+  /// `pck_<sha256[:24]>` of (scope, instructions, name-sorted tools), or null
+  /// when nothing static is present. It is a cache-routing hint only and never
+  /// encodes conversation state, so appending history items must not rotate it;
+  /// the stable scope keeps unrelated sessions off one shared bucket.
+  static String? promptCacheKeyFor({
+    required String? scopeId,
+    required String? instructions,
+    List<Map<String, dynamic>>? tools,
+  }) {
+    final scope = scopeId?.trim() ?? '';
+    final instructionText = instructions?.trim() ?? '';
+    final toolsPart = tools == null || tools.isEmpty
+        ? ''
+        : stableJson(_nameSortedTools(tools));
+    if (scope.isEmpty && instructionText.isEmpty && toolsPart.isEmpty) {
+      return null;
+    }
+    return boundedPromptCacheKey(
+      'pck_${_sha256Hex('$scope\u0000$instructionText\u0000$toolsPart').substring(0, 24)}',
+    );
+  }
+
+  /// Bounds a cache-routing value to a provider-safe key without changing its
+  /// identity: `pck_<sha256[:24]>` replaces anything longer than the limit.
+  static String? boundedPromptCacheKey(Object? value) {
+    final key = value?.toString().trim() ?? '';
+    if (key.isEmpty) return null;
+    if (key.length <= _maxPromptCacheKeyLength) return key;
+    return 'pck_${_sha256Hex(key).substring(0, 24)}';
+  }
+
+  /// Recursive canonical JSON (key insertion-order independent) so the routing
+  /// key stays stable however the tool schema maps were constructed.
+  static String stableJson(Object? value) => jsonEncode(_canonical(value));
+
+  static Object? _canonical(Object? value) {
+    if (value is Map) {
+      final sorted = SplayTreeMap<String, Object?>(
+        (a, b) => a.compareTo(b),
+      );
+      for (final entry in value.entries) {
+        sorted[entry.key.toString()] = _canonical(entry.value);
+      }
+      return sorted;
+    }
+    if (value is List) return value.map(_canonical).toList(growable: false);
+    return value;
+  }
+
+  static List<Map<String, dynamic>> _nameSortedTools(
+    List<Map<String, dynamic>> tools,
+  ) {
+    final sorted = [...tools]..sort(
+      (a, b) => _toolSortName(a).compareTo(_toolSortName(b)),
+    );
+    return sorted;
+  }
+
+  static String _toolSortName(Map<String, dynamic> tool) =>
+      (tool['name'] ?? tool['type'] ?? '').toString();
+
+  static String _sha256Hex(String value) =>
+      sha256.convert(utf8.encode(value)).toString();
 
   Map<String, dynamic> buildRequest({
     required List<Message> history,
@@ -108,6 +180,17 @@ class CodexResponsesCodec {
           )
           .toList(growable: false);
     }
+    final promptCacheKey = promptCacheKeyFor(
+      scopeId: options.sessionId,
+      instructions: body['instructions']?.toString() ?? '',
+      tools: body['tools'] is List
+          ? [
+              for (final tool in body['tools'] as List)
+                if (tool is Map<String, dynamic>) tool,
+            ]
+          : null,
+    );
+    if (promptCacheKey != null) body['prompt_cache_key'] = promptCacheKey;
     return _preflight(body, allowStream: stream);
   }
 

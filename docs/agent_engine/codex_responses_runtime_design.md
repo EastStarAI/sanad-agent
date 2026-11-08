@@ -56,6 +56,25 @@ effort، ويمرر `max_output_tokens` عند وجوده.
 قبل الشبكة يتحقق preflight من النموذج والتعليمات وأشكال input ومعرفات الأدوات
 ومعاملاتها ونتائجها وتعريفات tools، ويرفض أي شكل غير مدعوم بدل تصحيحه بصمت.
 
+## Prompt-cache routing affinity
+
+Every Codex Responses request carries a bounded, content-addressed
+`prompt_cache_key` computed by `CodexResponsesCodec` from the stable session
+scope, instructions, and name-sorted tools. The key is `pck_<sha256[:24]>`
+(64 characters maximum) and is never derived from conversation history, so
+appending a turn cannot rotate it; changing instructions or the tool set does.
+
+`CodexResponsesPolicy` owns the endpoint policy. GitHub-hosted Responses
+endpoints (`api.github.com`, `github.ai`, `githubcopilot.com`) drop the field
+before dispatch; xAI documents `prompt_cache_key` for its raw Responses HTTP
+body and keeps it; other endpoints keep the body field. Only the
+`chatgpt.com` Codex backend receives `session_id` (raw session id) and
+`x-client-request-id` (the exact body routing key, with no fallback), and the
+sync and stream paths build both through the same request builder.
+
+The live cached-token before/after probe is a separate acceptance gate; wire
+and header behavior is covered by the focused adapter tests.
+
 ## Response normalizer
 
 يقرأ normalizer كل output items وكل أجزاء النص بالترتيب، ويجمع reasoning summary
