@@ -1,13 +1,18 @@
-/// The dictation meter as the composer's own background.
+/// The dictation meter, drawn inside the composer's bottom action row.
 ///
-/// While the user speaks, the level scrolls across the whole card: the newest
-/// sample enters on the right, older samples slide out on the left, and each bar
-/// grows from the bottom like an equalizer. That is the shape people read as
-/// "I am being recorded", and keeping it behind the text means the level is
-/// visible without looking at the mic button.
+/// While the user speaks, the level scrolls across the row: the newest sample
+/// enters on the leading edge and older samples slide away, and each bar grows
+/// from the center like an equalizer. That is the shape people read as
+/// "I am being recorded".
+///
+/// It used to be painted across the whole composer card as a backdrop; the row
+/// now hosts it, so the only adaptations are a bounded height, the direction of
+/// travel, and an opacity that survives being drawn beside buttons instead of
+/// under text. The samples, smoothing, grow-in, floor, painter, and bar geometry
+/// are unchanged.
 ///
 /// Bars are drawn, not laid out: one [CustomPaint] keeps the cost flat whatever
-/// the composer size is, and the ticker only runs while a session is listening —
+/// the row width is, and the ticker only runs while a session is listening —
 /// an always-on ticker would repaint at 60 fps when idle and make
 /// `pumpAndSettle` in widget tests spin forever.
 library;
@@ -24,9 +29,15 @@ import 'package:sanad_client/features/dictation/presentation/bloc/dictation_stat
 class DictationComposerBackdrop extends StatefulWidget {
   const DictationComposerBackdrop({super.key});
 
-  /// Bars across the card. Enough to read as a waveform at desktop width without
+  /// Bars across the row. Enough to read as a waveform at desktop width without
   /// becoming noise on a narrow mobile composer.
   static const int barCount = 64;
+
+  /// Height of the strip inside the row.
+  ///
+  /// The row's controls are 32 px tall; the strip stays shorter so it reads as a
+  /// meter between two buttons rather than a third control.
+  static const double height = 24;
 
   @override
   State<DictationComposerBackdrop> createState() =>
@@ -162,14 +173,24 @@ class _DictationComposerBackdropState extends State<DictationComposerBackdrop> {
           );
         }
         if (!visible) return const SizedBox.shrink();
+        // The newest sample enters on the leading edge: left in LTR, right in
+        // RTL. Mirroring the strip keeps the direction of travel correct without
+        // a second painter.
         return IgnorePointer(
-          child: ValueListenableBuilder<List<double>>(
-            valueListenable: _samples,
-            builder: (context, samples, _) => CustomPaint(
-              key: const Key('dictation_composer_meter'),
-              painter: DictationMeterPainter(
-                samples: samples,
-                color: colors.primary,
+          child: SizedBox(
+            height: DictationComposerBackdrop.height,
+            child: Transform.flip(
+              flipX: Directionality.of(context) == TextDirection.rtl,
+              child: ValueListenableBuilder<List<double>>(
+                valueListenable: _samples,
+                builder: (context, samples, _) => CustomPaint(
+                  key: const Key('dictation_row_meter'),
+                  painter: DictationMeterPainter(
+                    samples: samples,
+                    color: colors.primary,
+                  ),
+                  size: Size.infinite,
+                ),
               ),
             ),
           ),
@@ -211,10 +232,11 @@ class DictationMeterPainter extends CustomPainter {
       final halfHeight = math.max(1.6, amplitude * size.height * 0.45);
       final x = i * slot + slot / 2;
       final freshness = 0.35 + 0.65 * (i / (count - 1));
-      // Faint on purpose: the text above the strip must stay the loudest thing
-      // in the card. Kept translucent enough that it reads as a backdrop and
-      // never competes with the composer text.
-      paint.color = color.withValues(alpha: 0.05 + 0.10 * freshness);
+      // The strip used to sit under the composer text as a backdrop, where 5–15%
+      // opacity was the point. In the row it sits beside 32 px buttons, so the
+      // same ramp starts higher to stay visible; the shape and the fade toward
+      // older samples are unchanged.
+      paint.color = color.withValues(alpha: 0.35 + 0.45 * freshness);
       canvas.drawLine(
         Offset(x, centerY - halfHeight),
         Offset(x, centerY + halfHeight),

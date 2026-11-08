@@ -347,6 +347,31 @@ Deferred and **not claimed** by this closure: Windows/Linux packaging proof,
 signing/notarization/attestation proof, and test-tooling enhancements beyond the
 archive fixture that was corrected.
 
+## G14 — Composer dictation UI (owner decision 2026-11-08)
+
+The dictation surface is the composer's own action row, not its background.
+
+- [x] **The button is a Stop control, not a meter.** While a session is active the
+      dictation button shows a stop icon and stops the session when pressed. It
+      carries no visible text; the tooltip is its only label, in English and
+      Arabic.
+- [x] **The visualization lives in the bottom action row.** The same meter widget
+      that used to be painted across the whole composer card is re-hosted inside
+      the row (driver key `dictation_row_meter`). While it is visible, the row's
+      permission picker, model selector, and thinking-level selector are hidden and
+      the meter takes their width; the Stop and Send buttons stay visible.
+- [x] **Nothing else changes while it is hidden.** Those selectors keep their
+      state, so Stop, auto-stop, an error, or a cancel restores the row exactly as
+      it was.
+- [x] **Only the container adapts.** Samples, smoothing, grow-in, display floor,
+      painter, and bar geometry are unchanged; the row adds a 24 px height, mirrors
+      the strip for RTL so the newest sample still enters on the leading edge, and
+      raises the opacity ramp so the strip stays readable beside 32 px buttons.
+- [x] **No composer-background visualization remains.** The `Stack` overlay and the
+      `dictation_composer_meter` key are gone; the composer card is a plain clipped
+      column.
+
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

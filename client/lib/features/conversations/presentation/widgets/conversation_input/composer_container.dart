@@ -27,6 +27,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/multili
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
 import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 
 import '../sidebar/sidebar_composition.dart';
@@ -211,17 +212,7 @@ class ComposerContainer extends StatelessWidget {
       onTap: chatFocusNode.requestFocus,
       child: ClipRRect(
         borderRadius: BorderRadius.circular(12),
-        // Dictation paints its meter across the whole card while listening, so
-        // the level is visible without watching the mic button.
-        child: Stack(
-          children: [
-            composerCard,
-            // The meter is translucent, so it sits on top of the card colour and
-            // still reads as the card's own background.
-            if (capabilities.supportsDictation)
-              const Positioned.fill(child: DictationComposerBackdrop()),
-          ],
-        ),
+        child: composerCard,
       ),
     );
     return focusSurface;
@@ -265,6 +256,28 @@ class ComposerContainer extends StatelessWidget {
   }
 
   Widget _buildBottomRow(BuildContext context) {
+    final dictationCubit = maybeDictationCubit(context);
+    if (dictationCubit == null) {
+      return _buildBottomRowContent(context, dictationActive: false);
+    }
+    // The row is the only place the live meter lives, and every selector in it
+    // steps aside while the user speaks, so the swap must follow the session.
+    return BlocBuilder<DictationCubit, DictationState>(
+      bloc: dictationCubit,
+      buildWhen: (previous, current) =>
+          previous.status != current.status ||
+          previous.isActive != current.isActive,
+      builder: (context, state) => _buildBottomRowContent(
+        context,
+        dictationActive: state.status == DictationStatus.listening,
+      ),
+    );
+  }
+
+  Widget _buildBottomRowContent(
+    BuildContext context, {
+    required bool dictationActive,
+  }) {
     final hasPendingRequest = inputSlice.pendingSuspendedRequest != null;
 
     final modelChip = !hasPendingRequest && capabilities.supportsModelChange
@@ -356,7 +369,10 @@ class ComposerContainer extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              if (!hasPendingRequest &&
+              // The permission picker steps aside while dictation is active: the
+              // row shows the live meter instead, and the value is unchanged.
+              if (!dictationActive &&
+                  !hasPendingRequest &&
                   capabilities.supportsToolPermissions &&
                   inputSlice.selectedWorkspace != null) ...[
                 ComposerPermissionModeChip(
@@ -371,7 +387,17 @@ class ComposerContainer extends StatelessWidget {
               ],
             ],
           ),
-          if (SidebarBreakpoints.isCompact(context))
+          // While listening, the model and thinking selectors give the row to the
+          // meter, which fills the space they had. Nothing about their state
+          // changes, so they return exactly as they were when the session ends.
+          if (dictationActive)
+            const Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: DictationComposerBackdrop(),
+              ),
+            )
+          else if (SidebarBreakpoints.isCompact(context))
             Expanded(
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -416,6 +442,13 @@ class ComposerContainer extends StatelessWidget {
                 sendStopButton,
               ],
             ),
+          // In the active layout the meter took the flexible slot, so the two
+          // controls that stay visible are pinned to the trailing edge here.
+          if (dictationActive) ...[
+            if (dictationMicButton != null) dictationMicButton,
+            if (dictationMicButton != null) const SizedBox(width: 8),
+            sendStopButton,
+          ],
         ],
       ),
     );

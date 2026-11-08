@@ -288,13 +288,11 @@ class _DictationMicButtonState extends State<DictationMicButton> {
                           child: AppProgressIndicator(strokeWidth: 2, color: color),
                         )
                       : state.status == DictationStatus.listening
-                      // The button *is* the meter while capturing: the user
-                      // watches the microphone, not a separate widget.
-                      ? _VoiceMeter(
-                          key: const Key('dictation_level'),
-                          level: state.level,
-                          color: color,
-                        )
+                      // The button is the session control, not the meter: the
+                      // meter lives in the composer row while audio is captured,
+                      // so the button stays a plain, obvious Stop. Its tooltip is
+                      // the only label — the control carries no visible text.
+                      ? Icon(Symbols.stop, size: 20, color: color)
                       : Icon(
                           Symbols.mic,
                           size: 18,
@@ -310,42 +308,3 @@ class _DictationMicButtonState extends State<DictationMicButton> {
   }
 }
 
-/// Live loudness meter drawn inside the mic button while audio is captured.
-///
-/// Replaces both the old elapsed timer and the static stop icon: the button
-/// itself shows that the microphone is hearing the user.
-class _VoiceMeter extends StatelessWidget {
-  const _VoiceMeter({super.key, required this.level, required this.color});
-
-  final double level;
-  final Color color;
-
-  static const List<double> _weights = [0.45, 0.75, 1.0, 0.75, 0.45];
-
-  @override
-  Widget build(BuildContext context) {
-    final clamped = level.clamp(0.0, 1.0);
-    return SizedBox(
-      width: 28,
-      height: 24,
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          for (final weight in _weights)
-            AnimatedContainer(
-              duration: const Duration(milliseconds: 60),
-              curve: Curves.easeOut,
-              width: 4,
-              // 5 px at silence up to the full 24 px, shaped by the bar weight.
-              height: 5 + (19 * clamped * weight),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.7 + (0.3 * clamped)),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}

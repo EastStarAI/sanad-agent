@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
@@ -267,7 +268,7 @@ void main() {
     expect(chatController.selection.baseOffset, lessThanOrEqualTo(7));
   });
 
-  testWidgets('a voice meter replaces the elapsed timer while listening', (
+  testWidgets('the button becomes a Stop control while listening', (
     tester,
   ) async {
     await tester.pumpWidget(build());
@@ -280,11 +281,19 @@ void main() {
     expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
 
     await emitReady(tester);
-    // The meter lives inside the button itself, replacing the stop icon.
+    // The meter moved to the composer row, so the button is a plain Stop: no
+    // bars inside it, and its tooltip is the only label it carries.
     expect(
       find.descendant(
         of: find.byKey(const Key('dictation_mic_btn')),
         matching: find.byKey(const Key('dictation_level')),
+      ),
+      findsNothing,
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('dictation_mic_btn')),
+        matching: find.byIcon(Symbols.stop),
       ),
       findsOneWidget,
     );

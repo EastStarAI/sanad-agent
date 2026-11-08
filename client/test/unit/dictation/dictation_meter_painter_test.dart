@@ -47,8 +47,9 @@ void main() {
       // A tick exists at the centre of every slot...
       final centreAlpha = _alphaAt(pixels, 200, 100, 40);
       expect(centreAlpha, greaterThan(0));
-      // ...and it is faint: the strip must not compete with the text above it.
-      expect(centreAlpha, lessThan(90));
+      // ...and it stays below a solid fill, so the strip reads as a meter beside
+      // the row's buttons rather than a painted block.
+      expect(centreAlpha, lessThan(150));
       // Nothing tall anywhere: silence is a row of dots, not a baseline plus dots.
       expect(_alphaAt(pixels, 200, 100, 20), 0);
       expect(_alphaAt(pixels, 200, 100, 60), 0);
@@ -56,9 +57,10 @@ void main() {
 
     test('speech grows the bars around the centre line', () async {
       final pixels = await _paint(List<double>.filled(64, 0.7));
-      // The meter sits behind text, so it stays translucent (≤15% opacity).
-      expect(_maxAlpha(pixels), greaterThan(15));
-      expect(_maxAlpha(pixels), lessThan(60));
+      // The strip sits beside 32 px buttons now, so it is more opaque than the
+      // 5–15% it used under the composer text — but still translucent.
+      expect(_maxAlpha(pixels), greaterThan(150));
+      expect(_maxAlpha(pixels), lessThan(230));
       expect(_alphaAt(pixels, 200, 100, 30), greaterThan(0));
       expect(_alphaAt(pixels, 200, 100, 50), greaterThan(0));
     });
