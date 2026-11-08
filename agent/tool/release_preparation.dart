@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:sanad_release_contract/release_contract.dart';
+
 /// Release-managed `sanad-client` relay CLI version literal.
 const clientCliVersionPath =
     'client/lib/features/client_cli/domain/models/client_cli_version.dart';
@@ -216,6 +218,7 @@ class ReleasePreparation {
         );
       }
     }
+    validateRequiredAgentTargets(declaredAgentTargets(artifacts));
 
     final notes = _file('release/release-notes.md').readAsStringSync();
     if (!RegExp('^# Sanad ${RegExp.escape(version)}\r?\n').hasMatch(notes) ||

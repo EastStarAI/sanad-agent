@@ -1,6 +1,6 @@
 ---
 title: "Release Verification Matrix"
-description: "Required local and hosted evidence for Sanad release, signing, installation, update, and rollback."
+description: "Required local and hosted evidence for Sanad release, signing, installation, update, rollback, and post-release Production surface verification."
 ---
 
 # Release Verification Matrix
@@ -126,7 +126,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Target | Local evidence | Hosted or clean-machine evidence still required |
 |---|---|---|
 | Agent macOS arm64/x64 | compilation, version, architecture, Developer ID verification, stable signing identifier with a matching designated requirement, accepted notary log with exact architecture/`cdhash` ticket match | both hosted runners, clean install, real upgrade and rollback |
-| Agent Linux x64 | analyzer, installer transaction/failure injection, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted build, provenance, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
+| Agent Linux x64/arm64 | analyzer, installer transaction/failure injection, arm64 asset selection and a named missing-target failure, candidate-manifest hook, version/cloud health verification, and service backend tests | hosted builds on `ubuntu-24.04` and `ubuntu-24.04-arm`, provenance for both artifacts, clean user/system systemd and OpenRC install, logout/reboot reconnect, request, uninstall/reinstall/update/rollback |
 | Agent Windows x64 | contract and workflow path | Unsigned Windows build disclosure, SHA-256/manifest/provenance, Defender/SmartScreen and lifecycle on Windows 11, service/update/rollback |
 | Client macOS universal | universal Mach-O inspection, Developer ID-signed and notarized DMG, staple, Gatekeeper, Sparkle signature | clean update and rollback |
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
@@ -134,6 +134,13 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
+
+A Linux arm64 Agent is built and published, but the hosted arm64 job proves the
+build, the shipped-binary smoke, and provenance, not a host install. Clean
+arm64 systemd/OpenRC lifecycle, upgrade, and rollback evidence must be recorded
+separately from the x64 evidence and is never inferred from it. The Client keeps
+Linux x64 packaging only: a Linux arm64 Client package remains a follow-up, and
+no arm64 Client result may be inferred from the arm64 Agent.
 
 Linux candidate installer testing may override manifest and artifact URLs only
 with `SANAD_INSTALL_ALLOW_TEST_URL=1`. This explicit harness switch is forbidden
@@ -494,3 +501,133 @@ metadata. Hosted build and Windows 11 clean-machine Defender, SmartScreen,
 service, reboot, and uninstall evidence passed. Windows 10 remains untested and
 is non-gating for `1.0.0`; Internal TestFlight and the later release lifecycle
 remain live evidence. Authenticode/SignPath is post-v1 work.
+
+## Post-release Production surface verification
+
+Every check inside the release pipeline runs while it owns the deployment, and
+its public probes add a per-release query marker, so none of them can observe
+what a user actually receives after the run. `Verify Production release
+surfaces` (`.github/workflows/release-surface-verifier.yml`) closes that gap. It
+is the only reader of the live Production surfaces that requests the plain
+public URL and fails loudly when a version-bearing surface does not serve the
+newest published Stable release.
+
+The workflow is read-only: `contents: read`, no secret, no Environment, no
+deployment, and no repository write. It runs after every `Prepare stable
+release` run, every 30 minutes on a schedule, and on demand.
+
+### Release window
+
+A release is visible on Production only after the `release-publication`
+approval and the serialized `updates` → `web` → `installers` handoff, so during
+the Draft window Production must still serve the previous Stable release.
+`verify_production_surfaces.sh resolve` therefore selects the newest published
+Stable release, ignores prereleases, and reports `release window: open` while a
+newer Draft exists. The workflow then records the window in its step summary and
+runs no surface comparison, so a Draft is never reported as a defect. A window
+that never closes is caught by the next scheduled run, which fails as soon as
+the release leaves Draft.
+
+### Verified surfaces
+
+Public hostnames and paths are owned by
+`scripts/release/production-surfaces.json`; release filenames, the build
+number, and the repository come from `release/release-contract.json` at the
+verified tag, and the published installer bytes come from that tag's
+`scripts/install.sh` and `scripts/install.ps1`. No host, filename, or build
+value is written inside the verifier.
+
+| Surface | Assertion |
+|---|---|
+| `updates.sanad.eaststarai.com/release-manifest.json` | `.version`, `.tag`, and `.commit` equal the Stable tag, its version, and its tagged commit |
+| `updates.sanad.eaststarai.com/appcast.xml` | every `sparkle:shortVersionString` equals the release version; every `sparkle:version` equals the build number or `<version>+<build>` |
+| `app.sanad.eaststarai.com/version.json` | `.version` and `.build` equal the release version and build |
+| `app.sanad.eaststarai.com/sanad-public-sha.txt` | served commit equals the tagged commit |
+| `downloads.sanad.eaststarai.com/install.sh`, `/install.ps1` | SHA-256 equals the tagged installer source bytes |
+| `downloads.sanad.eaststarai.com/client/{macos,windows,linux}` | `302` `Location` equals the tagged GitHub Release asset URL for the contract-selected Client artifact |
+| `sanad.eaststarai.com/install.sh`, `/install.ps1` | `302` `Location` resolves to the canonical downloads installer URL |
+
+Each surface that is behind produces exactly one `::error::` annotation naming
+the surface, its expectation, and what Production actually served, plus one row
+in a Markdown summary table written to the run's step summary. Any behind
+surface fails the run; the table is still emitted so a single run describes the
+whole surface set.
+
+### No cache busting
+
+Both the release pipeline and this verifier must observe the cached path a user
+takes. Every request therefore sends `Cache-Control: no-cache` and never adds a
+query marker (`?source=`, `?release=`, `?rollback=`); the verifier refuses to
+fetch any URL that carries a query string at all, and it never follows a
+redirect it is asserting. A stale edge or intermediary cache is a finding, not
+something to route around.
+
+### Immutable mutable content
+
+Mutable release paths that are served `Cache-Control: … immutable` are reported
+as warnings rather than failures, because correcting a served header is a
+private stack change outside this repository. The current Production
+`downloads.sanad` root declares `/install.sh` and `/install.ps1` immutable for a
+year even though both change on every release, so a warm cache can keep serving
+previous installer bytes after a successful handoff. Warnings stay visible in
+the summary and as `::warning::` annotations, and each one is expected to
+disappear once the static-surface cache policy is corrected; they never fail the
+run and must not be silenced without that fix.
+
+### Operator use
+
+```bash
+scripts/release/test_verify_production_surfaces.sh
+
+gh api "repos/EastStarAI/sanad-agent/releases?per_page=100" > releases.json
+scripts/release/verify_production_surfaces.sh resolve --releases releases.json
+
+tag_tree="$(mktemp -d)"
+git archive v1.0.21 release/release-contract.json scripts/install.sh scripts/install.ps1 \
+  | tar -x -C "$tag_tree"
+scripts/release/verify_production_surfaces.sh verify \
+  --tag v1.0.21 \
+  --tag-commit "$(git rev-parse 'v1.0.21^{commit}')" \
+  --tag-tree "$tag_tree" \
+  --surfaces scripts/release/production-surfaces.json
+```
+
+Exit codes are `0` for a matching surface set or an open release window, `1`
+when at least one surface is behind or no published Stable release exists, and
+`2` for a usage or configuration error. `--fixtures <dir>` replays recorded
+surface responses instead of HTTP, which is how
+`scripts/release/test_verify_production_surfaces.sh` proves a matching set, each
+individual behind surface, the Draft window, the immutable warning, and the
+request contract offline.
+
+Automated coverage for these fixtures currently runs inside the verifier
+workflow, which is not a pull-request trigger. Adding
+`scripts/release/test_verify_production_surfaces.sh` to the `release-security`
+job in `.github/workflows/ci.yml` is the remaining wiring step for pull-request
+gating.
+
+### Live Production verification — 2026-11-08
+
+Run against Production after `v1.0.21` (`a76496d6`) was published. Every
+version-bearing surface matched the tag, and both installer paths still declared
+immutable caching:
+
+| Surface | Expected | Observed | Result |
+| --- | --- | --- | --- |
+| updates.sanad.eaststarai.com/release-manifest.json | 1.0.21 / v1.0.21 / a76496d6 | 1.0.21 / v1.0.21 / a76496d6 | ok |
+| updates.sanad.eaststarai.com/appcast.xml | shortVersionString 1.0.21, version 22 or 1.0.21+22 | 2 enclosure(s): shortVersionString 1.0.21, 1.0.21 / version 22, 1.0.21+22 | ok |
+| app.sanad.eaststarai.com/version.json | 1.0.21 / build 22 | 1.0.21 / build 22 | ok |
+| app.sanad.eaststarai.com/sanad-public-sha.txt | a76496d6 | a76496d6 | ok |
+| downloads.sanad.eaststarai.com/install.sh | sha256 7181c3d8f3b9 | sha256 7181c3d8f3b9 | ok |
+| downloads.sanad.eaststarai.com/install.ps1 | sha256 10818f514b5f | sha256 10818f514b5f | ok |
+| downloads.sanad.eaststarai.com/client/macos | 302 …/releases/download/v1.0.21/sanad-client-1.0.21-macos-universal.dmg | same `Location` | ok |
+| downloads.sanad.eaststarai.com/client/windows | 302 …/releases/download/v1.0.21/sanad-client-1.0.21-windows-x64.exe | same `Location` | ok |
+| downloads.sanad.eaststarai.com/client/linux | 302 …/releases/download/v1.0.21/sanad-client-1.0.21-linux-x64.deb | same `Location` | ok |
+| sanad.eaststarai.com/install.sh | 302 https://downloads.sanad.eaststarai.com/install.sh | HTTP 302 https://downloads.sanad.eaststarai.com/install.sh | ok |
+| sanad.eaststarai.com/install.ps1 | 302 https://downloads.sanad.eaststarai.com/install.ps1 | HTTP 302 https://downloads.sanad.eaststarai.com/install.ps1 | ok |
+| downloads.sanad.eaststarai.com/install.sh | mutable path must not be immutable | `public, max-age=31536000, immutable` | warning |
+| downloads.sanad.eaststarai.com/install.ps1 | mutable path must not be immutable | `public, max-age=31536000, immutable` | warning |
+
+The same read on 2026-11-08 between the `v1.0.21` Draft and publication resolved
+`v1.0.20` on every one of these surfaces, which is why the window is reported
+instead of asserted against.

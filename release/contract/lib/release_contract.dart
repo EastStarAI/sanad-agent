@@ -89,6 +89,61 @@ class ReleaseArtifactTrustPolicy {
   }
 }
 
+/// One official Agent build target that a release must publish.
+///
+/// The public installer resolves the Agent by `platform` plus `architecture`
+/// and never substitutes another target, so a release that drops one of these
+/// publishes an installation the official path cannot perform on that machine.
+class AgentReleaseTarget {
+  const AgentReleaseTarget(this.platform, this.architecture);
+
+  final String platform;
+  final String architecture;
+
+  /// `platform/architecture`, the form validation messages use.
+  String get label => '$platform/$architecture';
+}
+
+/// The official Agent build matrix.
+///
+/// A new architecture is supported by adding it here together with its release
+/// job; removing an entry is a supported-platform change, not a cleanup.
+const requiredAgentReleaseTargets = <AgentReleaseTarget>[
+  AgentReleaseTarget('macos', 'arm64'),
+  AgentReleaseTarget('macos', 'x64'),
+  AgentReleaseTarget('linux', 'x64'),
+  AgentReleaseTarget('linux', 'arm64'),
+  AgentReleaseTarget('windows', 'x64'),
+];
+
+/// Fails unless [publishedTargets] covers every required Agent target.
+///
+/// [publishedTargets] holds the `platform/architecture` of each public Agent
+/// artifact the contract declares.
+void validateRequiredAgentTargets(Iterable<String> publishedTargets) {
+  final published = publishedTargets.toSet();
+  final missing = [
+    for (final target in requiredAgentReleaseTargets)
+      if (!published.contains(target.label)) target.label,
+  ];
+  if (missing.isEmpty) return;
+  throw FormatException(
+    'Release contract is missing official Agent targets: ${missing.join(', ')}.',
+  );
+}
+
+/// The `platform/architecture` of every public Agent artifact in a contract's
+/// raw `artifacts` list.
+List<String> declaredAgentTargets(Iterable<dynamic> artifacts) => [
+  for (final raw in artifacts)
+    if (raw is Map &&
+        raw['component'] == 'agent' &&
+        raw['public'] == true &&
+        raw['platform'] != null &&
+        raw['architecture'] != null)
+      '${raw['platform']}/${raw['architecture']}',
+];
+
 class ReleaseVersion implements Comparable<ReleaseVersion> {
   const ReleaseVersion(
     this.major,

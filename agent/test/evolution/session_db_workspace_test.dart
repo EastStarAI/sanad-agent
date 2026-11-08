@@ -287,6 +287,50 @@ void main() {
     );
   });
 
+  test('unscoped list includes execution-root sessions', () {
+    final db = SessionDB();
+    addTearDown(db.dispose);
+
+    SessionState session(String id, String? workspaceId, String at) =>
+        SessionState(
+          sessionId: id,
+          model: 'sanad-agent',
+          title: id,
+          workspaceId: workspaceId,
+          createdAt: DateTime.parse(at),
+          updatedAt: DateTime.parse(at),
+          lastUserMessageAt: DateTime.parse(at),
+        );
+
+    db.saveSession(session('plain', null, '2026-01-01T00:00:01Z'));
+    db.saveSession(
+      session('run', 'exec_root:/work/root', '2026-01-01T00:00:02Z'),
+    );
+    db.saveSession(session('scoped', 'workspace-a', '2026-01-01T00:00:03Z'));
+
+    // A run session belongs to the unscoped list: no registered workspace can
+    // ever own it, so the alternative is a session in no list at all.
+    final unscoped = db.getSessions(
+      SessionQueryRequest(unscopedOnly: true, limit: 10),
+    );
+    expect(
+      unscoped.sessions.map((row) => row.sessionId),
+      ['run', 'plain'],
+    );
+
+    // It stays addressable by its own execution-root identity too.
+    final byExecRoot = db.getSessions(
+      SessionQueryRequest(workspaceId: 'exec_root:/work/root', limit: 10),
+    );
+    expect(byExecRoot.sessions.map((row) => row.sessionId), ['run']);
+
+    // A registered workspace keeps its own section.
+    final scoped = db.getSessions(
+      SessionQueryRequest(workspaceId: 'workspace-a', limit: 10),
+    );
+    expect(scoped.sessions.map((row) => row.sessionId), ['scoped']);
+  });
+
   test('keyset pagination and workspace filtering in getSessions', () {
     final db = SessionDB();
     addTearDown(db.dispose);

@@ -143,6 +143,25 @@ jobs:
           reject --tag "v${version}" --channel stable
           jq '.version = "99.99.99" | .tag = "v99.99.99"' "$backup" > "$contract"
           reject --tag "v99.99.99" --channel stable
+      - name: Reject an incomplete official Agent matrix
+        working-directory: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          contract=../release/release-contract.json
+          backup="$RUNNER_TEMP/release-contract-arm64.json"
+          cp "$contract" "$backup"
+          trap 'cp "$backup" "$contract"' EXIT
+          jq '.artifacts |= map(
+            select((.component == "agent" and
+              .platform == "linux" and
+              .architecture == "arm64") | not))' "$backup" > "$contract"
+          if fvm dart run tool/release_tool.dart validate-contract \
+            --repo-root .. >/dev/null 2>"$RUNNER_TEMP/arm64-rejection.log"; then
+            echo "::error::A contract without the Linux arm64 Agent was accepted."
+            exit 1
+          fi
+          grep -F 'linux/arm64' "$RUNNER_TEMP/arm64-rejection.log"
       - name: Validate embedded product skills
         working-directory: agent
         run: fvm dart run tool/generate_bundled_skills.dart --check
@@ -207,18 +226,28 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-26, windows-2025]
+        # `ubuntu-24.04-arm` proves the Agent compiles and answers as a native
+        # arm64 executable on the same runner family the release matrix uses for
+        # the official Linux arm64 artifact.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    env:
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so the arm64
+      # lane installs the standalone Dart SDK at exactly the same version.
+      DART: ${{ matrix.os == 'ubuntu-24.04-arm' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.os == 'ubuntu-24.04-arm'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.os != 'ubuntu-24.04-arm'
       - name: Resolve agent dependencies
         working-directory: agent
-        run: fvm flutter pub get
+        run: ${{ env.DART }} pub get
       - name: Verify isolated CLI contracts
         working-directory: agent
-        run: fvm dart test test/guards/e2e_state_isolation_contract_test.dart
+        run: ${{ env.DART }} test test/guards/e2e_state_isolation_contract_test.dart
       - name: Build packaged Windows no-console launcher
         if: runner.os == 'Windows'
         working-directory: agent
@@ -236,7 +265,7 @@ jobs:
         working-directory: agent
         env:
           SANAD_CLI_AOT_SUCCESS_FILE: .dart_tool/cli-aot-smoke-success
-        run: fvm dart run tool/cli_aot_smoke.dart
+        run: ${{ env.DART }} run tool/cli_aot_smoke.dart
       - name: Require AOT smoke success marker
         if: runner.os != 'Windows'
         working-directory: agent
@@ -260,17 +289,25 @@ jobs:
       matrix:
         # `macos-15-intel` is the only genuine Intel evidence: cross-building
         # x86_64 on Apple Silicon would produce an untested slice, so the Intel
-        # slice is compiled, loaded, and staged on Intel hardware.
-        os: [ubuntu-24.04, macos-26, macos-15-intel, windows-2025]
+        # slice is compiled, loaded, and staged on Intel hardware. The arm64
+        # Linux lane builds on its own CPU for the same reason, and the release
+        # matrix publishes exactly the slices proven here.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     env:
       # This job builds the runtime, so a missing or foreign-architecture one is
       # a defect: the smoke test fails instead of skipping.
       SANAD_STT_REQUIRE_NATIVE: '1'
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so that lane
+      # installs the standalone Dart SDK at exactly the same version.
+      DART: ${{ matrix.os == 'ubuntu-24.04-arm' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.os == 'ubuntu-24.04-arm'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.os != 'ubuntu-24.04-arm'
       # The whisper shim is built from source on every desktop OS. The pinned tag
       # is the same one recorded in agent/native/checksums.json.
       - name: Fetch whisper.cpp
@@ -301,7 +338,7 @@ jobs:
         uses: ilammy/msvc-dev-cmd@v1
       - name: Resolve agent dependencies
         working-directory: agent
-        run: fvm flutter pub get
+        run: ${{ env.DART }} pub get
       # The tool owns the platform tag, the required files, Metal per
       # architecture, and the CMake architecture/deployment target, so CI never
       # restates the layout. Every `bash` step here excludes Windows and has a
@@ -313,7 +350,7 @@ jobs:
         env:
           WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
         shell: bash
-        run: fvm dart run tool/ensure_native_stt.dart
+        run: ${{ env.DART }} run tool/ensure_native_stt.dart
       - name: Build the native runtime for this runner
         if: runner.os == 'Windows'
         working-directory: agent
@@ -328,7 +365,7 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: agent
         shell: bash
-        run: fvm dart run tool/ensure_native_stt.dart --verify
+        run: ${{ env.DART }} run tool/ensure_native_stt.dart --verify
       - name: Verify the installed runtime and its manifest entry
         if: runner.os == 'Windows'
         working-directory: agent
@@ -339,7 +376,7 @@ jobs:
           fvm dart run tool/ensure_native_stt.dart --verify
       - name: Load the built runtime in a real process
         working-directory: agent
-        run: fvm dart test test/stt/native_runtime_smoke_test.dart
+        run: ${{ env.DART }} test test/stt/native_runtime_smoke_test.dart
       # Exercises the packaged-release producing path without publishing
       # anything: a staged runtime directory plus a reproducible archive whose
       # recorded sha256 is derived from the produced bytes. Member naming and
@@ -352,7 +389,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          fvm dart run tool/ensure_native_stt.dart \
+          ${{ env.DART }} run tool/ensure_native_stt.dart \
             --stage ../dist-native \
             --archive ../dist-native
           test "$(ls ../dist-native/sanad-stt-*.tar.gz | wc -l | tr -d ' ')" = 1
@@ -541,6 +578,23 @@ jobs:
           ! grep -E 'SANAD_AGENT_CODESIGN_IDENTIFIER: .*(\$|artifact_version)' .github/workflows/release.yml
           grep -F -- '--identifier "$SANAD_AGENT_CODESIGN_IDENTIFIER"' .github/workflows/release.yml
           grep -F 'designated_requirement="$(codesign -d -r- "$agent" 2>&1)"' .github/workflows/release.yml
+          # The release matrix and the official Agent targets in the contract
+          # library must move together: a target without a job publishes nothing,
+          # and a job without a contract row fails manifest generation.
+          ruby -ryaml -e '
+            targets = YAML.load_file(".github/workflows/release.yml")
+                          .dig("jobs", "agent", "strategy", "matrix", "include")
+                          .map { |entry| "#{entry["platform"]}/#{entry["architecture"]}" }
+                          .sort
+            official = %w[linux/arm64 linux/x64 macos/arm64 macos/x64 windows/x64]
+            abort("Agent release matrix drifted: #{targets.inspect}") unless targets == official
+            # The pinned Flutter SDK ships no Linux arm64 archive, so that target
+            # needs the pinned standalone Dart SDK and a per-lane executable.
+            job = YAML.load_file(".github/workflows/release.yml").dig("jobs", "agent")
+            uses = job["steps"].map { |step| step["uses"] }.compact
+            abort("Linux arm64 must install the pinned standalone Dart SDK") unless uses.include?("./.github/actions/setup-dart")
+            abort("The Agent matrix must select its Dart executable per lane") unless job.dig("env", "DART").to_s.include?("arm64")
+          '
           grep -F 'workflow_call:' .github/workflows/deploy.yml
           grep -F 'name: Activate, verify, and roll back Production Web on failure' .github/workflows/deploy.yml
           grep -F 'https://app.sanad.eaststarai.com/sanad-public-sha.txt' .github/workflows/deploy.yml

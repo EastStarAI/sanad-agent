@@ -41,6 +41,11 @@ class WorkspaceSecurityClient {
 
   /// Sends only the changed axes with the revision the user saw (omitted only
   /// when no policy has been read yet).
+  ///
+  /// [sessionId] names the conversation the change was made in: the Agent then
+  /// also writes that session's own permission override, because a session
+  /// started with `sanad run --allow-all-tools` keeps its own authority
+  /// independently of the workspace policy.
   Future<WorkspacePolicy> update(
     DeviceConfig device,
     String workspaceId, {
@@ -48,6 +53,7 @@ class WorkspaceSecurityClient {
     WorkspacePermissionMode? permissionMode,
     WorkspaceExecutionMode? executionMode,
     WorkspaceHostDiscoveryPolicy? hostDiscoveryPolicy,
+    String? sessionId,
   }) async {
     final payload = await _commands.request(
       device: device,
@@ -61,6 +67,20 @@ class WorkspaceSecurityClient {
         'host_discovery_policy': ?hostDiscoveryPolicy?.value,
       },
     );
+    final normalizedSessionId = sessionId?.trim();
+    if (permissionMode != null &&
+        normalizedSessionId != null &&
+        normalizedSessionId.isNotEmpty) {
+      await _commands.request(
+        device: device,
+        command: 'set_session_permission_mode',
+        expectedEvent: 'session_updated',
+        payload: {
+          'session_id': normalizedSessionId,
+          'permission_mode': permissionMode.value,
+        },
+      );
+    }
     return WorkspacePolicy.fromJson(payload);
   }
 }

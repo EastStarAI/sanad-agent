@@ -6,6 +6,8 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/setup/service_account_policy.dart';
 import 'package:test/test.dart';
 
+import '../../support/host_home_guard.dart';
+
 void main() {
   group('installer transaction', () {
     late Directory root;
@@ -14,10 +16,14 @@ void main() {
   late File commandLog;
   late HttpServer server;
   late String artifact;
+  RealSanadHomeWatch? realHomeWatch;
   var manifestRequests = 0;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('sanad-installer-test-');
+    // A leak into the owner's real Home must fail this test, never replace the
+    // installed binary.
+    realHomeWatch = RealSanadHomeWatch.start();
     home = Directory(p.join(root.path, 'home'))..createSync(recursive: true);
     mockBin = Directory(p.join(root.path, 'mock-bin'))..createSync();
     commandLog = File(p.join(root.path, 'commands.log'));
@@ -90,12 +96,16 @@ exit 0
         request.response.statusCode = HttpStatus.notFound;
       } else if (request.uri.path == '/artifact') {
         request.response.write(artifact);
+      } else if (request.uri.path == '/artifact-arm64') {
+        request.response.write(_arm64Artifact(artifact));
       } else if (request.uri.path == '/manifest' ||
-          request.uri.path == '/manifest-missing-artifact') {
+          request.uri.path == '/manifest-missing-artifact' ||
+          request.uri.path == '/manifest-both-architectures') {
         final bytes = utf8.encode(artifact);
         final artifactPath = request.uri.path == '/manifest'
             ? '/artifact'
             : '/missing';
+        final arm64Bytes = utf8.encode(_arm64Artifact(artifact));
         request.response.headers.contentType = ContentType.json;
         request.response.write(
           jsonEncode({
@@ -124,6 +134,18 @@ exit 0
                 'sha256': sha256.convert(bytes).toString(),
                 'size': bytes.length,
               },
+              if (request.uri.path == '/manifest-both-architectures')
+                {
+                  'component': 'agent',
+                  'platform': 'linux',
+                  'architecture': 'arm64',
+                  'public': true,
+                  'signature_type': 'sha256',
+                  'filename': 'sanad-agent-1.2.3-linux-arm64',
+                  'url': 'http://127.0.0.1:${server.port}/artifact-arm64',
+                  'sha256': sha256.convert(arm64Bytes).toString(),
+                  'size': arm64Bytes.length,
+                },
             ],
           }),
         );
@@ -134,6 +156,7 @@ exit 0
 
   tearDown(() async {
     await server.close(force: true);
+    realHomeWatch?.verifyUnchanged();
     await root.delete(recursive: true);
   });
 
@@ -534,6 +557,50 @@ Environment="SANAD_HOME=/home/ubuntu/.sanad"
       expect(result.stdout.toString(), contains('pairing completed'));
     },
   );
+
+  test('selects the Linux arm64 asset on an aarch64 host', () async {
+    _useLinuxHost(mockBin, architecture: 'aarch64');
+
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl:
+          'http://127.0.0.1:${server.port}/manifest-both-architectures',
+    );
+
+    expect(result.exitCode, 0, reason: result.stderr.toString());
+    // The installed binary is the arm64 asset, never the x64 one that shares
+    // the same manifest.
+    final target = File(p.join(home.path, '.sanad/bin/sanad'));
+    expect(target.readAsStringSync(), contains('linux-arm64'));
+    expect(
+      commandLog.readAsStringSync(),
+      contains('service install --expected-version 1.2.3'),
+    );
+  });
+
+  test('names the missing architecture instead of stopping silently', () async {
+    _useLinuxHost(mockBin, architecture: 'aarch64');
+
+    // This manifest publishes Linux x64 only, so an arm64 host has no asset.
+    final result = await _runInstaller(
+      home: home,
+      mockBin: mockBin,
+      commandLog: commandLog,
+      manifestUrl: 'http://127.0.0.1:${server.port}/manifest',
+    );
+
+    expect(result.exitCode, 69);
+    final error = result.stderr.toString();
+    expect(error, contains('linux/arm64'));
+    expect(error, contains('1.2.3'));
+    expect(error, contains('Published Agent targets'));
+    expect(error, contains('linux/x64'));
+    // Nothing was installed, paired, or serviced for an unavailable target.
+    expect(File(p.join(home.path, '.sanad/bin/sanad')).existsSync(), isFalse);
+    expect(commandLog.existsSync(), isFalse);
+  });
   }, skip: Platform.isWindows ? 'POSIX-only install.sh test' : false);
 }
 
@@ -561,10 +628,22 @@ Future<ProcessResult> _runInstaller({
   environment['SANAD_HOME'] = explicitHome
       ? p.join(home.path, '.sanad')
       : '';
+  // A root install derives its Home from the system account record; redirect
+  // that lookup into this test's temp tree unless the case chose its own path.
+  environment.putIfAbsent(
+    'SANAD_INSTALL_SYSTEM_HOME',
+    () => p.join(home.parent.path, 'system-home'),
+  );
   final installerArguments = <String>[
     if (pairingToken == null) '--no-login' else '--pairing-token-stdin',
     if (runAsUser != null) ...['--run-as-user', runAsUser],
   ];
+  // The installer must never resolve a Home outside this test's temp tree: a
+  // value that escapes it would install into the owner's real Sanad Home.
+  HostHomeGuard.assertHomeEnvironmentRedirected(
+    environment,
+    allowedRoot: home.parent.path,
+  );
   if (pairingToken == null) {
     return Process.run('sh', [
       '../scripts/install.sh',
@@ -607,12 +686,16 @@ void _writeExecutable(String path, String content) {
   Process.runSync('chmod', ['700', file.path]);
 }
 
+/// The fake Linux arm64 artifact: the same executable plus a marker the test
+/// can read back from the installed binary.
+String _arm64Artifact(String artifact) => '$artifact\n# linux-arm64\n';
+
 /// Reports Linux so the installer takes its Linux path under a faked account.
-void _useLinuxHost(Directory mockBin) {
+void _useLinuxHost(Directory mockBin, {String architecture = 'x86_64'}) {
   _writeExecutable(
     p.join(mockBin.path, 'uname'),
     '''#!/bin/sh
-if [ "\${1:-}" = "-s" ]; then echo Linux; else echo x86_64; fi
+if [ "\${1:-}" = "-s" ]; then echo Linux; else echo $architecture; fi
 ''',
   );
 }

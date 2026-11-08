@@ -172,9 +172,19 @@ fail_validation('Discord webhook secret must be scoped to the final send step') 
 fail_validation('Discord notifications must use the repository webhook secret') unless discord_workflow.include?('secrets.DISCORD_WEBHOOK_URL')
 fail_validation('Discord notifications must resolve merged pull requests from protected main pushes') unless discord_workflow.include?('commits/${GITHUB_SHA}/pulls') && discord_workflow.include?('.merged_at != null') && discord_workflow.include?('.base.ref == "main"')
 fail_validation('Discord notifications must hydrate complete pull-request actor data') unless discord_workflow.include?('pulls/${number}') && discord_workflow.include?('.merged_by.login')
-fail_validation('Discord notifications must include published Releases') unless discord_workflow.include?('types: [published]')
+# A Release published with the repository token emits no `release: published`
+# event that could start another workflow, so a published Release is announced
+# from the completing release workflow run instead.
+fail_validation('Discord notifications must follow the completing release workflow run') unless discord_workflow.include?('workflow_run:') && discord_workflow.include?('workflows: ["Prepare stable release"]') && discord_workflow.include?('types: [completed]')
+fail_validation('Discord notifications must not rely on the token-suppressed release event') if discord_workflow.match?(/^  release:/)
+fail_validation('Discord notifications must ignore an unfinished or failed release run') unless discord_workflow.include?('RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}') && discord_workflow.include?('if [[ "$RUN_CONCLUSION" != success ]]')
+fail_validation('Discord notifications must resolve only a published Stable Release') unless discord_workflow.include?('.draft == false') && discord_workflow.include?('.prerelease == false') && discord_workflow.include?('(.tag_name | test("^v[0-9]+')
+fail_validation('Discord notifications must resolve the Release the completing run published') unless discord_workflow.include?('published_at | fromdateiso8601') && discord_workflow.include?('/commits/${tag}') && discord_workflow.include?('!= "$RUN_SHA"')
+fail_validation('Discord notifications must announce only after the Production asset jobs succeeded') unless discord_workflow.include?("PRODUCTION_JOB_PREFIX: 'Deploy Stable Production assets / '") && discord_workflow.include?('for surface in updates web installers') && discord_workflow.include?('the announcement must not precede Production')
+fail_validation('Discord notifications must announce each tag once') unless discord_workflow.include?('ANNOUNCEMENT_LEDGER_PREFIX: discord-announcement-') && discord_workflow.include?('actions/artifacts?name=') && discord_workflow.include?('name: discord-announcement-${{ steps.release.outputs.tag }}')
 fail_validation('Discord notifications must suppress mentions') unless discord_workflow.include?('allowed_mentions: {parse: []}')
-%w[pull_request pull_request_target issues workflow_run workflow_dispatch].each do |event|
+fail_validation('Discord webhook secret must be referenced exactly once') unless discord_workflow.scan('secrets.DISCORD_WEBHOOK_URL').length == 1
+%w[pull_request pull_request_target issues workflow_dispatch].each do |event|
   fail_validation("Discord notifications must not subscribe to #{event}") if discord_workflow.match?(/^  #{Regexp.escape(event)}:/)
 end
 

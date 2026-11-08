@@ -45,7 +45,7 @@ Use short status queries. Do not leave indefinite watch or follow commands runni
 - Dry-run or compare first, apply only the intended drift correction, then verify idempotency.
 - Preserve the stable aggregate check, current protected-review model, resolved-conversation requirement, force-push and deletion blocks, and documented merge policy unless an approved governance change explicitly replaces them.
 - Keep Issue Forms, Discussion categories, support routes, CODEOWNERS, and public documentation consistent with their tracked sources.
-- Keep the Discord feed limited to merged pull requests and published Releases. Do not add raw Issues, CI runs, security events, fork activity, or direct-push notifications.
+- Keep the Discord feed limited to merged pull requests and published Stable Releases announced after their Production assets deploy. Do not add raw Issues, CI runs, security events, fork activity, or direct-push notifications.
 
 ## Secret and Security Handling
 

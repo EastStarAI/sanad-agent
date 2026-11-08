@@ -198,6 +198,12 @@ leaving you with a service that fails to start. When a Sanad service is already
 registered for a different Sanad Home, the installer stops before downloading
 anything and prints the command that removes it.
 
+The installer selects the Agent artifact by platform plus architecture
+(`aarch64` and `arm64` are the same Linux target). When the selected release
+publishes no artifact for this machine, it stops before downloading and prints
+the requested target, that release's version, and the Agent targets the release
+does publish. It never substitutes a different architecture's binary.
+
 ## Install the standalone agent manually
 
 Manual installation is useful when reviewing each step or when an environment
@@ -209,6 +215,7 @@ does not allow a piped installer.
    - macOS arm64: `sanad-agent-<version>-macos-arm64`
    - macOS x64: `sanad-agent-<version>-macos-x64`
    - Linux x64: `sanad-agent-<version>-linux-x64`
+   - Linux arm64: `sanad-agent-<version>-linux-arm64`
    - Windows x64: `sanad-agent-<version>-windows-x64.exe`
 
 2. Verify the checksum or signature published with the release.

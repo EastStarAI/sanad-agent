@@ -324,6 +324,7 @@ abstract class ConversationRepository {
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   });
   Stream<WorkspacePolicy> watchWorkspacePolicy(
     DeviceConfig agent,

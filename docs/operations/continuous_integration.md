@@ -29,7 +29,8 @@ slowest single shard instead of the whole suite.
 | Client Web guard | `Web startup composition` | `client` paths |
 | Agent checks | `Agent contract checks and analyze` | `agent` paths |
 | Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent` paths |
-| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `agent` paths |
+| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `agent` paths |
+| Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `agent` paths |
 | `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `client` or `docs` paths |
 | Docs and governance | `Validate docs and governance` | `docs` paths |
 | Release and security | `Validate release and security boundaries` | `release` or `security` paths |
@@ -40,6 +41,22 @@ slowest single shard instead of the whole suite.
 matrix, and it fails unless each dependency succeeded or was skipped by
 classification. A new lane that is not added to its `needs` and to its result
 check is a coverage hole, so both edits belong to the same change.
+
+`CLI automation (ubuntu-24.04-arm)` runs the Agent AOT smoke on GitHub's arm64
+runner, so a native arm64 executable is proved at pull-request time on the same
+runner family the release matrix uses for the official Linux arm64 Agent
+artifact. The pinned Flutter SDK publishes no Linux arm64 archive, so that lane
+installs the standalone Dart SDK through `.github/actions/setup-dart` at the
+version declared by `scripts/ci/dart_sdk_version.txt`; every other lane keeps the
+FVM-managed Flutter SDK, `DART` selects the executable per lane, and
+`agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes when the
+pin and the Flutter-bundled Dart version diverge.
+
+`Native dictation (ubuntu-24.04-arm)` builds, verifies, loads, and stages the
+whisper runtime on arm64 Linux for the same reason: the release matrix publishes
+`linux-arm64` from that runner, so the slice is proven here rather than trusted
+from an x64 host. It uses the same per-lane `DART` selector and a whisper build
+cache keyed by the runner label.
 
 ### Cross-Component Contract Fixtures
 

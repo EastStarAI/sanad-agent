@@ -290,24 +290,57 @@ download() {
 
 download "$MANIFEST_URL" "$TEMP_DIR/release-manifest.json"
 
-if command -v python3 >/dev/null 2>&1; then
-  METADATA="$(python3 - "$TEMP_DIR/release-manifest.json" "$PLATFORM" "$ARCHITECTURE" <<'PY'
+# Select the one public Agent asset this machine can run.
+#
+# The selector prints the five manifest fields on success and one actionable
+# diagnosis on failure, so an architecture this release does not publish ends
+# with a named reason instead of a silent stop. A wrong target is never
+# substituted with another one: a mismatched binary is worse than no install.
+select_agent_metadata() {
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$TEMP_DIR/release-manifest.json" "$PLATFORM" "$ARCHITECTURE" <<'PY'
 import json, sys
+
 path, platform, architecture = sys.argv[1:]
-with open(path, encoding="utf-8") as stream:
-    manifest = json.load(stream)
+target = platform + "/" + architecture
+
+
+def fail(exit_code, message):
+    print(message)
+    sys.exit(exit_code)
+
+
+try:
+    with open(path, encoding="utf-8") as stream:
+        manifest = json.load(stream)
+except (OSError, ValueError) as error:
+    fail(65, "Release manifest could not be read: %s" % error)
+if not isinstance(manifest, dict):
+    fail(65, "Release manifest must be a JSON object.")
 if manifest.get("repository") != "EastStarAI/sanad-agent":
-    raise SystemExit("manifest repository is not trusted")
-matches = [
-    item for item in manifest.get("artifacts", [])
-    if item.get("component") == "agent"
-    and item.get("platform") == platform
-    and item.get("architecture") == architecture
+    fail(65, "Release manifest repository is not trusted: %s" % manifest.get("repository"))
+version = manifest.get("version", "this release")
+agents = [
+    item for item in (manifest.get("artifacts") or [])
+    if isinstance(item, dict)
+    and item.get("component") == "agent"
     and item.get("public") is True
     and item.get("signature_type")
 ]
+matches = [
+    item for item in agents
+    if item.get("platform") == platform and item.get("architecture") == architecture
+]
+if not matches:
+    published = sorted({str(item.get("platform")) + "/" + str(item.get("architecture")) for item in agents})
+    fail(
+        69,
+        "No official Sanad Agent build is published for %s in %s. "
+        "Published Agent targets: %s. Install on a supported target, or wait for "
+        "a release that publishes this one." % (target, version, ", ".join(published) or "none"),
+    )
 if len(matches) != 1:
-    raise SystemExit("manifest does not contain exactly one matching agent")
+    fail(65, "Release manifest is ambiguous: %d public Agent assets for %s." % (len(matches), target))
 item = matches[0]
 runtimes = [
     entry for entry in manifest.get("artifacts", [])
@@ -324,31 +357,43 @@ print(item["filename"])
 print(item["url"])
 print(item["sha256"])
 print(item["size"])
-print(manifest["version"])
+print(version)
 print("" if runtime is None else runtime["filename"])
 print("" if runtime is None else runtime["url"])
 print("" if runtime is None else runtime["sha256"])
 print("" if runtime is None else runtime["size"])
 PY
-)"
-elif [ "$PLATFORM" = "macos" ] && command -v osascript >/dev/null 2>&1; then
-  METADATA="$(osascript -l JavaScript "$TEMP_DIR/release-manifest.json" "$PLATFORM" "$ARCHITECTURE" <<'JXA'
+  elif [ "$PLATFORM" = "macos" ] && command -v osascript >/dev/null 2>&1; then
+    osascript -l JavaScript "$TEMP_DIR/release-manifest.json" "$PLATFORM" "$ARCHITECTURE" <<'JXA'
 ObjC.import('Foundation')
 const args = $.NSProcessInfo.processInfo.arguments.js.slice(4)
 const data = $.NSData.dataWithContentsOfFile(args[0])
 const text = $.NSString.alloc.initWithDataEncoding(data, $.NSUTF8StringEncoding).js
 const manifest = JSON.parse(text)
+const target = args[1] + '/' + args[2]
 if (manifest.repository !== 'EastStarAI/sanad-agent') {
-  throw new Error('manifest repository is not trusted')
+  throw new Error('Release manifest repository is not trusted: ' + manifest.repository)
 }
-const matches = manifest.artifacts.filter(
+const agents = (manifest.artifacts || []).filter(
   item => item.component === 'agent' &&
-    item.platform === args[1] &&
-    item.architecture === args[2] &&
     item.public === true &&
     Boolean(item.signature_type)
 )
-if (matches.length !== 1) throw new Error('missing matching agent')
+const published = [...new Set(agents.map(item => item.platform + '/' + item.architecture))].sort()
+const matches = agents.filter(
+  item => item.platform === args[1] && item.architecture === args[2]
+)
+if (matches.length === 0) {
+  throw new Error(
+    'No official Sanad Agent build is published for ' + target +
+      ' in ' + manifest.version + '. Published Agent targets: ' +
+      (published.length ? published.join(', ') : 'none') + '.'
+  )
+}
+if (matches.length !== 1) {
+  throw new Error('Release manifest is ambiguous: ' + matches.length +
+    ' public Agent assets for ' + target + '.')
+}
 const item = matches[0]
 const runtimes = manifest.artifacts.filter(
   entry => entry.component === 'agent-runtime' &&
@@ -367,11 +412,24 @@ const runtime = runtimes.length === 1 ? runtimes[0] : null
   runtime ? runtime.size : ''
 ].join('\n')
 JXA
-)"
-else
-  echo "Python 3 is required on Linux to validate the release manifest." >&2
-  exit 69
+  else
+    echo "Python 3 is required on Linux to validate the release manifest." >&2
+    return 69
+  fi
+}
+
+SELECTION_FILE="$TEMP_DIR/agent-selection"
+SELECTION_STATUS=0
+select_agent_metadata >"$SELECTION_FILE" || SELECTION_STATUS=$?
+if [ "$SELECTION_STATUS" -ne 0 ]; then
+  if [ -s "$SELECTION_FILE" ]; then
+    cat "$SELECTION_FILE" >&2
+  else
+    echo "No official Sanad Agent build was selected for $PLATFORM/$ARCHITECTURE." >&2
+  fi
+  exit "$SELECTION_STATUS"
 fi
+METADATA="$(cat "$SELECTION_FILE")"
 
 FILENAME="$(printf '%s\n' "$METADATA" | sed -n '1p')"
 DOWNLOAD_URL="$(printf '%s\n' "$METADATA" | sed -n '2p')"

@@ -135,6 +135,37 @@ void main() {
     });
   });
 
+  group('pull-request workflow', () {
+    test('native dictation proves the published arm64 slice', () {
+      final ci = File('../.github/workflows/ci.yml').readAsStringSync();
+      final job = _jobs(ci)['native-stt'];
+      expect(job, isNotNull);
+
+      // The release matrix publishes linux-arm64, so the pull-request lane
+      // builds that slice on the same runner family instead of trusting an x64
+      // host. Losing the lane would publish an artifact no PR ever proved.
+      expect(job, contains('ubuntu-24.04-arm'));
+      expect(job, contains('./.github/actions/setup-dart'));
+      expect(job, contains('DART:'));
+
+      final runtimeLines = const LineSplitter()
+          .convert(job!)
+          .where(
+            (line) =>
+                line.contains('ensure_native_stt.dart') ||
+                line.contains('native_runtime_smoke_test.dart'),
+          )
+          .toList();
+      expect(runtimeLines, hasLength(7));
+      // Only the PowerShell twins may name `fvm dart`: every other line runs on
+      // the arm64 lane, which installs no Flutter SDK.
+      expect(
+        runtimeLines.where((line) => line.trimLeft().startsWith('fvm dart')),
+        hasLength(3),
+      );
+    });
+  });
+
   group('release workflow', () {
     test('stages the runtime into the Agent payload and stays required', () {
       final workflow = File('../.github/workflows/release.yml').readAsStringSync();
@@ -170,6 +201,42 @@ void main() {
       // runner's fvm entry point is a .bat shim, and Git-Bash `tee`/`sed`
       // semantics were never verified on that lane.
       expect(job, isNot(contains('tee ')));
+    });
+
+    test('the arm64 lane runs the runtime tooling with its own Dart', () {
+      final workflow = File('../.github/workflows/release.yml').readAsStringSync();
+      final start = workflow.indexOf('\n  agent:\n');
+      final end = workflow.indexOf('\n  client-linux-web:\n');
+      expect(start, isNonNegative);
+      expect(end, greaterThan(start));
+      final job = workflow.substring(start, end);
+
+      // The Linux arm64 lane has no Flutter SDK, so a runtime step that names
+      // `fvm dart` would fail there. Every runtime step that is not Windows-only
+      // must select its executable through the job's per-lane `DART`.
+      final runtimeLines = const LineSplitter()
+          .convert(job)
+          .where(
+            (line) =>
+                line.contains('ensure_native_stt.dart') ||
+                line.contains('native_runtime_smoke_test.dart'),
+          )
+          .toList();
+      expect(runtimeLines, hasLength(8));
+      // Only the PowerShell twins may name `fvm dart`: every other line runs on
+      // the arm64 lane, which installs no Flutter SDK.
+      expect(
+        runtimeLines.where((line) => line.trimLeft().startsWith('fvm dart')),
+        hasLength(4),
+      );
+      // The lane installs the pinned standalone Dart SDK instead of FVM.
+      expect(job, contains('./.github/actions/setup-dart'));
+      expect(
+        job,
+        contains(
+          "if: matrix.platform != 'linux' || matrix.architecture != 'arm64'",
+        ),
+      );
     });
 
     test('no bash step can execute on a Windows runner', () {

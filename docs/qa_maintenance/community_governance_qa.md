@@ -50,7 +50,8 @@ A vulnerability diverges at step 1 to Private Vulnerability Reporting and must n
 
 - Confirm `DISCORD_WEBHOOK_URL` exists as a repository secret while its value is absent from source, logs, and evidence.
 - Merge one approved pull request and confirm exactly one public-title/link notification appears in `#github` with non-null contributor and merger identities; a direct push without an associated merged pull request produces no message.
-- Publish a controlled Release only under SANAD-12 and confirm exactly one release notification; workflow dispatches, Issues, CI runs, security events, and fork activity produce none.
+- Publish a controlled Release only under SANAD-12 and confirm exactly one release notification, posted only after the three Production asset jobs (`Deploy Stable Production assets / updates`, `/ web`, and `/ installers`) succeed in that run; re-running the announcement workflow or the release run posts nothing the second time.
+- Confirm an RC candidate, a validation-only dispatch, a failed release run, a run whose Production asset job failed, Issues, CI runs, security events, and fork activity produce no release notification.
 - Confirm notification payloads suppress all mentions even when a public title contains mention syntax.
 - Verify role permissions with a non-owner test account. Owner-account 2FA
   remains enabled; future Maintainer/Moderator 2FA is not a SANAD-10 gate.

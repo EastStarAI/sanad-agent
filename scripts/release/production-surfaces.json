@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "updates_base_url": "https://updates.sanad.eaststarai.com",
+  "web_base_url": "https://app.sanad.eaststarai.com",
+  "web_version_path": "/version.json",
+  "web_commit_path": "/sanad-public-sha.txt",
+  "downloads_base_url": "https://downloads.sanad.eaststarai.com",
+  "downloads_installer_paths": [
+    "/install.sh",
+    "/install.ps1"
+  ],
+  "downloads_client_aliases": [
+    {
+      "path": "/client/macos",
+      "platform": "macos",
+      "architecture": "universal",
+      "format": "dmg"
+    },
+    {
+      "path": "/client/windows",
+      "platform": "windows",
+      "architecture": "x64",
+      "format": "exe"
+    },
+    {
+      "path": "/client/linux",
+      "platform": "linux",
+      "architecture": "x64",
+      "format": "deb"
+    }
+  ],
+  "edge_alias_base_url": "https://sanad.eaststarai.com",
+  "edge_alias_installer_paths": [
+    "/install.sh",
+    "/install.ps1"
+  ]
+}

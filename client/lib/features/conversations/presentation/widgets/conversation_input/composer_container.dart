@@ -372,9 +372,11 @@ class ComposerContainer extends StatelessWidget {
               // The permission picker steps aside while dictation is active: the
               // row shows the live meter instead, and the value is unchanged.
               if (!dictationActive &&
-                  !hasPendingRequest &&
-                  capabilities.supportsToolPermissions &&
-                  inputSlice.selectedWorkspace != null) ...[
+                  ComposerPermissionGate.shouldShow(
+                    hasPendingRequest: hasPendingRequest,
+                    capabilities: capabilities,
+                    inputSlice: inputSlice,
+                  )) ...[
                 ComposerPermissionModeChip(
                   permissionMode: inputSlice.permissionMode,
                   isLoadingPermissionMode: inputSlice.isLoadingPermissionMode,

@@ -8,6 +8,7 @@ import '../models/session_history_page.dart';
 import '../models/session_query.dart';
 import '../models/session_search.dart';
 import '../models/session_state.dart';
+import '../models/session_workspace_scope.dart';
 import 'agent_state_database.dart';
 import 'session_message_repository.dart';
 import 'sqlite_transaction.dart';
@@ -231,7 +232,14 @@ class SessionRepository {
 
     final normalizedWorkspaceId = _normalizeWorkspaceId(query.workspaceId);
     if (query.unscopedOnly) {
-      sql.write(' AND workspace_id IS NULL');
+      // A run session is keyed by its execution root, not by a registered
+      // workspace, so it belongs to the unscoped list: no workspace group can
+      // ever own it, and hiding it from both lists makes it unreachable.
+      sql.write(
+        ' AND (workspace_id IS NULL OR '
+        'substr(workspace_id, 1, ?) = ?)',
+      );
+      params.addAll([execRootWorkspacePrefix.length, execRootWorkspacePrefix]);
     } else if (normalizedWorkspaceId != null) {
       sql.write(' AND workspace_id = ?');
       params.add(normalizedWorkspaceId);

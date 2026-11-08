@@ -41,12 +41,14 @@ class _SecurityClient implements WorkspaceSecurityClient {
     WorkspacePermissionMode? permissionMode,
     WorkspaceExecutionMode? executionMode,
     WorkspaceHostDiscoveryPolicy? hostDiscoveryPolicy,
+    String? sessionId,
   }) async {
     updates.add({
       'device': device.id,
       'workspace_id': workspaceId,
       'expected_revision': expectedRevision,
       'permission_mode': permissionMode?.value,
+      'session_id': sessionId,
     });
     final error = nextError;
     if (error != null) {
@@ -138,6 +140,7 @@ void main() {
       'workspace_id': 'exec_root:/local/project',
       'expected_revision': 5,
       'permission_mode': 'full_access',
+      'session_id': 'sess-toggle',
     });
     expect(repository.setPermissionModeRequests, isEmpty);
     expect(messagesCubit.state.permissionMode, WorkspacePermissionMode.fullAccess);
@@ -145,6 +148,36 @@ void main() {
     await messagesCubit.setWorkspacePermissionMode(WorkspacePermissionMode.defaultMode);
     await pumpEventQueue();
     expect(security.updates.last['expected_revision'], 6);
+  });
+
+  test('a session with its own full access reads as full access and names itself when changed', () async {
+    final runSession = Session(
+      id: 'sess-run',
+      title: 'Run session',
+      deviceId: agent.id,
+      workspaceId: 'exec_root:/local/project',
+      workspacePath: '/local/project',
+      metadata: const {
+        'execution_root': '/local/project',
+        'allow_all_tools': true,
+        'permission_mode': 'full_access',
+      },
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    repository.seedSessions(agent, [runSession]);
+    await sessionCubit.selectSession(runSession);
+    await pumpEventQueue();
+
+    // The picker reads the authority the Agent actually enforces, not a
+    // workspace policy that the session override outranks.
+    expect(messagesCubit.state.permissionMode, WorkspacePermissionMode.fullAccess);
+
+    await messagesCubit.setWorkspacePermissionMode(WorkspacePermissionMode.defaultMode);
+    await pumpEventQueue();
+
+    expect(security.updates.single['session_id'], 'sess-run');
+    expect(security.updates.single['permission_mode'], 'default');
   });
 
   test('a rejected toggle reports the Agent reason and keeps the Agent state', () async {

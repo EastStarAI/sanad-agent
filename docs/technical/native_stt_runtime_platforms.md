@@ -283,12 +283,13 @@ or verification fails loses dictation only and keeps a working Agent (see
    `dist/native/<tag>/…` beside `dist/sanad-agent-…`. A failing build fails the
    release; there is no standalone side job whose artifact the manifest ignores.
 2. **As a declared release artifact.** `release/release-contract.json` declares
-   one `agent-runtime` artifact per Agent platform and architecture
-   (`sanad-agent-runtime-1.0.20-<platform>-<architecture>.tar.gz`,
-   `format: tar.gz`). `generate-manifest` fails when a declared archive is
-   missing, so the archive is part of the release candidate and its real sha256
-   and size land in the release manifest. `scripts/install.sh` and
-   `scripts/install.ps1` select that entry, verify size and sha256, reject an
+   one `agent-runtime` artifact per Agent platform and architecture that
+   publishes one (`sanad-agent-runtime-<release>-<platform>-<architecture>.tar.gz`,
+   `format: tar.gz`), so `linux-arm64` is a declared row alongside `linux-x64`,
+   `macos-arm64`, `macos-x64`, and `windows-x64`. `generate-manifest` fails when a
+   declared archive is missing, so the archive is part of the release candidate
+   and its real sha256 and size land in the release manifest. `scripts/install.sh`
+   and `scripts/install.ps1` select that entry, verify size and sha256, reject an
    archive whose layout is not exactly `native/<tag>/` with library files only,
    and install it as `<home>/bin/native/<tag>/` — the first location the loader
    searches relative to the installed executable.

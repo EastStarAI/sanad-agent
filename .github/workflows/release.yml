@@ -130,6 +130,16 @@ jobs:
             architecture: x64
             extension: ''
             environment: release-build
+          # GitHub-hosted arm64 runner. Linux carries SHA-256 plus GitHub
+          # attestation and no platform code signature, so arm64 uses the same
+          # trust policy, Environment, and gates as Linux x64; the public
+          # installer resolves the Agent by platform plus architecture and never
+          # substitutes another target.
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+            extension: ''
+            environment: release-build
           - runner: windows-2025
             platform: windows
             architecture: x64
@@ -138,9 +148,17 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 35
     environment: ${{ matrix.environment }}
+    env:
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so that job
+      # installs the standalone Dart SDK at exactly the same version instead.
+      # Every other job keeps the FVM-managed Flutter SDK.
+      DART: ${{ matrix.platform == 'linux' && matrix.architecture == 'arm64' && 'dart' || 'fvm dart' }}
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.platform == 'linux' && matrix.architecture == 'arm64'
       - uses: ./.github/actions/setup-fvm
+        if: matrix.platform != 'linux' || matrix.architecture != 'arm64'
       - name: Fetch whisper.cpp
         uses: actions/checkout@v6
         with:
@@ -172,18 +190,18 @@ jobs:
         working-directory: agent
         shell: bash
         run: |
-          fvm flutter pub get
-          fvm dart run tool/generate_bundled_skills.dart --check
-          fvm dart run tool/generate_model_capability_defaults.dart --check
-          fvm dart analyze
-          fvm dart test
+          ${{ env.DART }} pub get
+          ${{ env.DART }} run tool/generate_bundled_skills.dart --check
+          ${{ env.DART }} run tool/generate_model_capability_defaults.dart --check
+          ${{ env.DART }} analyze
+          ${{ env.DART }} test
       - name: Compile agent
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
         run: |
           mkdir -p ../dist
-          fvm dart compile exe \
+          ${{ env.DART }} compile exe \
             -DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }} \
             bin/sanad_agent.dart \
             -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
@@ -226,8 +244,8 @@ jobs:
           EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
         run: |
           set -euo pipefail
-          fvm dart run tool/ensure_native_stt.dart --expect-target "$EXPECTED"
-          fvm dart run tool/ensure_native_stt.dart --verify --expect-target "$EXPECTED"
+          ${{ env.DART }} run tool/ensure_native_stt.dart --expect-target "$EXPECTED"
+          ${{ env.DART }} run tool/ensure_native_stt.dart --verify --expect-target "$EXPECTED"
       - name: Build and verify the native dictation runtime
         if: matrix.platform == 'windows'
         working-directory: agent
@@ -376,7 +394,7 @@ jobs:
           ARCHIVE_NAME: sanad-agent-runtime-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}.tar.gz
         run: |
           set -euo pipefail
-          fvm dart run tool/ensure_native_stt.dart --verify \
+          ${{ env.DART }} run tool/ensure_native_stt.dart --verify \
             --expect-target "$EXPECTED" \
             --stage ../dist \
             --archive ../dist \
@@ -413,7 +431,7 @@ jobs:
         # built, so the flag belongs on this step rather than on the job.
         env:
           SANAD_STT_REQUIRE_NATIVE: '1'
-        run: fvm dart test test/stt/native_runtime_smoke_test.dart
+        run: ${{ env.DART }} test test/stt/native_runtime_smoke_test.dart
       - name: Load the packaged runtime in a real process
         if: matrix.platform == 'windows'
         working-directory: agent

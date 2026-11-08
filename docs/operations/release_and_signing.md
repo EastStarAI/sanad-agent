@@ -60,6 +60,47 @@ protected deployment is `release-publication`.
 The Agent job validates the same release surface on macOS, Linux, and Windows,
 so every gate has to mean the same thing on all three.
 
+Linux arm64 is a supported Agent target and uses the GitHub-hosted
+`ubuntu-24.04-arm` runner with the same steps, `release-build` Environment, and
+trust policy as Linux x64: both carry SHA-256 plus GitHub attestation and no
+platform code signature. `requiredAgentReleaseTargets` in
+`release/contract/lib/release_contract.dart` is the single declaration of that
+matrix; `validate-contract` and `check-preparation` fail when a contract omits a
+declared target, and the release-security CI job fails when the release matrix
+and that list disagree. Adding an architecture therefore means adding the
+contract row and the release job together. The public installer resolves the
+Agent by platform plus architecture only, so it reports the requested target
+instead of substituting a different architecture's binary.
+
+The pinned Flutter SDK publishes no Linux arm64 archive, so the arm64 job cannot
+use the FVM-managed Flutter SDK that every other Agent job installs. The Agent
+build needs the Dart AOT compiler only, so that job installs the standalone Dart
+SDK through `.github/actions/setup-dart`: the version comes from
+`scripts/ci/dart_sdk_version.txt`, the archive is the publisher's
+`dartsdk-linux-arm64-release.zip` verified against the checksum pinned in that
+action, and the action fails unless `dart --version` reports the pin. The pin and
+the Dart SDK bundled with `.fvmrc`'s Flutter must match, and
+`agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes as soon as
+they diverge. No lane may install an unpinned or architecture-mismatched SDK.
+
+That lane produces the whole Agent payload, not just the executable: it builds
+and verifies the whisper runtime with its own Dart, stages it into the same
+`dist/`, archives `sanad-agent-runtime-<release>-linux-arm64.tar.gz`, and loads
+the packaged library in a real process before the artifact is uploaded. Every
+runtime step in that job therefore selects the executable through the job's
+`DART` variable instead of naming `fvm dart`, and the whisper build cache is
+keyed by the runner label so an arm64 slice is never restored from an x64 build.
+The contract row for that archive is `linux`/`arm64`, and
+`agent/test/tool/native_runtime_package_contract_test.dart` fails when a
+published Agent target has no matching `agent-runtime` row.
+
+The official Agent target list is a build-matrix statement, not a statement
+about packaging. A Linux arm64 **Client** package (`.deb` and portable `tar.gz`)
+remains a separate follow-up: it needs an arm64 Linux build gate, an arm64
+`flutter build linux` verification, and its own manifest and alias handling,
+and it cannot reuse this Dart-only path because the Flutter SDK itself has no
+Linux arm64 distribution.
+
 Generated sources are compared and hashed as canonical LF text.
 `agent/tool/generate_bundled_skills.dart` and
 `agent/tool/generate_model_capability_defaults.dart` compare the rendered output
@@ -99,6 +140,7 @@ result, so it keeps its own exit-code handling.
 |---|---|---|---|
 | Agent | macOS arm64/x64 | GitHub Release | Developer ID, notarization, and GitHub attestation |
 | Agent | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
+| Agent | Linux arm64 | GitHub Release | SHA-256 plus GitHub attestation |
 | Agent | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | macOS universal | GitHub Release | Developer ID, notarization, Sparkle EdDSA |
 | Client | Linux x64 `.deb` and portable `tar.gz` | GitHub Release | SHA-256 plus GitHub attestation |
@@ -419,6 +461,44 @@ To eliminate cross-job interference while maintaining strict safety boundaries:
    within the 60-second deadline, the sweep fails closed and initiates rollback.
    The job's own release surface verification (exact payload bytes, SHA-256
    digests, version markers) is strictly verified and never relaxed.
+
+## Release announcement handoff
+
+`discord-notifications.yml` publishes the Discord release announcement, and it
+never announces a Release before Production. A GitHub Release is published with
+the repository `GITHUB_TOKEN`, and GitHub starts no workflow from an event that
+token produced, so the previous `release: published` subscription announced
+nothing after `v1.0.0-rc.1`.
+
+The workflow therefore follows the completing `Prepare stable release` run
+(`workflow_run`, `completed`) on the default branch instead of a Release event,
+and it sends an announcement only when every condition below holds:
+
+- the release run concluded `success`;
+- that same run published a Stable Release: the newest Release that is neither a
+  Draft nor a pre-release, whose tag matches `vX.Y.Z`, whose tag commit equals
+  the run's commit, and whose `published_at` falls inside the run's lifetime;
+- the reusable Production deployment of that run reported `success` for all
+  three serialized asset jobs, `Deploy Stable Production assets / updates`,
+  `/ web`, and `/ installers`.
+
+An RC candidate, a validation-only dispatch, a rejected publication approval, a
+failed release run, and a Production asset failure therefore never announce. A
+Production failure is recovered by re-running the failed jobs of the same
+release run, and the announcement then fires once, for the successful attempt.
+
+Announcements are idempotent per tag. After a successful send the workflow
+stores a `discord-announcement-<tag>` ledger artifact, and any later re-run of
+the release workflow or of the announcement workflow skips a tag that already
+owns a live ledger entry. The ledger is retained for 90 days, so a manual re-run
+of the same successful release run after that window is the only path that could
+repeat a notification.
+
+The notification contract itself is unchanged: one embed, mentions suppressed,
+`DISCORD_WEBHOOK_URL` read only by the final send step, and no protected
+environment, signing credential, or deployment authority. The completing-run
+checks add only `actions: read` to the existing `contents: read` and
+`pull-requests: read` scopes.
 
 ## Readiness and live handoff
 

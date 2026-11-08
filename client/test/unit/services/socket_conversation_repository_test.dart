@@ -501,6 +501,7 @@ class _TestConversationClient implements ConversationClient, AttachmentReplayCli
     required String workspaceId,
     required String workspacePath,
     required WorkspacePermissionMode mode,
+    String? sessionId,
   }) async {
     lastSetWorkspacePermissionModeId = workspaceId;
     lastSetWorkspacePermissionModePath = workspacePath;
