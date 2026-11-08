@@ -4,7 +4,7 @@ description: Bootstrap and orchestrate one or many delegated coding-agent CLI ta
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.4.0
+  version: 0.4.1
 ---
 
 # Delegate Task Supervisor
@@ -215,7 +215,7 @@ node "<skill-dir>/scripts/watch-once.mjs" \
   --since <last-sequence>
 ```
 
-This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`, `incomplete`, `needs_review`, `follow_lost`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
+This command is event-driven. By default, it blocks until a task enters an intervention status (`needs_input`, `needs_permission`) or a terminal status (`completed`, `failed`, `blocked`, `timeout`, `aborted`, `interrupted`, `cancelled`, `incomplete`, `needs_review`, `follow_lost`), prints one JSON event, and exits. It does not wake on routine `running` or `resumed` transitions unless `--all` is passed. A stall wake-up is a real stall (see §6), never a task that is busy or merely waiting for a free slot. It also returns a synthetic `supervisor_stale` intervention event when a manifest says `running` but its supervisor PID is dead, using filesystem events first and a one-second bounded liveness fallback so callers cannot block forever on stale state. Review that task or intervention, update the cursor from the returned `seq`, then invoke `watch-once` again.
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 
@@ -288,6 +288,8 @@ node "<skill-dir>/scripts/supervisor.mjs" inspect --run <run-directory> --task <
 
 Default `watch-once` wakes on blocked, waiting, retrying, resuming, intervention, and terminal transitions; use `--all` only when routine transitions are also relevant. Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream. A task that is `following` a daemon-owned turn is observed through the session, so `status` reports where the observation came from instead of implying a live worker; plain progress still never wakes a watcher.
 
+**Stall alerts are evidence-based.** A task makes progress whenever it writes something observable — a new timeline record, growth of its `events.jsonl`, its stdout or stderr stream, or a change to its `result.json` — and a `progress_stall` is measured from the **latest** of those, never from task start. A headless Sanad turn publishes only lifecycle records and streams its work to stdout, so nothing about it may be called silent while that stream grows. When progress returns after a real stall the task journals one non-actionable `progress_resumed` and never re-fires while work continues, and a task that blocks or settles clears the flag. A queued task waiting for a busy concurrency slot is the queue working: `status` reports its position and `awaiting_slot` reason, and it is never journaled as a stall however long the wait lasts. `queued_stall` is reserved for defects a coordinator can act on — a free slot the task was not launched into (`launch_pending`), or every slot held by a process that is already gone (`slots_frozen`). `watch` prints only actionable records by default: terminal outcomes, `blocked`/intervention states, and real stalls. `--all` adds routine transitions, `progress_resumed`, and the other non-actionable notices.
+
 ## 7. Review every result
 
 A terminal status means the relay exited; it does not prove correctness. Follow the owning delegate skill to inspect the result, diff, touched files, and gates. Surface scope changes and decisions instead of silently absorbing them. Preserve the session/conversation identifier for targeted continuation when rework is required. For Sanad tasks, inspect `cause` and `error_code` before retrying: `turn_in_flight` (exit 3) indicates that the session's prior turn is still active, while `reconnect_window_expired` indicates follow failure across daemon restart.
@@ -304,7 +306,7 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 - `scripts/supervisor-watch.mjs` — the durable `watch` loop with its cursor, the actionable-event enrichment every wake-up goes through, and `reconcileRun`, which turns a dead worker or a settled session into manifest state (`status` imports it too, so both surfaces repair the same way).
 - `scripts/supervisor-worker/context.mjs` — `createWorkerContext`: run configuration, mutable worker state, and the four journal writers (`persist`, `persistTasks`, `transition`, `notice`).
 - `scripts/supervisor-worker/child-process.mjs` — process spawning, task environment composition, process-group signalling, and group-survival probes.
-- `scripts/supervisor-worker/reconcile.mjs` — `createReconciler`: queue stall, progress stall, and lost-worker detection.
+- `scripts/supervisor-worker/reconcile.mjs` — `createReconciler`: progress-signal sampling (timeline, stdout/stderr, and result artifact growth), queue stall, progress stall, and lost-worker detection.
 - `scripts/supervisor-worker/scheduler.mjs` — `createScheduler`: monitor tick, run completion checks, request watcher/rescan, signal handling, and worker startup (`runWorker`).
 - `scripts/supervisor-worker/launcher.mjs` — `createLauncher`: slot concurrency, launch backoff, process exit handling (`finishTask`), and task launching.
 - `scripts/supervisor-worker/timeline.mjs` — `createTimelineObserver`: timeline file and relay stream observation, session id extraction.
@@ -313,5 +315,7 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 - `scripts/supervisor-worker/requests.mjs` — `createRequestHandler`: control request processing (`cancel`, `continue`, `steer`, `retry`, `add`, `enqueue`, `set-concurrency`, `close`) and auto-retry evaluation.
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
+- `scripts/supervisor-events.mjs` — the shared journal vocabulary: terminal states, actionable notices, and the `watch-once` wake set.
+- `scripts/supervisor-stalls.mjs` — the stall policy both the worker and `status` import: the artifact signatures that count as progress, the silence verdict measured from the latest signal, and the queue verdict that separates `awaiting_slot` from `launch_pending` and `slots_frozen`.
 
-The pure policy modules `scripts/supervisor-events.mjs`, `scripts/supervisor-retry.mjs`, and `scripts/supervisor-follow.mjs` are imported by these owners as well; none of the scripts keeps a private copy of their rules.
+The pure policy modules `scripts/supervisor-events.mjs`, `scripts/supervisor-stalls.mjs`, `scripts/supervisor-retry.mjs`, and `scripts/supervisor-follow.mjs` are imported by these owners as well; none of the scripts keeps a private copy of their rules.

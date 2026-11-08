@@ -6,7 +6,8 @@ import { basename, dirname, resolve } from 'node:path';
 // The wake set is shared with `supervisor.mjs watch` so both readers agree on
 // which journal records matter. Note that `queued_stall` and `progress_stall`
 // are notices, not state changes, but they are exactly the "nothing is
-// happening" signal an orchestrator waits for.
+// happening" signal an orchestrator waits for — and only a real stall reaches
+// them: a task waiting for a busy slot is never journaled this way.
 import { WATCH_STATUSES, TERMINAL_STATUSES } from './supervisor-events.mjs';
 
 const HELP = `watch-once

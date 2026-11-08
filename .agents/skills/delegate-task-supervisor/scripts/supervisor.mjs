@@ -63,14 +63,16 @@ import {
   verifyOption,
 } from './supervisor-control.mjs';
 import {
-  DEFAULT_PROGRESS_STALL_MS,
-  DEFAULT_QUEUED_STALL_MS,
   inspectCommand,
   logsCommand,
   statusCommand,
   timelineCommand,
   viewCommand,
 } from './supervisor-views.mjs';
+import {
+  DEFAULT_PROGRESS_STALL_MS,
+  DEFAULT_QUEUED_STALL_MS,
+} from './supervisor-stalls.mjs';
 import { watchCommand } from './supervisor-watch.mjs';
 // The worker's owners. `workerCommand` creates the one shared context and wires
 // these onto it; the loop itself belongs to the scheduler.
@@ -106,8 +108,10 @@ Usage:
 Concurrency is always reported. When --max-concurrency is omitted, start uses
 one slot per spec task (no artificial queueing) and prints the effective value as
 \`maxConcurrency\` in its JSON handshake. Queued tasks report their position,
-the active/max counts, and the reason they are waiting; \`status\` repeats that
-for every queued task and flags a task that stalled past --queued-stall-ms
+the active/max counts, and the reason they are waiting; a task waiting for a busy
+slot is expected, so \`status\` reports it instead of waking anyone, and only a
+stuck queue (a free slot the task was not launched into, or slots held by
+processes that are gone) is flagged past --queued-stall-ms
 (default ${DEFAULT_QUEUED_STALL_MS}ms).
 
 \`watch\` is the coordinator interface for several runs at once: it persists the

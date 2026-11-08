@@ -39,17 +39,13 @@ import {
   DEFAULT_AUTO_RETRY_MAX_ATTEMPTS,
   DEFAULT_LAUNCH_RETRY_MAX_ATTEMPTS,
 } from './supervisor-retry.mjs';
+import {
+  evaluateProgress,
+  progressThresholdMs,
+  queuedStallThreshold,
+  queueStallVerdict,
+} from './supervisor-stalls.mjs';
 
-// A task that waits for a slot while every slot is busy is normal; a task that
-// stays invisible in the queue for minutes is the silent stall live rounds
-// reported. The worker journals one `queued_stall` notice per task per queue
-// episode after this default, and `status` recomputes the same condition on
-// read so a caller that never watched still sees it.
-export const DEFAULT_QUEUED_STALL_MS = 120_000;
-// A running task that publishes no progress for this long is silent, not busy.
-// The worker journals one `progress_stall` notice per stall episode and a
-// `progress_resumed` notice when progress returns.
-export const DEFAULT_PROGRESS_STALL_MS = 900_000;
 // Queue ages and stall thresholds are often sub-second during a live
 // investigation; printing `0s` for a configured 600ms limit hides the setting.
 export function formatShortDuration(ms) {
@@ -57,37 +53,16 @@ export function formatShortDuration(ms) {
   return ms < 1000 ? `${Math.round(ms)}ms` : formatDuration(ms);
 }
 
-function queuedStallThreshold(manifest) {
-  const configured = Number(manifest?.queuedStallMs);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_QUEUED_STALL_MS;
-}
-
-export function progressThresholdMs(manifest, taskState = null) {
-  const perTask = Number(taskState?.progressStallMs);
-  if (Number.isFinite(perTask) && perTask > 0) return perTask;
-  const configured = Number(manifest?.progressStallMs);
-  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_PROGRESS_STALL_MS;
-}
-
 /**
  * Progress age for one task: how long since the last observable progress.
  *
  * `status` recomputes this on read (a caller that never watched must still see
- * a silent turn), and the same computation drives the worker's stall notices.
+ * a silent turn), and the same rule drives the worker's stall notices, so the
+ * journal and the read-only surface cannot disagree.
  */
 function describeProgress(manifest, task, now = Date.now()) {
-  const thresholdMs = progressThresholdMs(manifest, task);
-  const reference = task.lastProgressAt ?? task.startedAt ?? task.stateSince ?? null;
-  const referenceMs = reference ? parseIsoMillis(reference) : null;
-  const silentForMs = referenceMs == null ? null : Math.max(0, now - referenceMs);
-  const live = ['running', 'resuming'].includes(task.status);
   return {
-    lastProgressAt: task.lastProgressAt ?? null,
-    silentForMs,
-    thresholdMs,
-    // `blocked`, `waiting`, and intervention states are already actionable
-    // transitions; only a live turn can be silent.
-    stalled: live && silentForMs != null && silentForMs >= thresholdMs,
+    ...evaluateProgress({ state: task, manifest, now }),
     noticed: task.progressStall ?? null,
   };
 }
@@ -113,31 +88,27 @@ export function queueSnapshot(manifest) {
   return { active, maxConcurrency, queued };
 }
 
-// Why a task is still waiting: a full slot is the honest answer, and a task
-// that outlives the stall threshold while slots are occupied is flagged so a
-// silent queue can never be mistaken for progress.
+// Why a task is still waiting: a full slot is the honest answer and never a
+// stall, while a free slot nobody launched into — or slots held by processes
+// that are already gone — is a real defect worth waking a coordinator for. The
+// verdict itself is `queueStallVerdict`, so the worker journals exactly what a
+// `status` read recomputes.
 export function describeQueuedTask(manifest, id, now = Date.now()) {
   const snapshot = queueSnapshot(manifest);
   const entry = snapshot.queued.find((item) => item.id === id);
   if (!entry) return null;
-  const counts = `${snapshot.active}/${snapshot.maxConcurrency ?? '?'} active`;
-  const queuedAt = entry.state.queuedAt ?? null;
-  const queuedForMs = queuedAt == null ? null : Math.max(0, now - (parseIsoMillis(queuedAt) ?? now));
-  const awaitingSlot = snapshot.maxConcurrency != null && snapshot.active >= snapshot.maxConcurrency;
+  const verdict = queueStallVerdict({ manifest, state: entry.state, snapshot, now });
   return {
     position: entry.position,
     queuedTotal: snapshot.queued.length,
     active: snapshot.active,
     maxConcurrency: snapshot.maxConcurrency,
-    queuedAt,
-    queuedForMs,
-    stallThresholdMs: queuedStallThreshold(manifest),
-    stalled: entry.state.queueStall != null
-      || (awaitingSlot && queuedForMs != null && queuedForMs >= queuedStallThreshold(manifest)),
-    reason: awaitingSlot ? 'awaiting_slot' : 'launch_pending',
-    reasonText: awaitingSlot
-      ? `waiting for a concurrency slot (${counts})`
-      : `slot is free but the task is not launched yet (${counts})`,
+    queuedAt: entry.state.queuedAt ?? null,
+    queuedForMs: verdict.queuedForMs,
+    stallThresholdMs: verdict.thresholdMs,
+    stalled: entry.state.queueStall != null || verdict.stalled,
+    reason: verdict.reason,
+    reasonText: verdict.reasonText,
   };
 }
 

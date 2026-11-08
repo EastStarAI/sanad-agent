@@ -1899,6 +1899,44 @@ function taskMarker(results, id) {
   return join(results, id, 'started.marker');
 }
 
+// A task that writes to its own stdout while it works and never publishes a
+// structured timeline record: the exact shape of a headless `sanad run` turn,
+// which used to read as silent for its whole length (2026-11-08, run12).
+// `quietMs` delays the first line so a test can also produce a real silence.
+function writeStreamingFixture(root) {
+  const fixture = join(root, 'streaming_task.mjs');
+  writeFileSync(fixture, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname} from 'node:path';
+    const [runMs, quietMs, tickMs, resultPath] = process.argv.slice(2);
+    const started = Date.now();
+    const ticker = setInterval(() => {
+      if (Date.now() - started < Number(quietMs)) return;
+      process.stdout.write('streamed line after ' + (Date.now() - started) + 'ms\\n');
+    }, Number(tickMs));
+    setTimeout(() => {
+      clearInterval(ticker);
+      mkdirSync(dirname(resultPath), {recursive:true});
+      writeFileSync(resultPath, JSON.stringify({status:'completed', exitCode:0}));
+      process.exit(0);
+    }, Number(runMs));
+  `, 'utf8');
+  return fixture;
+}
+
+function streamingTask(fixture, workspace, results, id, { runMs, quietMs = 0, tickMs = 40, progressStallMs }) {
+  const out = join(results, id);
+  return {
+    id,
+    implementer: 'opencode',
+    workspace,
+    command: process.execPath,
+    args: [fixture, String(runMs), String(quietMs), String(tickMs), join(out, 'result.json')],
+    resultPath: join(out, 'result.json'),
+    progressStallMs,
+  };
+}
+
 function readJournal(runDir) {
   const path = join(runDir, 'events.jsonl');
   if (!existsSync(path)) return [];
@@ -2251,7 +2289,7 @@ test('set-concurrency raises live slots and lowering never kills running tasks',
   }
 });
 
-test('a task queued past the stall threshold journals one queued_stall visible in watch-once and status', async () => {
+test('a task waiting for a busy concurrency slot is reported, never journaled as a queue stall', async () => {
   const root = mkdtempSync(join(tmpdir(), 'delegate-queued-stall-test-'));
   const fixture = writePacedFixture(root);
   const { workspace, results } = queueFixture(root, 'stall');
@@ -2271,39 +2309,45 @@ test('a task queued past the stall threshold journals one queued_stall visible i
   ], env));
   assert.equal(started.queuedStallMs, 400);
 
-  const stallEvent = await waitForFileChange(runDir, () => (
-    readJournal(runDir).find((event) => event.to === 'queued_stall') ?? null
-  ), 15_000);
-  assert.equal(stallEvent.taskId, 'wait-1');
-  assert.equal(stallEvent.kind, 'queued_stall');
-  assert.equal(stallEvent.active, 1);
-  assert.equal(stallEvent.maxConcurrency, 1);
-  assert.equal(stallEvent.position, 1);
-  assert.equal(stallEvent.reason, 'awaiting_slot');
-  assert.ok(stallEvent.queuedForMs >= 400, `stall age ${stallEvent.queuedForMs}ms`);
+  // Wait for the queue to be past its own threshold while the only slot is
+  // busy: this is the exact shape that used to wake a coordinator (2026-11-08,
+  // run12: nine `queued_stall` notices for `awaiting_slot`).
+  await waitForCondition(() => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const waiter = manifest.tasks['wait-1'];
+    const runner = manifest.tasks.runner;
+    if (runner?.status !== 'running' || waiter?.status !== 'queued') return null;
+    const queuedForMs = Date.now() - Date.parse(waiter.queuedAt);
+    return queuedForMs >= 900 ? manifest : null;
+  }, 15_000);
 
-  const watched = JSON.parse(runNode(WATCH_ONCE, [
-    '--run', runDir, '--since', String(stallEvent.seq - 1),
-  ], env));
-  assert.equal(watched.seq, stallEvent.seq);
-  assert.equal(watched.taskId, 'wait-1');
-  assert.equal(watched.to, 'queued_stall');
+  // Nothing is journaled: a busy slot is the queue working as designed.
+  assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 0);
 
+  // `status` still reports the wait honestly — reason, position, counts — so the
+  // information is not lost, only kept out of the actionable stream.
   const statusText = runNode(SUPERVISOR, ['status', '--run', runDir], env);
-  assert.match(statusText, /QUEUED_STALL/);
+  assert.doesNotMatch(statusText, /QUEUED_STALL/);
+  assert.match(statusText, /awaiting_slot: waiting for a concurrency slot \(1\/1 active\)/);
   assert.match(statusText, /stall-after=400ms/);
   const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
-  assert.equal(statusJson.tasks['wait-1'].queue.stalled, true);
-  assert.equal(statusJson.queue.queued[0].stalled, true);
+  assert.equal(statusJson.tasks['wait-1'].queue.reason, 'awaiting_slot');
+  assert.equal(statusJson.tasks['wait-1'].queue.stalled, false);
+  assert.equal(statusJson.queue.queued[0].stalled, false);
   assert.equal(statusJson.queuedStallMs, 400);
+
+  // The coordinator's stream stays silent while the queue is only waiting.
+  const watchOutput = execFileSync(process.execPath, [
+    SUPERVISOR, 'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'),
+    '--once', '--timeout-sec', '2',
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.doesNotMatch(watchOutput, /queued_stall/);
 
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
   const finalManifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
   assert.equal(finalManifest.status, 'completed');
   assert.equal(finalManifest.tasks['wait-1'].status, 'completed');
   assert.equal(finalManifest.tasks['wait-1'].queueStall, null);
-  // One notice per queue episode, never a stream of duplicates.
-  assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -2739,6 +2783,104 @@ test('progress_stall is journaled once per stall and progress_resumed clears it'
     .map((event) => event.kind);
   assert.equal(stalledKinds[0], 'progress_stall');
   assert.equal(stalledKinds[1], 'progress_resumed');
+});
+
+test('a streaming task that publishes no timeline record is never reported as a progress stall', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-progress-signal-test-')));
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+  const fixture = writeStreamingFixture(root);
+  const { workspace, results } = queueFixture(root, 'streaming');
+  const specPath = writeSpec(root, [
+    streamingTask(fixture, workspace, results, 'streaming', { runMs: 2_000, progressStallMs: 300 }),
+  ]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  // Past several thresholds while the task streamed output the whole time: the
+  // old clock read `startedAt` here and woke a coordinator at exactly the limit.
+  const snapshot = await waitForCondition(() => {
+    const manifest = readJsonFile(join(runDir, 'manifest.json'));
+    const state = manifest.tasks.streaming;
+    if (state?.status !== 'running') return null;
+    const elapsedMs = Date.now() - Date.parse(state.startedAt);
+    return elapsedMs >= 900 ? manifest : null;
+  }, 15_000);
+  assert.ok(snapshot.tasks.streaming.lastProgressAt > snapshot.tasks.streaming.startedAt,
+    'stream output must advance the progress clock');
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.tasks.streaming.progress.stalled, false);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.to === 'completed'),
+    15_000,
+  );
+  // Not one false notice for the whole run.
+  assert.equal(readJournal(runDir).filter((event) => event.kind === 'progress_stall').length, 0);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a real silence is still reported once, cleared by progress_resumed, and never repeated while work continues', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-progress-resume-test-')));
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+  const fixture = writeStreamingFixture(root);
+  const { workspace, results } = queueFixture(root, 'resume');
+  const specPath = writeSpec(root, [
+    // Silent past its 300 ms threshold, then streaming until it finishes.
+    streamingTask(fixture, workspace, results, 'late', { runMs: 2_400, quietMs: 1_000, progressStallMs: 300 }),
+  ]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  const stall = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.kind === 'progress_stall') ?? null,
+    15_000,
+  );
+  assert.equal(stall.taskId, 'late');
+  assert.equal(stall.thresholdMs, 300);
+  assert.ok(stall.silentForMs >= 300, `silent for ${stall.silentForMs}ms`);
+  assert.ok(Number.isFinite(Date.parse(stall.lastProgressAt)),
+    'the notice names the clock the silence was measured from');
+
+  const resumed = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.kind === 'progress_resumed') ?? null,
+    15_000,
+  );
+  assert.ok(resumed.silentForMs >= 300);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.to === 'completed'),
+    15_000,
+  );
+  const journal = readJournal(runDir);
+  // One stall for one silence: resuming work must never re-fire the notice.
+  assert.equal(journal.filter((event) => event.kind === 'progress_stall').length, 1);
+  assert.equal(journal.filter((event) => event.kind === 'progress_resumed').length, 1);
+  const manifest = readJsonFile(join(runDir, 'manifest.json'));
+  assert.equal(manifest.tasks.late.progressStall, null, 'a resumed task must not stay flagged');
+
+  // `watch` prints the actionable stall only. The resume notice and the routine
+  // transitions stay out of the coordinator's stream unless `--all` asks for them.
+  const watchArgs = ['watch', '--run', runDir, '--once', '--json', '--timeout-sec', '5'];
+  const actionable = execFileSync(process.execPath, [
+    SUPERVISOR, ...watchArgs, '--cursor', join(root, 'cursor-actionable.json'),
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+    .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(actionable.length > 0);
+  assert.ok(actionable.every((entry) => entry.actionable === true));
+  assert.deepEqual(actionable.map((entry) => entry.to), ['progress_stall', 'completed']);
+
+  const everything = execFileSync(process.execPath, [
+    SUPERVISOR, ...watchArgs, '--all', '--cursor', join(root, 'cursor-all.json'),
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+    .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(everything.length > actionable.length, '--all must include the non-actionable records');
+  assert.ok(everything.some((entry) => entry.to === 'progress_resumed' && entry.actionable === false));
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
 
 test('a task left running by a dead supervisor is repaired to failed/worker_lost', async () => {
