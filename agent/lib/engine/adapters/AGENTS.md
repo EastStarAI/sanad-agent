@@ -22,6 +22,7 @@ This contract applies to `agent/lib/engine/adapters/`.
 
 ## Request Consistency
 - Sync and stream for one protocol reuse the same request builder and final normalization.
+- Codex Responses requests carry a bounded, content-addressed `prompt_cache_key` (`pck_<sha256[:24]>` of stable session scope, instructions, and name-sorted tools; never dependent on conversation state or history length) so provider cache routing stays warm across a conversation. The chatgpt.com Codex backend additionally receives `session_id` (raw session id) and `x-client-request-id` (the exact body routing key, never a fallback) affinity headers. GitHub-hosted Responses endpoints (`api.github.com`, `github.ai`, `githubcopilot.com`) drop the routing field instead of failing dispatch; xAI documents the field for its raw Responses body and keeps it, and no non-chatgpt.com host receives Codex-only affinity headers.
 - Diagnostic response dumps use the same aggregated normalized assistant message, tool calls, finish reason, and usage exposed by the adapter; interrupted streams may record a bounded partial projection plus the error, never raw SSE lines.
 - Request dumps never contain any part of a credential: credential-bearing headers and fields (`Authorization`, `x-api-key`, `api-key`, `api_key`, tokens) are masked by name at the dumper boundary, and the top-level key records presence only.
 - Structured reasoning fields take precedence over textual thought tags.

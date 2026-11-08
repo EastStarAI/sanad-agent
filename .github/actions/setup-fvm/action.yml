@@ -1,5 +1,5 @@
 name: Set up project Flutter and FVM
-description: Installs the exact Flutter SDK declared by the repository and FVM.
+description: Installs the exact Flutter SDK declared by the repository, reuses it for FVM, and restores the pub cache.
 runs:
   using: composite
   steps:
@@ -7,10 +7,82 @@ runs:
       with:
         flutter-version-file: .fvmrc
         cache: true
+    - uses: actions/cache@v6
+      if: runner.os != 'Windows'
+      with:
+        path: ~/.pub-cache
+        key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-${{ runner.os }}-
+    - uses: actions/cache@v6
+      if: runner.os == 'Windows'
+      with:
+        path: ~\AppData\Local\Pub\Cache
+        key: pub-${{ runner.os }}-${{ hashFiles('.fvmrc', '**/pubspec.lock') }}
+        restore-keys: |
+          pub-${{ runner.os }}-
     - shell: bash
       run: |
-        export PUB_CACHE="$RUNNER_TEMP/pub-cache"
-        echo "PUB_CACHE=$PUB_CACHE" >> "$GITHUB_ENV"
+        set -euo pipefail
+        version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
+        if [ -z "$version" ]; then
+          echo "::error::.fvmrc does not declare a Flutter version"
+          exit 1
+        fi
+        sdk_root="${FLUTTER_ROOT:-$(dirname "$(dirname "$(command -v flutter)")")}"
+        # The pub cache keeps its platform default; only its bin directory has
+        # to be published to later steps, in the platform's own path form.
+        cache="$HOME/.fvm-cache"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          pub_cache="${PUB_CACHE:-${LOCALAPPDATA}\\Pub\\Cache}"
+          echo "${pub_cache}\\bin" >> "$GITHUB_PATH"
+          cache="$(cygpath -u "$cache")"
+          fvm_cache="$(cygpath -w "$cache")"
+        else
+          echo "${PUB_CACHE:-$HOME/.pub-cache}/bin" >> "$GITHUB_PATH"
+          fvm_cache="$cache"
+        fi
+        mkdir -p "$cache/versions"
+        link="$cache/versions/$version"
+        rm -rf "$link"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          powershell -NoProfile -Command \
+            "New-Item -ItemType Junction -Path '$(cygpath -w "$link")' -Target '$(cygpath -w "$sdk_root")' | Out-Null"
+        else
+          ln -s "$sdk_root" "$link"
+        fi
+        echo "FVM_CACHE_PATH=$fvm_cache" >> "$GITHUB_ENV"
+        export FVM_CACHE_PATH="$fvm_cache"
         dart pub global activate fvm
-        echo "$PUB_CACHE/bin" >> "$GITHUB_PATH"
+        # The SDK above is already cached by flutter-action, so this install only
+        # registers the pinned version with FVM instead of downloading it again.
         dart pub global run fvm:main install
+    # PATH entries only apply to later steps, so the FVM version assertion runs
+    # in its own step. Output is captured whole: a pipe that closes early makes
+    # the Flutter tool abort while it writes its build log on Windows.
+    - shell: bash
+      run: |
+        set -euo pipefail
+        version="$(sed -n 's/.*"flutter"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' .fvmrc)"
+        if [ "${RUNNER_OS:-}" = "Windows" ]; then
+          # FVM's shim is a batch file that only the command interpreter
+          # resolves, and no Windows lane runs `fvm flutter`, so the check
+          # proves the FVM cache resolves the pinned SDK's Dart instead.
+          resolved="$(cmd //c fvm dart --version 2>&1)"
+          case "$resolved" in
+            *"Dart SDK version: "*) echo "FVM resolves the Dart SDK of Flutter $version" ;;
+            *)
+              echo "::error::FVM did not resolve a Dart SDK: '$resolved'"
+              exit 1
+              ;;
+          esac
+        else
+          resolved="$(fvm flutter --version 2>&1 | head -n1)"
+          case "$resolved" in
+            *" $version "*) echo "FVM resolves Flutter $version" ;;
+            *)
+              echo "::error::FVM resolved '$resolved' instead of Flutter $version"
+              exit 1
+              ;;
+          esac
+        fi

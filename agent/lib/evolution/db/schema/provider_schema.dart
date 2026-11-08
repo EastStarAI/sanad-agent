@@ -78,6 +78,13 @@ class ProviderSchema {
         FOREIGN KEY (instance_id) REFERENCES provider_instances (id) ON DELETE CASCADE
       );
     ''');
+    // Issue 339: the sanitized structured form of `last_error`, so clients and
+    // the CLI can render the discovery cause instead of a status name. Nullable
+    // because a verified row carries no failure at all.
+    safeAddColumn(
+      db,
+      'ALTER TABLE provider_model_cache ADD COLUMN last_error_detail TEXT',
+    );
 
     // ── Plan 29: recent_model_selections ──────────────────────────────────
     db.execute('''

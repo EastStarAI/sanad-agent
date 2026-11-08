@@ -622,6 +622,118 @@ void main() {
       );
     });
 
+    test('a label inside another word never arms an anchor', () {
+      final validator = CompactionContinuityValidator();
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.user,
+            content:
+                'Task: fix GitHub issue #338 - "Installer rollback on Linux". '
+                'The installer copies files and then fails in the rollback '
+                'path, so the daemon must self-heal on the next start.',
+          ),
+        ),
+        IndexedConversationMessage(
+          rowId: 2,
+          message: Message(
+            role: MessageRole.user,
+            content: 'mask: 0.0.0.0/0\nasked about: the rollback ordering',
+          ),
+        ),
+      ]);
+
+      expect(anchors.where((anchor) => anchor.key == 'ask'), isEmpty);
+      expect(anchors.where((anchor) => anchor.key == 'blocker'), isEmpty);
+      expect(anchors, isEmpty);
+    });
+
+    test('a label owns its line, with list and heading prefixes allowed', () {
+      final validator = CompactionContinuityValidator();
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.user,
+            content:
+                'Goal: ship the anchored extraction\n'
+                '> - pending ask: finish the regression\n'
+                '## Blocker: rollback leaves state on disk\n'
+                'We agreed that goal: mid-paragraph text is prose, not a label.',
+          ),
+        ),
+      ]);
+
+      final byKey = {
+        for (final anchor in anchors) anchor.key: anchor,
+      };
+      expect(byKey.keys, containsAll(['goal', 'pending ask', 'blocker']));
+      expect(byKey['goal']!.value, 'ship the anchored extraction');
+      expect(byKey['pending ask']!.value, 'finish the regression');
+      expect(byKey['blocker']!.value, 'rollback leaves state on disk');
+      expect(byKey['goal']!.critical, isTrue);
+      // The mid-paragraph occurrence is not a second goal anchor.
+      expect(anchors.where((anchor) => anchor.key == 'goal'), hasLength(1));
+      expect(anchors.where((anchor) => anchor.key == 'ask'), isEmpty);
+    });
+
+    test('duplicate labels keep one anchor per key', () {
+      final validator = CompactionContinuityValidator();
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.user,
+            content: 'goal: first statement of intent',
+          ),
+        ),
+        IndexedConversationMessage(
+          rowId: 2,
+          message: Message(
+            role: MessageRole.user,
+            content: 'goal: second statement of intent',
+          ),
+        ),
+      ]);
+
+      expect(anchors, hasLength(1));
+      expect(anchors.single.key, 'goal');
+      expect(anchors.single.value, 'first statement of intent');
+    });
+
+    test('an overlong label value is reported but never critical', () {
+      final validator = CompactionContinuityValidator();
+      final overlong = 'x' * 400;
+
+      final anchors = validator.extractAnchors([
+        IndexedConversationMessage(
+          rowId: 1,
+          message: Message(
+            role: MessageRole.user,
+            content: 'goal: $overlong',
+          ),
+        ),
+      ]);
+
+      expect(anchors, hasLength(1));
+      expect(anchors.single.key, 'goal');
+      expect(anchors.single.critical, isFalse);
+
+      final result = validator.validate(
+        summary: const CompactionInternalSummary(
+          currentGoal: 'a short restatement',
+          remainingWork: 'continue',
+        ),
+        anchors: anchors,
+      );
+      expect(result.passed, isTrue);
+      expect(result.missingAnchors, isEmpty);
+    });
+
     test('redacts secret-like tokens before anchor validation', () {
       final validator = CompactionContinuityValidator();
       const secret = 'sk-ant-api03-test-secret-value';

@@ -24,6 +24,14 @@ A workspace opens one detail page with Overview, MCP Servers, and Skills tabs. I
 
 Compact layouts move the same navigation into a drawer. Destinations and capabilities remain identical to the wide layout.
 
+## Appearance
+
+General holds the appearance controls: theme style, primary color, font family, font size scale, and background. The appearance state is device-scoped and client-owned; no appearance change emits an agent command.
+
+The font family choice offers System Default, Cairo, Inter, and Roboto. **Cairo is the default**: a profile with no saved preference renders in Cairo, which ships with the Client and therefore works offline on the first launch on every platform. A profile that already carries a stored choice keeps it, including an explicit System Default, because a stored value is never migrated to the new default; a user who wants Cairo selects it in General.
+
+The selected font applies to every text surface in the Client: conversation content, tool cards, composer chips, dialogs, overlays, settings pages, and empty states. Code blocks, diffs, terminals, paths, shell commands, and raw JSON stay monospace by design and do not follow the selection. Cairo covers Arabic and Latin, so the same default serves the English and Arabic interfaces.
+
 ## Privacy & Security
 
 Selecting a device reveals Overview, Providers, MCP Servers, Skills, **Privacy & Security**, and its Workspaces. Privacy & Security currently contains **Secrets** (Task 140).
@@ -60,6 +68,8 @@ Cloud Connection is shown only on a currently local route. Computer Use includes
 ## Providers
 
 The existing provider setup flow remains the provider editor. Current provider templates advertise one authentication method, so setup derives it and does not display an authentication-method selector. API-key setup collects the key once in Provider details, stores it on the newly created provisional instance, and proceeds directly to model discovery; Default Model is selected only in the model step. Local request-rate limiting is dormant: the compatibility field remains in the runtime, but Settings does not expose a Rate Limit control and every instance is unlimited. Device codes are displayed exactly as supplied by the provider with an adjacent copy action. Copy success and failure use the application's global Success/Error Toast system—never a SnackBar—and the verification-page copy must not claim that a browser opened until a launcher attempt actually succeeds.
+
+The provider picker above the setup forms presents the agent catalog as one flat list of provider cards with a search field directly above it. Search filters live as the user types: it is case-insensitive, trims surrounding whitespace, and matches the provider's display name, template id, and any alias the template declares. The filtered result keeps the registry's own order, an empty query shows the complete catalog unchanged, the field's clear action restores the full list, and a query with no match shows a localized empty state instead of a blank list. Search is presentation-only: it never reorders, re-requests, or replaces the authoritative catalog, and it stays usable in the Arabic right-to-left interface. The field never takes focus on open, so entering provider setup does not raise a keyboard or steal focus from the host surface.
 
 During new-provider setup, Back preserves the current details and reuses the same provisional provider identity. Cancel after that identity exists asks `Discard provider setup?`; Discard removes only the provider created by the current attempt. Cancel while editing an existing provider never deletes it. If cleanup fails, the incomplete provider remains visible in the configured list instead of becoming a hidden orphan. Configured draft cards expose Resume setup and Delete instead of hiding incomplete work.
 

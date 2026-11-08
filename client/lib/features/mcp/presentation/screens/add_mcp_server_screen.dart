@@ -4,6 +4,7 @@ import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.da
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_cubit.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
@@ -330,7 +331,7 @@ class _AddMcpServerScreenState extends State<AddMcpServerScreen> {
                     controller: input,
                     minLines: 8,
                     maxLines: 14,
-                    style: const TextStyle(fontFamily: 'monospace'),
+                    style: AppTypography.mono(),
                     decoration: const InputDecoration(
                       border: OutlineInputBorder(),
                       hintText: '{\n  "mcpServers": { ... }\n}',

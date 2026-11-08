@@ -21,6 +21,7 @@ import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_cre
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_security.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
+import 'package:sanad_agent/engine/request_dump_retention.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 import 'package:sanad_agent/evolution/db/compaction_boundary_repository.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
@@ -141,6 +142,10 @@ Future<void> main(List<String> args) async {
   // then yields between bounded delete batches.
   unawaited(runAgentStateMaintenanceSafely());
 
+  // Diagnostic request dumps are bounded by the owner-configured retention
+  // window: one sweep at startup, then daily while the daemon runs.
+  startRequestDumpRetentionSafely();
+
   // Keep the process alive if needed, though CliPlatform has its own loop.
   // ProcessSignal.sigint.watch().listen((_) async {
   //   print('\nShutting down...');
@@ -179,6 +184,30 @@ Future<void> runAgentStateMaintenanceSafely({
   } catch (error, stack) {
     (logger ?? Logger('DaemonStartup')).warning(
       'Deferred agent state maintenance failed; daemon remains available.',
+      error,
+      stack,
+    );
+  }
+}
+
+/// Starts diagnostic request-dump retention without letting a diagnostic
+/// failure affect the ready daemon.
+///
+/// The service sweeps once immediately and then once per configured interval.
+/// It only deletes its own expired dump names inside the state Home's
+/// `request_dumps` directory, so startup ordering against transports and
+/// recovery is irrelevant.
+void startRequestDumpRetentionSafely({
+  RequestDumpRetentionService Function()? resolveService,
+  Logger? logger,
+}) {
+  try {
+    final service =
+        (resolveService ?? () => getIt<RequestDumpRetentionService>())();
+    service.start();
+  } catch (error, stack) {
+    (logger ?? Logger('DaemonStartup')).warning(
+      'Request dump retention did not start; the daemon remains available.',
       error,
       stack,
     );

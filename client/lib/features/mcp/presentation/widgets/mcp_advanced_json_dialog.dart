@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/mcp/data/mcp_runtime_client.dart';
 import 'package:sanad_client/features/mcp/domain/models/mcp_runtime_models.dart';
@@ -41,7 +42,7 @@ Future<bool?> showMcpAdvancedJsonDialog({
                   controller: controller,
                   minLines: 12,
                   maxLines: 20,
-                  style: const TextStyle(fontFamily: 'monospace'),
+                  style: AppTypography.mono(),
                   onChanged: (_) => setDialogState(() {
                     preview = null;
                     error = null;

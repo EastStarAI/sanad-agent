@@ -516,6 +516,41 @@ raw SSE transport lines; an interrupted stream may retain a bounded partial
 projection with its error. They are mutable diagnostic state and follow worktree
 state isolation rather than identity/configuration storage.
 
+### Retention
+
+Dumps are bounded, not kept forever. `RequestDumpRetentionService`
+(`agent/lib/engine/request_dump_retention.dart`) is the only deleter:
+
+- **Policy.** `SANAD_HOME/config.yaml` key
+  `diagnostics.requestDumpRetentionDays` holds a positive whole number of days
+  and defaults to `3`. `RequestDumpRetentionPolicy`
+  (`agent/lib/core/config/request_dump_retention_policy.dart`) owns the default
+  and the expiry rule; the strict loader rejects `0`, negative, fractional, or
+  non-numeric values and unknown `diagnostics` keys. Changing the window is a
+  configuration edit, never a code change.
+- **Cadence.** The daemon sweeps once at startup and then once per day while it
+  runs (`RequestDumpRetentionPolicy.defaultSweepInterval`). One sweep is a
+  single non-recursive listing of the state Home's `request_dumps` directory plus
+  one `stat` per matching file, so it never competes with a turn.
+- **Scope.** Only names the dumper produces are candidates
+  (`request_dump_<key>_<timestamp>.json`, optionally collision-suffixed, and
+  `compaction_dump_<key>_<timestamp>.json`), resolved by
+  `LLMRequestDumper.isDumpFileName`. Anything else in the directory — notes,
+  nested directories, other owners' files — is never touched.
+- **Safety.** Symbolic links are never followed and never deleted, and neither a
+  linked dump file nor a `request_dumps` directory that is itself a link is
+  touched. A dump that `LLMRequestDumper.inFlightDumpPaths()` still reports as
+  owned by an in-flight normal or compaction request is skipped even when it is
+  old enough.
+- **Evidence.** One line is logged per sweep that reclaimed space:
+  `Request dump retention: removed <n> dump(s), <bytes> bytes older than <d>
+  days.` A sweep that removes nothing logs nothing.
+
+Because retention only deletes older files inside the current runtime's state
+Home, it is safe in isolated worktree runtimes and never reaches the primary
+checkout's dumps from a worktree.
+
+
 ## File-Backed Memory
 
 Long-term memory uses `SANAD_HOME/memories/MEMORY.md` and `USER.md`, with entries

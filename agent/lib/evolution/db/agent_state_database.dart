@@ -23,6 +23,7 @@ import 'schema/schema_migration_support.dart';
 import 'schema/sessions_messages_schema.dart';
 import 'schema/user_secrets_schema.dart';
 import 'schema/workspaces_schema.dart';
+import 'sqlite_transaction.dart';
 
 /// Single owner of the agent's local SQLite connection (`state.db`).
 ///
@@ -209,15 +210,14 @@ class AgentStateDatabase {
       }
       return result;
     } catch (_) {
-      try {
-        if (depth == 0) {
-          _db.execute('ROLLBACK');
-        } else {
-          _db.execute('ROLLBACK TO SAVEPOINT $savepoint');
-          _db.execute('RELEASE SAVEPOINT $savepoint');
-        }
-      } catch (_) {
-        // Suppress rollback failures so the primary error rethrows.
+      // SQLite already aborted the transaction for fatal errors such as
+      // SQLITE_FULL; it holds no transaction then, and a bare ROLLBACK would
+      // replace the real failure with `cannot rollback - no transaction is
+      // active`. A nested boundary must still undo only its savepoint.
+      if (depth == 0) {
+        SqliteTransaction.rollbackQuietly(_db);
+      } else {
+        SqliteTransaction.rollbackSavepointQuietly(_db, savepoint);
       }
       rethrow;
     } finally {

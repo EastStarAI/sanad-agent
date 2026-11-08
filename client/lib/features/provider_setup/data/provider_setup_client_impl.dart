@@ -293,13 +293,19 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
   Future<Map<String, dynamic>> testInstanceConnection({
     required String providerInstanceId,
     DeviceConfig? agent,
+    bool probe = true,
   }) async {
     final payload = await _request(
       command: 'provider.instance.test',
-      payload: {'provider_instance_id': providerInstanceId},
+      payload: {
+        'provider_instance_id': providerInstanceId,
+        'probe': probe,
+      },
       expectedEvent: 'provider.instance.test_result',
       agent: agent,
-      timeout: const Duration(seconds: 15),
+      // A local engine may need to cold-load its model, so the daemon's probe
+      // budget is 90 s; the request must outlive it.
+      timeout: const Duration(seconds: 120),
     );
     return payload;
   }

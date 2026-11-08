@@ -37,6 +37,12 @@ class DeviceRepositoryImpl implements IDeviceRepository {
   }
 
   @override
+  bool get isInventoryReady => _manager?.isInventoryReady ?? false;
+
+  @override
+  bool get hasAuthoritativeInventory => _manager?.hasAuthoritativeInventory ?? false;
+
+  @override
   DeviceConfig? getActiveAgent() {
     return _manager?.getActiveAgent();
   }

@@ -16,6 +16,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/gateway_connecti
 import 'package:sanad_client/features/devices/presentation/screens/onboarding_setup_screen.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 class _FakeProviderSetupClient extends Fake implements ProviderSetupClient {
   Completer<ProviderReadinessDto>? runtimeCheckCompleter;
@@ -123,6 +124,8 @@ void main() {
         BlocProvider<DeviceCubit>.value(value: mockDeviceCubit),
       ],
       child: const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: [Locale('en'), Locale('ar')],
         home: OnboardingSetupScreen(),
       ),
     );

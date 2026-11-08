@@ -303,7 +303,12 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
       return SanadGatewayStatus.connecting;
     }
     if (lifecycle == SocketLifecycleState.ready) {
-      return _hasCloudDevices ? SanadGatewayStatus.authenticatedWithDevices : SanadGatewayStatus.authenticatedNoDevices;
+      if (_hasCloudDevices) return SanadGatewayStatus.authenticatedWithDevices;
+      // A ready socket before the first inventory result is not an empty account:
+      // right after sign-in the gateway connects before the fetch lands, and
+      // claiming "no devices" there routes the user into onboarding.
+      if (_isInventoryPending) return SanadGatewayStatus.connecting;
+      return SanadGatewayStatus.authenticatedNoDevices;
     }
     return SanadGatewayStatus.disconnected;
   }
@@ -359,6 +364,18 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
       return AppRoutes.home;
     }
     return AppPlatform.isDesktop ? AppRoutes.onboarding : AppRoutes.login;
+  }
+
+  /// True while the device inventory holds no authoritative result yet: the
+  /// first load after sign-in, a retained cache while it refreshes, or a retry
+  /// surface after a failed fetch.
+  bool get _isInventoryPending {
+    return switch (_deviceCubit.state) {
+      DeviceLoading() || AgentInitial() => true,
+      DeviceNoActive(:final phase) =>
+        phase == DevicesPhase.loading || phase == DevicesPhase.stale || phase == DevicesPhase.error,
+      _ => false,
+    };
   }
 
   bool get _hasCloudDevices {

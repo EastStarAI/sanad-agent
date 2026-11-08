@@ -14,6 +14,7 @@ import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_codec.dart';
+import 'package:sanad_agent/engine/adapters/codex_responses_policy.dart';
 import 'package:sanad_agent/engine/adapters/codex_models_service.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
@@ -1305,6 +1306,432 @@ void main() {
         ),
       );
     });
+  });
+
+  group('Codex prompt cache routing affinity', () {
+    late Config config;
+    late ProviderProfile profile;
+
+    setUp(() {
+      config = Config(
+        environment: {
+          'ACTIVE_PROVIDER': 'openai-codex',
+          'LLM_API_KEY': 'test-codex-key',
+          'LLM_MODEL': 'gpt-5.4',
+          'LLM_BASE_URL': 'https://chatgpt.com/backend-api/codex',
+          'AGENT_NAME': 'TestAgent',
+        },
+      );
+      profile = const ProviderProfile(
+        name: 'openai-codex',
+        defaultBaseUrl: 'https://chatgpt.com/backend-api/codex',
+        fallbackModels: ['gpt-5.4'],
+        apiMode: 'codex_responses',
+      );
+    });
+
+    Config configFor(
+      String baseUrl, {
+      String provider = 'openai-codex',
+      String model = 'gpt-5.4',
+    }) => Config(
+      environment: {
+        'ACTIVE_PROVIDER': provider,
+        'LLM_API_KEY': 'test-codex-key',
+        'LLM_MODEL': model,
+        'LLM_BASE_URL': baseUrl,
+        'AGENT_NAME': 'TestAgent',
+      },
+    );
+
+    ProviderProfile profileFor(
+      String baseUrl, {
+      String name = 'openai-codex',
+      String model = 'gpt-5.4',
+    }) => ProviderProfile(
+      name: name,
+      defaultBaseUrl: baseUrl,
+      fallbackModels: [model],
+      apiMode: 'codex_responses',
+    );
+
+    Future<http.Request> dispatch(
+      Config adapterConfig,
+      ProviderProfile adapterProfile, {
+      required List<Message> history,
+      List<ToolSchema>? tools,
+      LLMRequestOptions options = const LLMRequestOptions(sessionId: 'sess-a'),
+      bool stream = false,
+    }) async {
+      late http.Request captured;
+      final adapter = CodexResponsesAdapter(
+        adapterConfig,
+        adapterProfile,
+        client: MockClient.streaming((request, _) async {
+          captured = request as http.Request;
+          return http.StreamedResponse(
+            Stream.value(
+              utf8.encode(_sseResponse({'status': 'completed', 'output': []})),
+            ),
+            200,
+          );
+        }),
+      );
+      if (stream) {
+        await adapter
+            .generateStream(history, tools: tools, options: options)
+            .toList();
+      } else {
+        await adapter.generateResponse(history, tools: tools, options: options);
+      }
+      return captured;
+    }
+
+    ToolSchema tool(String name, Map<String, dynamic> properties) => ToolSchema(
+      name: name,
+      description: '$name description',
+      parameters: {'type': 'object', 'properties': properties},
+    );
+
+    List<ToolSchema> baseTools() => [
+      tool('read_file', {
+        'path': {'type': 'string'},
+      }),
+      tool('terminal', {
+        'cmd': {'type': 'string'},
+      }),
+    ];
+
+    Message systemMessage([
+      String text = 'Stable conversation instructions',
+    ]) => Message(role: MessageRole.system, content: text);
+
+    Message userMessage(String text) =>
+        Message(role: MessageRole.user, content: text);
+
+    CodexResponsesCodec codec() => CodexResponsesCodec(
+      issuer: 'inst-a|codex_responses|https://chatgpt.com/backend-api/codex',
+      defaultProvider: 'openai-codex',
+    );
+
+    String? keyFor({
+      String instructions = 'Stable conversation instructions',
+      List<ToolSchema>? tools,
+      String? sessionId = 'sess-a',
+    }) => codec()
+        .buildRequest(
+          history: [systemMessage(instructions), userMessage('Inspect')],
+          model: 'gpt-5.4',
+          options: LLMRequestOptions(sessionId: sessionId),
+          tools: tools,
+        )['prompt_cache_key']
+        as String?;
+
+    test('prompt-cache host policy excludes only GitHub Responses hosts', () {
+      final policy = CodexResponsesPolicy.forProfile(
+        const ProviderProfile(name: 'openai-codex'),
+      );
+
+      for (final supported in [
+        'https://api.x.ai/v1',
+        'https://chatgpt.com/backend-api/codex',
+        'https://api.openai.com/v1',
+        'https://example.com/v1',
+        'https://notgithub.ai/v1',
+        'https://github.ai.evil.test/v1',
+        'https://api.github.com.evil.test/v1',
+      ]) {
+        expect(
+          policy.promptCacheKeySupportedForHost(supported),
+          isTrue,
+          reason: supported,
+        );
+      }
+
+      for (final unsupported in [
+        'https://api.github.com',
+        'https://models.github.ai/inference',
+        'https://github.ai/v1',
+        'https://api.githubcopilot.com',
+        'https://githubcopilot.com',
+      ]) {
+        expect(
+          policy.promptCacheKeySupportedForHost(unsupported),
+          isFalse,
+          reason: unsupported,
+        );
+      }
+    });
+
+    test('sync and stream send the same key and affinity headers', () async {
+      final history = [systemMessage(), userMessage('Inspect the cache')];
+      final sync = await dispatch(
+        config,
+        profile,
+        history: history,
+        tools: baseTools(),
+      );
+      final stream = await dispatch(
+        config,
+        profile,
+        history: history,
+        tools: baseTools(),
+        stream: true,
+      );
+
+      final syncBody = _map(jsonDecode(sync.body));
+      final streamBody = _map(jsonDecode(stream.body));
+      final syncKey = syncBody['prompt_cache_key'];
+
+      expect(syncKey, isA<String>());
+      expect(syncKey, startsWith('pck_'));
+      expect(streamBody['prompt_cache_key'], syncKey);
+      expect(syncBody['stream'], isTrue);
+      expect(streamBody['stream'], isTrue);
+
+      expect(sync.headers['session_id'], 'sess-a');
+      expect(stream.headers['session_id'], 'sess-a');
+      expect(sync.headers['x-client-request-id'], syncKey);
+      expect(stream.headers['x-client-request-id'], syncKey);
+    });
+
+    test('xAI keeps the body key without Codex-only headers', () async {
+      const baseUrl = 'https://api.x.ai/v1';
+      final xaiConfig = configFor(
+        baseUrl,
+        provider: 'xai-oauth',
+        model: 'grok-4.7',
+      );
+      final xaiProfile = profileFor(
+        baseUrl,
+        name: 'xai-oauth',
+        model: 'grok-4.7',
+      );
+      final history = [systemMessage(), userMessage('Inspect the cache')];
+
+      for (final stream in [false, true]) {
+        final request = await dispatch(
+          xaiConfig,
+          xaiProfile,
+          history: history,
+          tools: baseTools(),
+          stream: stream,
+        );
+        final body = _map(jsonDecode(request.body));
+
+        expect(body['prompt_cache_key'], startsWith('pck_'));
+        expect(request.headers.containsKey('session_id'), isFalse);
+        expect(request.headers.containsKey('x-client-request-id'), isFalse);
+      }
+    });
+
+    test('GitHub Responses hosts drop the routing field', () async {
+      final history = [systemMessage(), userMessage('Inspect the cache')];
+      for (final baseUrl in [
+        'https://api.github.com',
+        'https://models.github.ai/inference',
+        'https://api.githubcopilot.com',
+      ]) {
+        final request = await dispatch(
+          configFor(baseUrl),
+          profileFor(baseUrl),
+          history: history,
+          tools: baseTools(),
+        );
+        final body = _map(jsonDecode(request.body));
+
+        expect(
+          body.containsKey('prompt_cache_key'),
+          isFalse,
+          reason: baseUrl,
+        );
+        expect(request.headers.containsKey('session_id'), isFalse);
+        expect(request.headers.containsKey('x-client-request-id'), isFalse);
+      }
+    });
+
+    test('ordinary OpenAI keeps the body key only', () async {
+      const baseUrl = 'https://api.openai.com/v1';
+      final openAiConfig = configFor(baseUrl);
+      final openAiProfile = profileFor(baseUrl);
+      final history = [systemMessage(), userMessage('Inspect the cache')];
+
+      for (final stream in [false, true]) {
+        final request = await dispatch(
+          openAiConfig,
+          openAiProfile,
+          history: history,
+          tools: baseTools(),
+          stream: stream,
+        );
+        final body = _map(jsonDecode(request.body));
+
+        expect(body['prompt_cache_key'], startsWith('pck_'));
+        expect(request.headers.containsKey('session_id'), isFalse);
+        expect(request.headers.containsKey('x-client-request-id'), isFalse);
+      }
+    });
+
+    test('history extension never rotates the key in sync or stream', () async {
+      final firstHistory = [systemMessage(), userMessage('Inspect the cache')];
+      final extendedHistory = [
+        ...firstHistory,
+        Message(role: MessageRole.assistant, content: 'Prefix-stable reply'),
+        userMessage('Continue'),
+      ];
+
+      for (final stream in [false, true]) {
+        final first = await dispatch(
+          config,
+          profile,
+          history: firstHistory,
+          tools: baseTools(),
+          stream: stream,
+        );
+        final extended = await dispatch(
+          config,
+          profile,
+          history: extendedHistory,
+          tools: baseTools(),
+          stream: stream,
+        );
+        final firstBody = _map(jsonDecode(first.body));
+        final extendedBody = _map(jsonDecode(extended.body));
+
+        expect(
+          extendedBody['prompt_cache_key'],
+          firstBody['prompt_cache_key'],
+          reason: 'Appending history must not rotate the routing key.',
+        );
+      }
+    });
+
+    test('instruction and tool changes rotate the key', () {
+      final baseKey = keyFor(tools: baseTools());
+
+      expect(baseKey, startsWith('pck_'));
+      expect(
+        keyFor(instructions: 'Changed instructions', tools: baseTools()),
+        isNot(baseKey),
+      );
+      expect(keyFor(tools: [baseTools().first]), isNot(baseKey));
+      expect(
+        keyFor(
+          tools: [
+            tool('read_file', {
+              'path': {'type': 'string'},
+              'limit': {'type': 'integer'},
+            }),
+            baseTools()[1],
+          ],
+        ),
+        isNot(baseKey),
+      );
+      expect(
+        keyFor(
+          tools: [
+            ...baseTools(),
+            tool('web_search', {
+              'query': {'type': 'string'},
+            }),
+          ],
+        ),
+        isNot(baseKey),
+      );
+      expect(
+        keyFor(
+          tools: [
+            tool('read_files', {
+              'path': {'type': 'string'},
+            }),
+            baseTools()[1],
+          ],
+        ),
+        isNot(baseKey),
+      );
+    });
+
+    test('tool list and schema map insertion order keep the key', () {
+      final toolsA = [
+        tool('read_file', {
+          'path': {'type': 'string'},
+          'limit': {'type': 'integer'},
+        }),
+        baseTools()[1],
+      ];
+      final toolsB = [
+        tool('read_file', {
+          'limit': {'type': 'integer'},
+          'path': {'type': 'string'},
+        }),
+        baseTools()[1],
+      ];
+      final keyA = keyFor(tools: toolsA);
+
+      expect(keyFor(tools: toolsB), keyA);
+      expect(keyFor(tools: toolsA.reversed.toList(growable: false)), keyA);
+    });
+
+    test('session scope separates keys', () {
+      final tools = baseTools();
+      final keyA = keyFor(tools: tools);
+
+      expect(keyFor(tools: tools, sessionId: 'sess-a'), keyA);
+      expect(keyFor(tools: tools, sessionId: 'sess-b'), isNot(keyA));
+      expect(keyFor(tools: tools, sessionId: null), isNot(keyA));
+    });
+
+    test('null, blank, and long inputs stay bounded', () {
+      expect(CodexResponsesCodec.boundedPromptCacheKey(null), isNull);
+      expect(CodexResponsesCodec.boundedPromptCacheKey('   '), isNull);
+      expect(
+        CodexResponsesCodec.promptCacheKeyFor(
+          scopeId: null,
+          instructions: null,
+          tools: null,
+        ),
+        isNull,
+      );
+
+      final longValue = 'x' * 500;
+      final bounded = CodexResponsesCodec.boundedPromptCacheKey(longValue);
+      expect(bounded, startsWith('pck_'));
+      expect(bounded!.length, lessThanOrEqualTo(64));
+      expect(CodexResponsesCodec.boundedPromptCacheKey(longValue), bounded);
+      expect(
+        CodexResponsesCodec.boundedPromptCacheKey('${longValue}y'),
+        isNot(bounded),
+      );
+
+      final longKey = keyFor(
+        instructions: 'i' * 20000,
+        tools: baseTools(),
+        sessionId: 's' * 500,
+      );
+      expect(longKey, startsWith('pck_'));
+      expect(longKey!.length, lessThanOrEqualTo(64));
+    });
+
+    test(
+      'chatgpt.com mirrors the body key without inventing a session',
+      () async {
+        final request = await dispatch(
+          config,
+          profile,
+          history: [systemMessage(), userMessage('Inspect the cache')],
+          tools: baseTools(),
+          options: const LLMRequestOptions(sessionId: null),
+        );
+        final body = _map(jsonDecode(request.body));
+
+        expect(body['prompt_cache_key'], startsWith('pck_'));
+        expect(request.headers.containsKey('session_id'), isFalse);
+        expect(
+          request.headers['x-client-request-id'],
+          body['prompt_cache_key'],
+        );
+      },
+    );
   });
 }
 

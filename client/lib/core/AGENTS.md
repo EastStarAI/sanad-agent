@@ -20,6 +20,11 @@ The canonical app composition flow must only go through:
 - `lib/core/navigation/app_router.dart`
 - App-wide overlays that coordinate cross-route UX, such as the device-code login challenge overlay, belong in `app_shell.dart` composition and should wrap the routed child rather than being duplicated in individual screens.
 
+## Theme and Typography Ownership
+- `lib/core/theme/` owns the whole visual theme: `app_themes.dart` maps the appearance state onto `ThemeData`, and `app_typography.dart` is the only place that resolves a font family.
+- The user's font choice is applied once, in `AppThemes._applyFontFamily`. Features must not translate `AppFontFamily` themselves or build a `TextStyle` with a literal family.
+- `AppTypography.bundledCairoFamily` is the bundled Cairo asset family used as the default font; `AppTypography.mono` is the single monospace constant for machine-readable text.
+
 ## Routing Rules
 - Canonical routing configurations must live under `core/navigation/`.
 - Always define route configurations inside `AppRoutes` and routing logical handlers/redirects inside `AppRouter`.

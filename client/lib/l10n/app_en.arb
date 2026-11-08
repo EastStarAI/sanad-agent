@@ -120,6 +120,8 @@
   "sessionsDevices": "Sessions & Devices",
   "addDeviceTooltip": "Add device",
   "noDevicesAvailable": "No devices available.",
+  "noDevicesChip": "No devices",
+  "devicesLoading": "Loading devices…",
   "deviceSettings": "{device} Settings",
   "overview": "Overview",
   "mcpServers": "MCP Servers",
@@ -992,5 +994,276 @@
         "type": "String"
       }
     }
-  }
+  },
+  "providerPickerSearchHint": "Search providers",
+  "@providerPickerSearchHint": {
+    "description": "Placeholder hint of the provider picker search field"
+  },
+  "providerPickerEmptyResults": "No providers match your search.",
+  "@providerPickerEmptyResults": {
+    "description": "Empty state shown when provider search filters out every provider"
+  },
+  "providerDiscoveryInvalidCredential": "The provider rejected this credential. Update the API key, then test the connection again.",
+  "providerDiscoveryForbidden": "The credential is not allowed to use this provider. Check the account permissions or plan.",
+  "providerDiscoveryEndpointNotFound": "The provider does not serve the models endpoint. Check the base URL.",
+  "providerDiscoveryRateLimited": "The provider is rate limiting this account or it is out of quota. Try again later.",
+  "providerDiscoveryTimeout": "The provider endpoint did not answer in time.",
+  "providerDiscoveryNetwork": "The provider endpoint could not be reached. Check the base URL and your connection.",
+  "providerDiscoveryServerError": "The provider reported a server error. Try again later.",
+  "providerDiscoveryNoModels": "The provider returned no usable model list.",
+  "providerDiscoveryHttp": "The provider rejected the request (HTTP {status}).",
+  "@providerDiscoveryHttp": {
+    "description": "Fallback provider failure message for an HTTP status the daemon could not classify further",
+    "placeholders": {
+      "status": {
+        "type": "int"
+      }
+    }
+  },
+  "providerDiscoveryUnknown": "The provider request failed.",
+  "providerDiscoveryEndpoint": "Endpoint: {endpoint}",
+  "@providerDiscoveryEndpoint": {
+    "description": "Sanitized endpoint that the daemon probed",
+    "placeholders": {
+      "endpoint": {
+        "type": "String"
+      }
+    }
+  },
+  "providerModelCacheUnverified": "Unverified fallback list: these models come from built-in presets, not from the provider.",
+  "providerTestWorks": "Works: {models} models listed.",
+  "@providerTestWorks": {
+    "description": "Connection test passed and the generation probe was not measured",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerTestWorksWithProbe": "Works: {models} models, {model} replied in {seconds} s.",
+  "@providerTestWorksWithProbe": {
+    "description": "Connection test passed: verified model count, the probed model, and its round-trip seconds",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      },
+      "seconds": {
+        "type": "String"
+      }
+    }
+  },
+  "providerKeyAcceptedNoModel": "Key accepted: {models} models. Choose a model to run a generation check.",
+  "@providerKeyAcceptedNoModel": {
+    "description": "Partial success for a connection test: the credential listed models but no model is selected, so no generation check ran",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeModelRejected": "Key accepted, but {model} rejected the check request. The credential and the model list are fine; pick another model or retry with this one.",
+  "@providerProbeModelRejected": {
+    "description": "Non-blocking warning when the selected model refuses the tiny generation probe",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      }
+    }
+  },
+  "providerProbeTimedOut": "Key accepted: {models} models. The generation check timed out, which is normal for a local model that is still loading.",
+  "@providerProbeTimedOut": {
+    "description": "Non-blocking warning when the generation probe exceeded its time budget",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeNetworkFailed": "Key accepted: {models} models. The generation check could not reach the endpoint.",
+  "@providerProbeNetworkFailed": {
+    "description": "Non-blocking warning when the generation probe could not reach the endpoint",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeRateLimited": "Key accepted: {models} models. The provider rate limited the generation check; try again later.",
+  "@providerProbeRateLimited": {
+    "description": "Non-blocking warning when the provider rate limited the generation probe",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerProbeUnknownWarning": "Key accepted: {models} models. The generation check did not complete.",
+  "@providerProbeUnknownWarning": {
+    "description": "Non-blocking warning when the generation probe failed without a classified cause",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      }
+    }
+  },
+  "providerLastCheckFailed": "Last check failed ({cause}); using the saved model list.",
+  "@providerLastCheckFailed": {
+    "description": "Warning-style line for a non-definitive failed check over a still-usable saved model list",
+    "placeholders": {
+      "cause": {
+        "type": "String"
+      }
+    }
+  },
+  "providerProbeForbidden": "Key accepted: {models} models, but this account is not allowed to run {model}.",
+  "@providerProbeForbidden": {
+    "description": "Non-blocking warning when the provider forbids the account from running the probed model",
+    "placeholders": {
+      "models": {
+        "type": "int"
+      },
+      "model": {
+        "type": "String"
+      }
+    }
+  },
+  "providerFormBackToList": "Back to providers",
+  "providerUsageTitle": "Usage & limits",
+  "providerUsageRefresh": "Refresh",
+  "providerUsageUpdatedJustNow": "Updated just now",
+  "providerUsageUpdated": "Updated {when}",
+  "@providerUsageUpdated": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageJustNow": "just now",
+  "providerUsageAgoSeconds": "{count}s ago",
+  "@providerUsageAgoSeconds": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageAgoMinutes": "{count}m ago",
+  "@providerUsageAgoMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageAgoHours": "{count}h ago",
+  "@providerUsageAgoHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageLoading": "Loading usage…",
+  "providerUsageRefreshing": "Refreshing…",
+  "providerUsagePlan": "Plan: {plan}",
+  "@providerUsagePlan": {
+    "placeholders": {
+      "plan": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageUsedPercent": "{percent}% used",
+  "@providerUsageUsedPercent": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageRemainingPercent": "{percent}% remaining",
+  "@providerUsageRemainingPercent": {
+    "placeholders": {
+      "percent": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAt": "Resets {when}",
+  "@providerUsageResetsAt": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAnyMoment": "Resets any moment",
+  "providerUsageResetsInMoment": "Resets in a moment",
+  "providerUsageResetsInMinutes": "Resets in {count} min",
+  "@providerUsageResetsInMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsInHours": "Resets in {count} h",
+  "@providerUsageResetsInHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsInDays": "Resets in {count} d",
+  "@providerUsageResetsInDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetsOnDate": "Resets on {when}",
+  "@providerUsageResetsOnDate": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetsAvailable": "{count} resets available",
+  "@providerUsageResetsAvailable": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetAvailableSingle": "1 reset available",
+  "providerUsageResetLimits": "Reset limits",
+  "providerUsageCancel": "Cancel",
+  "providerUsageResetDialogTitle": "Reset usage limits?",
+  "providerUsageResetDialogBody": "This will use one reset credit for this account.",
+  "providerUsageResetExhaustedTitle": "Reset before limits are exhausted?",
+  "providerUsageResetExhaustedBody": "{message} A reset restores the full allowance and cannot be undone.",
+  "@providerUsageResetExhaustedBody": {
+    "placeholders": {
+      "message": {
+        "type": "String"
+      }
+    }
+  },
+  "providerUsageResetAnyway": "Reset anyway",
+  "providerUsageAuthRequired": "Account sign-in is required to view usage limits.",
+  "providerUsageUnavailable": "Usage information is temporarily unavailable. Please retry.",
+  "providerUsageFailed": "Usage information could not be loaded. Please try again.",
+  "providerUsageRetry": "Retry",
+  "providerUsageReconnect": "Reconnect"
 }

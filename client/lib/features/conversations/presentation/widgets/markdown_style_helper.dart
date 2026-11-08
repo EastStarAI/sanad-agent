@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:google_fonts/google_fonts.dart';
 // ignore: depend_on_referenced_packages
 import 'package:markdown/markdown.dart' as md;
 import 'package:sanad_client/core/theme/app_color_scheme.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/presentation/utils/text_utils.dart';
 import 'package:sanad_client/shared/widgets/copy_button.dart';
 
@@ -25,7 +25,7 @@ class MarkdownStyleHelper {
         fontSize: 13,
         height: 1.5,
       ),
-      code: GoogleFonts.firaCode(
+      code: AppTypography.mono(
         color: codeColor,
         fontSize: 13,
         height: 1.5,
@@ -122,7 +122,7 @@ class AppCodeBlock extends StatelessWidget {
                       child: Text(
                         codeText,
                         textDirection: codeDirection,
-                        style: GoogleFonts.firaCode(
+                        style: AppTypography.mono(
                           color: codeColor,
                           fontSize: 12,
                           height: 1.5,
@@ -204,7 +204,7 @@ class AppInlineCodeBuilder extends MarkdownElementBuilder {
         child: Text(
           text,
           textDirection: TextDirection.ltr,
-          style: GoogleFonts.firaCode(
+          style: AppTypography.mono(
             color: textColor,
             fontSize: fontSize,
             fontWeight: FontWeight.w500,

@@ -161,12 +161,23 @@ class _ConversationInputPanelState extends State<ConversationInputPanel> {
       DeviceActive(activeAgent: final activeAgent, agents: final agents) => ConversationInputAgentSlice(
         activeAgent: activeAgent,
         agents: agents,
+        phase: DevicesPhase.ready,
       ),
       DeviceNoActive(agents: final agents) => ConversationInputAgentSlice(
         activeAgent: null,
         agents: agents,
+        phase: state.phase,
       ),
-      _ => const ConversationInputAgentSlice(activeAgent: null, agents: <DeviceConfig>[]),
+      DeviceLoading() || AgentInitial() => const ConversationInputAgentSlice(
+        activeAgent: null,
+        agents: <DeviceConfig>[],
+        phase: DevicesPhase.loading,
+      ),
+      _ => const ConversationInputAgentSlice(
+        activeAgent: null,
+        agents: <DeviceConfig>[],
+        phase: DevicesPhase.error,
+      ),
     };
   }
 

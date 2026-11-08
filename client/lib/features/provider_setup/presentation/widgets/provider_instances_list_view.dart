@@ -8,6 +8,8 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
+import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_discovery_notice.dart';
+import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_test_notice.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_usage_section.dart';
 
 const _kAccountMethods = ['device_code', 'loopback', 'external'];
@@ -304,6 +306,21 @@ class _InstanceCard extends StatelessWidget {
               ),
             ],
           ),
+          // Visible cause of the last failed model discovery and the
+          // unverified-fallback label (issue 339). Rendered from the daemon
+          // projection, so it survives Resume/save and every list reload.
+          ProviderDiscoveryNotice(
+            instanceId: instance.id,
+            error: instance.discoveryError,
+            modelCache: instance.modelCache,
+          ),
+          // Latest Test outcome: the proof (models + probe round-trip) or the
+          // same localized failure the daemon classified.
+          if (setupState.instanceTests[instance.id] != null)
+            ProviderInstanceTestNotice(
+              instanceId: instance.id,
+              result: setupState.instanceTests[instance.id]!,
+            ),
           // Usage & limits disclosure (Task 55 §3.6). Renders only when the
           // daemon reports an adapter for this instance's template; hidden
           // phase and the widget itself collapse to nothing otherwise. Late
@@ -311,6 +328,10 @@ class _InstanceCard extends StatelessWidget {
           ProviderUsageSection(
             agent: agent,
             instanceId: instance.id,
+            // One shared action: the same account re-authentication the edit
+            // form exposes (issue 339 review 2).
+            onReconnect: () =>
+                unawaited(context.read<ProviderSetupCubit>().reconnectInstance(instance)),
           ),
           const SizedBox(height: 12),
           const Divider(height: 1),

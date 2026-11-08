@@ -9,6 +9,7 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_auth_session_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_store.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_service.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
@@ -364,6 +365,215 @@ void main() {
       );
 
       expect(() => instanceService.setDefault(inst.id), throwsStateError);
+    });
+
+    /// Seeds a cache row for the instance's current revisions.
+    void seedCache(
+      String instanceId, {
+      required String source,
+      List<Map<String, String>> models = const [
+        {'value': 'gpt-4o'},
+      ],
+      ProviderDiscoveryError? error,
+    }) {
+      final instance = instanceService.findById(instanceId)!;
+      repo.upsertModelCache(
+        instanceId: instanceId,
+        cacheKey: 'models',
+        models: models,
+        fetchedAt: DateTime.utc(2026, 1, 2),
+        source: source,
+        configRevision: instance.configRevision,
+        credentialRevision: instance.credentialRevision,
+        lastError: error?.summary,
+        lastErrorDetail: error?.toJson(),
+      );
+    }
+
+    ProviderDiscoveryError failureFor(String kind, {int? statusCode}) =>
+        ProviderDiscoveryError(
+          kind: kind,
+          statusCode: statusCode,
+          message: ProviderDiscoveryError.reasonForStatus(statusCode),
+        );
+
+    test('applyConnectionOutcome promotes a rejected credential to needs_auth', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(inst.id, source: 'fallback', error: failureFor(
+        ProviderFailureCategory.invalidCredential,
+        statusCode: 401,
+      ));
+
+      instanceService.applyConnectionOutcome(
+        inst.id,
+        failureFor(ProviderFailureCategory.invalidCredential, statusCode: 401),
+      );
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.needsAuth),
+      );
+    });
+
+    test('applyConnectionOutcome marks a definitive endpoint failure error', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+
+      instanceService.applyConnectionOutcome(
+        inst.id,
+        failureFor(ProviderFailureCategory.endpointNotFound, statusCode: 404),
+      );
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.error),
+      );
+    });
+
+    test('applyConnectionOutcome never demotes for an unproven failure', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      instanceService.markNeedsAuth(inst.id);
+
+      // A transport failure says nothing about the credential, so the earlier
+      // rejected-key verdict survives it (issue 339 review 2: only a
+      // definitive cause may move the status).
+      instanceService.applyConnectionOutcome(
+        inst.id,
+        failureFor(ProviderFailureCategory.network),
+      );
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.needsAuth),
+      );
+    });
+
+    test('applyConnectionOutcome restores ready after a verified outcome', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      instanceService.markNeedsAuth(inst.id);
+      seedCache(inst.id, source: 'live');
+
+      instanceService.applyConnectionOutcome(inst.id, null);
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.ready),
+      );
+    });
+
+    test('reconcileStatus re-derives a rejected credential from the cache', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(inst.id, source: 'fallback', error: failureFor(
+        ProviderFailureCategory.invalidCredential,
+        statusCode: 401,
+      ));
+
+      instanceService.reconcileStatus(inst.id, credentialConfigured: true);
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.needsAuth),
+      );
+
+      // A metadata-only edit must not silently reset the derived status.
+      instanceService.rename(inst.id, 'OpenAI Renamed');
+      instanceService.reconcileStatus(inst.id, credentialConfigured: true);
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.needsAuth),
+      );
+    });
+
+    test('reconcileStatus re-derives an endpoint failure as error', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(inst.id, source: 'cache_stale', error: failureFor(
+        ProviderFailureCategory.endpointNotFound,
+        statusCode: 404,
+      ));
+
+      instanceService.reconcileStatus(inst.id, credentialConfigured: true);
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.error),
+      );
+
+      // A provider outage is a moment, not the configuration: the status stays
+      // where it was and the cause is reported as a warning instead.
+      final outage = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI outage',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(outage.id, source: 'fallback', error: failureFor(
+        ProviderFailureCategory.serverError,
+        statusCode: 503,
+      ));
+
+      instanceService.reconcileStatus(outage.id, credentialConfigured: true);
+
+      expect(
+        instanceService.findById(outage.id)!.status,
+        equals(InstanceStatus.draft),
+      );
+    });
+
+    test('a stale-revision failure is not treated as the current reason', () {
+      final inst = instanceService.create(
+        templateId: 'openai',
+        displayName: 'OpenAI',
+        authMethod: ProviderAuthMethod.apiKey,
+        defaultModel: 'gpt-4o',
+      );
+      seedCache(
+        inst.id,
+        source: 'fallback',
+        error: failureFor(
+          ProviderFailureCategory.invalidCredential,
+          statusCode: 401,
+        ),
+      );
+      // The credential was replaced: the stored 401 describes the old one.
+      instanceService.reconcileStatus(inst.id, credentialConfigured: true);
+      final updated = repo.findById(inst.id)!.copyWith(credentialRevision: 2);
+      repo.update(updated);
+
+      instanceService.reconcileStatus(inst.id, credentialConfigured: true);
+
+      expect(
+        instanceService.findById(inst.id)!.status,
+        equals(InstanceStatus.draft),
+      );
     });
   });
 

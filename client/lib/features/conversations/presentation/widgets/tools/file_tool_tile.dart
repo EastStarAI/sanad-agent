@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
@@ -187,7 +187,7 @@ class _FileToolTileState extends State<FileToolTile> {
               const SizedBox(width: 12),
               Text(
                 statusText,
-                style: GoogleFonts.roboto(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
@@ -218,7 +218,7 @@ class _FileToolTileState extends State<FileToolTile> {
               const SizedBox(width: 8),
               Text(
                 'File Operation Failed',
-                style: GoogleFonts.outfit(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   fontWeight: FontWeight.bold,
                   color: errorColor,
@@ -229,7 +229,7 @@ class _FileToolTileState extends State<FileToolTile> {
           const SizedBox(height: 8),
           Text(
             event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Unknown error occurred.'),
-            style: GoogleFonts.firaCode(
+            style: AppTypography.mono(
               fontSize: 11,
               color: errorColor,
             ),
@@ -271,7 +271,7 @@ class _FileToolTileState extends State<FileToolTile> {
           ],
           Text(
             'Directory Listing',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -287,7 +287,7 @@ class _FileToolTileState extends State<FileToolTile> {
             ),
             child: Text(
               content,
-              style: GoogleFonts.firaCode(
+              style: AppTypography.mono(
                 fontSize: 11,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
@@ -402,7 +402,7 @@ class _FileToolTileState extends State<FileToolTile> {
           EdgeInsets.symmetric(horizontal: 10, vertical: 4),
         ),
         textStyle: WidgetStatePropertyAll(
-          GoogleFonts.roboto(fontSize: 11, fontWeight: FontWeight.w600),
+          AppTypography.text(context, fontSize: 11, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -416,7 +416,7 @@ class _FileToolTileState extends State<FileToolTile> {
     double height = _readViewportHeight,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
-    final defaultStyle = GoogleFonts.firaCode(
+    final defaultStyle = AppTypography.mono(
       fontSize: 11,
       color: Theme.of(context).colorScheme.onSurface,
       height: 1.5,
@@ -426,7 +426,7 @@ class _FileToolTileState extends State<FileToolTile> {
       final lineCount = '\n'.allMatches(code).length + 1;
       final lineNumbers = List.generate(lineCount, (i) => '${startLine + i}').join('\n');
 
-      final lineNumbersStyle = GoogleFonts.firaCode(
+      final lineNumbersStyle = AppTypography.mono(
         fontSize: 11,
         color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
         height: 1.5,
@@ -482,7 +482,7 @@ class _FileToolTileState extends State<FileToolTile> {
     final lineCount = '\n'.allMatches(code).length + 1;
     final lineNumbers = List.generate(lineCount, (i) => '${startLine + i}').join('\n');
 
-    final lineNumbersStyle = GoogleFonts.firaCode(
+    final lineNumbersStyle = AppTypography.mono(
       fontSize: 11,
       color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
       height: 1.5,
@@ -547,7 +547,7 @@ class _FileToolTileState extends State<FileToolTile> {
         if (patch != null && patch.trim().isNotEmpty) ...[
           Text(
             'Changes applied:',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -564,7 +564,7 @@ class _FileToolTileState extends State<FileToolTile> {
         ] else if (mapInput['content'] != null) ...[
           Text(
             'File Content:',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -580,7 +580,7 @@ class _FileToolTileState extends State<FileToolTile> {
         ] else ...[
           Text(
             'File size: $length characters.',
-            style: GoogleFonts.roboto(
+            style: AppTypography.text(context,
               fontSize: 12,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
             ),
@@ -648,7 +648,7 @@ class _FileToolTileState extends State<FileToolTile> {
         if (displayPatch != null && displayPatch.trim().isNotEmpty) ...[
           Text(
             'File Changes (Diff):',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
               fontSize: 11,
               fontWeight: FontWeight.bold,
@@ -704,7 +704,7 @@ class _FileToolTileState extends State<FileToolTile> {
         ],
         Text(
           'Matching Files (${files.length}):',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -714,7 +714,7 @@ class _FileToolTileState extends State<FileToolTile> {
         if (files.isEmpty)
           Text(
             'No matching files found.',
-            style: GoogleFonts.roboto(
+            style: AppTypography.text(context,
               fontSize: 12,
               fontStyle: FontStyle.italic,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
@@ -744,7 +744,7 @@ class _FileToolTileState extends State<FileToolTile> {
                           Expanded(
                             child: Text(
                               _toRelativePath(context, f),
-                              style: GoogleFonts.firaCode(
+                              style: AppTypography.mono(
                                 fontSize: 11,
                                 color: Theme.of(context).colorScheme.onSurfaceVariant,
                               ),
@@ -795,7 +795,7 @@ class _FileToolTileState extends State<FileToolTile> {
         ],
         Text(
           'Matching Lines (${matches.length}):',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -805,7 +805,7 @@ class _FileToolTileState extends State<FileToolTile> {
         if (matches.isEmpty)
           Text(
             'No matches found.',
-            style: GoogleFonts.roboto(
+            style: AppTypography.text(context,
               fontSize: 12,
               fontStyle: FontStyle.italic,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
@@ -827,7 +827,7 @@ class _FileToolTileState extends State<FileToolTile> {
                       padding: const EdgeInsets.symmetric(vertical: 3.0),
                       child: SelectableText(
                         m,
-                        style: GoogleFonts.firaCode(
+                        style: AppTypography.mono(
                           fontSize: 11,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -844,7 +844,7 @@ class _FileToolTileState extends State<FileToolTile> {
   Widget _buildInfoRow(BuildContext context, String label, String value) {
     return SelectableText.rich(
       TextSpan(
-        style: GoogleFonts.roboto(
+        style: AppTypography.text(context,
           fontSize: 13,
           color: Theme.of(context).colorScheme.onSurface,
         ),
@@ -855,7 +855,7 @@ class _FileToolTileState extends State<FileToolTile> {
           ),
           TextSpan(
             text: value,
-            style: GoogleFonts.firaCode(
+            style: AppTypography.mono(
               fontSize: 12,
               color: Theme.of(context).colorScheme.primary,
             ),
@@ -876,7 +876,7 @@ class _FileToolTileState extends State<FileToolTile> {
         ],
         Text(
           'Output Result',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.24),
             fontSize: 10,
             fontWeight: FontWeight.bold,
@@ -892,7 +892,7 @@ class _FileToolTileState extends State<FileToolTile> {
           ),
           child: Text(
             prettyValue,
-            style: GoogleFonts.firaCode(
+            style: AppTypography.mono(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
               fontSize: 11,
             ),

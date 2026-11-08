@@ -162,8 +162,13 @@ class SecretVaults {
   /// Opens (once per process) the vault for the active Home, migrating
   /// legacy files. Never throws: an unavailable vault keeps legacy values
   /// readable and rejects writes.
+  ///
+  /// Opening clears `SecretVaultPolicy.vaultSkipped`, because a process with an
+  /// open vault does have credential access even when its entry point deferred
+  /// the open — `run` is the command that does so.
   static Future<SecretVaults> open({AgentSecretStore? store}) async {
     _rejectUnisolatedTestOpen();
+    SecretVaultPolicy.markVaultOpened();
     final key = _canonical(getSanadHome());
     final existing = _opened[key];
     if (existing != null) return existing;
@@ -173,9 +178,11 @@ class SecretVaults {
   }
 
   /// Opens an instance that is not registered for this process (another
-  /// process's view in tests).
+  /// process's view in tests). Also clears
+  /// `SecretVaultPolicy.vaultSkipped`, for the same reason as [open].
   static Future<SecretVaults> openDetached({AgentSecretStore? store}) async {
     _rejectUnisolatedTestOpen();
+    SecretVaultPolicy.markVaultOpened();
     final home = SanadHomeBootstrap.identity();
     AgentSecretStore? backend = store;
     AgentSecretStoreUnavailable? creationFailure;

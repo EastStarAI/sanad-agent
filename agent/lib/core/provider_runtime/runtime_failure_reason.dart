@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/provider_runtime/runtime_notice.dart';
+import 'package:sanad_agent/core/storage/storage_full_failure.dart';
 
 /// Structured classification of an LLM/runtime failure (Plan 30 §7.1).
 ///
@@ -23,6 +24,7 @@ enum RuntimeFailureReason {
   contentPolicyBlocked,
   toolRuntimeError,
   localRuntimeError,
+  storageFull,
   unknown;
 
   /// Decision for this reason (Plan 30 §7.1).
@@ -169,6 +171,17 @@ enum RuntimeFailureReason {
           allowManualRetry: true,
           uiActions: [RuntimeNoticeAction.retry],
         );
+      case storageFull:
+        // Retrying cannot succeed until the operator frees space, so no
+        // automatic retry and no provider failover: the disk is the cause.
+        return const FailureDecision(
+          noticeStatus: RuntimeNoticeStatus.blocked,
+          severity: RuntimeNoticeSeverity.error,
+          retryable: false,
+          allowAutoFailover: false,
+          allowManualRetry: true,
+          uiActions: [RuntimeNoticeAction.retry],
+        );
       case unknown:
         return const FailureDecision(
           noticeStatus: RuntimeNoticeStatus.blocked,
@@ -295,6 +308,11 @@ enum RuntimeFailureReason {
     // Pattern match for common error strings without a status code.
     if (isModelNotFoundBody) {
       return RuntimeFailureReason.modelNotFound;
+    }
+    // A local full disk is never a provider failure; it is checked before the
+    // generic network/timeout patterns so its text cannot be misclassified.
+    if (StorageFullFailure.matchesText(text)) {
+      return RuntimeFailureReason.storageFull;
     }
     if (_isTlsFailureBody(text)) {
       return RuntimeFailureReason.tlsCertificate;

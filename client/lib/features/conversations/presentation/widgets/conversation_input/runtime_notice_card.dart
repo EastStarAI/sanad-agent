@@ -1,7 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/runtime_notice.dart';
 
 class RuntimeNoticeCard extends StatefulWidget {
@@ -102,13 +102,27 @@ class _RuntimeNoticeCardState extends State<RuntimeNoticeCard> {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isError = widget.notice.isBlocked || widget.notice.isFatal;
+    // A non-recovery warning (for example a failed automatic compaction)
+    // describes a session that kept running: it is neither an error nor a
+    // wait, so it gets the neutral informational icon instead of a clock that
+    // would imply an automatic resume.
+    final isInformational =
+        !isError &&
+        widget.notice.status != 'waiting' &&
+        widget.notice.status != 'resuming' &&
+        widget.notice.status != 'cleared';
     final accent = isError ? colorScheme.error : colorScheme.tertiary;
-    final titleStyle = GoogleFonts.inter(
+    final icon = isError
+        ? Icons.error_outline
+        : isInformational
+        ? Icons.info_outline
+        : Icons.schedule_outlined;
+    final titleStyle = AppTypography.text(context,
       color: colorScheme.onSurface,
       fontSize: 13,
       fontWeight: FontWeight.w600,
     );
-    final bodyStyle = GoogleFonts.inter(
+    final bodyStyle = AppTypography.text(context,
       color: widget.dimTextColor,
       fontSize: 12,
       height: 1.4,
@@ -129,7 +143,7 @@ class _RuntimeNoticeCardState extends State<RuntimeNoticeCard> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Icon(
-                isError ? Icons.error_outline : Icons.schedule_outlined,
+                icon,
                 size: 16,
                 color: accent,
               ),

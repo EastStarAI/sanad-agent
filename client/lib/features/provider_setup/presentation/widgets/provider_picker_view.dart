@@ -3,16 +3,48 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_state.dart';
+import 'package:sanad_client/features/provider_setup/presentation/utils/provider_search_filter.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 /// Lists every supported provider from the agent's `ProviderRegistry`.
 /// Shows configured/authenticated/current badges and routes to the right
 /// sub-flow on tap. No provider list is hardcoded here.
-class ProviderPickerView extends StatelessWidget {
+///
+/// The picker also offers a local search field. Filtering is presentation-only:
+/// it narrows the rendered catalog through [ProviderSearchFilter] without
+/// adding cubit state, changing the daemon protocol, or reordering providers.
+/// The list is flat, so search simply hides non-matching cards instead of
+/// filtering groups.
+class ProviderPickerView extends StatefulWidget {
   const ProviderPickerView({super.key});
+
+  @override
+  State<ProviderPickerView> createState() => _ProviderPickerViewState();
+}
+
+class _ProviderPickerViewState extends State<ProviderPickerView> {
+  final TextEditingController _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _onQueryChanged(String value) {
+    setState(() => _query = value);
+  }
+
+  void _clearQuery() {
+    _searchController.clear();
+    setState(() => _query = '');
+  }
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
     return BlocBuilder<ProviderSetupCubit, ProviderSetupState>(
       builder: (context, state) {
         if (state.providers.isEmpty) {
@@ -29,6 +61,7 @@ class ProviderPickerView extends StatelessWidget {
             ),
           );
         }
+        final visibleProviders = ProviderSearchFilter.apply(state.providers, _query);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -50,29 +83,39 @@ class ProviderPickerView extends StatelessWidget {
                 color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
               ),
             ),
-            const SizedBox(height: 20),
-            ListView.separated(
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              padding: const EdgeInsets.symmetric(vertical: 4),
-              itemCount: state.providers.length,
-              separatorBuilder: (_, __) => const SizedBox(height: 10),
-              itemBuilder: (context, index) {
-                final provider = state.providers[index];
-                return _ProviderCard(
-                  key: Key('provider_card_item_${provider.id}'),
-                  provider: provider,
-                  onTap: () {
-                    final template = state.templates.where((t) => t.name == provider.id).firstOrNull;
-                    if (template != null) {
-                      context.read<ProviderSetupCubit>().selectTemplate(
-                        template,
-                      );
-                    }
-                  },
-                );
-              },
+            const SizedBox(height: 16),
+            _ProviderSearchField(
+              controller: _searchController,
+              query: _query,
+              onChanged: _onQueryChanged,
+              onClear: _clearQuery,
             ),
+            const SizedBox(height: 12),
+            if (visibleProviders.isEmpty)
+              _EmptyResults(message: l10n.providerPickerEmptyResults)
+            else
+              ListView.separated(
+                shrinkWrap: true,
+                physics: const NeverScrollableScrollPhysics(),
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                itemCount: visibleProviders.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 10),
+                itemBuilder: (context, index) {
+                  final provider = visibleProviders[index];
+                  return _ProviderCard(
+                    key: Key('provider_card_item_${provider.id}'),
+                    provider: provider,
+                    onTap: () {
+                      final template = state.templates.where((t) => t.name == provider.id).firstOrNull;
+                      if (template != null) {
+                        context.read<ProviderSetupCubit>().selectTemplate(
+                          template,
+                        );
+                      }
+                    },
+                  );
+                },
+              ),
             if (state.error != null) ...[
               const SizedBox(height: 12),
               Text(
@@ -84,6 +127,84 @@ class ProviderPickerView extends StatelessWidget {
           ],
         );
       },
+    );
+  }
+}
+
+class _ProviderSearchField extends StatelessWidget {
+  final TextEditingController controller;
+  final String query;
+  final ValueChanged<String> onChanged;
+  final VoidCallback onClear;
+
+  const _ProviderSearchField({
+    required this.controller,
+    required this.query,
+    required this.onChanged,
+    required this.onClear,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
+    final hasQuery = query.isNotEmpty;
+    final border = OutlineInputBorder(
+      borderRadius: BorderRadius.circular(12),
+      borderSide: BorderSide(
+        color: theme.colorScheme.onSurface.withValues(alpha: 0.12),
+      ),
+    );
+    return TextField(
+      key: const Key('provider_picker_search_field'),
+      controller: controller,
+      onChanged: onChanged,
+      textInputAction: TextInputAction.search,
+      // Never autofocus: opening the picker must not steal focus or raise a
+      // mobile keyboard before the user asks for search. The picker has no
+      // keyboard-selection model of its own, so Enter stays a plain field
+      // action and no shortcut selects a provider.
+      decoration: InputDecoration(
+        hintText: l10n.providerPickerSearchHint,
+        isDense: true,
+        prefixIcon: const Icon(Icons.search, size: 20),
+        suffixIcon: hasQuery
+            ? IconButton(
+                key: const Key('provider_picker_search_clear'),
+                tooltip: l10n.clearSearch,
+                icon: const Icon(Icons.close, size: 18),
+                onPressed: onClear,
+              )
+            : null,
+        filled: true,
+        fillColor: theme.colorScheme.onSurface.withValues(alpha: 0.03),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+        border: border,
+        enabledBorder: border,
+      ),
+    );
+  }
+}
+
+class _EmptyResults extends StatelessWidget {
+  final String message;
+  const _EmptyResults({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Padding(
+      key: const Key('provider_picker_empty_results'),
+      padding: const EdgeInsets.symmetric(vertical: 28, horizontal: 12),
+      child: Text(
+        message,
+        textAlign: TextAlign.center,
+        style: TextStyle(
+          fontSize: 13,
+          height: 1.5,
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.55),
+        ),
+      ),
     );
   }
 }

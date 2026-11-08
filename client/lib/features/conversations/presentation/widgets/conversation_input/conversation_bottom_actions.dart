@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/utils/toast_utils.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_workspace_coordinator.dart';
 import 'package:sanad_client/core/di/injection.dart';
@@ -20,7 +21,6 @@ import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class ConversationBottomActions extends StatefulWidget {
   final DeviceConfig? activeAgent;
@@ -459,7 +459,7 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
       ),
       child: Text(
         text,
-        style: GoogleFonts.inter(color: widget.dimTextColor, fontSize: 11),
+        style: AppTypography.text(context, color: widget.dimTextColor, fontSize: 11),
       ),
     );
   }

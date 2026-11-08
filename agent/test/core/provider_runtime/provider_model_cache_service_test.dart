@@ -13,6 +13,7 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
@@ -24,9 +25,12 @@ import 'package:sanad_agent/core/provider_thinking/thinking_capability_assembler
 import 'package:sanad_agent/core/provider_thinking/thinking_selection_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_discovery_error.dart';
+import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/engine/adapters/models_dev_service.dart';
+import 'package:sanad_agent/engine/adapters/provider_registry.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 
@@ -468,8 +472,105 @@ void main() {
       expect(callCount, equals(2));
     });
 
-    test('refresh survives malformed base URL without prior cache', () async {
-      repo.createInstance(
+    test(
+      'a rejected credential is persisted as a sanitized, classified detail and cleared by a later success',
+      () async {
+        const secret = 'sk-rejected-credential-000123456789';
+        var reject = true;
+        final client = MockClient((request) async {
+          if (reject) {
+            return http.Response(
+              '{"error":{"type":"server_error","message":'
+              '"Invalid credential for $secret"}}',
+              401,
+              headers: {'x-api-key': secret},
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'data': [
+                {'id': 'gpt-4o', 'owned_by': 'openai'},
+              ],
+            }),
+            200,
+          );
+        });
+        final adapter = BaseOpenAIAdapter(
+          config,
+          ProviderRegistry.findByNameOrAlias('openai')!,
+          client: client,
+          baseUrlOverride: 'https://gateway.example/zen/go/v1',
+          apiKeyOverride: secret,
+          defaultModelOverride: 'gpt-4o',
+        );
+        runtime.adapterOverride = adapter;
+        final instances = ProviderInstanceService(repo);
+        repo.createInstance(
+          ProviderInstance(
+            id: 'inst-rejected',
+            templateId: 'openai',
+            displayName: 'OpenAI Go',
+            protocol: ProviderProtocol.openaiCompatible,
+            authMethod: ProviderAuthMethod.apiKey,
+            baseUrl: 'https://gateway.example/zen/go/v1',
+            defaultModel: 'gpt-4o',
+            configRevision: 1,
+            credentialRevision: 1,
+            createdAt: DateTime.now(),
+            updatedAt: DateTime.now(),
+          ),
+        );
+
+        await cacheService.refresh('inst-rejected', manual: true);
+
+        final row = repo.readModelCache('inst-rejected', 'models')!;
+        expect(row['source'], equals('fallback'));
+        final error = ProviderDiscoveryError.tryRestore(
+          detailJson: row['last_error_detail'],
+          legacyText: row['last_error'],
+        );
+        expect(error, isNotNull);
+        expect(error!.kind, ProviderFailureCategory.invalidCredential);
+        expect(error.statusCode, 401);
+        expect(
+          error.endpoint,
+          equals('https://gateway.example/zen/go/v1/models'),
+        );
+        // One human summary in the legacy column, no provider body anywhere.
+        expect(row['last_error'], equals(error.summary));
+        expect(row['last_error']!.contains(secret), isFalse);
+        expect(row['last_error_detail']!.contains(secret), isFalse);
+
+        // A fallback list never promotes the instance to ready.
+        instances.markReadyIfComplete(
+          'inst-rejected',
+          credentialConfigured: true,
+        );
+        expect(
+          repo.findById('inst-rejected')!.status,
+          equals(InstanceStatus.draft),
+        );
+
+        // Replacing the credential and rediscovering clears both columns and
+        // restores readiness.
+        reject = false;
+        await cacheService.refresh('inst-rejected', manual: true);
+        final fresh = repo.readModelCache('inst-rejected', 'models')!;
+        expect(fresh['source'], equals('live'));
+        expect(fresh['last_error'], isNull);
+        expect(fresh['last_error_detail'], isNull);
+        instances.markReadyIfComplete(
+          'inst-rejected',
+          credentialConfigured: true,
+        );
+        expect(
+          repo.findById('inst-rejected')!.status,
+          equals(InstanceStatus.ready),
+        );
+      },
+    );
+
+    test('refresh survives malformed base URL without prior cache', () async {      repo.createInstance(
         ProviderInstance(
           id: 'inst-1',
           templateId: 'custom',
@@ -522,7 +623,14 @@ void main() {
 
         final cachedRow = repo.readModelCache('inst-1', 'models')!;
         expect(cachedRow['source'], equals('failed'));
-        expect(cachedRow['last_error'], contains('boom'));
+        expect(
+          cachedRow['last_error'],
+          equals(
+            'The provider returned an unexpected model list from '
+            'https://api.openai.com/v1/models',
+          ),
+        );
+        expect(cachedRow['last_error_detail'], isNotNull);
 
         await expectLater(
           cacheService.refresh('inst-1', manual: true),
@@ -576,9 +684,15 @@ void main() {
         );
         expect(refreshed.first.thinkingControl!.source, 'live_probe_failed');
 
-        // Check DB metadata has the error string
+        // Check DB metadata has the sanitized cause
         final cachedRow = repo.readModelCache('inst-1', 'models')!;
-        expect(cachedRow['last_error'], contains('Network disconnected'));
+        expect(
+          cachedRow['last_error'],
+          equals(
+            'Could not reach the provider endpoint from '
+            'https://api.openai.com/v1/models',
+          ),
+        );
         expect(cachedRow['source'], equals('cache_stale'));
         final cachedModel = ModelOption.fromJson(
           Map<String, dynamic>.from((cachedRow['models'] as List).first as Map),

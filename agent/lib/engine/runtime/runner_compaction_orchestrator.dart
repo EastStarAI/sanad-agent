@@ -11,6 +11,7 @@ import '../../core/models/llm_finish_reason.dart';
 import '../../core/models/llm_usage_snapshot.dart';
 import '../../core/models/message.dart';
 import '../../evolution/compaction/model_projection_builder.dart';
+import '../../evolution/db/persisted_runtime_state_repository.dart';
 import '../../evolution/db/session_history_revision_repository.dart';
 import '../../evolution/db/session_projection_revision_repository.dart';
 import '../../evolution/models/compaction_operation_record.dart';
@@ -23,6 +24,7 @@ import '../agent_context_assembler.dart';
 import '../compaction/compaction.dart';
 import '../context/context.dart';
 import 'compaction_coordinator.dart';
+import 'compaction_failure_notice.dart';
 import 'continuation_checkpoint_coordinator.dart';
 import 'post_boundary_usage_reservation.dart';
 import 'turn_route_state.dart';
@@ -543,18 +545,41 @@ class RunnerCompactionOrchestrator {
       if (outcome?.status == CompactionStatus.completed) {
         lastCompactionCompletedAt = DateTime.now().toUtc();
         autoCompactionBlockedForRun = false;
+        CompactionFailureNotice.clear(_noticeStore, sessionId: host.sessionId);
         refreshCanonicalHistoryAfterCompaction();
         return true;
       }
       if (outcome?.status == CompactionStatus.failed) {
         autoCompactionBlockedForRun = true;
+        // A failed automatic compaction is a degraded session, not a silent
+        // one: the operator and the Client must see why it is uncompacted.
+        CompactionFailureNotice.report(
+          _noticeStore,
+          sessionId: host.sessionId,
+          reason: outcome!.failureReason!,
+          failureCause: outcome.failureCause,
+          requestId: host.turnRoute.turnRequestId,
+        );
       }
       return false;
-    } catch (_) {
+    } catch (error) {
       autoCompactionBlockedForRun = true;
+      CompactionFailureNotice.report(
+        _noticeStore,
+        sessionId: host.sessionId,
+        reason: CompactionFailureReason.summarizationFailed,
+        failureCause: CompactionDiagnostics.classify(error).cause,
+        requestId: host.turnRoute.turnRequestId,
+      );
       return false;
     }
   }
+
+  /// Durable notice store for the automatic-compaction failure warning.
+  PersistedRuntimeStateRepository? get _noticeStore =>
+      getIt.isRegistered<PersistedRuntimeStateRepository>()
+      ? getIt<PersistedRuntimeStateRepository>()
+      : null;
 
   int currentProjectionRevision() {
     if (!getIt.isRegistered<SessionProjectionRevisionRepository>()) return 0;

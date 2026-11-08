@@ -33,6 +33,26 @@ void main() {
     expect(exitCode, 1);
   });
 
+  test('service install rejects a missing run-as-user account', () async {
+    expect(await service_command.main(const ['install', '--run-as-user']), 1);
+    expect(exitCode, 1);
+  });
+
+  test('a root run-as-user target is never silent', () {
+    final warning = service_command.installRunAsUserWarning('install', 'root');
+    expect(warning, isNotNull);
+    expect(warning, contains('run as root'));
+    expect(warning, contains('root privileges'));
+    expect(
+      service_command.installRunAsUserWarning('install', 'ubuntu'),
+      isNull,
+    );
+    expect(
+      service_command.installRunAsUserWarning('status', 'root'),
+      isNull,
+    );
+  });
+
   test(
     'service install parser accepts --user-scope before invalid health option',
     () async {

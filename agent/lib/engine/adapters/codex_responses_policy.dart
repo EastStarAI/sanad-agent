@@ -16,6 +16,35 @@ class CodexResponsesPolicy {
     );
   }
 
+  /// True when the Responses host accepts the standard `prompt_cache_key`
+  /// body field. xAI documents the field for its raw Responses HTTP body, so
+  /// xAI keeps it; GitHub-hosted Responses endpoints remain excluded by the
+  /// endpoint policy and never receive a field their request schema does not
+  /// accept.
+  bool promptCacheKeySupportedForHost(String baseUrl) {
+    final host = Uri.tryParse(baseUrl.trim())?.host.toLowerCase() ?? '';
+    if (host.isEmpty) return true;
+    return !_promptCacheKeyUnsupportedHosts.any(
+      (denied) => host == denied || host.endsWith('.$denied'),
+    );
+  }
+
+  /// Applies the endpoint-shaped cache-routing quirk to a built request body:
+  /// unsupported hosts drop the routing field instead of failing dispatch.
+  void applyCacheRouting(Map<String, dynamic> body, {required String baseUrl}) {
+    if (!promptCacheKeySupportedForHost(baseUrl)) {
+      body.remove('prompt_cache_key');
+    }
+  }
+
+  /// Registrable hosts whose Responses schema excludes the routing field.
+  /// Exact and dot-suffix matching keeps unrelated lookalike domains out.
+  static const _promptCacheKeyUnsupportedHosts = {
+    'api.github.com',
+    'github.ai',
+    'githubcopilot.com',
+  };
+
   List<ToolSchema>? normalizeTools(List<ToolSchema>? tools) {
     if (!sanitizeSlashEnums || tools == null || tools.isEmpty) return tools;
     return tools

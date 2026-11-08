@@ -538,6 +538,75 @@ void main() {
       expect(inputCubit.state.draftAttachments, isEmpty);
       expect(chatController.fileTokensByMarker, isEmpty);
     });
+
+    testWidgets('Cmd+V text survives a tool that restores the system clipboard', (tester) async {
+      // A dictation tool posts Cmd+V and restores the previous pasteboard right
+      // after it, so only the snapshot taken for this paste holds the text.
+      final fakeReader = _FakeClipboardReader([
+        _FakeItemReader(values: {Formats.plainText: 'the dictated transcript'}),
+      ]);
+      final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      messenger.setMockMethodCallHandler(SystemChannels.platform, (MethodCall call) async {
+        if (call.method == 'Clipboard.getData') {
+          return <String, dynamic>{'text': 'restored previous clipboard'};
+        }
+        return null;
+      });
+      addTearDown(() => messenger.setMockMethodCallHandler(SystemChannels.platform, null));
+
+      await pumpComposer(tester, activeAgent: localAgent, readClipboard: () async => fakeReader);
+
+      focusNode.requestFocus();
+      await tester.pump();
+
+      await pressMetaV(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(chatController.text, 'the dictated transcript');
+      expect(inputCubit.state.draftAttachments, isEmpty);
+    });
+
+    testWidgets('Cmd+V text at a selection replaces it exactly once', (tester) async {
+      final fakeReader = _FakeClipboardReader([
+        _FakeItemReader(values: {Formats.plainText: 'world'}),
+      ]);
+
+      await pumpComposer(tester, activeAgent: localAgent, readClipboard: () async => fakeReader);
+
+      chatController.value = const TextEditingValue(
+        text: 'hello world',
+        selection: TextSelection(baseOffset: 6, extentOffset: 11),
+      );
+      focusNode.requestFocus();
+      await tester.pump();
+
+      await pressMetaV(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(chatController.text, 'hello world');
+      expect(chatController.selection, const TextSelection.collapsed(offset: 11));
+    });
+
+    testWidgets('Cmd+V text into an empty composer lands with a valid caret', (tester) async {
+      final fakeReader = _FakeClipboardReader([
+        _FakeItemReader(values: {Formats.plainText: 'first words'}),
+      ]);
+
+      await pumpComposer(tester, activeAgent: localAgent, readClipboard: () async => fakeReader);
+
+      focusNode.requestFocus();
+      await tester.pump();
+
+      await pressMetaV(tester);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 50));
+
+      expect(chatController.text, 'first words');
+      expect(chatController.selection.isValid, isTrue);
+      expect(chatController.selection.baseOffset, 'first words'.length);
+    });
   });
 
   group('Attachment rejection feedback (114 live defect)', () {

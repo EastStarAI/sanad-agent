@@ -1,44 +1,72 @@
 name: Protected label review
 
-# Public CI no longer subscribes to label events. When a protected review label
-# is added or removed, this workflow re-runs only the "Verify protected review
-# labels" job of the latest Public CI run for the current head SHA. GitHub also
-# re-runs its dependent "All required checks pass" job, which keeps the results
-# of every other job from that same run. Ordinary labels skip the job.
+# Public CI reads protected review labels at run time, so a protected label is
+# honoured only after "Verify protected review labels" re-reads it. That
+# re-verification is dispatched on demand instead of on every label event:
+# GitHub created one run per label event even when several labels changed in a
+# single call, so every pull request accumulated skipped runs.
+# A maintainer or coordinator dispatches this workflow right after applying or
+# removing a protected label:
+#   gh workflow run protected-labels.yml -f pr_number=<N>
+# It re-runs only the "Verify protected review labels" job of the latest Public
+# CI run for the pull request head SHA. GitHub also re-runs its dependent
+# "All required checks pass" job, which keeps the results of every other job
+# from that same run. Dispatching requires write access, and a dispatch run uses
+# this repository's own token, so fork pull requests are re-verified the same
+# way.
 # This workflow must never define a job named "All required checks pass".
 
 on:
-  pull_request:
-    types: [labeled, unlabeled]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Number of the open pull request whose protected review labels must be re-verified
+        required: true
+        type: string
+
+run-name: "Protected label review for #${{ inputs.pr_number }}"
 
 permissions:
   actions: write
   pull-requests: read
 
 concurrency:
-  # Protected-label events of one PR share a group so the newest one wins;
-  # ordinary-label events get a unique group and cannot cancel anything.
-  group: protected-labels-${{ github.event.pull_request.number }}-${{ contains(fromJSON('["maintainer-reviewed","security-reviewed","release-reviewed"]'), github.event.label.name) && 'protected' || github.run_id }}
+  # One re-verification per pull request; the newest dispatch wins and re-reads
+  # every label anyway.
+  group: protected-labels-${{ inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
   rerun-protected-review:
     name: Re-verify protected review labels
-    if: >-
-      github.event.pull_request.state == 'open' &&
-      contains(fromJSON('["maintainer-reviewed","security-reviewed","release-reviewed"]'), github.event.label.name)
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_NUMBER: ${{ inputs.pr_number }}
           REVIEW_JOB: Verify protected review labels
           POLL_SECONDS: 30
           MAX_WAIT_SECONDS: 4800
         run: |
           set -euo pipefail
+          # Validate the input before touching any pull request.
+          if [[ ! "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::pr_number must be a positive pull request number, got '$PR_NUMBER'."
+            exit 1
+          fi
+          pr="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" 2>/dev/null || true)"
+          if [[ -z "$pr" ]]; then
+            echo "::error::Pull request #$PR_NUMBER does not exist in $GITHUB_REPOSITORY."
+            exit 1
+          fi
+          state="$(jq -r '.state' <<< "$pr")"
+          if [[ "$state" != open ]]; then
+            echo "::error::Pull request #$PR_NUMBER is $state; only an open pull request can be re-verified."
+            exit 1
+          fi
+          # Re-verify whatever the current labels are, including a removal.
           head_sha() { gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha'; }
           sha="$(head_sha)"
           echo "Waiting for the latest Public CI run for $sha."
@@ -67,7 +95,8 @@ jobs:
             exit 1
           fi
           if ! gh api --method POST "repos/$GITHUB_REPOSITORY/actions/jobs/$job_id/rerun" > /dev/null; then
-            echo "::error::Could not re-run '$REVIEW_JOB' in Public CI run $run_id (fork pull requests get a read-only token). A maintainer must re-run that job manually."
+            echo "::error::Could not re-run '$REVIEW_JOB' in Public CI run $run_id. A maintainer must re-run that job manually."
             exit 1
           fi
           echo "Re-ran '$REVIEW_JOB' and its dependents in Public CI run $run_id for $sha."
+          echo "https://github.com/$GITHUB_REPOSITORY/actions/runs/$run_id"

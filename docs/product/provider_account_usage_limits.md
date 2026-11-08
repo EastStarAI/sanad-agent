@@ -15,7 +15,9 @@ account-usage API.
 
 The first supported account is ChatGPT through the `openai-codex` provider
 template. The experience remains capability-driven so future providers can add
-support without a client catalog change.
+support without a client catalog change. This rollout order is about
+account-usage capability only and does not describe the provider setup list,
+whose order follows the provider registry.
 
 ## Placement and loading
 

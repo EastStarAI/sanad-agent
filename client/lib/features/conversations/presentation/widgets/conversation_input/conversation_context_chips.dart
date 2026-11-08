@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/presentation/utils/device_ui_mapper.dart';
@@ -11,7 +13,6 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
-import 'package:google_fonts/google_fonts.dart';
 
 class ConversationContextChips extends StatelessWidget {
   final GlobalKey<PopupMenuButtonState<String>> agentSelectorKey;
@@ -47,7 +48,11 @@ class ConversationContextChips extends StatelessWidget {
       scrollDirection: Axis.horizontal,
       child: Row(
         children: [
-          agents.isEmpty ? _buildNoAgentsFoundChip(context) : _buildAgentSelectorChip(context),
+          agents.isEmpty
+              ? agentSlice.isLoadingInventory
+                    ? _buildDevicesLoadingChip(context)
+                    : _buildNoDevicesChip(context)
+              : _buildAgentSelectorChip(context),
           if (capabilities.supportsWorkspaces || capabilities.workspaceRequired) ...[
             const SizedBox(width: 8),
             ComposerWorkspaceChip(
@@ -89,7 +94,36 @@ class ConversationContextChips extends StatelessWidget {
     );
   }
 
-  Widget _buildNoAgentsFoundChip(BuildContext context) {
+  /// Shown while the inventory has no authoritative result yet: after sign-in
+  /// the socket may still be connecting, and a false "no devices" here is what
+  /// made a successful sign-in look like lost devices.
+  Widget _buildDevicesLoadingChip(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 5),
+      decoration: BoxDecoration(
+        color: chipBgColor,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: borderColor),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 11,
+            height: 11,
+            child: CircularProgressIndicator(strokeWidth: 1.5, color: dimTextColor),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            AppLocalizations.of(context)!.devicesLoading,
+            style: AppTypography.text(context, color: dimTextColor, fontSize: 12, fontWeight: FontWeight.w400),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNoDevicesChip(BuildContext context) {
     return GestureDetector(
       onTap: () {
         unawaited(context.push(AppRoutes.settings));
@@ -107,8 +141,8 @@ class ConversationContextChips extends StatelessWidget {
             Icon(Icons.warning_amber_rounded, size: 13, color: Theme.of(context).colorScheme.tertiary),
             const SizedBox(width: 6),
             Text(
-              'No Agents Found',
-              style: GoogleFonts.inter(
+              AppLocalizations.of(context)!.noDevicesChip,
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.error.withValues(alpha: 0.8),
                 fontSize: 12,
                 fontWeight: FontWeight.w400,
@@ -158,7 +192,7 @@ class ConversationContextChips extends StatelessWidget {
             const SizedBox(width: 6),
             Text(
               activeAgent?.name ?? 'Select Device',
-              style: GoogleFonts.inter(
+              style: AppTypography.text(context,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.8),
                 fontSize: 12,
                 fontWeight: FontWeight.w400,
@@ -185,7 +219,7 @@ class ConversationContextChips extends StatelessWidget {
                 ),
                 child: Text(
                   'local',
-                  style: GoogleFonts.inter(
+                  style: AppTypography.text(context,
                     color: Theme.of(context).colorScheme.secondary,
                     fontSize: 10,
                     fontWeight: FontWeight.w600,
@@ -243,7 +277,7 @@ class ConversationContextChips extends StatelessWidget {
                       ),
                       child: Text(
                         'local',
-                        style: GoogleFonts.inter(
+                        style: AppTypography.text(context,
                           color: Theme.of(context).colorScheme.secondary,
                           fontSize: 9,
                           fontWeight: FontWeight.w600,

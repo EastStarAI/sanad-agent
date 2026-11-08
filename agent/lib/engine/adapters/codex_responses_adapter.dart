@@ -178,10 +178,14 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    _policy.applyCacheRouting(body, baseUrl: _normalizedBaseUrl());
+    final promptCacheKey = CodexResponsesCodec.boundedPromptCacheKey(
+      body['prompt_cache_key'],
+    );
     final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers(options))
+      ..headers.addAll(_headers(options, promptCacheKey: promptCacheKey))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -308,10 +312,14 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
       stream: true,
       preloadedAttachments: verifiedAttachments,
     );
+    _policy.applyCacheRouting(body, baseUrl: _normalizedBaseUrl());
+    final promptCacheKey = CodexResponsesCodec.boundedPromptCacheKey(
+      body['prompt_cache_key'],
+    );
     final stopwatch = Stopwatch()..start();
     final url = Uri.parse('${_normalizedBaseUrl()}/responses');
     final request = http.Request('POST', url)
-      ..headers.addAll(_headers(options))
+      ..headers.addAll(_headers(options, promptCacheKey: promptCacheKey))
       ..body = jsonEncode(body);
     if (LLMRequestDumper.isEnabled) {
       await LLMRequestDumper.recordActualRequest(
@@ -512,17 +520,38 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
 
   String _normalizedBaseUrl() => baseUrl.replaceFirst(RegExp(r'/+$'), '');
 
-  Map<String, String> _headers(LLMRequestOptions options) =>
+  Map<String, String> _headers(
+    LLMRequestOptions options, {
+    String? promptCacheKey,
+  }) =>
       withOpenCodeSessionAffinity(
         headers: {
           'Content-Type': 'application/json',
           if (apiKey.isNotEmpty) 'Authorization': 'Bearer $apiKey',
           ...profile.defaultHeaders,
+          ..._codexBackendAffinityHeaders(options, promptCacheKey),
         },
         providerName: profile.name,
         baseUrl: baseUrl,
         sessionId: options.sessionId,
       );
+
+  /// Conversation affinity for the chatgpt.com Codex backend.
+  /// `session_id` carries the raw physical session id for transcript identity,
+  /// and `x-client-request-id` mirrors the exact body routing key so both
+  /// surfaces agree. Host-gated: other Responses endpoints never see it.
+  Map<String, String> _codexBackendAffinityHeaders(
+    LLMRequestOptions options,
+    String? promptCacheKey,
+  ) {
+    final host = Uri.tryParse(_normalizedBaseUrl())?.host.toLowerCase() ?? '';
+    if (host != 'chatgpt.com') return const {};
+    final sessionId = options.sessionId?.trim() ?? '';
+    return {
+      if (sessionId.isNotEmpty) 'session_id': sessionId,
+      'x-client-request-id': ?promptCacheKey,
+    };
+  }
 
   static String? _remaining(String? complete, String emitted) {
     if (complete == null || complete.isEmpty) return null;

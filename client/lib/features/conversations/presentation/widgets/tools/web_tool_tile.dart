@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 
 class WebToolTile extends StatelessWidget {
@@ -71,7 +71,7 @@ class WebToolTile extends StatelessWidget {
           if (query.toString().isNotEmpty) ...[
             RichText(
               text: TextSpan(
-                style: GoogleFonts.roboto(
+                style: AppTypography.text(context,
                   fontSize: 13,
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
@@ -95,7 +95,7 @@ class WebToolTile extends StatelessWidget {
           if (url.toString().isNotEmpty) ...[
             RichText(
               text: TextSpan(
-                style: GoogleFonts.roboto(
+                style: AppTypography.text(context,
                   fontSize: 13,
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
@@ -126,7 +126,7 @@ class WebToolTile extends StatelessWidget {
               const SizedBox(width: 12),
               Text(
                 statusText,
-                style: GoogleFonts.roboto(
+                style: AppTypography.text(context,
                   fontSize: 12,
                   color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
                 ),
@@ -150,7 +150,7 @@ class WebToolTile extends StatelessWidget {
       ),
       child: Text(
         event.text.isNotEmpty ? event.text : (event.toolOutput?.toString() ?? 'Web operation failed.'),
-        style: GoogleFonts.firaCode(fontSize: 11, color: errorColor),
+        style: AppTypography.mono(fontSize: 11, color: errorColor),
       ),
     );
   }
@@ -195,7 +195,7 @@ class WebToolTile extends StatelessWidget {
         if (query.toString().isNotEmpty) ...[
           RichText(
             text: TextSpan(
-              style: GoogleFonts.roboto(
+              style: AppTypography.text(context,
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.onSurface,
               ),
@@ -218,7 +218,7 @@ class WebToolTile extends StatelessWidget {
         ],
         Text(
           'Search Results',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -255,7 +255,7 @@ class WebToolTile extends StatelessWidget {
                       onTap: () => _launchUrl(url),
                       child: Text(
                         title,
-                        style: GoogleFonts.roboto(
+                        style: AppTypography.text(context,
                           fontSize: 14,
                           fontWeight: FontWeight.bold,
                           color: Theme.of(context).colorScheme.primary,
@@ -268,7 +268,7 @@ class WebToolTile extends StatelessWidget {
                       url,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
-                      style: GoogleFonts.roboto(
+                      style: AppTypography.text(context,
                         fontSize: 11,
                         color: Theme.of(context).colorScheme.onSurfaceVariant.withValues(alpha: 0.6),
                       ),
@@ -277,7 +277,7 @@ class WebToolTile extends StatelessWidget {
                       const SizedBox(height: 4),
                       Text(
                         snippet,
-                        style: GoogleFonts.roboto(
+                        style: AppTypography.text(context,
                           fontSize: 12,
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
@@ -309,7 +309,7 @@ class WebToolTile extends StatelessWidget {
       children: [
         Text(
           'Fetched Pages',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4),
             fontSize: 11,
             fontWeight: FontWeight.bold,
@@ -319,7 +319,7 @@ class WebToolTile extends StatelessWidget {
         if (resultsList.isEmpty)
           Text(
             output?.toString() ?? 'No fetch output available.',
-            style: GoogleFonts.roboto(fontSize: 13),
+            style: AppTypography.text(context, fontSize: 13),
           )
         else
           Column(
@@ -358,7 +358,7 @@ class WebToolTile extends StatelessWidget {
                               url,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
-                              style: GoogleFonts.roboto(
+                              style: AppTypography.text(context,
                                 fontSize: 13,
                                 fontWeight: FontWeight.bold,
                                 color: Theme.of(context).colorScheme.primary,
@@ -370,7 +370,7 @@ class WebToolTile extends StatelessWidget {
                         const SizedBox(width: 8),
                         Text(
                           'HTTP $code',
-                          style: GoogleFonts.roboto(
+                          style: AppTypography.text(context,
                             fontSize: 11,
                             fontWeight: FontWeight.bold,
                             color: code == 200 ? Colors.green : Colors.red,
@@ -399,7 +399,7 @@ class WebToolTile extends StatelessWidget {
         if (input != null) ...[
           Text(
             'Input Parameters',
-            style: GoogleFonts.outfit(
+            style: AppTypography.text(context,
               color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.24),
               fontSize: 10,
               fontWeight: FontWeight.bold,
@@ -408,13 +408,13 @@ class WebToolTile extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             input.toString(),
-            style: GoogleFonts.roboto(fontSize: 13),
+            style: AppTypography.text(context, fontSize: 13),
           ),
           const SizedBox(height: 8),
         ],
         Text(
           'Output Result',
-          style: GoogleFonts.outfit(
+          style: AppTypography.text(context,
             color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.24),
             fontSize: 10,
             fontWeight: FontWeight.bold,

@@ -55,6 +55,18 @@ class FakeDeviceRepository implements IDeviceRepository {
   @override
   bool get isCloudInventoryPending => cloudInventoryPending;
 
+  /// Set false to simulate a gateway that cannot answer an inventory fetch yet.
+  bool inventoryReady = true;
+
+  @override
+  bool get isInventoryReady => inventoryReady;
+
+  /// Set false to simulate a session with no successful inventory response yet.
+  bool authoritativeInventory = true;
+
+  @override
+  bool get hasAuthoritativeInventory => authoritativeInventory;
+
   @override
   Future<void> setActiveAgent(String? deviceId) async {
     _activeAgentId = deviceId;
