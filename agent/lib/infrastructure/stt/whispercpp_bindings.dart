@@ -171,7 +171,19 @@ class WhisperCppLibrary {
       );
     }
     _loadWindowsDependencies(targetPath);
-    final lib = DynamicLibrary.open(targetPath);
+    final DynamicLibrary lib;
+    try {
+      lib = DynamicLibrary.open(targetPath);
+    } on ArgumentError catch (error) {
+      // Windows reports a missing or unloadable dependency as a bare
+      // "module could not be found" for the shim itself, which hides the real
+      // cause. Naming the sibling that failed turns an opaque 126 into a fix.
+      final failures = _windowsDependencyFailures;
+      final detail = failures.isEmpty
+          ? 'every sibling loaded'
+          : 'sibling load failures: ${failures.join('; ')}';
+      throw SttException('engine_load_failed', '$error ($detail)');
+    }
     final instance = WhisperCppLibrary._(
       lib,
       lib.lookupFunction<_LoadNative, _LoadDart>('sanad_whisper_load'),
@@ -199,21 +211,30 @@ class WhisperCppLibrary {
 
   /// Registers the sibling runtime DLLs with the Windows loader.
   ///
-  /// A failure here is not reported: the shim open below owns the real error, and
-  /// a dependency the loader already has cannot be loaded twice.
+  /// A dependency the loader already has cannot be loaded twice, so an
+  /// already-loaded sibling is ignored; a real failure is recorded in
+  /// [_windowsDependencyFailures] for the shim error message.
   static void _loadWindowsDependencies(String shimPath) {
+    _windowsDependencyFailures = const [];
     if (!Platform.isWindows) return;
+    final failures = <String>[];
     final directory = File(shimPath).parent.path;
     for (final name in windowsRuntimeLibraries) {
       final file = File('$directory${Platform.pathSeparator}$name');
-      if (!file.existsSync()) continue;
+      if (!file.existsSync()) {
+        failures.add('$name: missing');
+        continue;
+      }
       try {
         DynamicLibrary.open(file.path);
-      } on Object {
-        // The shim open reports the authoritative failure.
+      } on Object catch (error) {
+        failures.add('$name: $error');
       }
     }
+    _windowsDependencyFailures = failures;
   }
+
+  static List<String> _windowsDependencyFailures = const [];
 
   /// Opens a ggml model with mmap. Throws [SttException] with the C reason.
   ///
