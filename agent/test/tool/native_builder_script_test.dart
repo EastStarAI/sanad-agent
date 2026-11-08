@@ -160,6 +160,21 @@ void main() {
     for (final name in WhisperCppLibrary.windowsRuntimeLibraries) {
       expect(script, contains(name), reason: '$name must be staged');
     }
+    // Order is the dependency graph: ggml.dll and whisper.dll import
+    // ggml-base, so preloading them first reintroduces the same error 126.
+    final libraries = WhisperCppLibrary.windowsRuntimeLibraries;
+    expect(
+      libraries.indexOf('ggml-base.dll'),
+      lessThan(libraries.indexOf('ggml.dll')),
+    );
+    expect(
+      libraries.indexOf('ggml-base.dll'),
+      lessThan(libraries.indexOf('whisper.dll')),
+    );
+    expect(
+      libraries.indexOf('ggml.dll'),
+      lessThan(libraries.indexOf('whisper.dll')),
+    );
   });
 
   test('the shim exports every symbol the FFI bindings look up', () {

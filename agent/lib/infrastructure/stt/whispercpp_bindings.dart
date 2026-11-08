@@ -195,17 +195,19 @@ class WhisperCppLibrary {
     return instance;
   }
 
-  /// The DLLs that ship beside the shim on Windows, dependencies first.
+  /// The DLLs that ship beside the shim on Windows, **dependencies first**.
   ///
   /// The builder stages exactly this set, and [open] loads each one before the
   /// shim: Windows resolves a DLL's imports from the application directory, the
   /// system directories, and `PATH`, never from the directory of the DLL being
   /// loaded, so opening the shim first fails with "module could not be found"
-  /// (error 126) even though every file is present.
+  /// (error 126) even though every file is present. The order is the dependency
+  /// graph, not the file list: `ggml.dll` and `whisper.dll` import `ggml-base`,
+  /// so loading them first fails the same way for the same reason.
   static const windowsRuntimeLibraries = [
-    'ggml.dll',
     'ggml-base.dll',
     'ggml-cpu.dll',
+    'ggml.dll',
     'whisper.dll',
   ];
 
