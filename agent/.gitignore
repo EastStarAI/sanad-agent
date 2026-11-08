@@ -48,7 +48,12 @@ generated_*
 # **/dsa_priv.pem
 # **/private_key.pem
 # *.pem.bak
+# The Flutter template ignores every `packages/` directory; this repository keeps
+# two tracked local packages there — the swappable dictation engine and its
+# stand-in (see `AGENTS.md`).
 packages
+!/packages/
+!/packages/**
 
 # Sanad local distribution build files
 /release/build/
