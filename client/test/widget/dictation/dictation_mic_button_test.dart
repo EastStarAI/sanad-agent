@@ -171,6 +171,25 @@ void main() {
     expect(find.byKey(const Key('dictation_mic_btn')), findsOneWidget);
   });
 
+  testWidgets('matches the send button footprint (32 px)', (tester) async {
+    await tester.pumpWidget(build());
+    final size = tester.getSize(
+      find.ancestor(
+        of: find.byKey(const Key('dictation_mic_btn')),
+        matching: find.byType(SizedBox),
+      ).first,
+    );
+    expect(size.width, 32);
+    expect(size.height, 32);
+  });
+
+  testWidgets('says it is not ready before a model is installed', (tester) async {
+    await tester.pumpWidget(build());
+    final tooltip = tester.widget<Tooltip>(find.byType(Tooltip));
+    expect(tooltip.message, contains('not ready'));
+    expect(find.byKey(const Key('dictation_mic_btn')), findsOneWidget);
+  });
+
   testWidgets('pressing the mic starts a dictation session', (tester) async {
     await tester.pumpWidget(build());
     await seedReadyModel(tester);

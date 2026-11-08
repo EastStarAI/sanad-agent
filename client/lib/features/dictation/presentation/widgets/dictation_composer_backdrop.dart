@@ -212,8 +212,9 @@ class DictationMeterPainter extends CustomPainter {
       final x = i * slot + slot / 2;
       final freshness = 0.35 + 0.65 * (i / (count - 1));
       // Faint on purpose: the text above the strip must stay the loudest thing
-      // in the card.
-      paint.color = color.withValues(alpha: 0.10 + 0.18 * freshness);
+      // in the card. Kept translucent enough that it reads as a backdrop and
+      // never competes with the composer text.
+      paint.color = color.withValues(alpha: 0.05 + 0.10 * freshness);
       canvas.drawLine(
         Offset(x, centerY - halfHeight),
         Offset(x, centerY + halfHeight),

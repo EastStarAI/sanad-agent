@@ -10,6 +10,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import 'composer_helpers.dart';
 
@@ -38,20 +39,28 @@ class ComposerSendStopButton extends StatelessWidget {
   /// Sends the draft, but never an empty one.
   ///
   /// While dictation is running the button is enabled on purpose — the user may
-  /// want to finish speaking and send in one press. Stopping first means the
-  /// final transcript is what gets sent, and a session that recognised nothing
-  /// sends nothing at all instead of an empty message.
+  /// want to finish speaking and send in one press. The session is stopped and
+  /// the button waits for the transcript before dispatching; a session that
+  /// recognised nothing (or failed, or timed out) sends nothing at all instead
+  /// of an empty message.
   Future<void> _send(
     BuildContext context, {
     required bool isDictating,
   }) async {
-    if (isDictating) {
-      await maybeDictationCubit(context)?.stop();
+    final dictation = readDictationCubit(context);
+    if (isDictating && dictation != null) {
+      final settled = await dictation.sendWhenSettled();
+      if (!context.mounted) return;
+      if (!settled) return;
+      // The transcript is inserted from a state listener, so give that frame a
+      // chance to land before reading the controller.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!context.mounted) return;
       if (chatController.exportPlainText().trim().isEmpty) return;
-    } else if (chatController.exportPlainText().trim().isEmpty) {
-      // Attachments can be sent alone; text cannot be empty otherwise.
+      onSendAttempt(intent: MessageDeliveryIntent.auto);
       return;
     }
+    if (chatController.exportPlainText().trim().isEmpty) return;
     onSendAttempt(intent: MessageDeliveryIntent.auto);
   }
 
@@ -70,7 +79,9 @@ class ComposerSendStopButton extends StatelessWidget {
     final hasContent = !isEmpty || attachments.isNotEmpty;
     final dictation = maybeDictationCubit(context);
     final dictating = dictation?.state.isActive ?? false;
+    final awaitingTranscript = dictation?.state.awaitingSend ?? false;
     final canSend =
+        !awaitingTranscript &&
         agentSlice.isOnline &&
         (hasContent || dictating) &&
         attachmentsReady &&
@@ -119,6 +130,38 @@ class ComposerSendStopButton extends StatelessWidget {
                   size: 16,
                   color: Theme.of(context).colorScheme.error,
                 ),
+        ),
+      );
+    }
+
+    if (awaitingTranscript) {
+      // The transcript is being decoded. A spinner that also stops: pressing it
+      // abandons the automatic send while keeping whatever text arrives.
+      return SizedBox(
+        width: 32,
+        height: 32,
+        child: Tooltip(
+          message: AppLocalizations.of(context)?.dictationAwaitingTranscriptTooltip ??
+              'Press to stop',
+          child: Material(
+            color: Theme.of(context).colorScheme.onSurface,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              key: const Key('send_message_waiting_dictation'),
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => readDictationCubit(context)?.cancelPendingSend(),
+              child: const Center(
+                child: SizedBox(
+                  width: 16,
+                  height: 16,
+                  child: AppProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.black,
+                  ),
+                ),
+              ),
+            ),
+          ),
         ),
       );
     }

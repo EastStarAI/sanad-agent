@@ -336,6 +336,67 @@ void main() {
       expect(cubit.state.status, DictationStatus.idle);
     });
 
+    test('sendWhenSettled waits for the transcript, then reports success', () async {
+      cubit = build();
+      await startSession();
+
+      final pending = cubit.sendWhenSettled();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      // The button is spinning and must stay unpressable until this clears.
+      expect(cubit.state.awaitingSend, isTrue);
+
+      transport.controller.add({'event': 'dictation_final', 'seq': 1, 'text': 'نص'});
+      transport.controller.add({'event': 'dictation_done', 'segments': 1});
+
+      expect(await pending, isTrue);
+      expect(cubit.state.awaitingSend, isFalse);
+      expect(cubit.state.status, DictationStatus.idle);
+    });
+
+    test('a session that heard nothing does not become a send', () async {
+      cubit = build();
+      await startSession();
+
+      final pending = cubit.sendWhenSettled();
+      transport.controller.add({'event': 'dictation_done', 'segments': 0});
+
+      expect(await pending, isFalse);
+      expect(cubit.state.awaitingSend, isFalse);
+    });
+
+    test('a dictation error releases the wait instead of sending', () async {
+      cubit = build();
+      await startSession();
+
+      final pending = cubit.sendWhenSettled();
+      transport.controller.add({
+        'event': 'dictation_error',
+        'code': 'engine_crashed',
+        'message': 'boom',
+      });
+
+      expect(await pending, isFalse);
+      expect(cubit.state.awaitingSend, isFalse);
+    });
+
+    test('cancelling the pending send keeps the session text', () async {
+      cubit = build();
+      await startSession();
+
+      final pending = cubit.sendWhenSettled();
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      cubit.cancelPendingSend();
+
+      expect(await pending, isFalse);
+      expect(cubit.state.awaitingSend, isFalse);
+
+      // The session still finishes on its own, so nothing spoken is lost.
+      transport.controller.add({'event': 'dictation_final', 'seq': 1, 'text': 'نص'});
+      transport.controller.add({'event': 'dictation_done', 'segments': 1});
+      await Future<void>.delayed(const Duration(milliseconds: 10));
+      expect(cubit.state.status, DictationStatus.idle);
+    });
+
     test('loudness reaches listeners while audio is captured', () async {
       cubit = build();
       await startSession();

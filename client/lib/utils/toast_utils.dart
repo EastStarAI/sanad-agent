@@ -11,12 +11,13 @@ class ToastUtils {
   /// Minimum time user-visible feedback remains readable before auto-close.
   static const defaultDuration = Duration(seconds: 5);
 
-  static void showError(BuildContext context, String message) {
+  static void showError(BuildContext context, String message, {Key? key}) {
     debugOnShowError?.call(message);
     _logger.warning('Showing user-visible error toast');
     _show(
       context,
       message,
+      key: key,
       type: ToastificationType.error,
       icon: Icons.error_outline,
       color: Theme.of(context).colorScheme.error,
@@ -46,6 +47,7 @@ class ToastUtils {
   static void _show(
     BuildContext context,
     String message, {
+    Key? key,
     required ToastificationType type,
     required IconData icon,
     required Color color,
@@ -56,7 +58,7 @@ class ToastUtils {
       type: type,
       style: ToastificationStyle.flat,
       autoCloseDuration: defaultDuration,
-      title: Text(message),
+      title: Text(message, key: key),
       alignment: AppPlatform.isMobile
           ? Alignment.topCenter
           : (isRtl ? Alignment.topLeft : Alignment.topRight),

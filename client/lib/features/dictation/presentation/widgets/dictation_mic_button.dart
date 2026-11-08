@@ -139,8 +139,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
           await cubit.refreshStatus(device);
           if (!mounted) return;
         }
-        final ready = cubit.state.model.isReady &&
-            cubit.state.model.unavailableReason == null;
+        final ready = cubit.state.model.isReady && cubit.state.model.unavailableReason == null;
         _logger.info(
           'dictation press: ready=$ready '
           'selected=${cubit.state.model.selectedModelId} '
@@ -183,6 +182,9 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       'session_limit' => l10n.dictationLimitReached,
       'microphone_denied' => l10n.dictationMicrophoneDenied,
       'dictation_busy' => l10n.dictationBusy,
+      'native_runtime_preparing' => l10n.dictationRuntimePreparing,
+      'native_runtime_missing' => l10n.dictationRuntimeMissing,
+      'unsupported_platform' => l10n.dictationUnsupportedPlatform,
       _ => null,
     };
     _announcedCode = code;
@@ -204,8 +206,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       listener: (context, state) {
         // A new session can hit the same condition again (say, two silent
         // attempts in a row), so the announced code only guards one session.
-        if (state.status == DictationStatus.preparing ||
-            state.status == DictationStatus.listening) {
+        if (state.status == DictationStatus.preparing || state.status == DictationStatus.listening) {
           _announcedCode = null;
         }
         _announce(state);
@@ -224,61 +225,65 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       },
       builder: (context, state) {
         final isActive = state.isActive;
-        final isBusy =
-            state.status == DictationStatus.preparing ||
-            state.status == DictationStatus.finalizing;
+        final isBusy = state.status == DictationStatus.preparing || state.status == DictationStatus.finalizing;
+        final notReady = !state.model.isReady || state.model.unavailableReason != null;
         final color = isActive
             ? Theme.of(context).colorScheme.error
+            : notReady
+            ? Theme.of(context).colorScheme.onSurfaceVariant
             : Theme.of(context).colorScheme.primary;
         return Row(
           mainAxisSize: MainAxisSize.min,
           children: [
             SizedBox(
+              // Same footprint as the send button; the composer row keeps one
+              // rhythm and the icon stays 20 px inside it.
               width: 32,
               height: 32,
-              child: IconButton(
-                key: const Key('dictation_mic_btn'),
-                tooltip: isBusy
+              child: Tooltip(
+                // Two lines on purpose: the actions differ, and one long line
+                // reads as a sentence the user has to parse instead of a hint.
+                message: isBusy
                     ? l10n.dictationPreparingTooltip
                     : isActive
-                        ? l10n.dictationStopTooltip
-                        : l10n.dictationStartTooltip,
-                onPressed:
-                    widget.device == null ? null : () => _onPressed(state),
-                onLongPress:
-                    widget.device == null ? null : () => _openSheet(state),
-                style: IconButton.styleFrom(
-                  backgroundColor: isActive
-                      ? color.withValues(alpha: 0.12)
-                      : Theme.of(context)
-                          .colorScheme
-                          .primary
-                          .withValues(alpha: 0.08),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8),
+                    ? l10n.dictationStopTooltip
+                    : notReady
+                    ? l10n.dictationNotReadyTooltip
+                    : l10n.dictationStartTooltip,
+                textAlign: TextAlign.center,
+                child: IconButton(
+                  key: const Key('dictation_mic_btn'),
+                  onPressed: widget.device == null ? null : () => _onPressed(state),
+                  onLongPress: widget.device == null ? null : () => _openSheet(state),
+                  style: IconButton.styleFrom(
+                    backgroundColor: isActive
+                        ? color.withValues(alpha: 0.12)
+                        : color.withValues(alpha: 0.08),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    padding: EdgeInsets.zero,
                   ),
-                  padding: EdgeInsets.zero,
+                  icon: isBusy
+                      ? SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: AppProgressIndicator(strokeWidth: 2, color: color),
+                        )
+                      : state.status == DictationStatus.listening
+                      // The button *is* the meter while capturing: the user
+                      // watches the microphone, not a separate widget.
+                      ? _VoiceMeter(
+                          key: const Key('dictation_level'),
+                          level: state.level,
+                          color: color,
+                        )
+                      : Icon(
+                          Symbols.mic,
+                          size: 18,
+                          color: widget.dimTextColor ?? color,
+                        ),
                 ),
-                icon: isBusy
-                    ? SizedBox(
-                        width: 16,
-                        height: 16,
-                        child:
-                            AppProgressIndicator(strokeWidth: 2, color: color),
-                      )
-                    : state.status == DictationStatus.listening
-                        // The button *is* the meter while capturing: the user
-                        // watches the microphone, not a separate widget.
-                        ? _VoiceMeter(
-                            key: const Key('dictation_level'),
-                            level: state.level,
-                            color: color,
-                          )
-                        : Icon(
-                            Symbols.mic,
-                            size: 18,
-                            color: widget.dimTextColor ?? color,
-                          ),
               ),
             ),
           ],
@@ -327,4 +332,3 @@ class _VoiceMeter extends StatelessWidget {
     );
   }
 }
-

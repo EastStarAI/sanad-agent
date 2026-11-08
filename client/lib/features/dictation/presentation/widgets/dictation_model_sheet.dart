@@ -61,6 +61,39 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
     return cubit.installModel(modelId, device: widget.device);
   }
 
+  /// The one action the current unsupported state deserves.
+  ///
+  /// The runtime is the only reason the user can fix from here; the download
+  /// itself is already offered by the model tiles below.
+  Widget _statusAction(
+    DictationCubit cubit,
+    AppLocalizations l10n,
+    DictationModelStatus model,
+  ) {
+    switch (model.unavailableReason) {
+      case 'native_runtime_preparing':
+        return const Padding(
+          padding: EdgeInsets.only(top: 8),
+          child: SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      case 'native_runtime_missing':
+        return Align(
+          alignment: AlignmentDirectional.centerEnd,
+          child: TextButton(
+            key: const Key('dictation_prepare_runtime'),
+            onPressed: () => cubit.prepareRuntime(widget.device),
+            child: Text(l10n.dictationPrepareNow),
+          ),
+        );
+      default:
+        return const SizedBox.shrink();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
@@ -95,9 +128,16 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                           color: colorScheme.error.withValues(alpha: 0.3),
                         ),
                       ),
-                      child: Text(
-                        '${l10n.dictationUnavailableTitle} · ${model.unavailableReason}',
-                        style: bodyStyle,
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${l10n.dictationUnavailableTitle} · '
+                            '${_reasonLabel(l10n, model.unavailableReason!)}',
+                            style: bodyStyle,
+                          ),
+                          _statusAction(cubit, l10n, model),
+                        ],
                       ),
                     ),
                   ],
@@ -307,4 +347,18 @@ class _ModelTile extends StatelessWidget {
         ? '${(value / 1024).toStringAsFixed(1)} GB'
         : '${value.toStringAsFixed(0)} MB';
   }
+}
+
+/// Turns a daemon readiness code into user-facing copy.
+///
+/// The daemon reports codes, never sentences (it has no locale); anything the
+/// sheet does not know is shown verbatim so an unexpected code is still visible
+/// rather than silently swallowed.
+String _reasonLabel(AppLocalizations l10n, String reason) {
+  return switch (reason) {
+    'native_runtime_preparing' => l10n.dictationRuntimePreparing,
+    'native_runtime_missing' => l10n.dictationRuntimeMissing,
+    'unsupported_platform' => l10n.dictationUnsupportedPlatform,
+    _ => reason,
+  };
 }

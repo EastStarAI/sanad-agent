@@ -32,3 +32,15 @@ DictationCubit? maybeDictationCubit(BuildContext context) {
   }
 }
 
+/// Same lookup for event handlers and shortcut callbacks.
+///
+/// `watch` is illegal outside the build phase, so anything triggered by a tap
+/// or a key must read the cubit instead of subscribing to it.
+DictationCubit? readDictationCubit(BuildContext context) {
+  try {
+    return context.read<DictationCubit>();
+  } on ProviderNotFoundException {
+    return null;
+  }
+}
+

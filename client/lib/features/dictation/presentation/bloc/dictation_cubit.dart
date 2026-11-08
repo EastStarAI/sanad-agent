@@ -59,6 +59,13 @@ class DictationCubit extends Cubit<DictationState> {
   Completer<void>? _statusCompleter;
   Completer<void>? _idle;
 
+  /// Pending "send after dictation" wait; see [sendWhenSettled].
+  Completer<bool>? _sendWaiter;
+
+  /// Transcript captured when the daemon finished, held so the pending send can
+  /// be resolved after the reset clears the visible state.
+  String _settledText = '';
+
   /// Ceiling for one utterance: five minutes of audio is held in the daemon
   /// until the user stops, so the cap is a real memory bound, not a UX hint.
   static const Duration sessionLimit = Duration(minutes: 5);
@@ -214,6 +221,45 @@ class DictationCubit extends Cubit<DictationState> {
     await idle.future.timeout(timeout, onTimeout: () {});
   }
 
+  /// Stops the session and reports whether a transcript is worth sending.
+  ///
+  /// True only when the session ended with text in the composer: a session that
+  /// recognised nothing, failed, or was cancelled by the user resolves false so
+  /// the caller sends nothing. The wait is bounded, so a daemon that never
+  /// answers cannot leave the send button spinning forever — the transcript
+  /// still lands in the composer whenever it finally arrives, it is simply not
+  /// sent automatically.
+  Future<bool> sendWhenSettled({
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    if (!state.isActive) return state.visibleText.trim().isNotEmpty;
+    if (_sendWaiter != null) return false;
+    final waiter = Completer<bool>();
+    _sendWaiter = waiter;
+    emit(state.copyWith(awaitingSend: true));
+    final timer = Timer(timeout, () => _settleSend(false));
+    await stop();
+    final settled = await waiter.future;
+    timer.cancel();
+    _sendWaiter = null;
+    if (!isClosed && state.awaitingSend) {
+      emit(state.copyWith(awaitingSend: false));
+    }
+    return settled;
+  }
+
+  /// Abandons a pending send without discarding the session's text.
+  ///
+  /// The session keeps finishing in the background, so whatever was spoken is
+  /// still inserted into the composer; it just stops being sent on its own.
+  void cancelPendingSend() => _settleSend(false);
+
+  void _settleSend(bool settled) {
+    final waiter = _sendWaiter;
+    _sendWaiter = null;
+    if (waiter != null && !waiter.isCompleted) waiter.complete(settled);
+  }
+
   /// Stops the session because the client-side cap was reached.
   Future<void> stopForLimit() async {
     if (!state.isActive) return;
@@ -271,6 +317,18 @@ class DictationCubit extends Cubit<DictationState> {
     final transport = await _ensureTransport(device);
     if (transport == null) return;
     transport.sendCommand('select', {'model_id': modelId});
+  }
+
+  /// Asks the daemon to (re)prepare the native dictation runtime.
+  ///
+  /// The build/download runs detached on the daemon, so this only kicks it off
+  /// and then refreshes the status the sheet renders.
+  Future<void> prepareRuntime(DeviceConfig device) async {
+    final transport = await _ensureTransport(device);
+    if (transport == null) return;
+    transport.sendCommand('prepareRuntime');
+    await Future<void>.delayed(const Duration(milliseconds: 400));
+    await refreshStatus(device);
   }
 
   Future<DictationTransport?> _ensureTransport(DeviceConfig device) async {
@@ -377,6 +435,9 @@ class DictationCubit extends Cubit<DictationState> {
         final segments = (event['segments'] as num?)?.toInt() ?? 0;
         _logger.info('dictation drained: segments=$segments');
         final noSpeech = segments == 0 && state.committedText.isEmpty;
+        // Hold the transcript: the reset below clears it from the state, but the
+        // pending send still has to know whether anything was recognised.
+        _settledText = noSpeech ? '' : state.committedText;
         unawaited(
           _reset(
             clearText: false,
@@ -385,6 +446,10 @@ class DictationCubit extends Cubit<DictationState> {
         );
       case 'dictation_error':
         final code = (event['code'] as String?) ?? 'dictation_error';
+        // `unavailable` is a wrapper: the specific reason (preparing vs missing
+        // runtime) is what the user needs to see.
+        final reason = event['reason'] as String?;
+        final effective = code == 'unavailable' && reason != null ? reason : code;
         if (state.model.installingModelId != null) {
           emit(
             state.copyWith(
@@ -392,7 +457,7 @@ class DictationCubit extends Cubit<DictationState> {
             ),
           );
         }
-        _fail(code);
+        _fail(effective);
       default:
         break;
     }
@@ -469,6 +534,9 @@ class DictationCubit extends Cubit<DictationState> {
         partialText: '',
         discardText: clearText,
         level: 0,
+        // A session that ends any other way (error, cancel, stop timeout) must
+        // also release the send button, never leave it spinning.
+        awaitingSend: false,
         errorCode: errorCode ?? (limitReached ? 'session_limit' : null),
         clearError: errorCode == null && !limitReached,
         sessionNeedsFirstUseSheet: errorCode == 'model_not_installed',
@@ -476,6 +544,10 @@ class DictationCubit extends Cubit<DictationState> {
     );
     _closing = false;
     if (device != null) _logger.info('dictation session closed');
+    // Resolve the wait only now: the caller may read the composer as soon as it
+    // returns, so the session must be idle first.
+    _settleSend(!clearText && _settledText.trim().isNotEmpty);
+    _settledText = '';
     final idle = _idle;
     _idle = null;
     if (idle != null && !idle.isCompleted) idle.complete();

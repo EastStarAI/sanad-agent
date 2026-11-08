@@ -26,6 +26,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 
 import '../sidebar/sidebar_composition.dart';
@@ -139,6 +140,13 @@ class ComposerContainer extends StatelessWidget {
                   if (slashState.visibleEntries.isNotEmpty)
                     const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false): () {
                       context.read<ComposerSlashCommandsCubit>().clear();
+                    },
+                  // Escape also abandons a pending "send after dictation" wait.
+                  // The slash menu owns Escape when it is open, hence the guard.
+                  if (slashState.visibleEntries.isEmpty &&
+                      (maybeDictationCubit(context)?.state.awaitingSend ?? false))
+                    const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false): () {
+                      readDictationCubit(context)?.cancelPendingSend();
                     },
                   const SingleActivator(LogicalKeyboardKey.enter, meta: true, includeRepeats: false): () {
                     onSendAttempt(intent: MessageDeliveryIntent.queue);
@@ -301,17 +309,24 @@ class ComposerContainer extends StatelessWidget {
       },
     );
 
-    final dictationMicButton = capabilities.supportsDictation &&
+    // Dictation is optional surface-wise: when the app shell has not provided a
+    // cubit (some composer tests, embedded composers), the mic simply does not
+    // render. When it is provided, visibility follows the agent, never the
+    // capability — the capability only styles the inactive state.
+    DictationCubit? dictationCubit;
+    try {
+      dictationCubit = context.read<DictationCubit>();
+    } on Object {
+      dictationCubit = null;
+    }
+    final dictationMicButton = dictationCubit != null &&
             agentSlice.activeAgent != null
-        ? Padding(
-            padding: const EdgeInsetsDirectional.only(end: 6),
-            child: DictationMicButton(
-              chatController: chatController,
-              device: agentSlice.activeAgent,
-              scopeKey: sessionId,
-              focusNode: chatFocusNode,
-              dimTextColor: dimTextColor,
-            ),
+        ? DictationMicButton(
+            chatController: chatController,
+            device: agentSlice.activeAgent,
+            scopeKey: sessionId,
+            focusNode: chatFocusNode,
+            dimTextColor: dimTextColor,
           )
         : null;
 
@@ -378,6 +393,7 @@ class ComposerContainer extends StatelessWidget {
                   ),
                   const SizedBox(width: 4),
                   if (dictationMicButton != null) dictationMicButton,
+                  if (dictationMicButton != null) const SizedBox(width: 4),
                   sendStopButton,
                 ],
               ),

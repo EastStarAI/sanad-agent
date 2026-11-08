@@ -20,6 +20,10 @@ import 'package:sanad_client/features/conversations/presentation/controllers/sla
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_composer.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_input/conversation_input_slices.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_transport.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_transport_resolver.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
@@ -100,6 +104,7 @@ void main() {
     Future<List<XFile>> Function()? pickAttachmentFiles,
     SessionCubit? sessionCubit,
     ConversationInputCubit? inputCubit,
+    DictationCubit? dictationCubit,
   }) {
     return tester.pumpWidget(
       MultiBlocProvider(
@@ -108,6 +113,8 @@ void main() {
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
           if (sessionCubit != null) BlocProvider<SessionCubit>.value(value: sessionCubit),
           if (inputCubit != null) BlocProvider<ConversationInputCubit>.value(value: inputCubit),
+          if (dictationCubit != null)
+            BlocProvider<DictationCubit>.value(value: dictationCubit),
         ],
         child: MaterialApp(
           localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -152,6 +159,28 @@ void main() {
     await tester.pumpAndSettle();
     expect(find.byKey(const Key('composer_permission_mode_default')), findsOneWidget);
     expect(find.byKey(const Key('composer_permission_mode_full_access')), findsOneWidget);
+  });
+
+  testWidgets('mic visibility follows the agent, never the dictation capability', (tester) async {
+    final dictation = DictationCubit(
+      resolver: _UnavailableResolver(),
+      capture: _NoopCapture(),
+      sessionIdFactory: () => 'session-1',
+    );
+    addTearDown(dictation.close);
+
+    await pumpComposer(
+      tester,
+      // The daemon says dictation is disabled for this agent; the button must
+      // still be rendered (inactive) so its explanation stays reachable.
+      capabilities: const Capability(supportsDictation: false),
+      inputSlice: idleSlice(),
+      agentSlice: onlineAgentSlice,
+      dictationCubit: dictation,
+    );
+    await tester.pump();
+
+    expect(find.byKey(const Key('dictation_mic_btn')), findsOneWidget);
   });
 
   testWidgets('clicking blank composer surface focuses the text input', (
@@ -934,4 +963,30 @@ class _StubConversationInputCubit extends Cubit<ConversationInputState> implemen
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Gives the composer a real cubit without connecting: nothing happens until the
+/// mic is actually pressed.
+class _UnavailableResolver implements DictationResolver {
+  @override
+  Future<DictationTransport> resolve({
+    required DeviceConfig device,
+    required String sessionId,
+  }) => Future<DictationTransport>.error(
+    const DictationTransportUnavailable('not-configured'),
+  );
+}
+
+class _NoopCapture implements DictationCapture {
+  @override
+  Future<bool> hasPermission() async => false;
+
+  @override
+  Future<Stream<List<int>>> start() async => const Stream<List<int>>.empty();
+
+  @override
+  Future<void> stop() async {}
+
+  @override
+  Future<void> dispose() async {}
 }

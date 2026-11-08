@@ -85,6 +85,11 @@ When interface or runtime ownership changes affect the local daemon contract, pr
 5. Full fast-suite and E2E results are provided only when the change scope requires them under the testing requirements above.
 6. A new or grown non-generated `lib/` file stays inside the size ratchet: over 1000 lines it fails `test/guards/file_size_ratchet_guard_test.dart`, and an allowlisted file never exceeds its recorded count; split the file instead of raising the number.
 
+## User-visible feedback
+- Transient feedback goes through `ToastUtils` (`showInfo` / `showSuccess` / `showError`), which owns placement, duration, RTL and the close button.
+- A `SnackBar` is acceptable only where a toast would be hidden (for example behind a full-screen modal barrier), and the call site must state that reason.
+- Tests assert the message through `ToastUtils.debugOnShowError` / `debugOnShowInfo`, never by finding `SnackBar` widgets.
+
 ## Boundary Ownership
 - Keep infrastructure-specific transport laws in the infrastructure domain.
 - Keep feature-specific runtime laws in the nearest owning feature contract; do not duplicate them in this client-wide contract.

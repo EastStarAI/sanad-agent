@@ -117,6 +117,7 @@ class DictationState extends Equatable {
     this.sessionNeedsFirstUseSheet = false,
     this.discardText = false,
     this.level = 0,
+    this.awaitingSend = false,
   });
 
   final DictationStatus status;
@@ -142,6 +143,11 @@ class DictationState extends Equatable {
   /// display-only: audio itself never leaves the capture callback.
   final double level;
 
+  /// True between the moment the user asked to send mid-dictation and the
+  /// moment the final transcript landed in the composer (or the wait ended).
+  /// The send button renders as a stop-capable progress while it holds.
+  final bool awaitingSend;
+
   bool get isActive =>
       status == DictationStatus.preparing ||
       status == DictationStatus.listening ||
@@ -150,7 +156,20 @@ class DictationState extends Equatable {
   bool get isRecording => status == DictationStatus.listening;
 
   /// What the composer should show for this session right now.
-  String get visibleText => '$committedText$partialText';
+  /// What the composer shows while dictating.
+  ///
+  /// A streaming model commits one segment per silence, and the next segment's
+  /// partial arrives immediately. Concatenating the two glued the new sentence
+  /// onto the old one until the segment was committed and a space appeared — the
+  /// text visibly "jumped". The separator is therefore added here, from the
+  /// first frame the partial is visible.
+  String get visibleText {
+    if (partialText.isEmpty) return committedText;
+    if (committedText.isEmpty) return partialText;
+    final needsSpace =
+        !committedText.endsWith(' ') && !partialText.startsWith(' ');
+    return needsSpace ? '$committedText $partialText' : '$committedText$partialText';
+  }
 
   DictationState copyWith({
     DictationStatus? status,
@@ -163,6 +182,7 @@ class DictationState extends Equatable {
     bool? sessionNeedsFirstUseSheet,
     bool? discardText,
     double? level,
+    bool? awaitingSend,
   }) {
     return DictationState(
       status: status ?? this.status,
@@ -175,6 +195,7 @@ class DictationState extends Equatable {
           sessionNeedsFirstUseSheet ?? this.sessionNeedsFirstUseSheet,
       discardText: discardText ?? this.discardText,
       level: level ?? this.level,
+      awaitingSend: awaitingSend ?? this.awaitingSend,
     );
   }
 
@@ -191,5 +212,6 @@ class DictationState extends Equatable {
         // The meter only repaints when the state differs, so loudness has to be
         // part of equality or every level update is suppressed.
         level,
+        awaitingSend,
       ];
 }

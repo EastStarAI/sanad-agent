@@ -56,9 +56,9 @@ void main() {
 
     test('speech grows the bars around the centre line', () async {
       final pixels = await _paint(List<double>.filled(64, 0.7));
-      // The meter sits behind text, so it stays translucent (≤28% opacity).
-      expect(_maxAlpha(pixels), greaterThan(55));
-      expect(_maxAlpha(pixels), lessThan(110));
+      // The meter sits behind text, so it stays translucent (≤15% opacity).
+      expect(_maxAlpha(pixels), greaterThan(15));
+      expect(_maxAlpha(pixels), lessThan(60));
       expect(_alphaAt(pixels, 200, 100, 30), greaterThan(0));
       expect(_alphaAt(pixels, 200, 100, 50), greaterThan(0));
     });
