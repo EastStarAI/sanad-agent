@@ -49,6 +49,7 @@ part 'src/runtime/ownership/runtime_state.dart';
 part 'src/runtime/lifecycle/runtime_wait_helpers.dart';
 part 'src/runtime/lifecycle/runtime_background.dart';
 part 'src/runtime/lifecycle/runtime_run.dart';
+part 'src/runtime/lifecycle/native_runtime_probe.dart';
 part 'src/runtime/lifecycle/runtime_status.dart';
 part 'src/runtime/lifecycle/runtime_inventory.dart';
 part 'src/runtime/lifecycle/runtime_inventory_collect.dart';

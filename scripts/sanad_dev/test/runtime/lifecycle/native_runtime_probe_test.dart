@@ -92,6 +92,19 @@ void main() {
       expect(started.single, contains('ensure_native_stt.dart'));
     });
 
+    test('a failing installer never throws at the caller', () async {
+      // Dictation is the only thing a missing runtime takes away: the launcher
+      // still starts the daemon and the Client, and readiness reports the reason.
+      final launched = await sanad_dev.prepareNativeDictation(
+        temporaryDirectory.path,
+        starter: (command, workingDirectory) async {
+          throw const ProcessException('fvm', ['dart']);
+        },
+      );
+
+      expect(launched, isFalse);
+    });
+
     test('the unqualified macOS directory is only a bounded legacy alias',
         () async {
       // A foreign architecture's unqualified slice must never be treated as this
