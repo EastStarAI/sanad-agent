@@ -15,6 +15,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+# Make the source path absolute before pushing into it: a relative path is
+# resolved twice once the working directory changes, which silently points the
+# include directories at whisper.cpp\whisper.cpp and breaks the shim build.
+$WhisperSrc = (Resolve-Path -LiteralPath $WhisperSrc).Path
 $here = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $out = Join-Path $here $OutDir
 
