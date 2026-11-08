@@ -171,11 +171,9 @@ class SttRuntimeVerification {
 /// staging and verification must never accept the bounded Apple Silicon legacy
 /// alias as a build output.
 ///
-/// [requireSherpa] additionally demands the sherpa-onnx libraries that the
-/// packaged runtime ships under `sherpa/`. It is on for staging and archiving —
-/// the only paths that produce a payload a released Agent loads — and off for a
-/// developer checkout, where those libraries come from the pub cache and the
-/// build never copies them into `agent/native/`.
+/// The sherpa-onnx libraries are verified when they are present under `sherpa/`
+/// and ignored when they are not: a developer checkout keeps them in the pub
+/// cache, while `stageSttRuntime` refuses to produce a payload without them.
 Future<SttRuntimeVerification> verifySttRuntime({
   required Directory nativeRoot,
   required SttNativeTarget target,
@@ -183,7 +181,6 @@ Future<SttRuntimeVerification> verifySttRuntime({
   bool requireManifestEntry = true,
   bool requirePinnedHashes = false,
   bool comparePinnedHashes = true,
-  bool requireSherpa = false,
   String? directoryPath,
 }) async {
   final directory =
@@ -262,8 +259,9 @@ Future<SttRuntimeVerification> verifySttRuntime({
     final sherpaRoot = '$directory/${target.sherpaNativeSubdirectory}';
     for (final relative in target.sherpaLibraries) {
       final key = '${target.sherpaNativeSubdirectory}/$relative';
-      if (!requireSherpa && !File('$sherpaRoot/$relative').existsSync()) {
-        // A source checkout legitimately has no packaged copy.
+      if (!File('$sherpaRoot/$relative').existsSync()) {
+        // A source checkout legitimately has no packaged copy; staging is the
+        // gate that refuses to ship a payload without one.
         continue;
       }
       verifyLibrary('$sherpaRoot/$relative', key);

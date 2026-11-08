@@ -260,11 +260,6 @@ Future<int> _stageAndArchive({
         nativeRoot: nativeRoot,
         target: target,
         manifest: manifest,
-        // Staging produces the payload a released Agent loads, so the sherpa
-        // libraries must be present here even though a developer checkout keeps
-        // them in the pub cache.
-        requireSherpa:
-            options.stageDirectory != null || options.archiveDirectory != null,
       );
   if (verification == null) _printVerification(checked, version);
   if (!checked.ok) return 1;
