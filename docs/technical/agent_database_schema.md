@@ -941,7 +941,7 @@ Task 139 extends all four snapshots in the same change: every one of them now pi
 
 Task 140 extends all four snapshots as well, by exactly one object each: `user_secret_metadata`, its five columns, and its primary-key index. Nothing else in any snapshot moved, because the module is applied after every pre-existing one and migrates no earlier table.
 
-Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql` files and contain synthetic placeholders only — no user data or secrets.
+Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql.txt` files and contain synthetic placeholders only — no user data or secrets. The legacy payloads carry a trailing `.txt` so no final path component ends in `.sql`: the private Production deploy archives this repository and its host-side artifact check rejects archive members ending in `pem`, `key`, `p12`, `pfx`, `dump`, or `sql`. `agent/test/guards/deploy_artifact_suffix_guard_test.dart` enforces that naming rule over every tracked file, with only `client/release/shared/dsa_pub.pem` allowlisted because both clients embed it.
 
 What the snapshots enforce:
 
