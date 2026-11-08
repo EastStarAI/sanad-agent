@@ -216,6 +216,35 @@ void main() {
       expect(channel.isStarted, isTrue);
     });
 
+    test('two independent readers share the command stream', () async {
+      // The connection and the session both read commands, exactly like the
+      // local WebSocket channel. A single-subscription stream would throw
+      // "already listened to" on the second reader and no hosted session could
+      // start.
+      final connection = <DictationCommand>[];
+      final session = <DictationCommand>[];
+      channel.commands.listen((message) => connection.add(message.command));
+      channel.commands.listen((message) => session.add(message.command));
+
+      channel.onOrderedControl({
+        'dictation_id': 'dict-1',
+        'request_id': 'dict-1',
+        'reason': 'stopped',
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(connection, [DictationCommand.stop]);
+      expect(session, [DictationCommand.stop]);
+    });
+
+    test('closing a channel nobody subscribed to completes', () async {
+      // A single-subscription controller only completes its `done` future once
+      // a subscriber consumed it; awaiting it here used to stall the relay's
+      // teardown forever.
+      await channel.close().timeout(const Duration(seconds: 5));
+      expect(channel.isClosed, isTrue);
+    });
+
     test('begin session is idempotent and arms exactly one timer', () async {
       final timers = <_FakeTimer>[];
       final withTimers = HostedDictationChannel(

@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/dictation_session.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/hosted_dictation_relay.dart';
 import 'package:test/test.dart';
 
@@ -162,6 +163,9 @@ stt:
     test('start opens one session and a second start is busy', () async {
       await relay.handleCommand(command(op: 'start'));
       await until(() => relay.hasSession, reason: 'hosted session');
+      // The recognizer announces readiness once its model is loaded; the session
+      // re-emits that as `dictation_ready`, and only then may the client capture.
+      engine.emit(const SttReadyEvent(loadMs: 100, modelId: 'test-model'));
       // The relay composes the channel and the one service starts the session
       // from the buffered start command; without it nothing loads.
       await until(

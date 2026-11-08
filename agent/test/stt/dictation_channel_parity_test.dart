@@ -55,6 +55,11 @@ stt:
     await until(() => localEngine.started, reason: 'local engine start');
     localEngine.emit(const SttReadyEvent(loadMs: 100, modelId: 'test-model'));
     local.addAudio([1, 2, 3, 4]);
+    // A frame and the control that ends the session are delivered on separate
+    // stream turns, so the capture is awaited before the stop is issued; a real
+    // client always sends `stop` after the last captured frame, never in the
+    // same turn.
+    await Future<void>.delayed(Duration.zero);
     local.sendCommand(DictationCommand.stop);
     await until(() => local.closed, reason: 'local channel closed');
     await localRun;
@@ -83,6 +88,7 @@ stt:
       'seq': 0,
       'data': const [1, 2, 3, 4],
     });
+    await Future<void>.delayed(Duration.zero);
     hosted.onOrderedControl({
       'dictation_id': 'dict-1',
       'request_id': 'dict-1',
@@ -110,9 +116,12 @@ stt:
         .$2;
     expect(hostedReady['load_ms'], localReady['load_ms']);
     expect(hostedReady['model_id'], localReady['model_id']);
-    expect(
+    // The hosted carrier stamps its own wire identity (`version`,
+    // `dictation_id`) onto every payload; the transcript fields are the same
+    // ones the local channel sends, not a second shape.
+    final hostedDone = Map<String, dynamic>.from(
       hostedEvents.firstWhere((entry) => entry.$1 == 'dictation_done').$2,
-      local.eventsOf('dictation_done').single,
-    );
+    )..removeWhere((key, _) => key == 'version' || key == 'dictation_id');
+    expect(hostedDone, local.eventsOf('dictation_done').single);
   });
 }

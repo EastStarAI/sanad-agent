@@ -10,6 +10,7 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/update/agent_update_service.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/device_control_command_handler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
@@ -190,6 +191,7 @@ void main() {
   late DeliveryPresenceController deliveryPresence;
   late MemoryAgentSecretStore secrets;
   late DictationService dictation;
+  late FakeSttEngine engine;
 
   setUp(() async {
     getIt.allowReassignment = true;
@@ -210,10 +212,15 @@ stt:
     runtimeBridge = TrackingPlatformRuntimeBridge();
     authManager = FakeAuthManager();
 
+    engine = FakeSttEngine(
+      // A warm recognizer replays its readiness when a session attaches, so the
+      // `dictation_ready` assertion never depends on emission timing.
+      readyEvent: const SttReadyEvent(loadMs: 100, modelId: 'test-model'),
+    );
     dictation = DictationService(
       sanadHome: tempDir.path,
       platformSupported: true,
-      engineFor: (_) => FakeSttEngine(),
+      engineFor: (_) => engine,
     );
 
     getIt.registerSingleton<AuthManager>(authManager);
@@ -350,7 +357,8 @@ stt:
     test('a dictation start opens one hosted session', () async {
       await socket.trigger('execute_command', envelope(op: 'start'));
       // The channel's buffered start command is the only path that loads the
-      // engine, which is what makes the session ready.
+      // engine, and the loaded recognizer announces readiness, which the session
+      // re-emits as `dictation_ready`.
       await waitForEvent('dictation_ready');
       expect(dictation.isBusy, isTrue);
 

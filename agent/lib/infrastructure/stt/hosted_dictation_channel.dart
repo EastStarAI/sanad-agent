@@ -98,11 +98,18 @@ class HostedDictationChannel implements DictationChannel {
   final StreamController<Uint8List> _audio =
       StreamController<Uint8List>.broadcast();
 
-  /// Single-subscription on purpose: the session subscribes exactly once, and a
-  /// start issued while the service is still attaching is buffered instead of
-  /// dropped. A broadcast controller would silently lose it.
+  /// Single-subscription at the source on purpose: the relay composes the
+  /// channel and only then hands it to the one service, so a start issued while
+  /// nobody is attached is buffered instead of dropped. It is exposed as a
+  /// broadcast view because the connection and the session are two independent
+  /// readers of the same command stream, exactly like the local WebSocket
+  /// channel; a raw single-subscription stream throws "already listened to" on
+  /// the session's subscription and no hosted session could ever start.
   final StreamController<DictationMessage> _commands =
       StreamController<DictationMessage>();
+
+  late final Stream<DictationMessage> _commandsView = _commands.stream
+      .asBroadcastStream();
 
   late DateTime _lastActivity;
   Timer? _deadlineTimer;
@@ -117,7 +124,7 @@ class HostedDictationChannel implements DictationChannel {
   Stream<Uint8List> get audio => _audio.stream;
 
   @override
-  Stream<DictationMessage> get commands => _commands.stream;
+  Stream<DictationMessage> get commands => _commandsView;
 
   @override
   int get droppedFrames => _droppedFrames;
@@ -245,7 +252,20 @@ class HostedDictationChannel implements DictationChannel {
     _deadlineTimer?.cancel();
     _deadlineTimer = null;
     if (!_audio.isClosed) await _audio.close();
-    if (!_commands.isClosed) await _commands.close();
+    if (!_commands.isClosed) {
+      // A single-subscription source only completes its `done` future once a
+      // subscriber has consumed it. A channel nobody ever subscribed to (the
+      // relay closed it before the service attached, or after the connection
+      // cancelled its own subscription) would await forever and stall the
+      // caller's teardown, so the close is issued and only awaited when a
+      // listener can actually observe it.
+      final closing = _commands.close();
+      if (_commands.hasListener) {
+        await closing;
+      } else {
+        unawaited(closing);
+      }
+    }
     _onClosed?.call();
   }
 
