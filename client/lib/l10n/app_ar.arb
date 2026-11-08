@@ -523,6 +523,39 @@
   "dictationLimitReached": "توقف الإملاء عند الحد الأقصى ٥ دقائق.",
   "dictationMicrophoneDenied": "الإملاء يحتاج صلاحية استخدام الميكروفون.",
   "dictationBusy": "هناك جلسة إملاء أخرى قيد التشغيل.",
+  "dictationRelayUnavailable": "هذا الجهاز لا يمكنه تمرير الإملاء عبر الاتصال الحالي. حدّث الوكيل أو اعمل على الجهاز نفسه.",
+  "dictationDisabled": "الإملاء مغلق على هذا الجهاز.",
+  "dictationUpdateRequired": "حدّث الوكيل لاستخدام الإملاء على هذا الجهاز.",
+  "dictationUnavailable": "الإملاء غير متاح على هذا الجهاز.",
+  "dictationFailedGeneric": "لم يبدأ الإملاء. حاول مرة أخرى.",
+  "dictationPathOverrideModel": "ملف نموذج محدد من إعدادات الوكيل",
+  "dictationModelSizeMb": "{size} م.ب",
+  "@dictationModelSizeMb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationModelSizeGb": "{size} ج.ب",
+  "@dictationModelSizeGb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "voiceUpdateRequired": "حدّث الوكيل أو التطبيق لاستخدام الصوت على هذا الجهاز.",
+  "voiceUnavailable": "الصوت غير متاح لهذا الجهاز الآن.",
+  "deviceSettingsDictationTitle": "الإملاء",
+  "deviceSettingsDictationEnabled": "الإملاء المحلي",
+  "deviceSettingsDictationEnabledHint": "يحول الوكيل الكلام إلى نص على هذا الجهاز. لا يخرج الصوت من الجهاز.",
+  "deviceSettingsDictationManagedExternally": "مُدار من ملف config.yaml الخاص بالوكيل.",
+  "deviceSettingsDictationModel": "النموذج",
+  "deviceSettingsDictationNoModel": "لا يوجد نموذج مثبت بعد. اضغط الميكروفون في مربع الكتابة لاختيار واحد.",
+  "deviceSettingsDictationReady": "جاهز",
+  "deviceSettingsDictationNotReady": "غير جاهز",
+  "deviceSettingsDictationBusy": "قيد الاستخدام",
   "workspaceSecurityTitle": "التنفيذ والاكتشاف",
   "workspaceSecuritySubtitle": "يحفظها الوكيل على هذا الجهاز. لا تستطيع الملفات داخل مساحة العمل تغيير هذه الإعدادات.",
   "workspaceExecutionModeLabel": "التنفيذ",

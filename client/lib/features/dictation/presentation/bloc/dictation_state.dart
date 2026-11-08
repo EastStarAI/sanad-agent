@@ -14,6 +14,7 @@ class DictationModelOption extends Equatable {
   const DictationModelOption({
     required this.id,
     required this.label,
+    this.labelCode,
     this.note,
     this.totalBytes,
     this.hosted = false,
@@ -23,6 +24,11 @@ class DictationModelOption extends Equatable {
 
   final String id;
   final String label;
+
+  /// Translatable identity for a daemon-owned row (for example the
+  /// `stt.model_path` override). The daemon never ships user-facing copy, so the
+  /// sheet localizes this code and falls back to [label] for catalog names.
+  final String? labelCode;
   final String? note;
   final int? totalBytes;
   final bool hosted;
@@ -35,7 +41,7 @@ class DictationModelOption extends Equatable {
   bool get isStreaming => mode == DictationModelMode.streaming;
 
   @override
-  List<Object?> get props => [id, label, note, totalBytes, hosted, installed, mode];
+  List<Object?> get props => [id, label, labelCode, note, totalBytes, hosted, installed, mode];
 }
 
 /// Daemon-reported speech model state (`stt_status` + `stt_download_progress`).
@@ -46,6 +52,9 @@ class DictationModelStatus extends Equatable {
     this.downloadProgress,
     this.installedBytes,
     this.unavailableReason,
+    this.readinessReason,
+    this.isPlatformSupported = true,
+    this.busy = false,
     this.models = const [],
     this.installingModelId,
   });
@@ -57,8 +66,27 @@ class DictationModelStatus extends Equatable {
   final double? downloadProgress;
   final int? installedBytes;
 
-  /// Daemon-side reason the engine cannot run (platform, native library, ...).
+  /// Daemon-side reason the engine cannot run at all (platform, disabled).
   final String? unavailableReason;
+
+  /// Daemon readiness reason reported independently of platform support.
+  ///
+  /// A device can be `supported: true` and still `ready: false` while the native
+  /// runtime is missing or being prepared; discarding the reason in that case is
+  /// what made the runtime states unreachable in the sheet.
+  final String? readinessReason;
+
+  /// Whether the Agent reported `supported` for dictation on this device.
+  final bool isPlatformSupported;
+
+  /// Another session holds the daemon's single dictation lease.
+  final bool busy;
+
+  /// True for any reason the user cannot clear by pressing the mic again.
+  bool get hasPermanentBlocker => !isPlatformSupported;
+
+  /// The reason the session cannot start right now, platform support included.
+  String? get blockedReason => unavailableReason ?? readinessReason;
 
   /// Full catalog as reported by the daemon (for the model sheet).
   final List<DictationModelOption> models;
@@ -76,6 +104,10 @@ class DictationModelStatus extends Equatable {
     bool clearDownloadProgress = false,
     int? installedBytes,
     String? unavailableReason,
+    String? readinessReason,
+    bool clearReadinessReason = false,
+    bool? isPlatformSupported,
+    bool? busy,
     List<DictationModelOption>? models,
     String? installingModelId,
     bool clearInstallingModel = false,
@@ -87,6 +119,11 @@ class DictationModelStatus extends Equatable {
           clearDownloadProgress ? null : (downloadProgress ?? this.downloadProgress),
       installedBytes: installedBytes ?? this.installedBytes,
       unavailableReason: unavailableReason ?? this.unavailableReason,
+      readinessReason: clearReadinessReason
+          ? null
+          : (readinessReason ?? this.readinessReason),
+      isPlatformSupported: isPlatformSupported ?? this.isPlatformSupported,
+      busy: busy ?? this.busy,
       models: models ?? this.models,
       installingModelId: clearInstallingModel
           ? null
@@ -101,6 +138,9 @@ class DictationModelStatus extends Equatable {
         downloadProgress,
         installedBytes,
         unavailableReason,
+        readinessReason,
+        isPlatformSupported,
+        busy,
         models,
         installingModelId,
       ];

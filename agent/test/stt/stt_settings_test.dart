@@ -1,3 +1,4 @@
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/stt_catalog.dart';
@@ -19,6 +20,50 @@ void main() {
   void writeConfig(String contents) {
     File('${home.path}/config.yaml').writeAsStringSync(contents);
   }
+
+  group('gpu default', () {
+    // Intel macOS is the one carve-out: the x64 whisper.cpp baseline has no
+    // usable Metal path, so the default must not turn it on. Linux/Windows and
+    // Apple Silicon keep their previous behaviour.
+    test('the Intel macOS default is CPU', () {
+      expect(defaultSttUseGpuFor(Abi.macosX64), isFalse);
+    });
+
+    test('every other mapped target keeps the GPU default', () {
+      for (final abi in [
+        Abi.macosArm64,
+        Abi.linuxX64,
+        Abi.linuxArm64,
+        Abi.windowsX64,
+        Abi.windowsArm64,
+      ]) {
+        expect(
+          defaultSttUseGpuFor(abi),
+          isTrue,
+          reason: '$abi must keep the pre-existing default',
+        );
+      }
+    });
+
+    test('an absent use_gpu follows the default for this host', () {
+      final settings = SttSettings.load(sanadHome: home.path);
+      expect(settings.useGpu, defaultSttUseGpu());
+    });
+
+    test('an explicit use_gpu wins in both directions', () {
+      writeConfig('''
+stt:
+  use_gpu: true
+''');
+      expect(SttSettings.load(sanadHome: home.path).useGpu, isTrue);
+
+      writeConfig('''
+stt:
+  use_gpu: false
+''');
+      expect(SttSettings.load(sanadHome: home.path).useGpu, isFalse);
+    });
+  });
 
   group('stt settings', () {
     test('the default thread count follows the machine width', () {

@@ -363,6 +363,13 @@ Future<void> handleRun({
         ..['SANAD_DEV_RUNTIME_NONCE'] = runtimeNonce
         ..['SANAD_DEV_WORKSPACE_HASH'] = runtime.worktreeId.split('-').last
         ..addAll(cloudEndpoints?.toAgentEnvironment() ?? const {});
+  // Flutter's documented handoff keeps the authenticated DDS URI. The file is
+  // prepared owner-only and removed before launch so discovery never accepts a
+  // stale recording; a failure here only keeps the existing fallback.
+  final vmServiceOutFile = await prepareVmServiceOutFile(
+    sanadHome: runtime.sanadHome,
+    vmServicePort: runtime.vmServicePort,
+  );
   final flutterArguments = <String>[
     'flutter',
     'run',
@@ -384,6 +391,8 @@ Future<void> handleRun({
       '--dart-define=SANAD_DEV_WORKTREE_BRANCH=${runtime.branch}',
     '--host-vmservice-port=${runtime.vmServicePort}',
     '--disable-service-auth-codes',
+    if (vmServiceOutFile != null)
+      '--vmservice-out-file=$vmServiceOutFile',
     if (driverMode) '--print-dtd',
     if (driverMode) ...['-t', 'lib/driver_main.dart'],
   ];
@@ -452,7 +461,7 @@ Future<void> handleRun({
   // a fresh clone has none. Prepare it **in the background** so the daemon and
   // client start immediately; dictation becomes available as soon as the build
   // finishes (the library is only opened when a session starts), no restart.
-  if (startsAgent) unawaited(_prepareNativeDictation(agentDirectory));
+  if (startsAgent) unawaited(prepareNativeDictation(agentDirectory));
 
   try {
     final agentStart = startsAgent
@@ -687,20 +696,30 @@ Future<void> handleRun({
 
 /// Prepares the native dictation runtime before the daemon starts.
 ///
-/// `agent/native/<platform>/` is not tracked: the whisper shim and its ggml
-/// libraries are per-platform build products. A fresh clone therefore has none,
-/// and `tool/ensure_native_stt.dart` verifies, downloads or builds them. This
-/// runs the script once per machine; a failure only leaves dictation
+/// `agent/native/<platform>-<architecture>/` is not tracked: the whisper shim and
+/// its ggml libraries are per-platform build products. A fresh clone therefore
+/// has none, and `tool/ensure_native_stt.dart` verifies, downloads or builds
+/// them. This runs the script once per machine; a failure only leaves dictation
 /// unavailable (the daemon reports `native_runtime_missing`), never blocks run.
-Future<void> _prepareNativeDictation(String agentDirectory) async {
-  final platformDir = Platform.isMacOS
-      ? 'macos'
-      : (Platform.isWindows ? 'windows' : 'linux');
+///
+/// The probe is architecture-qualified: after the runtime moved to
+/// `native/<platform>-<architecture>/` an unqualified probe never saw it and
+/// started a background installer on every run. The Apple Silicon directory is
+/// the one bounded legacy alias the loader still accepts.
+Future<bool> prepareNativeDictation(
+  String agentDirectory, {
+  Future<void> Function(String command, String workingDirectory)? starter,
+}) async {
+  final tag = nativeRuntimeTag();
+  if (tag == null) return false;
   final shimName = Platform.isMacOS
       ? 'libsanad_whisper.dylib'
       : (Platform.isWindows ? 'sanad_whisper.dll' : 'libsanad_whisper.so');
-  final shim = File('$agentDirectory/native/$platformDir/$shimName');
-  if (shim.existsSync()) return;
+  final candidates = <String>[
+    '$agentDirectory/native/$tag/$shimName',
+    if (tag == 'macos-arm64') '$agentDirectory/native/macos/$shimName',
+  ];
+  if (candidates.any((path) => File(path).existsSync())) return false;
 
   stdout.writeln(
     'Preparing the native dictation runtime in the background '
@@ -714,16 +733,44 @@ Future<void> _prepareNativeDictation(String agentDirectory) async {
       ? 'fvm dart run tool\\ensure_native_stt.dart > $logFile 2>&1'
       : 'fvm dart run tool/ensure_native_stt.dart > $logFile 2>&1';
   try {
-    await Process.start(
-      Platform.isWindows ? 'cmd' : '/bin/sh',
-      Platform.isWindows ? ['/c', command] : ['-c', command],
-      workingDirectory: agentDirectory,
-      mode: ProcessStartMode.detached,
-    );
+    if (starter != null) {
+      await starter(command, agentDirectory);
+    } else {
+      await Process.start(
+        Platform.isWindows ? 'cmd' : '/bin/sh',
+        Platform.isWindows ? ['/c', command] : ['-c', command],
+        workingDirectory: agentDirectory,
+        mode: ProcessStartMode.detached,
+      );
+    }
+    return true;
   } on Object catch (error) {
     stderr.writeln(
       'Could not start the native dictation build ($error). '
       'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
     );
+    return false;
   }
+}
+
+/// Directory name the loader searches: `native/<platform>-<architecture>`.
+///
+/// The per-platform library table lives in the Agent; this only mirrors the
+/// layout the two sides agree on, so the launcher never guesses a slice. A host
+/// pair outside the table returns null and the probe stays out of the way.
+String? nativeRuntimeTag({String? operatingSystem, String? architecture}) {
+  final os = operatingSystem ?? Platform.operatingSystem;
+  final abi = architecture ?? _hostArchitecture();
+  if (abi == null) return null;
+  const supported = {'macos', 'linux', 'windows'};
+  if (!supported.contains(os)) return null;
+  return '$os-$abi';
+}
+
+/// `arm64` or `x64` from the Dart ABI, matching the Agent's own mapping source.
+String? _hostArchitecture() {
+  final value = Abi.current().toString().toLowerCase();
+  if (value.contains('arm64')) return 'arm64';
+  if (value.contains('x64')) return 'x64';
+  return null;
 }

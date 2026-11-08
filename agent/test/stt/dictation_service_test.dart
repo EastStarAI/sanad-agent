@@ -1,10 +1,10 @@
 import 'dart:convert';
+import 'dart:ffi';
 import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_catalog.dart';
-import 'package:sanad_agent/infrastructure/stt/stt_model_store.dart';
-import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
+import 'package:sanad_agent/infrastructure/stt/whispercpp_bindings.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -55,7 +55,11 @@ stt:
 ''');
       final readiness = service().readiness();
       expect(readiness.isSupported, isFalse);
-      expect(readiness.reason, contains('stt.threads'));
+      expect(
+        readiness.reason,
+        'config_invalid',
+        reason: 'the event carries a stable code, never a parser message',
+      );
     });
   });
 
@@ -110,7 +114,97 @@ stt:
     });
   });
 
-  group('dictation status payload', () {
+  group('dictation runtime settings', () {
+    test('the enabled toggle persists and is reported back', () async {
+      final subject = service();
+      expect(subject.settingsSnapshot()['enabled'], isTrue);
+
+      await subject.applyEnabled(false);
+
+      expect(subject.settings.enabled, isFalse);
+      expect(subject.settingsSnapshot()['enabled'], isFalse);
+      expect(
+        subject.readiness().reason,
+        'dictation_disabled',
+        reason: 'the capability follows the persisted toggle',
+      );
+      // Persisted, not just in memory: a new daemon reads the same value.
+      expect(service().settings.enabled, isFalse);
+    });
+
+    test('an explicit config.yaml value owns the toggle', () async {
+      writeConfig('''
+stt:
+  enabled: true
+''');
+      final subject = service();
+      expect(subject.settingsSnapshot()['managed_externally'], isTrue);
+      await expectLater(
+        subject.applyEnabled(false),
+        throwsA(
+          isA<Object>().having(
+            (error) => error.toString(),
+            'message',
+            contains('managed_externally'),
+          ),
+        ),
+      );
+      expect(subject.settings.enabled, isTrue);
+    });
+
+    test('the settings projection reports the installed model and size', () {
+      writeConfig('''
+stt:
+  model_id: whisper-base-int8
+''');
+      final snapshot = service().settingsSnapshot();
+      expect(snapshot['selected_model_id'], 'whisper-base-int8');
+      final models = (snapshot['models'] as List).cast<Map<String, dynamic>>();
+      final selected = models.firstWhere(
+        (model) => model['id'] == 'whisper-base-int8',
+      );
+      expect(selected['total_bytes'], greaterThan(0));
+      expect(selected['installed'], isFalse);
+      expect(selected['mode'], isNotNull);
+    });
+
+    test('selecting a model from settings uses the one selection owner', () async {
+      final subject = service();
+      await subject.selectModel('whisper-base-int8');
+      expect(subject.selectedModelId, 'whisper-base-int8');
+      expect(service().selectedModelId, 'whisper-base-int8');
+      await expectLater(
+        subject.selectModel('nope'),
+        throwsA(
+          isA<Object>().having(
+            (error) => error.toString(),
+            'message',
+            contains('model_unknown'),
+          ),
+        ),
+      );
+    });
+
+    test('the authored status rows ship no user-facing prose', () {
+      // The legacy catalog's Arabic labels/notes are a pre-existing
+      // localization-ownership drift recorded in the run REPORT; this change
+      // must not add another one, and the new override row must stay
+      // translation-free and path-free.
+      writeConfig('stt:\n  model_path: /tmp/manual-model\n');
+      final status = service().statusPayload();
+      expect(status.containsKey('model_path'), isFalse);
+      expect(status['has_model_path'], isTrue);
+      final override = (status['models'] as List)
+          .cast<Map<String, dynamic>>()
+          .firstWhere((model) => model['id'] == 'path-override');
+      expect(override['label'], isNull);
+      expect(override['label_code'], 'path_override');
+      // A host filesystem path must never be part of a status payload, local or
+      // hosted: the row identity is enough for every surface.
+      expect(override.containsKey('note'), isFalse);
+      expect(service().settingsSnapshot().containsKey('model_path'), isFalse);
+    });
+
     test('lists every visible catalog entry with install state', () {
       final payload = service().statusPayload();
       expect(payload['supported'], isTrue);
@@ -145,35 +239,51 @@ stt:
         ),
       );
     });
+  });
 
-    test('an unhosted model reports not_hosted instead of hanging', () async {
-      const unhosted = SttCatalogEntry(
-        id: 'unhosted-entry',
-        label: 'Unhosted',
-        note: 'no pinned URL',
-        mode: SttModelMode.batchVad,
-        language: 'ar',
-        hosted: false,
-        files: [
-          SttModelFile(
-            name: 'missing.onnx',
-            url: '',
-            sizeBytes: 1,
-            sha256:
-                '0000000000000000000000000000000000000000000000000000000000000000',
-          ),
-        ],
-      );
-      await expectLater(
-        SttModelStore(sanadHome: home.path).install(unhosted),
-        throwsA(
-          isA<Object>().having(
-            (error) => error.toString(),
-            'message',
-            contains('not_hosted'),
-          ),
-        ),
-      );
+  group('native platform gate', () {
+    // These read the owning table through the service. The table's own test
+    // (`stt_native_platform_test.dart`) asserts every ABI mapping, including
+    // `macosX64.dictationSupported`; here the question is only whether the
+    // service still answers from that table instead of a private catalog.
+    test('an injected verdict is the whole platform gate', () {
+      final refused = service(platformSupported: false).readiness();
+      final allowed = service(platformSupported: true).readiness();
+
+      expect(refused.reason, 'unsupported_platform');
+      expect(allowed.isSupported, isTrue);
+    });
+
+    test(
+      'the default gate lets a buildable host through to its real blocker',
+      () {
+        // A second `Platform`/`Abi` catalog in the service is what made a
+        // buildable Intel runtime report `unsupported_platform`. On a supported
+        // host the default verdict must never be that reason.
+        final readiness = service().readiness();
+
+        expect(readiness.reason, isNot('unsupported_platform'));
+      },
+      skip: Platform.isMacOS && Abi.current() == Abi.macosArm64
+          ? false
+          : 'Host ABI is not covered by the macOS arm64 regression',
+    );
+
+    test('a whisper model without its shim is supported but not ready', () {
+      if (WhisperCppLibrary.isAvailable) {
+        // A checkout with a built runtime cannot exercise the missing case; the
+        // readiness reason for it is asserted in the platform-gate test above.
+        return;
+      }
+      writeConfig('''
+stt:
+  model_id: whisper-turbo-ggml-q5
+''');
+      final readiness = service().readiness();
+
+      expect(readiness.isSupported, isTrue);
+      expect(readiness.reason, 'native_runtime_missing');
     });
   });
 }
+

@@ -1,9 +1,8 @@
-/// Dictation service: readiness, model catalog control, and socket sessions.
+/// Dictation service: readiness, model catalog control, and channel sessions.
 library;
 
 import 'dart:async';
 import 'dart:convert';
-import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -13,9 +12,147 @@ import 'dictation_session.dart';
 import 'stt_engine.dart';
 import 'stt_catalog.dart';
 import 'stt_model_store.dart';
+import 'stt_native_platform.dart';
 import 'stt_settings.dart';
 import 'stt_types.dart';
 import 'whispercpp_bindings.dart';
+
+/// One event a control command asks the caller's channel to deliver.
+///
+/// The service never knows which transport carries it: the local channel writes
+/// a text frame, the hosted adapter attaches an origin delivery envelope.
+class DictationControlEvent {
+  const DictationControlEvent(this.event, this.payload);
+
+  final String event;
+  final Map<String, dynamic> payload;
+}
+
+typedef DictationEmit = void Function(String event, Map<String, dynamic> payload);
+
+/// Catalog, install, selection, and preparation commands — shared by both
+/// channels so local and hosted behavior cannot diverge.
+///
+/// These commands are stateless: they create no per-`dictation_id` context, and
+/// at most one install runs per device. Session commands (`start`, `stop`,
+/// `cancel`) stay with [DictationSession] and one dictation lease.
+class DictationControl {
+  DictationControl(this._service);
+
+  final DictationService _service;
+  final Logger _logger = Logger('DictationControl');
+
+  bool _installing = false;
+  bool _installCancelled = false;
+  Object? _installOwner;
+  String? _installingModelId;
+
+  bool get isInstalling => _installing;
+  String? get installingModelId => _installingModelId;
+
+  /// Abandons [owner]'s in-flight install; another channel's install is never
+  /// cancelled by a peer's disconnect, deadline, or abort.
+  void cancelInstall(Object owner) {
+    if (!_installing) return;
+    if (!identical(_installOwner, owner)) return;
+    _installCancelled = true;
+  }
+
+  bool isInstallingFor(Object owner) =>
+      _installing && identical(_installOwner, owner);
+
+  /// Runs one stateless command, reporting every outcome through [emit].
+  Future<void> handle(
+    DictationMessage message, {
+    required Object owner,
+    required DictationEmit emit,
+  }) async {
+    try {
+      switch (message.command) {
+        case DictationCommand.status:
+          emit('stt_status', _service.statusPayload());
+        case DictationCommand.install:
+          await _install(
+            message.modelId ?? _service.selectedModelId,
+            owner: owner,
+            emit: emit,
+          );
+        case DictationCommand.select:
+          final modelId = message.modelId;
+          if (modelId == null) {
+            emit('dictation_error', {
+              'code': 'model_unknown',
+              'message': 'stt_select needs model_id',
+            });
+            return;
+          }
+          await _service.selectModel(modelId);
+          emit('stt_status', _service.statusPayload());
+        case DictationCommand.prepareRuntime:
+          final started = _service.prepareNativeRuntime();
+          emit('stt_status', _service.statusPayload());
+          if (!started) {
+            emit('dictation_error', {
+              'code': 'prepare_unavailable',
+              'reason': 'prepare_unavailable',
+              'message':
+                  'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
+            });
+          }
+        default:
+          // start/stop/cancel belong to the session that owns the lease.
+          return;
+      }
+    } on SttException catch (error) {
+      _logger.warning('dictation command failed: code=${error.code}');
+      emit('dictation_error', {
+        'code': error.code,
+        'message': error.message,
+      });
+    } on Object catch (error) {
+      emit('dictation_error', {
+        'code': 'internal',
+        'message': '$error',
+      });
+    }
+  }
+
+  Future<void> _install(
+    String modelId, {
+    required Object owner,
+    required DictationEmit emit,
+  }) async {
+    if (_installing) {
+      emit('dictation_error', {
+        'code': 'install_in_progress',
+        'message': 'another model install is running',
+      });
+      return;
+    }
+    _installing = true;
+    _installCancelled = false;
+    _installOwner = owner;
+    _installingModelId = modelId;
+    try {
+      await _service.install(
+        modelId,
+        isCancelled: () => _installCancelled || !identical(_installOwner, owner),
+        onProgress: (id, received, total) {
+          emit('stt_download_progress', {
+            'model_id': id,
+            'received_bytes': received,
+            'total_bytes': total,
+          });
+        },
+      );
+      emit('stt_status', _service.statusPayload());
+    } finally {
+      _installing = false;
+      _installOwner = null;
+      _installingModelId = null;
+    }
+  }
+}
 
 /// Readiness/installation/model-selection surface for local dictation.
 ///
@@ -26,11 +163,14 @@ class DictationService {
   DictationService({
     required this.sanadHome,
     SttEngine Function()? engineFactory,
+    SttEngine Function(SttModelFiles files)? engineFor,
     HttpClient Function()? httpClient,
     bool? platformSupported,
   }) : _engineFactory = engineFactory ?? SherpaSttEngine.new,
-       _platformSupported = platformSupported ?? _isSupportedPlatform() {
+       _engineFor = engineFor,
+       _platformSupported = platformSupported ?? _nativeTargetSupported() {
     _store = SttModelStore(httpClient: httpClient, sanadHome: sanadHome);
+    _control = DictationControl(this);
     try {
       _settings = SttSettings.load(sanadHome: sanadHome);
       _configError = null;
@@ -43,28 +183,38 @@ class DictationService {
   final Logger _logger = Logger('DictationService');
   final String sanadHome;
   final SttEngine Function() _engineFactory;
+
+  /// Overrides runtime selection for a resolved model. It exists so a channel
+  /// test can exercise the real lease/start path without loading native code.
+  final SttEngine Function(SttModelFiles files)? _engineFor;
   final bool _platformSupported;
 
   late final SttModelStore _store;
+  late final DictationControl _control;
   late SttSettings _settings;
   SttException? _configError;
 
   SttModelStore get store => _store;
   SttSettings get settings => _settings;
 
-  static bool _isSupportedPlatform() {
-    final abi = Abi.current();
-    if (Platform.isMacOS) return abi == Abi.macosArm64;
-    if (Platform.isWindows) {
-      return abi == Abi.windowsX64 || abi == Abi.windowsArm64;
-    }
-    if (Platform.isLinux) return abi == Abi.linuxX64 || abi == Abi.linuxArm64;
-    return false;
-  }
+  /// Shared catalog/install/selection/preparation surface for every channel.
+  DictationControl get control => _control;
+
+  /// Platform verdict from the single native target table.
+  ///
+  /// A second `Platform`/`Abi` catalog here is exactly the drift that made a
+  /// buildable Intel runtime report `unsupported_platform`: the table owns which
+  /// OS/architecture pairs can dictate, and this only consumes that answer. An
+  /// unresolvable host is unsupported, never optimistically enabled.
+  static bool _nativeTargetSupported() =>
+      SttNativeTarget.tryCurrent()?.dictationSupported ?? false;
 
   SttReadiness readiness() {
     if (_configError != null) {
-      return SttReadiness.unavailable(_configError!.message);
+      // The parser message can carry YAML line context and English prose; the
+      // event carries the stable code only.
+      _logger.warning('dictation config invalid: ${_configError!.code}');
+      return const SttReadiness.unavailable('config_invalid');
     }
     if (!_settings.enabled) {
       return const SttReadiness.unavailable('dictation_disabled');
@@ -91,9 +241,16 @@ class DictationService {
   /// Starts `tool/ensure_native_stt.dart` in the background.
   ///
   /// Only meaningful in a dev checkout: packaged builds ship the shim beside the
-  /// executable. Returns false when the tool or shell is unavailable so the
-  /// caller can show the manual instruction instead of pretending it retried.
+  /// executable. Returns false when the tool is not present in this checkout, so
+  /// the caller reports the manual instruction instead of pretending a retry
+  /// started.
   bool prepareNativeRuntime() {
+    final workingDirectory = Directory.current.path;
+    final tool = File('$workingDirectory/tool/ensure_native_stt.dart');
+    if (!tool.existsSync()) {
+      _logger.warning('native dictation prepare unavailable: tool not found');
+      return false;
+    }
     final logFile = 'native/.stt-prepare.log';
     final command = 'fvm dart run tool/ensure_native_stt.dart >> $logFile 2>&1';
     try {
@@ -101,7 +258,7 @@ class DictationService {
         Process.start(
           Platform.isWindows ? 'cmd' : '/bin/sh',
           Platform.isWindows ? ['/c', command] : ['-c', command],
-          workingDirectory: Directory.current.path,
+          workingDirectory: workingDirectory,
           mode: ProcessStartMode.detached,
         ),
       );
@@ -152,6 +309,33 @@ class DictationService {
     ).writeAsString(jsonEncode({'model_id': modelId}));
   }
 
+  /// Persists the selected model — the same owner the `select` command uses, so
+  /// the model sheet and the Device settings page can never disagree.
+  Future<void> selectModel(String modelId) async {
+    await _writeSelection(modelId);
+    await unloadWarmEngine();
+  }
+
+  /// Persists the Device settings dictation toggle.
+  ///
+  /// `config.yaml` owns the key when it names it explicitly; refusing is the
+  /// truthful outcome, because the next reload would silently discard the
+  /// write.
+  Future<void> applyEnabled(bool enabled) async {
+    if (_settings.enabledManagedByConfig) {
+      throw SttException(
+        'managed_externally',
+        'stt.enabled is set in config.yaml',
+      );
+    }
+    await SttRuntimePreferences.writeEnabled(
+      sanadHome: sanadHome,
+      enabled: enabled,
+    );
+    reloadSettings();
+    if (!enabled) await unloadWarmEngine();
+  }
+
   /// Explicit config beats a per-device selection, which beats the default.
   String get selectedModelId {
     if (_settings.modelPath?.trim().isNotEmpty ?? false) return 'path-override';
@@ -171,18 +355,27 @@ class DictationService {
 
   /// True while a dictation session holds the engine. A second session is
   /// refused instead of loading a second copy of the model.
-  bool get isBusy => _activeSessions > 0;
+  bool get isBusy => _sessionOwner != null;
 
-  int _activeSessions = 0;
+  /// The connection that currently owns the lease.
+  ///
+  /// Ownership is a token, not a counter: a status-only, refused, or busy
+  /// channel closing must never free another channel's live session.
+  Object? _sessionOwner;
 
-  /// One dictation lease per daemon: returns false when another session holds it.
-  bool acquireSession() {
-    if (_activeSessions > 0) return false;
-    _activeSessions = 1;
+  /// Takes the daemon-wide dictation lease for [owner].
+  bool acquireSession(Object owner) {
+    if (_sessionOwner != null) return false;
+    _sessionOwner = owner;
     return true;
   }
 
-  void releaseSession() => _activeSessions = 0;
+  /// Releases the lease only when [owner] still holds it.
+  void releaseSession(Object owner) {
+    if (identical(_sessionOwner, owner)) _sessionOwner = null;
+  }
+
+  bool ownsSession(Object owner) => identical(_sessionOwner, owner);
 
   // --- Warm recogniser -------------------------------------------------------
   //
@@ -275,12 +468,55 @@ class DictationService {
     }
   }
 
+  /// Catalog rows as the Client renders them.
+  ///
+  /// `label_code` carries a translatable identity for rows the daemon owns; the
+  /// catalog `label` is a product name and is used verbatim. The daemon never
+  /// ships user-facing sentences or non-English copy.
+  List<Map<String, dynamic>> _modelRows({
+    required String? installedOverrides,
+    required bool overrideReady,
+  }) {
+    return [
+      // An explicit `stt.model_path` is a ready model even though it is not a
+      // catalog entry; without this row the UI offers the setup sheet.
+      if (installedOverrides != null)
+        {
+          'id': 'path-override',
+          'label_code': 'path_override',
+          // The absolute override path never leaves this machine: the row's
+          // identity is enough for every surface to describe it.
+          'mode': SttModelMode.batchVad.name,
+          'language': _settings.language,
+          'total_bytes': 0,
+          'hosted': false,
+          'installed': overrideReady,
+          'engine': SttEngineKind.whisperCpp.name,
+        },
+      for (final entry in kSttCatalog)
+        if (!entry.hidden)
+          {
+            'id': entry.id,
+            'label': entry.label,
+            'note': entry.note,
+            'mode': entry.mode.name,
+            'language': entry.language,
+            'total_bytes': entry.totalBytes,
+            'hosted': entry.hosted,
+            'installed': _store.statusOf(entry).installed,
+            'engine': entry.engine.name,
+          },
+    ];
+  }
+
+  String? get _installedOverridePath {
+    final overridePath = _settings.modelPath?.trim();
+    return overridePath == null || overridePath.isEmpty ? null : overridePath;
+  }
+
   Map<String, dynamic> statusPayload() {
     final readiness = this.readiness();
-    final overridePath = _settings.modelPath?.trim();
-    final installedOverrides = overridePath != null && overridePath.isNotEmpty
-        ? overridePath
-        : null;
+    final installedOverrides = _installedOverridePath;
     // A path that does not resolve is not an installed model: reporting it as
     // ready would start a session that fails at load time.
     final overrideReady =
@@ -291,38 +527,37 @@ class DictationService {
       if (readiness.reason != null) 'reason': readiness.reason,
       'busy': isBusy,
       'selected': selectedModelId,
-      'model_path': (installedOverrides?.isEmpty ?? true)
-          ? null
-          : installedOverrides,
-      'models': [
-        // An explicit `stt.model_path` is a ready model even though it is not a
-        // catalog entry; without this row the UI offers the setup sheet.
-        if (installedOverrides != null)
-          {
-            'id': 'path-override',
-            'label': 'نموذج محلي (stt.model_path)',
-            'note': installedOverrides,
-            'mode': SttModelMode.batchVad.name,
-            'language': _settings.language,
-            'total_bytes': 0,
-            'hosted': false,
-            'installed': overrideReady,
-            'engine': SttEngineKind.whisperCpp.name,
-          },
-        for (final entry in kSttCatalog)
-          if (!entry.hidden)
-            {
-              'id': entry.id,
-              'label': entry.label,
-              'note': entry.note,
-              'mode': entry.mode.name,
-              'language': entry.language,
-              'total_bytes': entry.totalBytes,
-              'hosted': entry.hosted,
-              'installed': _store.statusOf(entry).installed,
-              'engine': entry.engine.name,
-            },
-      ],
+      // Host filesystem layout is never part of a status payload. A local or
+      // hosted reader only needs to know that an override exists.
+      'has_model_path': installedOverrides != null,
+      'models': _modelRows(
+        installedOverrides: installedOverrides,
+        overrideReady: overrideReady,
+      ),
+    };
+  }
+
+  /// Device settings projection of the dictation runtime.
+  ///
+  /// It reuses the same catalog rows and readiness as `stt_status` so the
+  /// settings page can never describe a different state than the mic.
+  Map<String, dynamic> settingsSnapshot() {
+    final readiness = this.readiness();
+    final installedOverrides = _installedOverridePath;
+    return {
+      'enabled': _settings.enabled,
+      'managed_externally': _settings.enabledManagedByConfig,
+      'selected_model_id': selectedModelId,
+      'supported': readiness.isSupported,
+      'ready': readiness.isReady,
+      if (readiness.reason != null) 'reason': readiness.reason,
+      'busy': isBusy,
+      'has_model_path': installedOverrides != null,
+      'models': _modelRows(
+        installedOverrides: installedOverrides,
+        overrideReady:
+            installedOverrides != null && _resolveOverrideExists(),
+      ),
     };
   }
 
@@ -343,13 +578,17 @@ class DictationService {
     _logger.info('dictation model installed: $modelId');
   }
 
-  /// Handles one dictation WebSocket for its whole lifetime.
-  Future<void> handleSocket(WebSocket socket) async {
-    final connection = _DictationConnection(
-      service: this,
-      transport: WebSocketDictationChannel(socket),
-    );
-    await connection.run();
+  /// Handles one local dictation WebSocket for its whole lifetime.
+  Future<void> handleSocket(WebSocket socket) =>
+      handleChannel(WebSocketDictationChannel(socket));
+
+  /// Handles one transport-neutral dictation channel.
+  ///
+  /// The local socket and the hosted relay differ only in framing; the session,
+  /// lease, engine, and event vocabulary are this one implementation.
+  Future<void> handleChannel(DictationChannel channel) {
+    final connection = _DictationConnection(service: this, transport: channel);
+    return connection.run();
   }
 
   SttEngine createEngine() => _engineFactory();
@@ -357,6 +596,8 @@ class DictationService {
   /// Picks the runtime the resolved model asks for. A path override that points
   /// at a ggml file is treated as whisper.cpp, so a local trial needs no config.
   SttEngine createEngineFor(SttModelFiles files) {
+    final override = _engineFor;
+    if (override != null) return override(files);
     if (files.engine == SttEngineKind.whisperCpp) return WhisperCppSttEngine();
     return _engineFactory();
   }
@@ -380,11 +621,15 @@ class _DictationConnection {
   StreamSubscription<DictationMessage>? _commands;
   StreamSubscription<Uint8List>? _audio;
   StreamController<Uint8List>? _audioIn;
+  Future<void>? _startAttempt;
   bool _sessionReady = false;
   bool _starting = false;
-  bool _installing = false;
-  bool _installCancelled = false;
   bool _closed = false;
+
+  /// Bumped whenever this connection abandons the start it is waiting on, so a
+  /// model load that finishes afterwards frees its recognizer instead of
+  /// publishing a session nobody owns.
+  int _startGeneration = 0;
 
   /// Metadata counters only — never audio content — so a session that decodes
   /// nothing can be traced to the side that dropped the frames.
@@ -428,101 +673,57 @@ class _DictationConnection {
   Future<void> _teardown() async {
     if (_closed) return;
     _closed = true;
-    _installCancelled = true;
     _sessionReady = false;
-    service.releaseSession();
+    // A publish or a model load in flight must observe the abandonment before
+    // the lease is released; teardown waits for it so the engine is disposed
+    // first and a new session never overlaps the old one.
+    _startGeneration++;
+    service.control.cancelInstall(this);
     await _commands?.cancel();
     _commands = null;
     await _audio?.cancel();
     _audio = null;
-    await _session?.close();
-    _session = null;
     final controller = _audioIn;
     _audioIn = null;
+    final starting = _startAttempt;
+    if (starting != null) {
+      try {
+        await starting;
+      } on Object {
+        // A failed start reports itself to its own channel.
+      }
+    }
+    final session = _session;
+    _session = null;
+    if (session != null) await session.close();
     if (controller != null && !controller.isClosed) await controller.close();
+    // Only the token this connection acquired is released: a status-only,
+    // refused, or busy channel closing must never free a live session.
+    service.releaseSession(this);
     await transport.close();
   }
 
   Future<void> _handleCommand(DictationMessage message) async {
-    try {
-      switch (message.command) {
-        case DictationCommand.status:
+    switch (message.command) {
+      case DictationCommand.start:
+        await _startSession();
+      case DictationCommand.stop:
+      case DictationCommand.cancel:
+        // Owned by the active session; a cancel during a model load abandons
+        // that load instead of letting it publish a session afterwards.
+        if (message.command == DictationCommand.cancel) _startGeneration++;
+        if (_session == null) {
           transport.send('stt_status', service.statusPayload());
-        case DictationCommand.install:
-          final modelId = message.modelId ?? service.selectedModelId;
-          await _install(modelId);
-        case DictationCommand.select:
-          final modelId = message.modelId;
-          if (modelId == null) {
-            transport.send('dictation_error', {
-              'code': 'model_unknown',
-              'message': 'stt_select needs model_id',
-            });
-            return;
-          }
-          await service._writeSelection(modelId);
-          transport.send('stt_status', service.statusPayload());
-        case DictationCommand.start:
-          await _startSession();
-        case DictationCommand.prepareRuntime:
-          final started = service.prepareNativeRuntime();
-          transport.send('stt_status', service.statusPayload());
-          if (!started) {
-            transport.send('dictation_error', {
-              'code': 'prepare_unavailable',
-              'reason': 'prepare_unavailable',
-              'message':
-                  'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
-            });
-          }
-        case DictationCommand.stop:
-        case DictationCommand.cancel:
-          // Owned by the active session; harmless when none is running.
-          if (_session == null) {
-            transport.send('stt_status', service.statusPayload());
-          }
-      }
-    } on SttException catch (error) {
-      _logger.warning(
-        'dictation command failed: code=${error.code} message=${error.message}',
-      );
-      transport.send('dictation_error', {
-        'code': error.code,
-        'message': error.message,
-      });
-    } on Object catch (error) {
-      transport.send('dictation_error', {
-        'code': 'internal',
-        'message': '$error',
-      });
-    }
-  }
-
-  Future<void> _install(String modelId) async {
-    if (_installing) {
-      transport.send('dictation_error', {
-        'code': 'install_in_progress',
-        'message': 'another model install is running',
-      });
-      return;
-    }
-    _installing = true;
-    _installCancelled = false;
-    try {
-      await service.install(
-        modelId,
-        isCancelled: () => _installCancelled || _closed,
-        onProgress: (id, received, total) {
-          transport.send('stt_download_progress', {
-            'model_id': id,
-            'received_bytes': received,
-            'total_bytes': total,
-          });
-        },
-      );
-      transport.send('stt_status', service.statusPayload());
-    } finally {
-      _installing = false;
+        }
+      case DictationCommand.status:
+      case DictationCommand.install:
+      case DictationCommand.select:
+      case DictationCommand.prepareRuntime:
+        await service.control.handle(
+          message,
+          owner: this,
+          emit: transport.send,
+        );
     }
   }
 
@@ -530,17 +731,21 @@ class _DictationConnection {
     // A client may repeat `start` (a double press, or a reconnect) while the
     // recognizer is still loading. The second command must be ignored, not
     // answered with `dictation_busy`, which would look like a stuck session.
-    if (_session != null || _starting) return;
+    if (_session != null || _starting || _closed) return;
     _starting = true;
+    final attempt = _startSessionOnce();
+    _startAttempt = attempt;
     try {
-      await _startSessionOnce();
+      await attempt;
     } finally {
       _starting = false;
+      if (identical(_startAttempt, attempt)) _startAttempt = null;
     }
   }
 
   Future<void> _startSessionOnce() async {
-    if (_session != null) return;
+    if (_session != null || _closed) return;
+    final generation = _startGeneration;
     service._applySettingsFromDisk();
     final readiness = service.readiness();
     if (!readiness.isReady) {
@@ -562,7 +767,7 @@ class _DictationConnection {
       });
       return;
     }
-    if (!service.acquireSession()) {
+    if (!service.acquireSession(this)) {
       _logger.info('dictation refused: another session holds the engine');
       transport.send('dictation_error', {
         'code': 'dictation_busy',
@@ -574,8 +779,17 @@ class _DictationConnection {
     try {
       engine = await service.acquireEngine(files);
     } on Object {
-      service.releaseSession();
+      service.releaseSession(this);
       rethrow;
+    }
+    if (_closed || generation != _startGeneration) {
+      // The channel closed (or cancelled) while the model was loading. Free the
+      // recognizer instead of publishing an orphan session, and keep the lease
+      // until it is gone.
+      _logger.info('dictation start abandoned during load: model=${files.modelId}');
+      await engine.dispose();
+      service.releaseSession(this);
+      return;
     }
     final audioIn = StreamController<Uint8List>();
     _audioIn = audioIn;
@@ -617,6 +831,9 @@ class _SessionChannel implements DictationChannel {
 
   @override
   Stream<DictationMessage> get commands => _inner.commands;
+
+  @override
+  int get droppedFrames => _inner.droppedFrames;
 
   @override
   void send(String event, [Map<String, dynamic> payload = const {}]) =>

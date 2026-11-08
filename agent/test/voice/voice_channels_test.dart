@@ -137,47 +137,91 @@ void main() {
       socket = FakeSocket();
       final gateway = FakeServerSanadGatewayPlatform(socket);
       getIt.registerSingleton<ServerSanadGatewayPlatform>(gateway);
-      channel = CloudSocketIoTransportChannel('device-123');
+      channel = CloudSocketIoTransportChannel(
+        deviceId: 'device-123',
+        sessionId: 'voice-1',
+        requestId: 'voice-1',
+      );
     });
 
     tearDown(() {
       getIt.unregister<ServerSanadGatewayPlatform>();
     });
 
-    test('receives binary PCM audio from voice_audio_chunk_relay', () async {
+    Map<String, dynamic> relayed(List<int> data) => {
+      'session_id': 'voice-1',
+      'request_id': 'voice-1',
+      'data': data,
+    };
+
+    test('receives binary PCM audio for its own identity', () async {
       final pcmData = [10, 11, 12, 13];
 
       expect(channel.inputAudioStream, emits(pcmData));
 
       final handler = socket.listeners['voice_audio_chunk_relay']!.first;
-      handler({'data': pcmData});
+      handler(relayed(pcmData));
     });
 
-    test('receives control event from voice_control_relay', () async {
+    test('an identity-less or foreign audio frame is ignored', () async {
+      final received = <List<int>>[];
+      final subscription = channel.inputAudioStream.listen(received.add);
+      addTearDown(subscription.cancel);
+      final handler = socket.listeners['voice_audio_chunk_relay']!.first;
+
+      handler({'data': [1, 2, 3, 4]});
+      handler({'session_id': 'voice-2', 'request_id': 'voice-2', 'data': [5]});
+      handler({'session_id': 'voice-1', 'data': [6]});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(received, isEmpty);
+    });
+
+    test('receives a control event for its own identity', () async {
       expect(channel.controlEvents, emits('interrupt'));
 
       final handler = socket.listeners['voice_control_relay']!.first;
-      handler({'event': 'interrupt'});
+      handler({
+        'session_id': 'voice-1',
+        'request_id': 'voice-1',
+        'event': 'interrupt',
+      });
     });
 
-    test('sendOutputAudio emits device_voice_audio_chunk to Socket.IO', () {
+    test('sendOutputAudio carries device and session identity', () {
       final outputPcm = [14, 15, 16, 17];
       channel.sendOutputAudio(outputPcm);
 
       expect(socket.emitted.containsKey('device_voice_audio_chunk'), true);
       final payload = socket.emitted['device_voice_audio_chunk'] as Map;
       expect(payload['device_id'], 'device-123');
+      expect(payload['session_id'], 'voice-1');
+      expect(payload['request_id'], 'voice-1');
       expect(payload['data'], outputPcm);
     });
 
-    test('sendControlEvent emits device_event to Socket.IO', () {
+    test('sendControlEvent emits an origin-scoped device_event', () {
       channel.sendControlEvent('voice_interrupted', {});
 
       expect(socket.emitted.containsKey('device_event'), true);
       final payload = socket.emitted['device_event'] as Map;
       expect(payload['device_id'], 'device-123');
-      expect(payload['type'], 'event');
+      expect(payload['type'], 'device_event');
       expect(payload['event'], 'voice_interrupted');
+      expect(payload['session_id'], 'voice-1');
+      expect(payload['event_id'], isA<String>());
+      expect((payload['event_id'] as String).isNotEmpty, isTrue);
+      expect(payload['delivery'], {
+        'scope': 'origin',
+        'request_id': 'voice-1',
+      });
+    });
+
+    test('close detaches only this session listeners', () async {
+      await channel.close();
+
+      expect(socket.listeners.containsKey('voice_audio_chunk_relay'), isFalse);
+      expect(socket.listeners.containsKey('voice_control_relay'), isFalse);
     });
   });
 }

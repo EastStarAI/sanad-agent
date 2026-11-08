@@ -326,6 +326,7 @@ Future<List<ClientInstance>> discoverClientInstances({
       String? deviceId;
       int? clientPid;
       ClientLaunchProfile? launchProfile;
+      List<String>? clientArguments;
       final devToolsPort = ds['devToolsPort'];
       final bindPort = ds['bindPort'];
       final originalPort = ds['originalPort'];
@@ -346,6 +347,7 @@ Future<List<ClientInstance>> discoverClientInstances({
 
           if (isMatch) {
             clientPid = process.pid;
+            clientArguments = process.arguments;
             launchProfile = extractClientLaunchProfile(process.arguments);
             matchedPath = resolveClientDirectoryForLaunchProfile(
               profile: launchProfile,
@@ -361,7 +363,23 @@ Future<List<ClientInstance>> discoverClientInstances({
       }
       var serviceToken = ds['token'] as String;
       if (launchProfile != null && bindPort != null && bindPort != 0) {
+        // The live client records the authenticated DDS URI itself. Read that
+        // before the journal and the upstream argument token, because a token
+        // copied from `--vm-service-uri` belongs to a different port than the
+        // DDS bind port and cannot authorize it.
+        final sanadHome = launchProfile.define('SANAD_HOME');
+        final recordedToken = sanadHome == null || sanadHome.isEmpty
+            ? null
+            : await readVmServiceAuthCodeFromOutFile(
+                outFilePath: vmServiceOutFilePath(
+                  sanadHome: sanadHome,
+                  vmServicePort: port,
+                ),
+                expectedPort: port,
+                liveClientArguments: clientArguments ?? const <String>[],
+              );
         serviceToken =
+            recordedToken ??
             await managedVmServiceAuthCodeFromJournal(
               profile: launchProfile,
               vmServicePort: port,

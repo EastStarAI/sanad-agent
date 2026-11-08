@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:sanad_client/features/devices/data/daemon/verified_agent_bootstrap_installer.dart';
@@ -39,6 +40,257 @@ void main() {
     if (temporaryDirectory.existsSync()) {
       await temporaryDirectory.delete(recursive: true);
     }
+  });
+
+  test('reports bounded download progress that ends at completion', () async {
+    final bytes = utf8.encode('verified-agent');
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: _sha256OfBytes(bytes),
+    );
+    final progress = <double>[];
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: '${temporaryDirectory.path}/bin/sanad',
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient(
+        (request) async => request.url.path.endsWith('release-manifest.json')
+            ? http.Response(jsonEncode(manifest), 200)
+            : http.Response.bytes(bytes, 200),
+      ),
+    );
+
+    await installer.install(targetVersion: '1.1.0', onProgress: progress.add);
+
+    expect(progress, isNotEmpty);
+    expect(progress.every((value) => value >= 0 && value <= 1), isTrue);
+    expect(progress.last, 1.0);
+  });
+
+  group('packaged native runtime', () {
+    // A Client-only install must carry dictation: the runtime is a second
+    // artifact of the same manifest, verified by the same size/sha/trust rules,
+    // and installed only after the executable itself is in place.
+    Future<File> runtimeArchive(
+      String tag,
+      Map<String, String> members,
+    ) async {
+      final staging = Directory('${temporaryDirectory.path}/runtime-staging');
+      final root = Directory('${staging.path}/native/$tag')
+        ..createSync(recursive: true);
+      members.forEach((name, contents) {
+        final file = File('${root.path}/$name');
+        file.parent.createSync(recursive: true);
+        file.writeAsStringSync(contents);
+      });
+      final archive = File('${temporaryDirectory.path}/runtime.tar.gz');
+      final tar = await Process.run('tar', [
+        '-czf',
+        archive.path,
+        '-C',
+        staging.path,
+        'native/$tag',
+      ]);
+      expect(tar.exitCode, 0, reason: '${tar.stderr}');
+      return archive;
+    }
+
+    Map<String, dynamic> manifestWithRuntime({
+      required List<int> agentBytes,
+      required String agentDigest,
+      required File runtime,
+      required List<int> runtimeBytes,
+      String tag = 'linux-x64',
+      String? runtimeDigest,
+    }) {
+      final manifest = _manifest(
+        size: agentBytes.length,
+        digest: agentDigest,
+      );
+      return {
+        ...manifest,
+        'artifacts': [
+          for (final artifact in manifest['artifacts'] as List) artifact,
+          {
+            'component': 'agent-runtime',
+            'platform': 'linux',
+            'architecture': 'x64',
+            'format': 'tar.gz',
+            'filename': 'sanad-agent-runtime-1.1.0-$tag.tar.gz',
+            'url':
+                'https://github.com/EastStarAI/sanad-agent/releases/download/v1.1.0/sanad-agent-runtime-1.1.0-$tag.tar.gz',
+            'sha256': runtimeDigest ?? _sha256OfBytes(runtimeBytes),
+            'size': runtimeBytes.length,
+            'public': true,
+            'signature_type': 'github-attestation',
+          },
+        ],
+      };
+    }
+
+    VerifiedAgentBootstrapInstaller installerFor({
+      required List<int> agentBytes,
+      required Map<String, dynamic> manifest,
+      required List<int> runtimeBytes,
+      int runtimeStatus = 200,
+    }) =>
+        VerifiedAgentBootstrapInstaller(
+          targetPath: '${temporaryDirectory.path}/bin/sanad',
+          operatingSystem: 'linux',
+          architecture: 'x64',
+          client: MockClient((request) async {
+            if (request.url.path.endsWith('release-manifest.json')) {
+              return http.Response(jsonEncode(manifest), 200);
+            }
+            if (request.url.path.endsWith('.tar.gz')) {
+              return http.Response.bytes(runtimeBytes, runtimeStatus);
+            }
+            return http.Response.bytes(agentBytes, 200);
+          }),
+        );
+
+    test('the runtime is installed beside the verified executable', () async {
+      final agentBytes = utf8.encode('verified-agent');
+      final runtime = await runtimeArchive('linux-x64', {
+        'libsanad_whisper.so': 'shim',
+        'libggml.so.1': 'ggml',
+      });
+      final runtimeBytes = runtime.readAsBytesSync();
+      final installer = installerFor(
+        agentBytes: agentBytes,
+        manifest: manifestWithRuntime(
+          agentBytes: agentBytes,
+          agentDigest: _sha256OfBytes(agentBytes),
+          runtime: runtime,
+          runtimeBytes: runtimeBytes,
+        ),
+        runtimeBytes: runtimeBytes,
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.status, AgentBootstrapStatus.installed);
+      expect(result.runtimeStatus, AgentRuntimeBundleStatus.installed);
+      expect(result.isSuccess, isTrue);
+      final installed = File(
+        '${temporaryDirectory.path}/bin/native/linux-x64/libsanad_whisper.so',
+      );
+      expect(installed.readAsStringSync(), 'shim');
+      expect(
+        Directory('${temporaryDirectory.path}/bin/native/linux-x64.rollback')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('a manifest without a runtime keeps the previous install valid',
+        () async {
+      final agentBytes = utf8.encode('verified-agent');
+      final installer = installerFor(
+        agentBytes: agentBytes,
+        manifest: _manifest(
+          size: agentBytes.length,
+          digest: _sha256OfBytes(agentBytes),
+        ),
+        runtimeBytes: const [],
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.runtimeStatus, AgentRuntimeBundleStatus.notPublished);
+      expect(result.isSuccess, isTrue);
+      expect(
+        Directory('${temporaryDirectory.path}/bin/native').existsSync(),
+        isFalse,
+      );
+    });
+
+    test('a runtime checksum mismatch fails the whole install', () async {
+      final agentBytes = utf8.encode('verified-agent');
+      final runtime = await runtimeArchive('linux-x64', {
+        'libsanad_whisper.so': 'shim',
+      });
+      final runtimeBytes = runtime.readAsBytesSync();
+      final installer = installerFor(
+        agentBytes: agentBytes,
+        manifest: manifestWithRuntime(
+          agentBytes: agentBytes,
+          agentDigest: _sha256OfBytes(agentBytes),
+          runtime: runtime,
+          runtimeBytes: runtimeBytes,
+          runtimeDigest: 'c' * 64,
+        ),
+        runtimeBytes: runtimeBytes,
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.runtimeStatus, AgentRuntimeBundleStatus.checksumFailed);
+      expect(
+        result.isSuccess,
+        isFalse,
+        reason: 'a published-but-uninstallable runtime is a failed install',
+      );
+      expect(
+        Directory('${temporaryDirectory.path}/bin/native/linux-x64')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('an unexpected runtime member is refused before extraction',
+        () async {
+      final agentBytes = utf8.encode('verified-agent');
+      final runtime = await runtimeArchive('linux-x64', {
+        'libsanad_whisper.so': 'shim',
+        'models/ggml-base.bin': 'model payload',
+      });
+      final runtimeBytes = runtime.readAsBytesSync();
+      final installer = installerFor(
+        agentBytes: agentBytes,
+        manifest: manifestWithRuntime(
+          agentBytes: agentBytes,
+          agentDigest: _sha256OfBytes(agentBytes),
+          runtime: runtime,
+          runtimeBytes: runtimeBytes,
+        ),
+        runtimeBytes: runtimeBytes,
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.runtimeStatus, AgentRuntimeBundleStatus.layoutRejected);
+      expect(result.isSuccess, isFalse);
+      expect(
+        Directory('${temporaryDirectory.path}/bin/native/linux-x64')
+            .existsSync(),
+        isFalse,
+      );
+    });
+
+    test('a runtime download failure fails the whole install', () async {
+      final agentBytes = utf8.encode('verified-agent');
+      final runtime = await runtimeArchive('linux-x64', {
+        'libsanad_whisper.so': 'shim',
+      });
+      final runtimeBytes = runtime.readAsBytesSync();
+      final installer = installerFor(
+        agentBytes: agentBytes,
+        manifest: manifestWithRuntime(
+          agentBytes: agentBytes,
+          agentDigest: _sha256OfBytes(agentBytes),
+          runtime: runtime,
+          runtimeBytes: runtimeBytes,
+        ),
+        runtimeBytes: runtimeBytes,
+        runtimeStatus: 503,
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.runtimeStatus, AgentRuntimeBundleStatus.downloadFailed);
+      expect(result.isSuccess, isFalse);
+    });
   });
 
   test('installs exactly the verified manifest artifact', () async {
@@ -386,6 +638,9 @@ Map<String, dynamic> _linuxClientManifest() => {
     },
   ],
 };
+
+String _sha256OfBytes(List<int> bytes) =>
+    sha256.convert(bytes).toString();
 
 Map<String, dynamic> _manifest({required int size, required String digest}) => {
   'schema_version': 1,

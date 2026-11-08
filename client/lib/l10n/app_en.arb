@@ -678,6 +678,39 @@
   "dictationLimitReached": "Dictation stopped at the 5-minute limit.",
   "dictationMicrophoneDenied": "Microphone access is required for dictation.",
   "dictationBusy": "Another dictation session is already running.",
+  "dictationRelayUnavailable": "This device cannot relay dictation on the current connection. Update the Agent, or work on the same machine.",
+  "dictationDisabled": "Dictation is turned off on this device.",
+  "dictationUpdateRequired": "Update the Agent to use dictation on this device.",
+  "dictationUnavailable": "Dictation is not available on this device.",
+  "dictationFailedGeneric": "Dictation could not start. Try again.",
+  "dictationPathOverrideModel": "Model file set in Agent settings",
+  "dictationModelSizeMb": "{size} MB",
+  "@dictationModelSizeMb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationModelSizeGb": "{size} GB",
+  "@dictationModelSizeGb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "voiceUpdateRequired": "Update the Agent or the Client to use voice on this device.",
+  "voiceUnavailable": "Voice is unavailable for this device right now.",
+  "deviceSettingsDictationTitle": "Dictation",
+  "deviceSettingsDictationEnabled": "Local dictation",
+  "deviceSettingsDictationEnabledHint": "Speech is transcribed on this device by the Agent. Audio never leaves the machine.",
+  "deviceSettingsDictationManagedExternally": "Managed by the Agent's config.yaml.",
+  "deviceSettingsDictationModel": "Model",
+  "deviceSettingsDictationNoModel": "No model installed yet. Press the mic in the composer to set one up.",
+  "deviceSettingsDictationReady": "Ready",
+  "deviceSettingsDictationNotReady": "Not ready",
+  "deviceSettingsDictationBusy": "In use",
   "workspaceSecurityTitle": "Execution and discovery",
   "workspaceSecuritySubtitle": "Stored by the Agent on this device. Files inside the workspace cannot change these settings.",
   "workspaceExecutionModeLabel": "Execution",

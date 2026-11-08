@@ -71,6 +71,9 @@ class _FakeChannel implements DictationChannel {
   Stream<Uint8List> get audio => _audio.stream;
 
   @override
+  int get droppedFrames => 0;
+
+  @override
   Stream<DictationMessage> get commands => _commands.stream;
 
   @override

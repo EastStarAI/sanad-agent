@@ -16,6 +16,7 @@ import 'package:sanad_client/utils/toast_utils.dart';
 import '../settings_widgets.dart';
 import 'agent_restart_confirmation_dialog.dart';
 import 'device_rename_dialog.dart';
+import '../dictation_settings_card.dart';
 
 class DeviceOverviewPage extends StatefulWidget {
   const DeviceOverviewPage({
@@ -472,6 +473,14 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
                 ],
               ),
             ),
+            if (settings.dictation != null) ...[
+              const SizedBox(height: 16),
+              DictationSettingsCard(
+                dictation: settings.dictation!,
+                enabled: !_saving && !settings.dictation!.managedExternally,
+                onToggle: (value) => _update({'dictation_enabled': value}),
+              ),
+            ],
           ],
           const SizedBox(height: 24),
           SettingsCard(
@@ -523,3 +532,4 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
     }
   }
 }
+

@@ -11,6 +11,8 @@ import 'dart:ffi';
 import 'dart:isolate';
 import 'dart:typed_data';
 
+import 'package:logging/logging.dart';
+
 import 'stt_isolate.dart';
 import 'stt_model_store.dart';
 import 'stt_types.dart';
@@ -70,6 +72,10 @@ class SherpaSttEngine implements SttEngine {
   final StreamController<SttEvent> _events =
       StreamController<SttEvent>.broadcast();
   final Queue<Uint8List> _queue = ListQueue<Uint8List>();
+
+  /// Daemon-side logger for worker metadata lines (gate measurements, typed
+  /// codes). Never audio or transcript text.
+  final Logger _logger = Logger('SttEngine');
 
   Isolate? _isolate;
   SendPort? _inbox;
@@ -195,6 +201,11 @@ class SherpaSttEngine implements SttEngine {
         case 'closed':
           if (!_workerClosed.isCompleted) _workerClosed.complete();
           _closeEvents();
+        case 'log':
+          // The worker forwards its metadata lines here so the daemon's own
+          // logger owns them: a worker isolate has no shared log listener.
+          final line = message['message'] as String?;
+          if (line != null && line.isNotEmpty) _logger.info(line);
       }
     });
 

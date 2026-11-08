@@ -44,6 +44,13 @@ class ReleaseArtifactTrustPolicy {
     'client:android': 'android-apksigner',
     'client:ios': 'apple-distribution',
     'client:web': 'github-attestation',
+    // The native dictation runtime travels as a reproducible archive, so the
+    // verifiable facts about that artifact are its manifest SHA-256 and the
+    // GitHub attestation. The macOS libraries inside it are Developer ID
+    // signed, but the archive itself is not a signed executable.
+    'agent-runtime:macos': 'github-attestation',
+    'agent-runtime:linux': 'github-attestation',
+    'agent-runtime:windows': 'github-attestation',
   };
 
   static String expectedSignatureType({

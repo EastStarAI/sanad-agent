@@ -123,8 +123,11 @@ class AppProviders extends StatelessWidget {
           create: (_) => DictationCubit(
             resolver: DictationTransportResolver(
               connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
+              // The hosted branch reads the Agent's relay advertisement and frame
+              // bound from the same capability store the mic button gates on.
+              capabilities: getIt<DeviceCapabilitiesStore>(),
             ),
-            capture: DictationAudioCapture(),
+            capture: dictationCaptureFactory(),
           ),
         ),
         BlocProvider(

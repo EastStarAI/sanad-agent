@@ -10,21 +10,12 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
-import 'package:logging/logging.dart';
-
 import 'stt_speech_gate.dart';
 import 'stt_types.dart';
 import 'whispercpp_bindings.dart';
 
 /// Mandatory entry point for the whisper.cpp worker isolate.
 void whisperCppWorkerEntry(SendPort out) {
-  // The daemon's log listener lives on the main isolate, so this worker wires
-  // its own: otherwise every gate measurement is written into a void.
-  Logger.root.level = Level.INFO;
-  Logger.root.onRecord.listen((record) {
-    // ignore: avoid_print
-    print('${record.loggerName}: ${record.message}');
-  });
   final inbox = ReceivePort();
   out.send({'evt': 'port', 'port': inbox.sendPort});
   final worker = _WhisperCppWorker(out);
@@ -45,12 +36,16 @@ class _WhisperCppWorker {
 
   final SendPort _out;
 
-  /// The gate logs numbers only (share, peak, rms): a rejected session must name
-  /// its own measurement, and no audio or text ever reaches the log.
-  static final _logger = Logger('WhisperCppWorker');
   Pointer<Void> _context = nullptr;
   WhisperCppLibrary? _library;
   String _modelId = '';
+
+  /// Decode language of the loaded entry (`stt.language` / catalog language).
+  ///
+  /// The worker runs in its own isolate with no config access, so the value
+  /// travels with `init`; hardcoding one language silently mistranscribed every
+  /// other catalog entry.
+  String _language = 'ar';
   int _seq = 0;
   bool _disposed = false;
 
@@ -96,11 +91,22 @@ class _WhisperCppWorker {
     }
   }
 
-  static void _log(String message) => _logger.info(message);
+  /// Forwards one metadata line to the daemon's own logger.
+  ///
+  /// A worker isolate does not share the daemon's log listener, and printing
+  /// here duplicated nothing while it polluted stdout: the line travels back
+  /// over the existing port instead. Numbers and codes only — never audio or
+  /// transcript text.
+  void _log(String message) =>
+      _out.send({'evt': 'log', 'message': message});
 
   void _init(Map message) {
     final stopwatch = Stopwatch()..start();
     _modelId = message['modelId'] as String? ?? '';
+    final language = message['language'] as String?;
+    if (language != null && language.trim().isNotEmpty) {
+      _language = language.trim();
+    }
     final library = WhisperCppLibrary.open(message['library'] as String?);
     _library = library;
     final modelPath = message['model'] as String;
@@ -150,7 +156,7 @@ class _WhisperCppWorker {
       // whisper invents text on silence ("شكراً للمشاهدة" and friends), which
       // would insert junk into the composer. The guard is scale-invariant: a
       // muted mic has no peak, and steady noise is not peaky.
-      _logger.info(
+      _log(
         'dictation gate blocked: reason=${gate.reason} '
         'samples=$audioSamples ms=${audioSamples * 1000 ~/ 16000} '
         'peak=${gate.peak.toStringAsFixed(4)} '
@@ -164,7 +170,7 @@ class _WhisperCppWorker {
       return;
     }
     final gain = _normaliseForDecode(stats.peak);
-    _logger.info(
+    _log(
       'dictation gate passed: samples=$audioSamples '
       'peak=${gate.peak.toStringAsFixed(4)} '
       'rms=${gate.rms.toStringAsFixed(4)} '
@@ -253,7 +259,7 @@ class _WhisperCppWorker {
       final result = library.run(
         _context,
         samples,
-        language: 'ar',
+        language: _language,
         threads: threads,
       );
       if (result.text.isNotEmpty) parts.add(result.text);

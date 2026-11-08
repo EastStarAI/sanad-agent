@@ -19,7 +19,9 @@ locally, and transcript events stream back into the composer. No cloud provider 
   by pinned SHA-256 with atomic activation; download is explicit on first press.
 - **`config.yaml` overrides the catalog:** `stt.enabled`, `model_id`, `model_path` (wins, no SHA),
   `language`, `threads`, `use_gpu`, `model_idle_minutes`.
-- **Routing has one owner:** `DictationTransportResolver`; cloud relay is a separate task.
+- **Routing has one owner:** `DictationTransportResolver`; the hosted channel is a
+  separate task whose wire contract is
+  [Dictation Transport Protocol](../../technical/dictation_transport_protocol.md).
 - **Privacy:** logs carry metadata only — never audio, transcript text, credentials, or paths.
 - **Capability contract:** `supports_dictation` means "enabled and valid for this agent"; transient
   readiness lives only in the live `stt_status`, never in capabilities (computed at connect).
@@ -53,9 +55,9 @@ locally, and transcript events stream back into the composer. No cloud provider 
 - [x] Cancel removes the whole session range; stop keeps the committed text.
 - [x] First-use sheet for model choice + download consent with progress.
 - [x] English + Arabic strings only, no inline literals.
-- [ ] Settings surface — **deferred to G6**; until then `stt.enabled` is the only switch.
+- [ ] Settings surface — owned by G6 below (required closure); until then `stt.enabled` is the only switch.
 
-### G6 — Device settings: Dictation section (deferred)
+### G6 — Device settings: Dictation section (required closure)
 - [ ] Add a Dictation section to the device settings page (model + size, enable toggle, reason).
 - [ ] Every change goes as a command over the existing connection layer; no client-side file edits.
 - [ ] The daemon persists and re-advertises the capability; the client only reflects it.
@@ -75,7 +77,7 @@ locally, and transcript events stream back into the composer. No cloud provider 
 - [x] Press policy: one press starts when ready, otherwise opens the sheet; long press always opens it.
 - [x] No auto-select after download.
 - [x] Egyptian ggml model published and set as the default entry.
-- [ ] Dedicated tests for install-progress state transitions (partially covered by the current suite).
+- [ ] Dedicated tests for install-progress state transitions (required closure; partially covered today).
 
 ### G2d — Single-pass batch and state-driven mic (delivered via G7/G5b)
 - [x] Model `mode` reaches the client through `stt_status`.
@@ -121,7 +123,8 @@ Owner decisions:
   `dictation_model_sheet`; transient states (preparing, install failure) keep it usable.
 - **No toast** for dictation lifecycle states: the sheet is the only surface.
 - Visibility follows the **agent** capability; the client never hardcodes a platform.
-- macOS Intel support is a **separate follow-up after G8**; cloud relay is out of scope here.
+- macOS Intel support is required public closure, tracked as **G10** below; the
+  hosted channel is a separate task.
 
 - [x] Capability contract stays config/platform only; transient state lives in `stt_status`.
 - [x] Composer renders the mic whenever an active agent exists; capability drives styling only.
@@ -142,6 +145,66 @@ Owner decisions:
 - [x] Dictation notices use `ToastUtils.showInfo`; no `SnackBar` in the feature.
 - [x] Last two client sites (schedules run-failure and refused action) moved to `ToastUtils`.
 - [x] Rule recorded in `client/AGENTS.md`; tests assert through `debugOnShowError`/`debugOnShowInfo`.
+
+### G10 — macOS Intel (`macos-x64`) public closure
+
+Required for public closure. Not deferrable and not silently dropped: the daemon
+platform gate, the checksum manifest, and the CI matrix currently exclude this
+target, so an Intel Mac reports `unsupported_platform` and cannot install the
+native runtime.
+
+- [ ] Platform gate accepts `Abi.macosX64` beside `Abi.macosArm64` in the dictation
+      runtime readiness check, and a unit test covers both macOS ABIs.
+- [ ] Loader resolves the shim per macOS architecture: the artifact directory is
+      currently arch-stripped (`native/macos/`), so x64 and arm64 binaries must not
+      overwrite each other in one checkout. A loader-path test covers the x64
+      resolution and the `SANAD_WHISPER_LIBRARY` override.
+- [ ] `agent/native/checksums.json` gains a `macos-x64` artifact entry with a
+      SHA-256 for every required file (shim plus its ggml/whisper siblings).
+      Today only `macos-arm64` exists, so `ensure_native_stt` on Intel reports the
+      platform as missing.
+- [ ] A build/verification job runs the shim build and checksum verification on an
+      x64 macOS runner. The current `native-stt` matrix covers `macos-26` (arm64)
+      only; the concrete x64 runner label is confirmed when the job is added.
+- [ ] The pinned release archive name for `macos-x64` is published and verified
+      through the same download path (`--base-url`) as the other platforms.
+- [ ] Checksum-manifest test asserts every platform entry in
+      `checksums.json` lists the complete required file set for that platform.
+
+**Facts kept separate:** a green CI build job on an x64 macOS runner proves the
+shim builds and verifies; it does not prove transcription quality, Metal fallback,
+or memory on real Intel hardware. Real-hardware acceptance on an Intel Mac is
+recorded as its own evidence line when it happens and is not implied by the CI
+result.
+
+### G11 — Audited repair (reopened claims, required closure)
+
+Historical evidence above keeps its recorded dates and results; nothing is deleted.
+These items reopen claims that the audit found unproven or contradictory, and they
+are required before the feature is closed.
+
+- [ ] **Owned dictation lease and load cancellation.** A status-only, refused, or
+      busy connection currently releases another connection's live lease on teardown.
+      Release only the acquired owner token, after engine/session cleanup; prevent
+      close-during-load from creating an orphan session or releasing another owner.
+      Tests cover non-owner teardown, concurrent starts, delayed load, cancellation,
+      and sequential sessions across separate connections.
+- [ ] **Readiness reason survives projection.** The daemon can report
+      `supported: true`, `ready: false`, and `native_runtime_missing|preparing`, but the
+      Client discards the reason whenever `supported` is true. Preserve the reason
+      independently of platform support and prove that the sheet renders native
+      preparation, progress, failure, and its reachable setup action.
+- [ ] **Residency statements.** `docs/technical/local_dictation.md` says the model is
+      freed on stop; the implementation keeps it warm for `stt.model_idle_minutes`.
+      Reconcile the document with the implemented behavior.
+- [ ] **Platform gate.** The readiness gate accepts Windows and Linux ABIs while the
+      documented gate says macOS arm64 only, and Intel is rejected by the gate. Make the
+      documentation and the gate agree, with G10 covering Intel.
+- [ ] **Toast statements.** G8 states no toast for dictation lifecycle states, while G9
+      moved dictation notices to `ToastUtils`. Record one behavior and make the docs match.
+- [ ] **Native packaging.** The native runtime is reproducible from a clean clone on every
+      supported OS. Resolve the six removed dylibs still reachable in feature history
+      before delivery; any history rewrite requires fresh explicit owner authorization.
 
 ## Measurements (macOS arm64, owner machine)
 
@@ -171,26 +234,89 @@ Owner decisions:
 
 ## Platform scope and binaries
 
-- Targets: macOS arm64, Windows x64/arm64, Linux x64/arm64; loader picks
+- Targets: macOS arm64 **and macOS x64 (Intel, see G10)**, Windows x64/arm64, Linux
+  x64/arm64; loader picks
   `libsanad_whisper.dylib` / `sanad_whisper.dll` / `libsanad_whisper.so` (`SANAD_WHISPER_LIBRARY` override).
 - **Verified:** macOS arm64 locally; Windows x64 and Linux x64 compile in CI (`native-stt` green on
-  `ubuntu-24.04`, `macos-26`, `windows-2025`). ARM runners are not exercised yet.
+  `ubuntu-24.04`, `macos-26`, `windows-2025`). ARM runners are not exercised yet, and no
+  macOS x64 fact exists yet: the platform tag resolves to `macos-x64`, the checksum
+  manifest has no entry for it, and the readiness gate rejects it.
 - **Binaries are not tracked.** `.gitignore` excludes `agent/native/*/*.{dylib,so,dll}`;
   `tool/ensure_native_stt.dart` verifies checksums → downloads (`--base-url`) → builds from a
   discovered or `--whisper-src` tree → else exits 2 with instructions. It refuses incomplete builds,
   writes `native/.stt-preparing` while working, and the dev CLI starts it detached on `run`.
-- Six dylibs removed from the index still exist in older commits; history rewrite is required
-  before merge (owner approved).
+- Six dylibs removed from the index still exist in older feature commits. Their delivery
+  resolution is pending; historical approval is not authority for a new history rewrite.
 
-## Later tasks (owner-requested)
+## Later tasks (owner-requested, deferred)
+
+Only these are deferred; none is a completion claim for work above. Settings,
+install-progress tests, document conflicts, native packaging, the binary-history
+blocker, and macOS Intel are required closure in G6, G2c, G10, and G11.
 
 - A genuinely accurate English streaming model (keep the multilingual entry untouched; probe first).
 - Daemon idle-memory work: measure AOT vs JIT first, then an old-gen heap cap, then post-session retention.
-- [ ] After G8: `macos-x64` (Intel) — build job, checksums, artifact, platform gate. Recorded here
-      deliberately: it is a separate follow-up, not dropped.
 - Optional: shard `Test client`; default to `q5` on low-RAM devices; owner's verdict on the
   composer-wide meter (it paints: `shifts=181 max=0.506`).
-- Separate task: cloud relay for dictation (`voice02-dictation-cloud-relay.md`); local relay is done.
+- Separate task: the hosted dictation channel
+  (`backend` task `voice02-dictation-cloud-relay`); its shared wire contract is
+  [Dictation Transport Protocol](../../technical/dictation_transport_protocol.md). The local
+  relay is done.
+
+## G12 — Hosted dictation relay and legacy voice identity repair
+
+Scope: the public Agent/Client half of `voice02-dictation-cloud-relay`, under the shared contract in
+[Dictation Transport Protocol](../../technical/dictation_transport_protocol.md).
+
+1. **Agent lease and control surface.** Session ownership is an opaque-owner lease released only
+after the session closes; `status`, `install`, `select`, and `prepareRuntime` are served by one
+control surface for both channels; install is per-owner single-flight; `start` is generation-guarded
+so a cancel during load cannot resurrect a session.
+2. **Agent hosted adapter.** `command == "dictation"` is dispatched before conversation-session
+registration; events are origin-scoped `device_event`s with `event_id`, no `session_id`, and a
+producer deadline; audio/end/abort are validated for identity, `seq` contiguity, and the byte cap;
+abort and disconnect call `closeAll` and release the lease.
+3. **Capability advertisement.** `dictation_relay_v1` (version plus frame bound) and
+`voice_origin_v1` are advertised and parsed strictly; a version this build does not speak resolves
+to "unavailable".
+4. **Client transport selection.** One resolver chooses local or hosted and fails closed without the
+capability, the account device id, or an authenticated socket; the hosted transport reuses the
+existing socket, claims before routing, splits frames, carries `stop`/`cancel` on the ordered
+`dictation_end`, and reshapes relayed events into the canonical local vocabulary (D1).
+5. **Truthful readiness.** `supported` (platform verdict) and `ready` + `reason` (current state) stay
+separate, so a supported device missing its runtime keeps its reason and its setup action.
+6. **Device settings.** A Dictation section renders the daemon's own projection: enabled (or
+`managed_externally`), selected model, size, readiness, and reason.
+7. **Legacy voice identity repair.** One minted `voice_session_id` per session with `request_id`
+equal to it on `start_voice`, `voice_audio_chunk`, `voice_control`, and `stop_voice`; account device
+id instead of the local row id; inbound filtering of foreign identity; `voice_relay_error` →
+update-required state.
+
+Acceptance (authored; verification requires the gates below):
+
+- Local and hosted channels produce the same ordered event sequence and the same client state for the
+same fixture (D1).
+- A second concurrent session is refused as busy and never steals the lease (D6).
+- `dictation_event` reaches only the originating socket (D2); a frame whose identity is absent or
+foreign is ignored client side (D15 ordered end + bounded state; the client keeps one session, one
+control operation, and no per-`dictation_id` map).
+- Delayed `dictation_final`/`dictation_done` after the ordered end still reach the client and the
+send path, and late traffic stays bounded by retirement (D14 is bounded retirement/late traffic, not
+the send path).
+- A Gateway capability or identity refusal fails closed with a typed state and no degraded session
+(D5, D16: capability validation of recognized fields).
+- No audio, transcript, path, or credential appears in any log written by the new code (D10).
+- Takeover of a live claim is Gateway-side (D13) and the public side adds no state that could be
+resurrected; the client still ignores a post-end producer event instead of replaying it.
+
+Definition of done for G12: both analyzers green; the focused Agent and Client unit suites green;
+the hosted parity test green; the contract document and the owning `AGENTS.md` files updated in the
+same change set.
+
+Open seams (not completion claims): the native runtime distribution hooks are blocked by the release
+contract's trust policy for an `agent-runtime` component; the launcher readiness probe needs the
+native arch/target contract; and the Gateway must not retire an origin claim at `dictation_end`
+receipt, because the drain results follow it.
 
 ## Definition of done
 

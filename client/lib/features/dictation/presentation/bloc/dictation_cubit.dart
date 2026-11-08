@@ -4,6 +4,7 @@ import 'dart:math' as math;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_identity.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_transport.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_transport_resolver.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
@@ -23,7 +24,7 @@ class DictationCubit extends Cubit<DictationState> {
     String Function()? sessionIdFactory,
   })  : _resolver = resolver,
         _capture = capture,
-        _sessionIdFactory = sessionIdFactory ?? _timestampSessionId,
+        _sessionIdFactory = sessionIdFactory ?? DictationIdentity.next,
         super(DictationState(previewPolicy: previewPolicy));
 
   static final _logger = Logger('DictationCubit');
@@ -70,9 +71,6 @@ class DictationCubit extends Cubit<DictationState> {
   /// until the user stops, so the cap is a real memory bound, not a UX hint.
   static const Duration sessionLimit = Duration(minutes: 5);
 
-  static String _timestampSessionId() =>
-      'dict-${DateTime.now().millisecondsSinceEpoch}';
-
   void setPreviewPolicy(DictationPreviewPolicy policy) {
     if (state.previewPolicy == policy) return;
     emit(state.copyWith(previewPolicy: policy));
@@ -94,12 +92,13 @@ class DictationCubit extends Cubit<DictationState> {
     );
 
     try {
-      final transport = await _resolver.resolve(
-        device: device,
-        sessionId: _sessionId!,
-      );
-      _transport = transport;
-      _attachEvents(transport);
+      // One connection per session: status refreshes and the session itself share
+      // the transport, so a press never opens a second socket.
+      final transport = await _ensureTransport(device);
+      if (transport == null) {
+        await _reset(clearText: true, errorCode: state.errorCode ?? 'connect_failed');
+        return;
+      }
       _capturing = false;
       transport.sendCommand('start');
       // Capture waits for `dictation_ready`: the daemon drops audio that
@@ -109,8 +108,6 @@ class DictationCubit extends Cubit<DictationState> {
     } on DictationTransportUnavailable catch (error) {
       _logger.info('dictation transport unavailable: ${error.reason}');
       await _reset(clearText: true, errorCode: error.reason);
-    } on DictationMicrophoneDenied {
-      await _reset(clearText: true, errorCode: 'microphone_denied');
     } on Object catch (error) {
       _logger.warning('dictation start failed: ${error.runtimeType}');
       await _reset(clearText: true, errorCode: 'start_failed');
@@ -122,7 +119,21 @@ class DictationCubit extends Cubit<DictationState> {
     _capturing = true;
     _captureDrained = Completer<void>();
     _sentChunks = 0;
-    final stream = await _capture.start();
+    final Stream<List<int>> stream;
+    try {
+      stream = await _capture.start();
+    } on DictationMicrophoneDenied {
+      // Capture starts when the daemon is ready, which is after `start` returned:
+      // a denied microphone has to terminate the session from here.
+      _capturing = false;
+      _fail('microphone_denied');
+      return;
+    } on Object catch (error) {
+      _capturing = false;
+      _logger.warning('dictation capture failed: ${error.runtimeType}');
+      _fail('microphone_error');
+      return;
+    }
     _audioSubscription = stream.listen(
       (chunk) {
         // The cap is measured on the audio path, so it needs no timer: a
@@ -334,6 +345,11 @@ class DictationCubit extends Cubit<DictationState> {
   Future<DictationTransport?> _ensureTransport(DeviceConfig device) async {
     final existing = _transport;
     if (existing != null && existing.isOpen) return existing;
+    if (existing != null) {
+      // A replacement closes the previous connection: an orphaned socket keeps a
+      // daemon connection (and eventually its lease) alive with no owner.
+      await _detachTransport(existing);
+    }
     _sessionId = _sessionIdFactory();
     try {
       final transport = await _resolver.resolve(
@@ -351,6 +367,17 @@ class DictationCubit extends Cubit<DictationState> {
       emit(state.copyWith(errorCode: 'connect_failed'));
       return null;
     }
+  }
+
+  /// Stops listening to [transport] and closes it, without touching a newer one.
+  Future<void> _detachTransport(DictationTransport transport) async {
+    if (identical(_eventTransport, transport)) {
+      await _eventSubscription?.cancel();
+      _eventSubscription = null;
+      _eventTransport = null;
+    }
+    await transport.close();
+    if (identical(_transport, transport)) _transport = null;
   }
 
   /// Listens to the transport exactly once: status refreshes and a later
@@ -399,7 +426,10 @@ class DictationCubit extends Cubit<DictationState> {
       case 'dictation_ready':
         emit(
           state.copyWith(
-            model: state.model.copyWith(isReady: true),
+            model: state.model.copyWith(
+              isReady: true,
+              clearReadinessReason: true,
+            ),
             // The recognizer exists now, so the user can speak. Until this
             // event the mic shows a loading affordance.
             status: state.status == DictationStatus.preparing
@@ -475,6 +505,7 @@ class DictationCubit extends Cubit<DictationState> {
         DictationModelOption(
           id: (entry['id'] as String?) ?? '',
           label: (entry['label'] as String?) ?? '',
+          labelCode: entry['label_code'] as String?,
           note: entry['note'] as String?,
           totalBytes: (entry['total_bytes'] as num?)?.toInt(),
           hosted: entry['hosted'] == true,
@@ -486,11 +517,22 @@ class DictationCubit extends Cubit<DictationState> {
       );
     }
     final selectedEntry = models.where((m) => m.id == selected).firstOrNull;
+    // `ready` is authoritative; the installed flag is only a catalog echo and is
+    // absent for an override model that is on disk but not in the catalog.
+    final readyFlag = event['ready'];
+    final reason = event['reason'] as String?;
     return DictationModelStatus(
       selectedModelId: selected,
-      isReady: selectedEntry?.installed ?? false,
+      isReady:
+          readyFlag is bool ? readyFlag : (selectedEntry?.installed ?? false),
       installedBytes: selectedEntry?.totalBytes,
-      unavailableReason: supported ? null : (event['reason'] as String?),
+      // Same field, two meanings: unsupported is a platform verdict, while a
+      // supported-but-not-ready device (native runtime missing or preparing)
+      // must keep its reason so the sheet can offer the prepare action.
+      unavailableReason: supported ? null : reason,
+      readinessReason: supported ? reason : null,
+      isPlatformSupported: supported,
+      busy: event['busy'] == true,
       models: models,
     );
   }
@@ -502,10 +544,16 @@ class DictationCubit extends Cubit<DictationState> {
 
   void _onTransportClosed() {
     if (_closing) return;
-    unawaited(_reset(clearText: false));
+    // The socket died under an in-flight install: the daemon's progress events
+    // can no longer reach this cubit, so the spinner must not outlive them.
+    unawaited(_reset(clearText: false, clearModelProgress: true));
   }
 
-  Future<void> _reset({required bool clearText, String? errorCode}) async {
+  Future<void> _reset({
+    required bool clearText,
+    String? errorCode,
+    bool clearModelProgress = false,
+  }) async {
     if (_closing) return;
     _closing = true;
     _clock.stop();
@@ -518,10 +566,8 @@ class DictationCubit extends Cubit<DictationState> {
     await _audioSubscription?.cancel();
     _audioSubscription = null;
     await _capture.stop();
-    await _eventSubscription?.cancel();
-    _eventSubscription = null;
-    await _transport?.close();
-    _transport = null;
+    final transport = _transport;
+    if (transport != null) await _detachTransport(transport);
     final device = _device;
     _device = null;
     _sessionId = null;
@@ -540,6 +586,12 @@ class DictationCubit extends Cubit<DictationState> {
         errorCode: errorCode ?? (limitReached ? 'session_limit' : null),
         clearError: errorCode == null && !limitReached,
         sessionNeedsFirstUseSheet: errorCode == 'model_not_installed',
+        model: clearModelProgress
+            ? state.model.copyWith(
+                clearInstallingModel: true,
+                clearDownloadProgress: true,
+              )
+            : null,
       ),
     );
     _closing = false;

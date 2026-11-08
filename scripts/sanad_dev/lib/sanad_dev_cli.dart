@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:math';
 
@@ -23,6 +24,7 @@ import 'src/infrastructure/secure_runtime_file.dart';
 import 'src/infrastructure/startup_attempt.dart';
 import 'src/infrastructure/startup_probe.dart';
 import 'src/infrastructure/terminal_launcher.dart';
+import 'src/infrastructure/vm_service_out_file.dart';
 import 'src/runtime/ownership/runtime_ownership.dart';
 import 'src/runtime/switch/runtime_switch.dart';
 

@@ -52,6 +52,13 @@ abstract class DictationChannel {
   Stream<DictationMessage> get commands;
   void send(String event, [Map<String, dynamic> payload = const {}]);
   Future<void> close();
+
+  /// Frames this channel dropped before they reached the engine.
+  ///
+  /// The local channel forwards what the socket delivered, so it drops nothing;
+  /// the hosted channel drops duplicates and reports them in `dictation_done`
+  /// exactly like the engine's own counted drops.
+  int get droppedFrames => 0;
 }
 
 /// Binary frames are microphone audio; text frames are JSON commands.
@@ -101,6 +108,9 @@ class WebSocketDictationChannel implements DictationChannel {
       StreamController<DictationMessage>.broadcast();
   late final StreamSubscription _subscription;
   bool _closed = false;
+
+  @override
+  int get droppedFrames => 0;
 
   @override
   Stream<Uint8List> get audio => _audio.stream;
@@ -162,6 +172,13 @@ class DictationSession {
   bool _closing = false;
   int _segments = 0;
 
+  /// The in-flight termination.
+  ///
+  /// A second `close()` (socket teardown racing a `stop` command) must observe
+  /// the same termination instead of returning early, so a caller that awaits it
+  /// releases the lease only after the engine really finished draining.
+  Future<void>? _termination;
+
   /// Starts forwarding audio and publishing transcript events.
   Future<void> start() async {
     if (_started || _closing) return;
@@ -203,13 +220,14 @@ class DictationSession {
             'decode_ms': event.decodeMs,
           });
         case SttDoneEvent():
+          final dropped = event.droppedChunks + transport.droppedFrames;
           _logger.info(
             'dictation drained: segments=$_segments '
-            'dropped=${event.droppedChunks} model=$modelId',
+            'dropped=$dropped model=$modelId',
           );
           transport.send('dictation_done', {
             'segments': _segments,
-            'dropped_chunks': event.droppedChunks,
+            'dropped_chunks': dropped,
           });
         case SttErrorEvent():
           // Codes and counts only: never transcript text or audio.
@@ -258,8 +276,15 @@ class DictationSession {
     await _stop(drain: false);
   }
 
-  Future<void> _stop({required bool drain}) async {
-    if (_closing) return;
+  Future<void> _stop({required bool drain}) {
+    final existing = _termination;
+    if (existing != null) return existing;
+    final termination = _stopOnce(drain: drain);
+    _termination = termination;
+    return termination;
+  }
+
+  Future<void> _stopOnce({required bool drain}) async {
     _closing = true;
     _sessionClock.stop();
     if (drain) {

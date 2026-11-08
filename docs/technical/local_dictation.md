@@ -100,6 +100,64 @@ directory or a single `.bin` ggml file) and requires no download or checksum;
 macOS on arm64 only in v1. Elsewhere `supports_dictation` is false with a reason
 and the mic button is not actionable.
 
+## Readiness is two facts, not one
+
+The daemon reports `supported` (can this platform ever run dictation) separately
+from `ready` plus `reason` (can it run *right now*). A supported device whose
+native shim is missing reports `supported: true, ready: false,
+reason: native_runtime_missing`, and the Client keeps that reason so the setup
+action stays reachable. Conflating the two is what made the runtime states
+unreachable in the composer: a supported device could not explain itself, and a
+pressing user was told "not ready" with no way forward.
+
+The same `reason` string is projected twice — as the platform verdict when
+`supported` is false and as the readiness reason when it is true. There is no
+second status field on the wire.
+
+## One channel, chosen in one place
+
+Dictation is transport-agnostic above the transport boundary. The local socket
+channel and the hosted relay produce the same `{event, ...fields}` vocabulary, so
+the session, the cubit, the insertion helper, and the widgets never branch on
+connection scope. Only `DictationTransportResolver.resolve` chooses a channel,
+and it fails closed when the hosted prerequisites are missing (no
+`dictation_relay_v1`, no account device id, no authenticated socket). The
+D-series invariants and the hosted rules live in
+[dictation_transport_protocol.md](dictation_transport_protocol.md).
+
+Consequences that are contract, not implementation detail:
+
+- The mic cannot be hidden on a remote device that can relay; it opens the sheet
+  or reports the exact reason.
+- The device settings page renders the daemon's own `dictation` projection, so
+  it cannot describe a state different from the mic.
+- A daemon-owned catalog row is identified by `label_code` (`path_override`
+  today) and localized by the Client; the daemon never ships user-facing copy.
+
+## Driver acceptance seam
+
+A driver-run acceptance leg can execute this same path without a microphone. The
+`driver_main.dart` entry installs `dictationCaptureFactory` **before**
+`AppProviders` builds the cubit and registers three `ext.sanad_client.*`
+extensions:
+
+- `dictation_capture` arms a bounded 16 kHz mono PCM16LE fixture (even bytes,
+  at most 60 s, 320..32000-byte chunks every 10..500 ms). A fixture is
+  single-use; arming or disarming during an active session is refused, and
+  cancellation stops its timer so no late chunk reaches the transport.
+- `dictation_probe` counts only known dictation/voice event classes plus
+  device/dictation identity equality over the existing authenticated event
+  stream. It stores no audio, transcript, or per-frame history.
+- `dictation_control` reports the cubit phase and can invoke the existing
+  `DictationCubit.cancel()` for a live control leg.
+
+Production `main.dart` never installs the seam, so the real microphone remains
+the default. Every response is a boolean, count, or phase: audio, transcript
+bytes, and daemon messages never cross the driver surface. A VM-only service
+extension is only reachable when the selected Client actually exposes a usable
+DDS VM URL; that is an environment prerequisite, not something this seam
+provides.
+
 ## Related
 
 - [Experimental Realtime Voice](voice_streaming.md) — the duplex voice path,

@@ -70,7 +70,9 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
     AppLocalizations l10n,
     DictationModelStatus model,
   ) {
-    switch (model.unavailableReason) {
+    // Readiness reason, not the platform verdict: a supported device that is
+    // missing its native shim is exactly the case this action exists for.
+    switch (model.readinessReason) {
       case 'native_runtime_preparing':
         return const Padding(
           padding: EdgeInsets.only(top: 8),
@@ -116,7 +118,7 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(l10n.dictationSheetIntro, style: bodyStyle),
-                  if (model.unavailableReason != null) ...[
+                  if (model.blockedReason != null) ...[
                     const SizedBox(height: 12),
                     Container(
                       width: double.infinity,
@@ -133,7 +135,8 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                         children: [
                           Text(
                             '${l10n.dictationUnavailableTitle} · '
-                            '${_reasonLabel(l10n, model.unavailableReason!)}',
+                            '${_reasonLabel(l10n, model.blockedReason!)}',
+                            key: const Key('dictation_blocked_reason'),
                             style: bodyStyle,
                           ),
                           _statusAction(cubit, l10n, model),
@@ -199,7 +202,7 @@ class _ModelTile extends StatelessWidget {
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final size = _formatBytes(option.totalBytes);
+    final size = _formatBytes(l10n, option.totalBytes);
 
     Widget? action;
     if (isDownloading) {
@@ -257,7 +260,11 @@ class _ModelTile extends StatelessWidget {
                       children: [
                         Flexible(
                           child: Text(
-                            option.label,
+                            // A daemon-owned row (the `stt.model_path` override)
+                            // arrives as a code, not as English copy.
+                            option.labelCode == null
+                                ? option.label
+                                : _labelForCode(l10n, option.labelCode!, option.label),
                             style: theme.textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                             ),
@@ -339,14 +346,26 @@ class _ModelTile extends StatelessWidget {
     );
   }
 
-  static String? _formatBytes(int? bytes) {
+  static String? _formatBytes(AppLocalizations l10n, int? bytes) {
     if (bytes == null || bytes <= 0) return null;
     const mb = 1024 * 1024;
     final value = bytes / mb;
+    // Formatted through the locale: the unit is universal, the digits are not.
     return value >= 1024
-        ? '${(value / 1024).toStringAsFixed(1)} GB'
-        : '${value.toStringAsFixed(0)} MB';
+        ? l10n.dictationModelSizeGb((value / 1024).toStringAsFixed(1))
+        : l10n.dictationModelSizeMb(value.toStringAsFixed(0));
   }
+}
+
+/// Localizes a daemon label code, falling back to the daemon's own text.
+///
+/// Codes are the daemon's stable identities (`path_override` today); the sheet
+/// owns every user-facing word, so no daemon string is ever shown untranslated.
+String _labelForCode(AppLocalizations l10n, String code, String fallback) {
+  return switch (code) {
+    'path_override' => l10n.dictationPathOverrideModel,
+    _ => fallback.isEmpty ? code : fallback,
+  };
 }
 
 /// Turns a daemon readiness code into user-facing copy.
@@ -359,6 +378,11 @@ String _reasonLabel(AppLocalizations l10n, String reason) {
     'native_runtime_preparing' => l10n.dictationRuntimePreparing,
     'native_runtime_missing' => l10n.dictationRuntimeMissing,
     'unsupported_platform' => l10n.dictationUnsupportedPlatform,
-    _ => reason,
+    'dictation_disabled' => l10n.dictationDisabled,
+    'model_not_installed' => l10n.dictationModelRequired,
+    // The daemon may report `config_invalid` or a future code; the sheet owns
+    // every sentence it shows, so an unknown code falls back to neutral copy
+    // instead of a raw daemon or parser message.
+    _ => l10n.dictationUnavailable,
   };
 }

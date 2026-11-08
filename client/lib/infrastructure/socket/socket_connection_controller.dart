@@ -330,6 +330,12 @@ class SocketConnectionController {
       'capabilities',
       'device_event',
       'voice_audio_chunk_relay',
+      // Hosted dictation relay envelopes. Registered here or they never reach
+      // the transport: this list is the cloud inbound contract.
+      'dictation_event',
+      'dictation_route_ack',
+      'dictation_route_error',
+      'voice_relay_error',
       'command_result',
       'execute_tool',
     ]) {

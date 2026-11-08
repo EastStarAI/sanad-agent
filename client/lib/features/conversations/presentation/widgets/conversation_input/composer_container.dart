@@ -304,7 +304,6 @@ class ComposerContainer extends StatelessWidget {
           onSendAttempt: onSendAttempt,
           onStop: onStop,
           dimTextColor: dimTextColor,
-          sessionId: sessionId,
         );
       },
     );

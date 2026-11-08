@@ -1,6 +1,7 @@
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 
 class DeviceSettingsUpdate {
   const DeviceSettingsUpdate({
@@ -19,15 +20,21 @@ class DeviceSettingsService {
     required Config config,
     required EnvFileService envFileService,
     required RuntimeRecoveryService runtimeRecovery,
+    DictationService? dictation,
   }) : _config = config,
        _envFileService = envFileService,
-       _runtimeRecovery = runtimeRecovery;
+       _runtimeRecovery = runtimeRecovery,
+       _dictation = dictation;
 
   static const supportedWebSearchProviders = {'ddg', 'serper'};
 
   final Config _config;
   final EnvFileService _envFileService;
   final RuntimeRecoveryService _runtimeRecovery;
+
+  /// The same daemon dictation owner the mic and the hosted relay use, so the
+  /// settings page reports the readiness the user actually has.
+  final DictationService? _dictation;
 
   Map<String, dynamic> snapshot() => {
     'cloud_connection': {
@@ -52,6 +59,10 @@ class DeviceSettingsService {
       'enabled': _runtimeRecovery.autoFailoverEnabled,
       'managed_externally': _config.isProcessManaged('PROVIDER_AUTO_FAILOVER'),
     },
+    // Additive block inside the existing settings family: the dictation runtime
+    // is daemon-owned, so the page reads its enabled/model/size/reason here
+    // instead of reading agent configuration itself.
+    if (_dictation != null) 'dictation': _dictation.settingsSnapshot(),
   };
 
   Future<DeviceSettingsUpdate> update(Map<String, dynamic> changes) async {
@@ -65,6 +76,8 @@ class DeviceSettingsService {
       'web_search_provider',
       'serper_api_key',
       'provider_auto_failover_enabled',
+      'dictation_enabled',
+      'dictation_model_id',
     };
     final unknown = changes.keys.where((key) => !allowed.contains(key));
     if (unknown.isNotEmpty) {
@@ -125,10 +138,39 @@ class DeviceSettingsService {
       ).toString();
     }
 
+    // Dictation is persisted by its own owner (never by hand-editing the agent
+    // configuration), so its changes are applied before the environment file is
+    // touched and cannot partially land with an invalid mixed request.
+    final dictationEnabled = changes.containsKey('dictation_enabled')
+        ? requireBool('dictation_enabled')
+        : null;
+    final dictationModelId = changes.containsKey('dictation_model_id')
+        ? changes['dictation_model_id']
+        : null;
+    if (changes.containsKey('dictation_model_id') &&
+        (dictationModelId is! String || dictationModelId.trim().isEmpty)) {
+      throw const FormatException('dictation_model_id must be a model id.');
+    }
+    final dictation = _dictation;
+    if (dictationEnabled != null || dictationModelId != null) {
+      if (dictation == null) {
+        throw StateError('This agent does not run dictation.');
+      }
+      if (dictationEnabled != null) {
+        await dictation.applyEnabled(dictationEnabled);
+      }
+      if (dictationModelId is String) {
+        await dictation.selectModel(dictationModelId.trim());
+      }
+    }
+
     // Validation completes before the single environment-file mutation so an
-    // invalid mixed request cannot partially apply.
-    await _envFileService.upsert(updates);
-    _config.reload();
+    // invalid mixed request cannot partially apply. A dictation-only change
+    // writes no environment key, so it never touches the file.
+    if (updates.isNotEmpty) {
+      await _envFileService.upsert(updates);
+      _config.reload();
+    }
     if (changes.containsKey('provider_auto_failover_enabled')) {
       _runtimeRecovery.autoFailoverEnabled =
           changes['provider_auto_failover_enabled'] as bool;

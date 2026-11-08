@@ -15,6 +15,18 @@ class Capability {
   static const int defaultAttachmentMaxFilesPerMessage = 4;
   static const int defaultAttachmentMaxTotalBytesPerMessage = 20 * 1024 * 1024;
 
+  /// Largest audio frame the dictation relay contract allows.
+  static const int dictationRelayContractMaxFrameBytes = 32768;
+
+  /// Contract ceilings for one hosted relay session (§2). An Agent may declare a
+  /// smaller value; the Client never assumes these numbers are what the peer
+  /// agreed to.
+  static const int dictationRelayContractMaxSessionBytes = 12582912;
+  static const int dictationRelayContractMaxSessionSeconds = 300;
+
+  /// The only relay version this Client speaks.
+  static const int dictationRelayVersion1 = 1;
+
   final bool supportsModelChange;
   final bool supportsThinkingModeChange;
   final bool supportsVoiceMessage;
@@ -26,6 +38,27 @@ class Capability {
 
   /// Machine-readable reason when [supportsDictation] is false.
   final String? dictationUnavailableReason;
+
+  /// Hosted relay contract this Agent accepts (`dictation_relay_v1`).
+  ///
+  /// Absent means the hosted channel is unavailable for this device: the Client
+  /// keeps the local-only outcome and never attempts the relay. A version this
+  /// build does not know is refused defensively rather than negotiated.
+  final int? dictationRelayVersion;
+
+  /// Largest audio frame the Agent declared for the relay, bounded by the
+  /// contract maximum; the Client splits capture to it.
+  final int dictationRelayMaxFrameBytes;
+
+  /// The declared session byte bound, clamped to the contract maximum.
+  final int dictationRelayMaxSessionBytes;
+
+  /// The declared session duration bound in seconds, clamped to the contract
+  /// maximum, so a long utterance cannot outlive the peer's admission window.
+  final int dictationRelayMaxSessionSeconds;
+
+  /// This Agent produces origin-correlated voice output (`voice_origin_v1`).
+  final bool supportsVoiceOrigin;
   final bool supportsStop;
   final bool supportsWorkplace;
   final bool supportsAttachments;
@@ -64,6 +97,12 @@ class Capability {
     this.supportsVoiceCall = false,
     this.supportsDictation = false,
     this.dictationUnavailableReason,
+    this.dictationRelayVersion,
+    this.dictationRelayMaxFrameBytes = dictationRelayContractMaxFrameBytes,
+    this.dictationRelayMaxSessionBytes = dictationRelayContractMaxSessionBytes,
+    this.dictationRelayMaxSessionSeconds =
+        dictationRelayContractMaxSessionSeconds,
+    this.supportsVoiceOrigin = false,
     this.supportsStop = false,
     this.supportsWorkplace = false,
     this.supportsAttachments = false,
@@ -128,6 +167,19 @@ class Capability {
       supportsDictation: caps['supports_dictation'] ?? false,
       dictationUnavailableReason:
           caps['dictation_unavailable_reason'] as String?,
+      dictationRelayVersion: _parseDictationRelayVersion(
+        caps['dictation_relay_v1'],
+      ),
+      dictationRelayMaxFrameBytes: _parseDictationRelayMaxFrameBytes(
+        caps['dictation_relay_v1'],
+      ),
+      dictationRelayMaxSessionBytes: _parseDictationRelayMaxSessionBytes(
+        caps['dictation_relay_v1'],
+      ),
+      dictationRelayMaxSessionSeconds: _parseDictationRelayMaxSessionSeconds(
+        caps['dictation_relay_v1'],
+      ),
+      supportsVoiceOrigin: caps['voice_origin_v1'] == true,
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
       supportsAttachments: supportsAttachmentMedia,
@@ -165,6 +217,11 @@ class Capability {
     );
   }
 
+  /// Whether the hosted dictation relay is usable for this device.
+  bool get supportsDictationRelay =>
+      supportsDictation &&
+      dictationRelayVersion == dictationRelayVersion1;
+
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
@@ -175,6 +232,12 @@ class Capability {
         other.supportsVoiceCall == supportsVoiceCall &&
         other.supportsDictation == supportsDictation &&
         other.dictationUnavailableReason == dictationUnavailableReason &&
+        other.dictationRelayVersion == dictationRelayVersion &&
+        other.dictationRelayMaxFrameBytes == dictationRelayMaxFrameBytes &&
+        other.dictationRelayMaxSessionBytes == dictationRelayMaxSessionBytes &&
+        other.dictationRelayMaxSessionSeconds ==
+            dictationRelayMaxSessionSeconds &&
+        other.supportsVoiceOrigin == supportsVoiceOrigin &&
         other.supportsStop == supportsStop &&
         other.supportsWorkplace == supportsWorkplace &&
         other.supportsAttachments == supportsAttachments &&
@@ -213,6 +276,11 @@ class Capability {
     supportsVoiceCall,
     supportsDictation,
     dictationUnavailableReason,
+    dictationRelayVersion,
+    dictationRelayMaxFrameBytes,
+    dictationRelayMaxSessionBytes,
+    dictationRelayMaxSessionSeconds,
+    supportsVoiceOrigin,
     supportsStop,
     supportsWorkplace,
     supportsAttachments,
@@ -251,8 +319,55 @@ class Capability {
     return true;
   }
 
-  static CapabilityValueScope _parseScope(dynamic raw) {
-    switch ((raw ?? '').toString().toLowerCase()) {
+  /// `dictation_relay_v1.version`, present and equal to 1 only.
+  ///
+  /// A missing block, a wrong type, or a version this build does not speak all
+  /// resolve to null, so the hosted channel is treated as unavailable instead of
+  /// negotiated. Malformed recognized capability is rejected at the producer
+  /// boundary; the Client still refuses defensively.
+  static int? _parseDictationRelayVersion(dynamic raw) {
+    if (raw is! Map) return null;
+    final version = raw['version'];
+    if (version is int && version == dictationRelayVersion1) return version;
+    if (version == '$dictationRelayVersion1') return dictationRelayVersion1;
+    return null;
+  }
+
+  /// The declared frame bound, clamped to the contract maximum.
+  static int _parseDictationRelayMaxFrameBytes(dynamic raw) {
+    final declared = raw is Map ? (raw['max_frame_bytes'] as num?)?.toInt() : null;
+    if (declared == null || declared <= 0) {
+      return dictationRelayContractMaxFrameBytes;
+    }
+    return declared < dictationRelayContractMaxFrameBytes
+        ? declared
+        : dictationRelayContractMaxFrameBytes;
+  }
+
+  /// The declared session byte bound, clamped to the contract maximum.
+  static int _parseDictationRelayMaxSessionBytes(dynamic raw) {
+    final declared = raw is Map ? (raw['max_session_bytes'] as num?)?.toInt() : null;
+    if (declared == null || declared <= 0) {
+      return dictationRelayContractMaxSessionBytes;
+    }
+    return declared < dictationRelayContractMaxSessionBytes
+        ? declared
+        : dictationRelayContractMaxSessionBytes;
+  }
+
+  /// The declared session duration bound, clamped to the contract maximum.
+  static int _parseDictationRelayMaxSessionSeconds(dynamic raw) {
+    final declared =
+        raw is Map ? (raw['max_session_seconds'] as num?)?.toInt() : null;
+    if (declared == null || declared <= 0) {
+      return dictationRelayContractMaxSessionSeconds;
+    }
+    return declared < dictationRelayContractMaxSessionSeconds
+        ? declared
+        : dictationRelayContractMaxSessionSeconds;
+  }
+
+  static CapabilityValueScope _parseScope(dynamic raw) {    switch ((raw ?? '').toString().toLowerCase()) {
       case 'session':
         return CapabilityValueScope.session;
       case 'message':

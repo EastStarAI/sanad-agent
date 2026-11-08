@@ -95,7 +95,7 @@ class FakeVoiceStreamCubit extends Cubit<VoiceStreamState> implements VoiceStrea
   FakeVoiceStreamCubit() : super(const VoiceStreamState());
 
   @override
-  Future<void> startVoiceSession({required DeviceConfig agent, required String sessionId}) async {}
+  Future<void> startVoiceSession({required DeviceConfig agent, String? sessionId}) async {}
 
   @override
   void sendManualInterrupt() {}

@@ -23,7 +23,6 @@ class ComposerSendStopButton extends StatelessWidget {
   final void Function({MessageDeliveryIntent intent}) onSendAttempt;
   final VoidCallback? onStop;
   final Color dimTextColor;
-  final String? sessionId;
 
   const ComposerSendStopButton({
     required this.agentSlice,
@@ -33,7 +32,6 @@ class ComposerSendStopButton extends StatelessWidget {
     required this.onSendAttempt,
     required this.onStop,
     required this.dimTextColor,
-    this.sessionId,
   });
 
   /// Sends the draft, but never an empty one.
@@ -210,10 +208,9 @@ class ComposerSendStopButton extends StatelessWidget {
                 } else {
                   final activeAgent = agentSlice.activeAgent;
                   if (activeAgent != null) {
-                    await voiceCubit.startVoiceSession(
-                      agent: activeAgent,
-                      sessionId: sessionId ?? 'default',
-                    );
+                    // No session id from here: the cubit mints the one identity
+                    // the whole voice session is claimed and routed by.
+                    await voiceCubit.startVoiceSession(agent: activeAgent);
                   }
                 }
               },

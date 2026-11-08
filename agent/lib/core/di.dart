@@ -8,6 +8,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/test_runtime_isolation.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/core/e2e_agent_runtime_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_rate_limiter.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -347,7 +348,16 @@ void setupDI() {
       config: getIt<Config>(),
       envFileService: getIt<EnvFileService>(),
       runtimeRecovery: getIt<RuntimeRecoveryService>(),
+      dictation: getIt<DictationService>(),
     ),
+  );
+
+  // One dictation owner per daemon: the local socket channel, the hosted relay,
+  // the capability projection, and the Device settings projection all resolve
+  // this instance, so the session lease, engine residency, and catalog state can
+  // never diverge.
+  getIt.registerLazySingleton<DictationService>(
+    () => DictationService(sanadHome: getSanadHome()),
   );
 
   getIt.registerLazySingleton<AgentRuntimeService>(

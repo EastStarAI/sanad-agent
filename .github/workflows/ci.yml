@@ -258,9 +258,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-26, windows-2025]
+        # `macos-15-intel` is the only genuine Intel evidence: cross-building
+        # x86_64 on Apple Silicon would produce an untested slice, so the Intel
+        # slice is compiled, loaded, and staged on Intel hardware.
+        os: [ubuntu-24.04, macos-26, macos-15-intel, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
+    env:
+      # This job builds the runtime, so a missing or foreign-architecture one is
+      # a defect: the smoke test fails instead of skipping.
+      SANAD_STT_REQUIRE_NATIVE: '1'
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
@@ -277,22 +284,90 @@ jobs:
         with:
           path: whisper.cpp/build
           key: whisper-${{ matrix.os }}-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
-      - name: Build on Unix (macOS Metal, Linux CPU)
-        if: runner.os != 'Windows'
+      - name: Require the runner CPU the matrix label claims
+        if: runner.os == 'macOS'
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "macOS" ]; then export GGML_METAL=ON; else export GGML_METAL=OFF; fi
-          bash agent/tool/build_whispercpp.sh "$GITHUB_WORKSPACE/whisper.cpp"
+          set -euo pipefail
+          expected=arm64
+          if [ "${{ matrix.os }}" = "macos-15-intel" ]; then expected=x86_64; fi
+          actual="$(uname -m)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::${{ matrix.os }} reported $actual, expected $expected"
+            exit 1
+          fi
       - name: Set up MSVC
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
-      - name: Build on Windows
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: pwsh -File agent/tool/build_whispercpp.ps1 whisper.cpp
-      - name: Verify the shim is discoverable
+      - name: Resolve agent dependencies
         working-directory: agent
+        run: fvm flutter pub get
+      # The tool owns the platform tag, the required files, Metal per
+      # architecture, and the CMake architecture/deployment target, so CI never
+      # restates the layout. Every `bash` step here excludes Windows and has a
+      # `pwsh` twin: the runner's fvm entry point is a `.bat` shim, and this
+      # lane has no verified Git-Bash semantics.
+      - name: Build the native runtime for this runner
+        if: runner.os != 'Windows'
+        working-directory: agent
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+        shell: bash
         run: fvm dart run tool/ensure_native_stt.dart
+      - name: Build the native runtime for this runner
+        if: runner.os == 'Windows'
+        working-directory: agent
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart
+      - name: Verify the installed runtime and its manifest entry
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: fvm dart run tool/ensure_native_stt.dart --verify
+      - name: Verify the installed runtime and its manifest entry
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --verify
+      - name: Load the built runtime in a real process
+        working-directory: agent
+        run: fvm dart test test/stt/native_runtime_smoke_test.dart
+      # Exercises the packaged-release producing path without publishing
+      # anything: a staged runtime directory plus a reproducible archive whose
+      # recorded sha256 is derived from the produced bytes. Member naming and
+      # the no-model invariant are owned by agent/test/tool/stt_native_archive_test.dart
+      # and the staging allowlist by agent/test/tool/stt_native_runtime_test.dart,
+      # so no shell pipeline restates them here.
+      - name: Stage and archive the runtime for packaging
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          fvm dart run tool/ensure_native_stt.dart \
+            --stage ../dist-native \
+            --archive ../dist-native
+          test "$(ls ../dist-native/sanad-stt-*.tar.gz | wc -l | tr -d ' ')" = 1
+      - name: Stage and archive the runtime for packaging
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --stage ../dist-native --archive ../dist-native
+          $archives = @(Get-ChildItem -LiteralPath ../dist-native -Filter 'sanad-stt-*.tar.gz')
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one staged runtime archive."
+          }
 
   client-analyze:
     name: Analyze client

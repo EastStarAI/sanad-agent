@@ -17,6 +17,17 @@ abstract class DictationCapture {
   Future<void> dispose();
 }
 
+/// Builds the capture source a new [DictationCubit] uses.
+///
+/// Production keeps the real microphone. The developer driver entry replaces
+/// this once, before `AppProviders` is built, so a driver-run acceptance leg can
+/// feed a bounded fixture through the same cubit, resolver, transport, and
+/// daemon. It is intentionally a construction-time factory: a cubit captures its
+/// capture instance, so replacing the factory later could never affect it.
+typedef DictationCaptureFactory = DictationCapture Function();
+
+DictationCaptureFactory dictationCaptureFactory = DictationAudioCapture.new;
+
 /// Microphone capture for dictation: 16 kHz mono PCM16 little-endian.
 ///
 /// Capture is deliberately separate from the voice-call service so dictation

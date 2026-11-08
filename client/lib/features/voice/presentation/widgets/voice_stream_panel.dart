@@ -4,6 +4,7 @@ import 'package:sanad_client/core/theme/app_typography.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 
@@ -52,12 +53,23 @@ class _VoiceStreamPanelState extends State<VoiceStreamPanel> with SingleTickerPr
     final isConnecting = widget.voiceState.status == VoiceSessionStatus.connecting;
     final isSpeaking = widget.voiceState.status == VoiceSessionStatus.speaking;
     final isListening = widget.voiceState.status == VoiceSessionStatus.listening;
+    final isBlocked =
+        widget.voiceState.status == VoiceSessionStatus.updateRequired ||
+        widget.voiceState.status == VoiceSessionStatus.error;
+    final l10n = AppLocalizations.of(context)!;
 
     String statusText = 'Connecting...';
     if (isListening) {
       statusText = widget.voiceState.isMuted ? 'Microphone muted' : 'Listening to you...';
     }
     if (isSpeaking) statusText = '${widget.agent.name} is speaking...';
+    if (widget.voiceState.status == VoiceSessionStatus.updateRequired) {
+      // No degraded fallback exists for an outdated relay peer, so the panel
+      // states the required action instead of pretending the call is running.
+      statusText = l10n.voiceUpdateRequired;
+    } else if (widget.voiceState.status == VoiceSessionStatus.error) {
+      statusText = l10n.voiceUnavailable;
+    }
 
     // Wave color palettes - Premium Gradients
     final List<Color> userWaveColors = [
@@ -126,18 +138,21 @@ class _VoiceStreamPanelState extends State<VoiceStreamPanel> with SingleTickerPr
                       ),
                     ),
                     const SizedBox(height: 2),
-                    Text(
-                      statusText,
-                      style: AppTypography.text(context,
-                        color: isConnecting
-                            ? Colors.orangeAccent
-                            : isSpeaking
-                            ? agentWaveColors[1]
-                            : colorScheme.onSurfaceVariant,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
+                  Text(
+                    statusText,
+                    key: const Key('voice_status_text'),
+                    style: AppTypography.text(context,
+                      color: isBlocked
+                          ? colorScheme.error
+                          : isConnecting
+                          ? Colors.orangeAccent
+                          : isSpeaking
+                          ? agentWaveColors[1]
+                          : colorScheme.onSurfaceVariant,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
                     ),
+                  ),
                   ],
                 ),
               ),

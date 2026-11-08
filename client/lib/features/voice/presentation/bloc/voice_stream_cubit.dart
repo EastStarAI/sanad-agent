@@ -9,6 +9,7 @@ import 'package:universal_io/io.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/domain/dictation_identity.dart';
 import 'package:sanad_client/features/voice/domain/services/voice_stream_service.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/infrastructure/local_gateway/local_gateway_credential_provider.dart';
@@ -48,8 +49,26 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
 
   Future<void> startVoiceSession({
     required DeviceConfig agent,
-    required String sessionId,
+    String? sessionId,
   }) async {
+    // One identity for the whole session, minted here with the same generator as
+    // `dictation_id`. A caller-supplied value (a conversation id) is not a
+    // session identity: reusing it let two sessions share one origin claim.
+    final voiceSessionId = DictationIdentity.isValid(sessionId)
+        ? sessionId!
+        : DictationIdentity.nextVoice();
+    // The claim is keyed by the account device id, because that is the identity
+    // the Gateway authenticates; `agent.id` is only this device's local row id.
+    final accountDeviceId = agent.accountDeviceId;
+    if (accountDeviceId == null || accountDeviceId.isEmpty) {
+      emit(
+        state.copyWith(
+          status: VoiceSessionStatus.updateRequired,
+          errorMessage: 'account_device_identity_required',
+        ),
+      );
+      return;
+    }
     _logger.info('=== [VoiceStreamCubit] startVoiceSession called ===');
     if (state.isSessionActive) {
       _logger.info('[VoiceStreamCubit] Session is already active, stopping first');
@@ -61,7 +80,8 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
         isSessionActive: true,
         status: VoiceSessionStatus.connecting,
         activeAgentId: agent.id,
-        activeSessionId: sessionId,
+        activeSessionId: voiceSessionId,
+        activeAccountDeviceId: accountDeviceId,
         isMuted: false,
         clearError: true,
       ),
@@ -91,7 +111,7 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
         final wsUri = LocalGatewayUriPolicy.requireWebSocket(
           _toLocalWebSocketUri(
             AppConfig.localGatewayUrl,
-            sessionId: sessionId,
+            sessionId: voiceSessionId,
             deviceId: agent.id,
           ),
         );
@@ -172,16 +192,26 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
         // Start session command
         _logger.info('[VoiceStreamCubit] Emitting start_voice command to cloud...');
         cloudSocket.sendDeviceCommand(
-          deviceId: agent.id,
+          deviceId: accountDeviceId,
           command: 'start_voice',
           payload: {
-            'session_id': sessionId,
+            'device_id': accountDeviceId,
+            'session_id': voiceSessionId,
+            // Equal to the session id: the claim the Gateway registers is the
+            // same identity every later frame and daemon event is routed by.
+            'request_id': voiceSessionId,
           },
         );
 
         // Listen to Socket.IO events relayed from cloud
         _cloudSocketSubscription = cloudSocket.events.listen((event) async {
           final eventName = event['event'] as String?;
+          if (_isForeignVoiceFrame(event, voiceSessionId)) return;
+
+          if (eventName == 'voice_relay_error') {
+            await _handleVoiceRelayError(event);
+            return;
+          }
 
           if (event['type'] == 'voice_audio_chunk_relay') {
             final audioData = event['data'];
@@ -211,8 +241,12 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
             _handleMicChunk(
               chunk,
               sendFn: (data) {
+                // Identity on every frame: without it the Gateway cannot tell
+                // which session this audio belongs to and rejects the frame.
                 cloudSocket.emit('voice_audio_chunk', {
-                  'device_id': agent.id,
+                  'device_id': accountDeviceId,
+                  'session_id': voiceSessionId,
+                  'request_id': voiceSessionId,
                   'data': data,
                 });
               },
@@ -238,11 +272,64 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
     }
   }
 
+  /// True when a relayed voice frame does not belong to this session.
+  ///
+  /// The device check is kept from the legacy path; the identity check is the
+  /// repair. Protocol §10.1 makes an unidentified relayed frame foreign by
+  /// definition: the only way to produce one is the broadcast that caused the
+  /// cross-wire, and §10.2 is deliberately not backward compatible with it. So a
+  /// missing `session_id`/`request_id` is rejected, never played.
+  bool _isForeignVoiceFrame(Map<String, dynamic> event, String ownSessionId) {
+    final sessionId = event['session_id']?.toString();
+    final requestId = event['request_id']?.toString();
+    final deviceId = event['device_id']?.toString();
+    if (sessionId == null || sessionId.isEmpty || sessionId != ownSessionId) {
+      return true;
+    }
+    if (requestId == null || requestId.isEmpty || requestId != ownSessionId) {
+      return true;
+    }
+    final ownAgentId = state.activeAgentId;
+    if (deviceId != null &&
+        deviceId.isNotEmpty &&
+        deviceId != ownAgentId &&
+        deviceId != state.activeAccountDeviceId) {
+      return true;
+    }
+    return false;
+  }
+
+  /// Ends the session on a relay protocol violation and presents the
+  /// update-required state instead of a degraded session.
+  Future<void> _handleVoiceRelayError(Map<String, dynamic> event) async {
+    final code = event['error_code']?.toString() ?? 'relay_error';
+    _logger.warning('[VoiceStreamCubit] voice relay error code=$code');
+    if (code == 'offline' || code == 'expired') {
+      // Not a version problem: the device simply is not reachable for this
+      // session, which the generic error state already covers.
+      await stopVoiceSession();
+      emit(
+        state.copyWith(
+          status: VoiceSessionStatus.error,
+          errorMessage: 'voice_unavailable',
+        ),
+      );
+      return;
+    }
+    await stopVoiceSession();
+    emit(
+      state.copyWith(
+        status: VoiceSessionStatus.updateRequired,
+        errorMessage: code,
+      ),
+    );
+  }
+
   /// Sends manual interrupt signal to current session
   void sendManualInterrupt() {
     if (!state.isSessionActive) return;
 
-    final deviceId = state.activeAgentId;
+    final deviceId = state.activeAccountDeviceId ?? state.activeAgentId;
     if (deviceId == null) return;
 
     unawaited(_voiceStreamService.startPlayback()); // Clear client speaker playback buffer
@@ -251,12 +338,17 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
       // Local interruption
       _localWs?.add(jsonEncode({'event': 'interrupt'}));
     } else {
-      // Cloud interruption
+      // Cloud interruption: identity travels with the control frame, because the
+      // Gateway verifies the claim before forwarding it to the daemon.
       _connectionCoordinator.cloudSocketService.sendDeviceCommand(
         deviceId: deviceId,
         command: 'voice_control',
         payload: {
           'event': 'interrupt',
+          if (state.activeSessionId != null) ...{
+            'session_id': state.activeSessionId,
+            'request_id': state.activeSessionId,
+          },
         },
       );
     }
@@ -293,14 +385,20 @@ class VoiceStreamCubit extends Cubit<VoiceStreamState> {
     _localWs = null;
 
     // Send stop command if cloud scope
-    final deviceId = state.activeAgentId;
+    final deviceId = state.activeAccountDeviceId ?? state.activeAgentId;
+    final sessionId = state.activeSessionId;
     if (deviceId != null && !wasLocal) {
       _logger.info('[VoiceStreamCubit] Emitting stop_voice to cloud socket...');
       _connectionCoordinator.cloudSocketService.sendDeviceCommand(
         deviceId: deviceId,
         command: 'stop_voice',
         payload: {
-          'session_id': state.activeSessionId ?? 'default',
+          // Never a placeholder: `default` claimed a second, invented session
+          // identity and left the real route open.
+          if (sessionId != null) ...{
+            'session_id': sessionId,
+            'request_id': sessionId,
+          },
         },
       );
     }

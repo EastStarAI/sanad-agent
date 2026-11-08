@@ -42,6 +42,14 @@ $ServiceInstalledThisRun = $false
 $TempDirectory = Join-Path ([System.IO.Path]::GetTempPath()) ("sanad-install-" + [guid]::NewGuid())
 New-Item -ItemType Directory -Path $TempDirectory | Out-Null
 
+# The packaged Agent carries its native dictation runtime beside the executable.
+# These track whether this run replaced a previously installed runtime so a
+# failed install can restore the exact previous layout.
+$RuntimeDir = Join-Path $BinDir "native/windows-x64"
+$RuntimeBackup = "$RuntimeDir.rollback"
+$RuntimeReplaced = $false
+$RuntimeInstalled = $false
+
 try {
     $ManifestPath = Join-Path $TempDirectory "release-manifest.json"
     Invoke-WebRequest -Uri $ManifestUrl -OutFile $ManifestPath -UseBasicParsing
@@ -70,6 +78,29 @@ try {
         $env:SANAD_INSTALL_ALLOW_TEST_URL -ne "1") {
         throw "Manifest returned an untrusted download URL."
     }
+    $RuntimeMatches = @(
+        $Manifest.artifacts | Where-Object {
+            $_.component -eq "agent-runtime" -and
+            $_.platform -eq "windows" -and
+            $_.architecture -eq "x64" -and
+            $_.public -eq $true -and
+            $_.format -eq "tar.gz"
+        }
+    )
+    if ($RuntimeMatches.Count -gt 1) {
+        throw "Manifest declares more than one Windows x64 Agent runtime."
+    }
+    $RuntimeArtifact = if ($RuntimeMatches.Count -eq 1) { $RuntimeMatches[0] } else { $null }
+    if ($null -ne $RuntimeArtifact) {
+        if ($RuntimeArtifact.filename -notmatch '^sanad-agent-runtime-\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?-windows-x64\.tar\.gz$') {
+            throw "Manifest returned an invalid native runtime filename."
+        }
+        $ExpectedRuntimeUrl = "https://github.com/EastStarAI/sanad-agent/releases/download/$($Manifest.tag)/$($RuntimeArtifact.filename)"
+        if ($RuntimeArtifact.url -ne $ExpectedRuntimeUrl -and
+            $env:SANAD_INSTALL_ALLOW_TEST_URL -ne "1") {
+            throw "Manifest returned an untrusted native runtime URL."
+        }
+    }
 
     $Staged = Join-Path $TempDirectory $Artifact.filename
     Invoke-WebRequest -Uri $Artifact.url -OutFile $Staged -UseBasicParsing
@@ -90,6 +121,66 @@ try {
     }
     try {
         Move-Item -LiteralPath $Staged -Destination $Target -Force
+        if ($null -ne $RuntimeArtifact) {
+            if (-not (Get-Command tar.exe -ErrorAction SilentlyContinue)) {
+                Write-Warning "tar is required to install the native dictation runtime; dictation stays unavailable."
+            } else {
+                $RuntimeArchive = Join-Path $TempDirectory $RuntimeArtifact.filename
+                Invoke-WebRequest -Uri $RuntimeArtifact.url -OutFile $RuntimeArchive -UseBasicParsing
+                if ((Get-Item -LiteralPath $RuntimeArchive).Length -ne [int64]$RuntimeArtifact.size) {
+                    throw "Native runtime size verification failed."
+                }
+                $RuntimeHash = (Get-FileHash -LiteralPath $RuntimeArchive -Algorithm SHA256).Hash.ToLowerInvariant()
+                if ($RuntimeHash -ne $RuntimeArtifact.sha256.ToLowerInvariant()) {
+                    throw "Native runtime SHA-256 verification failed."
+                }
+                $Extract = Join-Path $TempDirectory "runtime"
+                New-Item -ItemType Directory -Path $Extract -Force | Out-Null
+                & tar.exe -xzf $RuntimeArchive -C $Extract
+                if ($LASTEXITCODE -ne 0) { throw "Native runtime extraction failed." }
+                $RuntimeRoot = Join-Path $Extract "native"
+                $ExpectedRuntime = Join-Path $RuntimeRoot "windows-x64"
+                $Unexpected = @(Get-ChildItem -LiteralPath $RuntimeRoot -Force |
+                    Where-Object { $_.Name -ne "windows-x64" })
+                if (-not (Test-Path -LiteralPath $ExpectedRuntime -PathType Container) -or
+                    $Unexpected.Count -ne 0) {
+                    throw "Native runtime archive has an unexpected layout."
+                }
+                if (@(Get-ChildItem -LiteralPath $ExpectedRuntime -Recurse -Directory).Count -ne 0) {
+                    throw "Native runtime archive has an unexpected layout."
+                }
+                $RuntimeEntries = @(Get-ChildItem -LiteralPath $RuntimeRoot -Recurse -Force)
+                if (@($RuntimeEntries | Where-Object { $_.Name -like '.*' }).Count -ne 0) {
+                    throw "Native runtime archive contains a hidden entry."
+                }
+                if (@($RuntimeEntries | Where-Object { $_.Attributes -band [IO.FileAttributes]::ReparsePoint }).Count -ne 0) {
+                    throw "Native runtime archive contains a link or reparse point."
+                }
+                $Foreign = @(Get-ChildItem -LiteralPath $ExpectedRuntime -File |
+                    Where-Object { $_.Name -notmatch '\.(dll|dylib|so(\.\d+(\.\d+)*)?)$' })
+                if ($Foreign.Count -ne 0) {
+                    throw "Native runtime archive contains a file outside the library allowlist."
+                }
+                New-Item -ItemType Directory -Path (Join-Path $BinDir "native") -Force | Out-Null
+                if (Test-Path -LiteralPath $RuntimeDir) {
+                    if (Test-Path -LiteralPath $RuntimeBackup) {
+                        Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
+                    }
+                    Move-Item -LiteralPath $RuntimeDir -Destination $RuntimeBackup -Force
+                    $RuntimeReplaced = $true
+                }
+                Move-Item -LiteralPath $ExpectedRuntime -Destination $RuntimeDir -Force
+                $RuntimeInstalled = $true
+                # The previous runtime stays in $RuntimeBackup until every later
+                # step (pairing, sign-in, service, cloud health) has committed.
+            }
+        } else {
+            if (Test-Path -LiteralPath $RuntimeDir) {
+                Write-Warning "This release publishes no native dictation runtime for Windows x64; keeping the runtime already installed in $RuntimeDir."
+            } else {
+                Write-Warning "This release publishes no native dictation runtime for Windows x64 and none is installed; dictation stays unavailable."
+            }
+        }
         $PortalLogin = $Login.IsPresent
         if (-not [string]::IsNullOrWhiteSpace($PairingToken)) {
             & $Target login --token $PairingToken
@@ -122,11 +213,50 @@ try {
                 Write-Warning "Failed to remove the partially installed SanadAgent task."
             }
         }
+        $RollbackIncomplete = $false
+        if ($RuntimeInstalled -and (Test-Path -LiteralPath $RuntimeDir)) {
+            try {
+                Remove-Item -LiteralPath $RuntimeDir -Recurse -Force -ErrorAction Stop
+            } catch {
+                # A locked directory must not abort the rollback before the
+                # executable is restored and the truthful result is reported.
+                $RollbackIncomplete = $true
+                Write-Warning "The runtime this run installed could not be removed; it is kept at $RuntimeDir."
+            }
+        }
+        if ($RuntimeReplaced -and (Test-Path -LiteralPath $RuntimeBackup)) {
+            if (Test-Path -LiteralPath $RuntimeDir) {
+                # A forced move into a directory that could not be cleared would
+                # nest the backup and leave the only predecessor copy buried.
+                $RollbackIncomplete = $true
+                Write-Warning "The previous native runtime could not be restored; it is kept at $RuntimeBackup."
+            } else {
+                try {
+                    Move-Item -LiteralPath $RuntimeBackup -Destination $RuntimeDir -Force
+                } catch {
+                    $RollbackIncomplete = $true
+                    Write-Warning "The previous native runtime could not be restored; it is kept at $RuntimeBackup."
+                }
+            }
+        }
         if (Test-Path -LiteralPath $Target) { Remove-Item -LiteralPath $Target -Force }
         if (Test-Path -LiteralPath $Backup) {
-            Move-Item -LiteralPath $Backup -Destination $Target -Force
+            try {
+                Move-Item -LiteralPath $Backup -Destination $Target -Force
+            } catch {
+                $RollbackIncomplete = $true
+                Write-Warning "The previous executable could not be restored; it is kept at $Backup."
+            }
+        }
+        if ($RollbackIncomplete) {
+            throw "Installation failed; the previous installation could not be fully restored (*.rollback files remain beside $Target). $($Failure.Exception.Message)"
         }
         throw "Installation failed; rollback completed. $($Failure.Exception.Message)"
+    }
+
+    # Commit: every later step succeeded, so the replaced runtime is disposable.
+    if (Test-Path -LiteralPath $RuntimeBackup) {
+        Remove-Item -LiteralPath $RuntimeBackup -Recurse -Force
     }
 
     Write-Host "Sanad Agent installed successfully." -ForegroundColor Green

@@ -139,12 +139,13 @@ class _DictationMicButtonState extends State<DictationMicButton> {
           await cubit.refreshStatus(device);
           if (!mounted) return;
         }
-        final ready = cubit.state.model.isReady && cubit.state.model.unavailableReason == null;
+        final ready = cubit.state.model.isReady &&
+            cubit.state.model.blockedReason == null;
         _logger.info(
           'dictation press: ready=$ready '
           'selected=${cubit.state.model.selectedModelId} '
           'models=${cubit.state.model.models.length} '
-          'reason=${cubit.state.model.unavailableReason}',
+          'reason=${cubit.state.model.blockedReason}',
         );
         if (!ready) {
           await DictationModelSheet.show(context, device: device);
@@ -185,10 +186,22 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       'native_runtime_preparing' => l10n.dictationRuntimePreparing,
       'native_runtime_missing' => l10n.dictationRuntimeMissing,
       'unsupported_platform' => l10n.dictationUnsupportedPlatform,
-      _ => null,
+      // A hosted device can refuse a session for reasons the local channel
+      // never produces; each one gets its own sentence instead of a generic
+      // failure notice.
+      'relay_unavailable' => l10n.dictationRelayUnavailable,
+      'dictation_disabled' => l10n.dictationDisabled,
+      'update_required' => l10n.dictationUpdateRequired,
+      'invalid_session_identity' => l10n.dictationFailedGeneric,
+      'remote_only_platform' => l10n.dictationUnsupportedPlatform,
+      'dictation_unavailable' => l10n.dictationUnavailable,
+      'audio_gap' => l10n.dictationFailedGeneric,
+      'prepare_unavailable' => l10n.dictationFailedGeneric,
+      // Unknown refusals are still a refusal: one localized generic notice, never
+      // the raw daemon code. Lifecycle/preparing/ready states stay inline.
+      _ => l10n.dictationFailedGeneric,
     };
     _announcedCode = code;
-    if (message == null) return;
     _logger.info('dictation announce code=$code');
     // A notice, not a blocking bar: the toast surface is the app-wide feedback
     // owner, so dictation never pushes a SnackBar over the composer.
@@ -226,7 +239,9 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       builder: (context, state) {
         final isActive = state.isActive;
         final isBusy = state.status == DictationStatus.preparing || state.status == DictationStatus.finalizing;
-        final notReady = !state.model.isReady || state.model.unavailableReason != null;
+        final notReady =
+            !state.model.isReady || state.model.blockedReason != null;
+        final heldByPeer = !isActive && state.model.busy;
         final color = isActive
             ? Theme.of(context).colorScheme.error
             : notReady
@@ -247,6 +262,8 @@ class _DictationMicButtonState extends State<DictationMicButton> {
                     ? l10n.dictationPreparingTooltip
                     : isActive
                     ? l10n.dictationStopTooltip
+                    : heldByPeer
+                    ? l10n.dictationBusy
                     : notReady
                     ? l10n.dictationNotReadyTooltip
                     : l10n.dictationStartTooltip,

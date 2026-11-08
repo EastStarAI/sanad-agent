@@ -97,7 +97,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   }
 
   final _voiceEngines = <VoiceEngine>[];
-  DictationService? _dictationService;
+
+  /// The daemon's single dictation owner, shared with the hosted relay and the
+  /// Device settings projection.
+  DictationService get _dictationService => getIt<DictationService>();
 
   HttpServer? _server;
   StreamSubscription<void>? _authChangeSubscription;
@@ -829,10 +832,9 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   void _acceptDictationClient(WebSocket socket) {
     // Local dictation: microphone PCM in, transcript events out. Recognition
     // runs in this daemon, on an isolate, never in the client.
-    _dictationService ??= DictationService(sanadHome: getSanadHome());
     _logger.info('🎙️ [dictation] local dictation client connected');
     unawaited(
-      _dictationService!.handleSocket(socket).catchError((Object error) {
+      _dictationService.handleSocket(socket).catchError((Object error) {
         _logger.warning('dictation socket failed: $error');
       }),
     );
