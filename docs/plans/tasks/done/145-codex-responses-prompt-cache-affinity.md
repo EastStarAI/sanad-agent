@@ -1,8 +1,8 @@
 ---
 title: "Codex Responses prompt-cache routing affinity"
-status: "in progress"
-current_gate: "G2 verification — fixture matrix green; Draft PR #356 delivered; live cached-token gate blocked pending an owner-authorized isolated Codex route"
-remaining_estimate: "live cached-token evidence only"
+status: "completed"
+current_gate: "complete — G2 live retention gate owner-accepted; PR #356 merged by squash with the required labels and exact-head CI"
+remaining_estimate: "none"
 ---
 
 # Goal (Task 145)
@@ -30,6 +30,31 @@ into a dispatch failure.
 - No verified evidence supports describing the implementation as parity with
   another agent; that wording was removed.
 
+## Live retention evidence (owner-accepted)
+
+Owner-provided live sample accepted on 2026-11-08, recorded as
+OWNER-REPORTED / OWNER-ACCEPTED. This task did not rerun the probe and captured
+no request, session, model, or commit metadata.
+
+Before the change, `(input_tokens, cached_tokens)` per request:
+`8878,0`, `15125,0`, `39586,0`, `60807,0`, `86673,0`, `104199,8832`,
+`117941,0`, `126175,117760`, `136953,39808`.
+
+After the change, consecutive requests:
+`12052,0`, `26078,12288`, `44708,25984`, `56851,44544`, `63739,56704`.
+
+The first post-change request is cold; the four later requests retain
+approximately the previous request's full input prefix, with no warm zero-cache
+drop in this sample. `12288` exceeds the earlier `12052` input count, so the
+counts are kept exactly as reported without clamping or normalization, and the
+owner's approximate 128-token bucket explanation is not treated as a verified
+provider invariant. This is not a claim of universal 100% retention.
+
+Routing correctness and measured cache retention stay separate criteria: the
+fixture matrix proves body and header shape, while only live usage counts prove
+retention. A justified cold response alone does not prove improved retention,
+and a changed routing key does not guarantee a cold read.
+
 ## Locked decisions
 
 - The key is content-addressed from the stable session scope, instructions,
@@ -46,9 +71,9 @@ into a dispatch failure.
 - Sync and stream reuse the same request builder and header composition.
 - No runner/history changes, no `cache_control`, and no behavior change for
   Chat, Anthropic Messages, or Ollama routes.
-- Live evidence must come from an owner-authorized isolated authenticated
-  Codex route. Credential copying, the primary Home, occupied Test Homes, and
-  runtime switching are out of scope.
+- Live evidence must be owner-authorized; this task does not copy credentials
+  or use the primary Home, occupied Test Homes, or runtime switching. The
+  accepted sample was reported and authorized by the owner.
 
 ## Gates
 
@@ -61,8 +86,8 @@ into a dispatch failure.
 - [x] Verify the transferred diff matches the owner's original patch.
 - [x] Identify the GitHub-hosted Responses endpoints that must keep the field
   excluded.
-- [ ] Live cached-token baseline from an authorized isolated Codex route
-  (blocked; see G2).
+- [x] Live cached-token baseline: the owner-provided pre-change sample is
+  recorded on the QA page as OWNER-REPORTED.
 
 ### G1 — Implementation
 - [x] `codex_responses_codec.dart`: build the bounded content-addressed key
@@ -92,8 +117,11 @@ into a dispatch failure.
 - [x] Draft PR #356 created with `type/feature`, `comp/agent`,
   `comp/providers`, and `size/medium`; implementation-head CI green and the
   PR re-queried for Draft state, head, labels, and checks.
-- [ ] Live cached-token before/after evidence: blocked pending an
-  owner-authorized isolated authenticated Codex route.
+- [x] Live cached-token before/after evidence accepted by the owner; see
+  [Live retention evidence](#live-retention-evidence-owner-accepted) and the
+  [QA page](docs/qa_maintenance/codex_prompt_cache_affinity_qa.md).
+- [x] PR #356 converted to Ready and squash-merged with the required labels,
+  green exact-head CI, and final main verification.
 
 ## Acceptance criteria
 
@@ -105,16 +133,19 @@ into a dispatch failure.
 - The chatgpt.com body key and `x-client-request-id` always agree, and no
   session header is invented when the session id is absent.
 - The key is always `pck_`-prefixed and at most 64 characters.
-- Live cached-token evidence is recorded only when an authorized isolated
-  route exists; otherwise the gate stays explicitly blocked.
+- Live cached-token evidence is recorded only as owner-reported and
+  owner-accepted, with routing correctness and measured retention judged
+  separately.
 
 ## Definition of Done
 
 - Focused adapter tests cover the behavior and its failure boundaries.
 - Analyzer and the required test scope pass.
 - The owning adapter contract and active design documentation are current.
-- The QA page records the fixture matrix and the live-gate status.
-- A Draft PR exists with the correct labels and green exact-head CI.
+- The QA page records the fixture matrix and the owner-accepted live sample.
+- The completed task plan is archived under `docs/plans/tasks/done/`.
+- PR #356 carries the required labels and green exact-head CI, and is squash
+  merged with the verified head.
 - No credential, private Home, occupied Test Home, or runtime switch is used.
 
 ## Verification commands
@@ -130,7 +161,5 @@ graphify update .
 
 ## Remaining work
 
-1. Obtain or explicitly record the live cached-token gate result without
-   crossing the credential/Home/runtime boundary.
-2. Update this plan and the PR body with that evidence.
-3. Keep the PR in Draft until the owner explicitly authorizes the next step.
+None. The live gate is closed by owner-accepted evidence, and delivery is PR
+#356 with its labels, CI, and squash merge.

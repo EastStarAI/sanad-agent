@@ -1,6 +1,6 @@
 ---
 title: "Codex Prompt-Cache Affinity QA"
-description: "Fixture and live-gate coverage for Codex Responses prompt_cache_key routing, GitHub exclusions, xAI raw-body support, and chatgpt.com affinity headers."
+description: "Fixture coverage and owner-accepted live retention evidence for Codex Responses prompt_cache_key routing, GitHub exclusions, xAI raw-body support, and chatgpt.com affinity headers."
 ---
 
 # Codex Prompt-Cache Affinity QA
@@ -16,8 +16,9 @@ Design and wire contract:
 [Codex Responses Runtime Design](../agent_engine/codex_responses_runtime_design.md)
 and [Engine Adapters Contract](../../agent/lib/engine/adapters/AGENTS.md).
 
-All fixture evidence below observes the actual adapter HTTP body and headers
-through a mock carrier. It is not live vendor acceptance.
+The fixture matrix observes the actual adapter HTTP body and headers through a
+mock carrier, so it is not live vendor acceptance. Live retention evidence is
+separate and is recorded as an owner-accepted usage sample below.
 
 ## Fixture Matrix
 
@@ -45,11 +46,68 @@ fvm dart test test/engine/adapters/codex_responses_adapter_test.dart --reporter 
 
 ## Live Cached-Token Gate
 
-Status: **blocked pending an owner-authorized isolated authenticated Codex
-route.** No credential, primary Home, occupied Test Home, or runtime switch is
-used by this task.
+Status: **closed on 2026-11-08 with owner-accepted live evidence.** The
+evidence below is OWNER-REPORTED / OWNER-ACCEPTED; this task did not rerun the
+live probe. No credential, primary Home, occupied Test Home, or runtime switch
+was used by this task, and no request, session, model, or commit metadata was
+captured for tracked notes.
 
-Prerequisites:
+### Accepted sample
+
+Before the change, `(input_tokens, cached_tokens)` per request:
+
+| Request | `input_tokens` | `cached_tokens` |
+|---|---|---|
+| 1 | 8878 | 0 |
+| 2 | 15125 | 0 |
+| 3 | 39586 | 0 |
+| 4 | 60807 | 0 |
+| 5 | 86673 | 0 |
+| 6 | 104199 | 8832 |
+| 7 | 117941 | 0 |
+| 8 | 126175 | 117760 |
+| 9 | 136953 | 39808 |
+
+After the change, consecutive requests `(input_tokens, cached_tokens)`:
+
+| Request | `input_tokens` | `cached_tokens` |
+|---|---|---|
+| 1 | 12052 | 0 |
+| 2 | 26078 | 12288 |
+| 3 | 44708 | 25984 |
+| 4 | 56851 | 44544 |
+| 5 | 63739 | 56704 |
+
+### Observations
+
+- The before sample alternates between zero and large cached counts
+  (`0, 0, 0, 0, 0, 8832, 0, 117760, 39808`), the warm/cold flapping this task
+  targets.
+- In the after sample the first request is cold (`12052, 0`) and the four
+  subsequent requests retain approximately the previous request's full input
+  prefix: `12288` against `12052`, `25984` against `26078`, `44544` against
+  `44708`, and `56704` against `56851`. No warm zero-cache drop appears in this
+  sample.
+- Retention is approximate, not exact: `12288` exceeds the previous request's
+  `12052` input tokens. Counts are recorded as reported, with no clamping or
+  normalization. The owner's approximate 128-token bucket explanation is not
+  an independently verified provider invariant.
+- This sample does not claim universal 100% retention; it records one accepted
+  consecutive-request sample on the Codex route.
+
+### Criteria separation
+
+Routing correctness and measured cache retention remain separate criteria:
+
+- Routing correctness is proven by the fixture matrix above: the body and
+  header shape of each supported and excluded host.
+- Measured retention is proven only by live usage counts such as this sample.
+  A justified cold response alone does not prove improved retention, and a
+  changed routing key does not guarantee a cold read.
+
+### Re-running later
+
+Prerequisites for a fresh probe:
 
 - A prepared worktree-scoped Test Home with an authenticated `openai-codex`
   provider instance, or an owner-designated Test Home with the same.
@@ -82,6 +140,6 @@ Pass criteria:
   reason.
 - No credential or message content appears in tracked evidence.
 
-Current evidence: the fixture matrix passes; the live gate has not run because
-no authorized isolated authenticated route was available. This gap is recorded,
-not inferred as a pass.
+Current evidence: the fixture matrix passes and the live retention gate is
+closed by the owner-accepted sample above. The live sample was not independently
+rerun by this task.
