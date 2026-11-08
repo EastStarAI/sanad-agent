@@ -150,4 +150,24 @@ void main() {
       reason: 'the stale-cache guard must run before cmake configures',
     );
   });
+
+  test('the shim exports every symbol the FFI bindings look up', () {
+    // POSIX exports these by default; MSVC exports nothing without a marker, so
+    // an unmarked shim builds and stages cleanly on Windows and then fails to
+    // load with "procedure could not be found" (error 127).
+    final source = File('native/whispercpp/sanad_whisper.c').readAsStringSync();
+    expect(source, contains('__declspec(dllexport)'));
+    for (final symbol in [
+      'sanad_whisper_load',
+      'sanad_whisper_free',
+      'sanad_whisper_run',
+      'sanad_whisper_system_info',
+    ]) {
+      expect(
+        RegExp('SANAD_WHISPER_EXPORT[^;]*\\b$symbol\\b').hasMatch(source),
+        isTrue,
+        reason: '$symbol must be exported explicitly',
+      );
+    }
+  });
 }

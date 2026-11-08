@@ -15,6 +15,16 @@
 
 #include "whisper.h"
 
+// The daemon loads this shim through dart:ffi, so its four entry points must be
+// exported. POSIX builds export them by default; MSVC exports nothing unless a
+// function is marked, which is why the Windows runtime could be built, staged,
+// and then fail to load with "procedure could not be found" (error 127).
+#if defined(_WIN32)
+#define SANAD_WHISPER_EXPORT __declspec(dllexport)
+#else
+#define SANAD_WHISPER_EXPORT __attribute__((visibility("default")))
+#endif
+
 // whisper.cpp prints model-load and progress lines to stderr. The daemon must
 // not log audio or transcript content, and those lines are noise in the logs.
 static void sanad_whisper_quiet_log(enum ggml_log_level level, const char* text, void* user_data) {
@@ -29,7 +39,7 @@ static void sanad_whisper_quiet_log(enum ggml_log_level level, const char* text,
 // `use_gpu` selects Metal when the runtime was built with it. The switch lives
 // at load time because whisper.cpp binds the backend when the model is
 // created; a caller that loses the GPU falls back by reopening on the CPU.
-void* sanad_whisper_load(const char* path_model, int use_gpu, char* err, int err_cap) {
+SANAD_WHISPER_EXPORT void* sanad_whisper_load(const char* path_model, int use_gpu, char* err, int err_cap) {
   whisper_log_set(sanad_whisper_quiet_log, NULL);
   struct whisper_context_params cparams = whisper_context_default_params();
   cparams.use_gpu = use_gpu != 0;
@@ -41,7 +51,7 @@ void* sanad_whisper_load(const char* path_model, int use_gpu, char* err, int err
   return ctx;
 }
 
-void sanad_whisper_free(void* handle) {
+SANAD_WHISPER_EXPORT void sanad_whisper_free(void* handle) {
   if (handle == NULL) return;
   whisper_free((struct whisper_context*)handle);
 }
@@ -50,7 +60,7 @@ void sanad_whisper_free(void* handle) {
 // written into `out` (excluding the terminator), or -1 on failure.
 //
 // `out` receives the concatenated segment texts; the caller owns the buffer.
-int sanad_whisper_run(void* handle,
+SANAD_WHISPER_EXPORT int sanad_whisper_run(void* handle,
                       const float* samples,
                       int n_samples,
                       const char* language,
@@ -101,6 +111,6 @@ int sanad_whisper_run(void* handle,
 }
 
 // Reports the ggml backend actually in use ("CPU" for the CPU-only build).
-const char* sanad_whisper_system_info(void) {
+SANAD_WHISPER_EXPORT const char* sanad_whisper_system_info(void) {
   return whisper_print_system_info();
 }
