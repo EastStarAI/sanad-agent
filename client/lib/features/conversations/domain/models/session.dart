@@ -1,3 +1,4 @@
+import 'package:sanad_client/features/conversations/domain/models/session_workspace_scope.dart';
 import 'package:sanad_client/features/conversations/domain/models/thinking_control.dart';
 
 class Session {
@@ -44,6 +45,26 @@ class Session {
     this.workspaceTrustState,
     this.metadata,
   });
+
+  /// The registered workspace whose conversation group owns this session.
+  ///
+  /// An `exec_root:` id names the folder a run session executes in, not a
+  /// registered workspace, so such a session belongs to the ordinary unscoped
+  /// group; its execution path stays visible through the permission picker's
+  /// tooltip instead of becoming a group of its own.
+  String? get groupWorkspaceId =>
+      isExecRootWorkspaceId(workspaceId) ? null : workspaceId;
+
+  /// Whether this session is only an identity placeholder.
+  ///
+  /// Startup restores a route's session id before its authoritative summary
+  /// arrives, so a selected session can briefly be an id with no workspace and
+  /// no metadata. It must be replaced by the authoritative copy as soon as one
+  /// is available.
+  bool get isIdentityPlaceholder {
+    final normalized = title.trim();
+    return normalized == 'Loading...' || normalized == 'Loading…';
+  }
 
   factory Session.fromJson(Map<String, dynamic> json) {
     return Session(
@@ -135,6 +156,55 @@ class Session {
       metadata: metadata ?? this.metadata,
     );
   }
+
+  /// Applies only the fields the Client owns from an Agent session update.
+  ///
+  /// A `session_updated` event may be a partial projection (a title refresh) or
+  /// a complete one (the Agent repairing a session's own targeting and
+  /// permission mode). Workspace identity and the permission keys are applied
+  /// key by key from [payload], so a partial event never clears them and an
+  /// Agent projection never replaces the rest of [metadata] wholesale.
+  Session withOwnedSessionUpdate(Map<String, dynamic> payload) {
+    String? ownedText(String key) {
+      final value = payload[key];
+      if (value is! String) return null;
+      final trimmed = value.trim();
+      return trimmed.isEmpty ? null : trimmed;
+    }
+
+    final incomingMetadata = payload['metadata'];
+    final incoming = incomingMetadata is Map
+        ? Map<String, dynamic>.from(incomingMetadata)
+        : const <String, dynamic>{};
+    final ownedMetadata = <String, dynamic>{
+      for (final key in _ownedMetadataKeys)
+        if (incoming.containsKey(key)) key: incoming[key],
+    };
+    if (!ownedMetadata.containsKey('permission_mode')) {
+      final permissionMode = ownedText('permission_mode');
+      if (permissionMode != null) {
+        ownedMetadata['permission_mode'] = permissionMode;
+      }
+    }
+
+    return copyWith(
+      workspaceId: ownedText('workspace_id'),
+      workspaceName: ownedText('workspace_name'),
+      workspacePath: ownedText('workspace_path'),
+      workspaceTrustState: ownedText('workspace_trust_state'),
+      metadata: ownedMetadata.isEmpty
+          ? null
+          : <String, dynamic>{...?metadata, ...ownedMetadata},
+    );
+  }
+
+  /// Session metadata keys whose value the Client trusts an Agent update to
+  /// carry; every other key stays Client-owned.
+  static const Set<String> _ownedMetadataKeys = <String>{
+    'execution_root',
+    'allow_all_tools',
+    'permission_mode',
+  };
 
   static ThinkingControlDescriptorDto? _thinkingControlFromJson(Object? raw) {
     if (raw is Map<String, dynamic>) {

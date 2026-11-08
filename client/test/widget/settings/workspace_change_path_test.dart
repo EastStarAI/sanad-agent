@@ -95,6 +95,7 @@ class _FakeSecurityClient implements WorkspaceSecurityClient {
     WorkspacePermissionMode? permissionMode,
     WorkspaceExecutionMode? executionMode,
     WorkspaceHostDiscoveryPolicy? hostDiscoveryPolicy,
+    String? sessionId,
   }) async => const WorkspacePolicy(revision: 2, canWiden: true);
 }
 

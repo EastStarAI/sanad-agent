@@ -5,6 +5,7 @@ import 'package:sanad_agent/capabilities/mcp/sanad_settings_store.dart';
 import 'package:sanad_agent/capabilities/runtime/workspace_path_resolver.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/models/session_workspace_scope.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
 
 import 'command_authority.dart';
@@ -74,7 +75,7 @@ class WorkspacePolicyStore {
        _listRegisteredWorkspaces = listRegisteredWorkspaces,
        _pathResolver = pathResolver;
 
-  static const execRootPrefix = 'exec_root:';
+  static const execRootPrefix = execRootWorkspacePrefix;
 
   final AgentStateDatabase Function()? _database;
   final RegisteredWorkspacePathResolver? _resolveRegisteredPath;

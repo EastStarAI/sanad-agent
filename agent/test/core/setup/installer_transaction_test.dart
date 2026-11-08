@@ -6,6 +6,8 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/setup/service_account_policy.dart';
 import 'package:test/test.dart';
 
+import '../../support/host_home_guard.dart';
+
 void main() {
   group('installer transaction', () {
     late Directory root;
@@ -14,10 +16,14 @@ void main() {
   late File commandLog;
   late HttpServer server;
   late String artifact;
+  RealSanadHomeWatch? realHomeWatch;
   var manifestRequests = 0;
 
   setUp(() async {
     root = await Directory.systemTemp.createTemp('sanad-installer-test-');
+    // A leak into the owner's real Home must fail this test, never replace the
+    // installed binary.
+    realHomeWatch = RealSanadHomeWatch.start();
     home = Directory(p.join(root.path, 'home'))..createSync(recursive: true);
     mockBin = Directory(p.join(root.path, 'mock-bin'))..createSync();
     commandLog = File(p.join(root.path, 'commands.log'));
@@ -134,6 +140,7 @@ exit 0
 
   tearDown(() async {
     await server.close(force: true);
+    realHomeWatch?.verifyUnchanged();
     await root.delete(recursive: true);
   });
 
@@ -561,10 +568,22 @@ Future<ProcessResult> _runInstaller({
   environment['SANAD_HOME'] = explicitHome
       ? p.join(home.path, '.sanad')
       : '';
+  // A root install derives its Home from the system account record; redirect
+  // that lookup into this test's temp tree unless the case chose its own path.
+  environment.putIfAbsent(
+    'SANAD_INSTALL_SYSTEM_HOME',
+    () => p.join(home.parent.path, 'system-home'),
+  );
   final installerArguments = <String>[
     if (pairingToken == null) '--no-login' else '--pairing-token-stdin',
     if (runAsUser != null) ...['--run-as-user', runAsUser],
   ];
+  // The installer must never resolve a Home outside this test's temp tree: a
+  // value that escapes it would install into the owner's real Sanad Home.
+  HostHomeGuard.assertHomeEnvironmentRedirected(
+    environment,
+    allowedRoot: home.parent.path,
+  );
   if (pairingToken == null) {
     return Process.run('sh', [
       '../scripts/install.sh',

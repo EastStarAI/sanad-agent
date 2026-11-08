@@ -28,6 +28,16 @@ rebuild workspace groups, and processing or suspension changes rebuild only the
 affected row. The legacy `SessionSidebar` remains a forwarding compatibility
 surface rather than a second implementation.
 
+Grouping follows `Session.groupWorkspaceId`: a session belongs to a registered
+workspace group only when its `workspace_id` is a registered workspace. An
+`exec_root:<root>` identity names the folder a run session executes in, not a
+workspace, so such a session is grouped with the unscoped conversations — the
+sidebar builds groups only for registered workspaces plus the unscoped section,
+and an `exec_root:` page would render nowhere. The cache places created and
+updated sessions by that same rule and folds any execution-root page found in a
+restored cache back into the unscoped section. The execution path stays visible
+through the permission picker's tooltip.
+
 ## Device-Scoped Selection
 
 Changing the active device switches the cache context before refreshing its
@@ -91,6 +101,16 @@ snapshot at the already-confirmed revision may repair only locally missing route
 fields; it cannot overwrite non-empty local intent awaiting confirmation. This
 keeps the composer sendable across runtime-source handoff while preserving
 daemon route authority once hydration completes.
+
+`Session.isIdentityPlaceholder` names that state, and `SessionCubit.adoptSelectedSession`
+is the single owner of leaving it: the first authoritative copy of the same id
+replaces the placeholder without navigating or re-activating, so the header,
+the composer's workspace, and the permission picker read real values. Both
+authoritative arrival paths adopt — a loaded session page (through the cache
+snapshot refresh) and a conversation-search hit opened while the id is already
+selected (including the anchored-history branch). A placeholder that no
+authoritative copy ever reaches would otherwise keep the picker hidden, which is
+exactly the run-session failure it replaces.
 
 ## Incremental History Loading
 
