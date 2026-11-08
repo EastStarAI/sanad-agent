@@ -129,4 +129,25 @@ void main() {
     ]);
     expect(arguments, isNot(contains('x86_64')));
   });
+
+  test('the Windows builder discards a CMake cache for another platform', () {
+    // A restored CI cache (or a developer's earlier build) can carry a
+    // CMakeCache configured without the requested platform, and CMake then
+    // refuses to reconfigure instead of reusing the tree. The builder must
+    // discard such a tree itself, because no workflow key can guarantee it.
+    final script = File('tool/build_whispercpp.ps1').readAsStringSync();
+    expect(script, contains('CMAKE_GENERATOR_PLATFORM'));
+    expect(
+      script,
+      contains(r'Remove-Item -Recurse -Force -LiteralPath $buildDir'),
+    );
+    final guard = script.indexOf('CMAKE_GENERATOR_PLATFORM');
+    final configure = script.indexOf(r'cmake -B build');
+    expect(guard, isNonNegative);
+    expect(
+      guard,
+      lessThan(configure),
+      reason: 'the stale-cache guard must run before cmake configures',
+    );
+  });
 }

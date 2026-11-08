@@ -151,7 +151,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: whisper.cpp/build
-          key: whisper-${{ matrix.runner }}-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+          key: whisper-build-v2-${{ matrix.runner }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
       - name: Require the runner CPU the matrix label claims
         if: matrix.platform == 'macos'
         shell: bash

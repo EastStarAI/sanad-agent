@@ -44,6 +44,22 @@ $out = Join-Path $here $OutDir
 
 Push-Location $WhisperSrc
 try {
+    # A restored cache, or a developer's earlier build, can hold a CMakeCache
+    # configured for a different generator platform. CMake then refuses to
+    # reconfigure ("does not match the platform used previously") instead of
+    # reusing the tree, which fails the build on a warm cache. Discard such a
+    # tree so the requested architecture always wins.
+    $buildDir = Join-Path $WhisperSrc "build"
+    $cacheFile = Join-Path $buildDir "CMakeCache.txt"
+    if (Test-Path -LiteralPath $cacheFile) {
+        $cached = Select-String -LiteralPath $cacheFile -Pattern '^CMAKE_GENERATOR_PLATFORM:[^=]*=(.*)$' |
+            Select-Object -First 1
+        $cachedPlatform = if ($null -ne $cached) { $cached.Matches[0].Groups[1].Value.Trim() } else { "" }
+        if ($cachedPlatform -ne $Arch) {
+            Write-Host "Discarding a CMake cache configured for platform '$cachedPlatform' (requested '$Arch')."
+            Remove-Item -Recurse -Force -LiteralPath $buildDir
+        }
+    }
     cmake -B build -DCMAKE_BUILD_TYPE=Release `
         -DBUILD_SHARED_LIBS=ON `
         -DGGML_METAL=OFF `
