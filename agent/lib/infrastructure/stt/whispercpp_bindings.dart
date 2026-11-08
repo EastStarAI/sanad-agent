@@ -15,8 +15,9 @@ import 'package:ffi/ffi.dart';
 import 'stt_types.dart';
 
 typedef _LoadNative =
-    Pointer<Void> Function(Pointer<Utf8>, Pointer<Uint8>, Int32);
-typedef _LoadDart = Pointer<Void> Function(Pointer<Utf8>, Pointer<Uint8>, int);
+    Pointer<Void> Function(Pointer<Utf8>, Int32, Pointer<Uint8>, Int32);
+typedef _LoadDart =
+    Pointer<Void> Function(Pointer<Utf8>, int, Pointer<Uint8>, int);
 
 typedef _FreeNative = Void Function(Pointer<Void>);
 typedef _FreeDart = void Function(Pointer<Void>);
@@ -78,17 +79,61 @@ class WhisperCppLibrary {
     return _candidates.first;
   }
 
-  static const String _libraryName = 'libsanad_whisper.dylib';
+  static const String _libraryBase = 'libsanad_whisper';
+
+  /// Native extension differs per OS; the shim is the same C file everywhere.
+  static String get libraryFileName {
+    if (Platform.isMacOS) return '$_libraryBase.dylib';
+    if (Platform.isWindows) return 'sanad_whisper.dll';
+    return '$_libraryBase.so';
+  }
+
+  /// Directory that holds the prebuilt shim and its ggml/whisper libraries.
+  static String get platformDir {
+    if (Platform.isMacOS) return 'macos';
+    if (Platform.isWindows) return 'windows';
+    return 'linux';
+  }
 
   static List<String> get _candidates {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final cwd = Directory.current.path;
+    final name = libraryFileName;
+    final dir = platformDir;
+    final override = Platform.environment['SANAD_WHISPER_LIBRARY']?.trim();
     return <String>[
-      '$exeDir/native/macos/$_libraryName',
-      '$exeDir/../native/macos/$_libraryName',
-      '$cwd/native/macos/$_libraryName',
-      '$cwd/agent/native/macos/$_libraryName',
+      if (override != null && override.isNotEmpty) override,
+      '$exeDir/native/$dir/$name',
+      '$exeDir/../native/$dir/$name',
+      '$cwd/native/$dir/$name',
+      '$cwd/agent/native/$dir/$name',
     ];
+  }
+
+  /// True when the shim (and therefore its ggml/whisper siblings) is on disk.
+  ///
+  /// Readiness uses this instead of opening the library: a missing runtime must
+  /// be reportable without loading anything into the daemon.
+  static bool get isAvailable {
+    for (final candidate in _candidates) {
+      if (File(candidate).existsSync()) return true;
+    }
+    return false;
+  }
+
+  /// True when the shim is being built or downloaded right now.
+  ///
+  /// `ensure_native_stt` writes this marker while it works and removes it when
+  /// it finishes, so the UI can show "preparing" instead of "missing". Stale
+  /// markers (a killed build) expire so the state never sticks.
+  static bool get isBeingPrepared {
+    for (final candidate in _candidates) {
+      final marker = File('${File(candidate).parent.path}/.stt-preparing');
+      if (!marker.existsSync()) continue;
+      final age = DateTime.now().difference(marker.lastModifiedSync());
+      if (age < const Duration(minutes: 30)) return true;
+    }
+    return false;
   }
 
   static WhisperCppLibrary open([String? path]) {
@@ -114,11 +159,14 @@ class WhisperCppLibrary {
   }
 
   /// Opens a ggml model with mmap. Throws [SttException] with the C reason.
-  Pointer<Void> loadModel(String path) {
+  ///
+  /// [useGpu] selects Metal; whisper.cpp binds the backend when the model is
+  /// created, so a CPU fallback means reopening the model with this flag off.
+  Pointer<Void> loadModel(String path, {bool useGpu = true}) {
     final pathPtr = path.toNativeUtf8();
     final error = calloc<Uint8>(256);
     try {
-      final handle = _load(pathPtr, error, 256);
+      final handle = _load(pathPtr, useGpu ? 1 : 0, error, 256);
       if (handle == nullptr) {
         throw SttException('model_load_failed', _readCString(error, 256));
       }

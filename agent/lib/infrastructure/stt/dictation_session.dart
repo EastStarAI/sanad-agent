@@ -21,7 +21,8 @@ enum DictationCommand {
   cancel,
   status,
   install,
-  select;
+  select,
+  prepareRuntime;
 
   static DictationCommand? parse(String? name) {
     for (final command in DictationCommand.values) {
@@ -135,12 +136,20 @@ class DictationSession {
     required this.engine,
     required this.modelId,
     this.maxSessionDuration = const Duration(minutes: 5),
+    this.onRelease,
   });
 
   final DictationChannel transport;
   final SttEngine engine;
   final String modelId;
   final Duration maxSessionDuration;
+
+  /// Called instead of disposing the engine when the session ends.
+  ///
+  /// The service parks the recogniser for a while so the next session does not
+  /// pay the model load (Metal shader compilation alone is seconds). When null
+  /// the session owns the engine and frees it, which is the old behaviour.
+  final Future<void> Function(SttEngine engine)? onRelease;
 
   final Logger _logger = Logger('DictationSession');
 
@@ -262,7 +271,12 @@ class DictationSession {
     _audioSubscription = null;
     await _commandSubscription?.cancel();
     _commandSubscription = null;
-    await engine.dispose();
+    final release = onRelease;
+    if (release != null) {
+      await release(engine);
+    } else {
+      await engine.dispose();
+    }
     await _eventSubscription?.cancel();
     _eventSubscription = null;
     await transport.close();

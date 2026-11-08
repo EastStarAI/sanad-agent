@@ -25,9 +25,15 @@ static void sanad_whisper_quiet_log(enum ggml_log_level level, const char* text,
 
 // Loads the ggml model with mmap and returns an opaque context.
 // Returns NULL on failure and writes a short reason into `err`.
-void* sanad_whisper_load(const char* path_model, char* err, int err_cap) {
+//
+// `use_gpu` selects Metal when the runtime was built with it. The switch lives
+// at load time because whisper.cpp binds the backend when the model is
+// created; a caller that loses the GPU falls back by reopening on the CPU.
+void* sanad_whisper_load(const char* path_model, int use_gpu, char* err, int err_cap) {
   whisper_log_set(sanad_whisper_quiet_log, NULL);
   struct whisper_context_params cparams = whisper_context_default_params();
+  cparams.use_gpu = use_gpu != 0;
+  cparams.flash_attn = use_gpu != 0;
   struct whisper_context* ctx = whisper_init_from_file_with_params(path_model, cparams);
   if (ctx == NULL && err != NULL && err_cap > 0) {
     snprintf(err, (size_t)err_cap, "whisper_init_from_file_with_params failed");

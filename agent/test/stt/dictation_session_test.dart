@@ -12,6 +12,7 @@ class _FakeEngine implements SttEngine {
   final audio = <int>[];
   bool finishCalled = false;
   bool cancelCalled = false;
+  bool resetCalled = false;
   bool disposed = false;
   bool started = false;
   Completer<void>? finishGate;
@@ -29,6 +30,7 @@ class _FakeEngine implements SttEngine {
     SttModelFiles files, {
     required String modelId,
     int threads = 2,
+    bool useGpu = true,
   }) async {
     started = true;
   }
@@ -46,6 +48,9 @@ class _FakeEngine implements SttEngine {
 
   @override
   Future<void> cancel() async => cancelCalled = true;
+
+  @override
+  Future<void> reset() async => resetCalled = true;
 
   @override
   Future<void> dispose() async {

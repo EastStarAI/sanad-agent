@@ -192,6 +192,49 @@ jobs:
             throw 'AOT smoke did not complete successfully.'
           }
 
+  native-stt:
+    name: Native dictation (${{ matrix.os }})
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-26, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      # The whisper shim is built from source on every desktop OS. The pinned tag
+      # is the same one recorded in agent/native/checksums.json.
+      - name: Fetch whisper.cpp
+        uses: actions/checkout@v6
+        with:
+          repository: ggerganov/whisper.cpp
+          ref: v1.9.5
+          path: whisper.cpp
+      - name: Cache whisper build
+        uses: actions/cache@v4
+        with:
+          path: whisper.cpp/build
+          key: whisper-${{ matrix.os }}-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+      - name: Build on Unix (macOS Metal, Linux CPU)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then export GGML_METAL=ON; else export GGML_METAL=OFF; fi
+          bash agent/tool/build_whispercpp.sh "$GITHUB_WORKSPACE/whisper.cpp"
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Build on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: pwsh -File agent/tool/build_whispercpp.ps1 whisper.cpp
+      - name: Verify the shim is discoverable
+        working-directory: agent
+        run: fvm dart run tool/ensure_native_stt.dart
+
   client:
     needs: classify
     if: needs.classify.outputs.client == 'true'
@@ -469,13 +512,14 @@ jobs:
   all-required:
     name: All required checks pass
     if: always()
-    needs: [classify, history, agent, client, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
+    needs: [classify, history, agent, native-stt, client, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
     runs-on: ubuntu-24.04
     steps:
       - env:
           CLASSIFY: ${{ needs.classify.result }}
           HISTORY: ${{ needs.history.result }}
           AGENT: ${{ needs.agent.result }}
+          NATIVE_STT: ${{ needs.native-stt.result }}
           CLIENT: ${{ needs.client.result }}
           SANAD_DEV_PLATFORMS: ${{ needs.sanad-dev-platforms.result }}
           DOCS: ${{ needs.docs-governance.result }}
@@ -485,7 +529,7 @@ jobs:
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT" "$CLIENT" "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
+          for result in "$AGENT" "$NATIVE_STT" "$CLIENT" "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
             [[ "$result" == success || "$result" == skipped ]]
           done
           test "$SENSITIVE_REVIEW" = success

@@ -31,6 +31,7 @@ abstract class SttEngine {
     SttModelFiles files, {
     required String modelId,
     int threads = 2,
+    bool useGpu = true,
   });
 
   /// Queues 16 kHz mono PCM16 little-endian audio.
@@ -38,6 +39,12 @@ abstract class SttEngine {
 
   /// Flushes the tail segment and completes the session.
   Future<void> finish();
+
+  /// Prepares a finished engine for a new session without reloading the model.
+  ///
+  /// Only meaningful when the engine was kept warm between sessions; a fresh
+  /// engine is already in this state.
+  Future<void> reset();
 
   /// Drops pending audio and any in-flight decode result.
   Future<void> cancel();
@@ -122,6 +129,7 @@ class SherpaSttEngine implements SttEngine {
     SttModelFiles files, {
     required String modelId,
     int threads = 2,
+    bool useGpu = true,
   }) async {
     final outbox = ReceivePort();
     _outbox = outbox;
@@ -231,6 +239,7 @@ class SherpaSttEngine implements SttEngine {
       'language': files.language,
       'threads': threads,
       'streamingModelType': files.streamingModelType,
+      'useGpu': useGpu,
     });
     await _ready!.future.timeout(
       const Duration(seconds: 60),
@@ -280,6 +289,16 @@ class SherpaSttEngine implements SttEngine {
       const Duration(seconds: 300),
       onTimeout: () {},
     );
+  }
+
+  @override
+  Future<void> reset() async {
+    if (_closed) return;
+    _queue.clear();
+    _cancelled = false;
+    _finished = null;
+    _busy = false;
+    _inbox?.send({'cmd': 'reset'});
   }
 
   @override

@@ -93,10 +93,20 @@ class SttCatalogEntry {
 
 /// Why dictation is or is not usable on this device.
 class SttReadiness {
-  const SttReadiness.ready() : isSupported = true, reason = null;
-  const SttReadiness.unavailable(this.reason) : isSupported = false;
+  const SttReadiness.ready()
+    : isSupported = true,
+      isReady = true,
+      reason = null;
+
+  /// [isSupported] answers "may this device dictate at all?" (platform, config,
+  /// settings). [isReady] answers "can it start right now?". They differ while
+  /// the native runtime is still being downloaded or built: the mic must stay
+  /// visible so the user sees progress instead of losing the button.
+  const SttReadiness.unavailable(this.reason, {this.isSupported = false})
+    : isReady = false;
 
   final bool isSupported;
+  final bool isReady;
   final String? reason;
 }
 

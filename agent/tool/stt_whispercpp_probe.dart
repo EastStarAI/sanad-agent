@@ -2,7 +2,10 @@
 /// resident memory for one buffer, in a clean process.
 ///
 /// Usage:
-///   `fvm dart run tool/stt_whispercpp_probe.dart <ggml-model> <wav16k> [lang] [threads]`
+///   `fvm dart run tool/stt_whispercpp_probe.dart <ggml-model> <wav16k> [lang] [threads] [gpu]`
+///
+/// `gpu` is `1` (Metal, default) or `0` (CPU) so the same sample can be timed
+/// on both backends without rebuilding.
 ///
 /// Prints one line per metric so a run can be compared with the sherpa numbers
 /// in the plan (`stt_probe.dart`).
@@ -24,10 +27,11 @@ void main(List<String> args) {
   final wavPath = args[1];
   final language = args.length > 2 ? args[2] : 'ar';
   final threads = args.length > 3 ? int.parse(args[3]) : 4;
+  final useGpu = args.length > 4 ? args[4] != '0' : true;
 
   final library = WhisperCppLibrary.open();
   final loadWatch = Stopwatch()..start();
-  final context = library.loadModel(modelPath);
+  final context = library.loadModel(modelPath, useGpu: useGpu);
   loadWatch.stop();
   stdout.writeln(
     'model loaded in ${loadWatch.elapsedMilliseconds}ms, '

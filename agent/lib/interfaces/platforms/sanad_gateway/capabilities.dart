@@ -143,10 +143,14 @@ class AgentCapabilities {
   final bool supportsLocalToolRuntime;
   final bool supportsSlashCommands;
 
-  /// Local (daemon-side) dictation is available on this device.
+  /// Local (daemon-side) dictation is enabled and valid for this agent.
   ///
-  /// True even when no model is installed yet: the first mic press is what
-  /// installs one. Reasons for a false value are machine readable.
+  /// This is a configuration/platform fact, not "ready right now": it stays
+  /// true while the native runtime is still being prepared, and false only when
+  /// the owner disabled dictation, the `stt` block is invalid, or this build
+  /// ships no runtime for the host architecture. Transient readiness lives in
+  /// the live `stt_status` event, because capabilities are computed once at
+  /// connect and would otherwise go stale.
   final bool supportsDictation;
   final String? dictationUnavailableReason;
 

@@ -2,11 +2,31 @@
 library;
 
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:yaml/yaml.dart';
 
 import 'stt_catalog.dart';
 import 'stt_types.dart';
+
+/// Thread count when the config does not name one.
+///
+/// Measured on an Apple silicon laptop (4 performance + 6 efficiency cores,
+/// `egy-whisper-turbo-ggml-q8`, same 6 s sample) — decode time by thread count:
+///
+/// | threads | 4 | 5 | 6 | 8 |
+/// |---|---|---|---|---|
+/// | Metal  | 1607 ms | 1060 ms | 1069 ms | 1049 ms |
+///
+/// The curve plateaus at five, so wide machines get 6 and small ones keep the
+/// whisper.cpp baseline (`min(4, cores)`) instead of oversubscribing.
+int sttThreadsFor(int cores) {
+  if (cores <= 0) return 4;
+  if (cores >= 8) return 6;
+  return math.min(4, cores);
+}
+
+int get defaultSttThreads => sttThreadsFor(Platform.numberOfProcessors);
 
 /// Effective dictation settings for this daemon.
 class SttSettings {
@@ -16,6 +36,8 @@ class SttSettings {
     this.modelPath,
     this.language = 'ar',
     this.threads = 4,
+    this.useGpu = true,
+    this.modelIdleMinutes = 5,
   });
 
   final bool enabled;
@@ -29,6 +51,20 @@ class SttSettings {
 
   final String language;
   final int threads;
+
+  /// Metal acceleration for the whisper path. Off forces the CPU backend,
+  /// which is also the automatic fallback when the model fails to open on the
+  /// GPU (see `whispercpp_isolate.dart`).
+  final bool useGpu;
+
+  /// Minutes the recogniser stays in memory after the last session.
+  ///
+  /// `0` frees it as soon as a session ends, a negative value keeps it for the
+  /// daemon's lifetime. The default matches the reference app (5 minutes) and
+  /// exists so a burst of dictation does not pay the model load every time.
+  final int modelIdleMinutes;
+
+  bool get keepsModelWarm => modelIdleMinutes != 0;
 
   String get effectiveModelId =>
       modelId.isNotEmpty ? modelId : defaultSttEntry.id;
@@ -83,7 +119,7 @@ class SttSettings {
             '(${kSttCatalog.map((e) => e.id).join(', ')})',
       );
     }
-    final threads = readInt('threads', 4);
+    final threads = readInt('threads', defaultSttThreads);
     if (threads < 1 || threads > 16) {
       throw const SttException('config_invalid', 'stt.threads must be 1..16');
     }
@@ -98,6 +134,8 @@ class SttSettings {
       modelPath: readString('model_path'),
       language: language,
       threads: threads,
+      useGpu: readBool('use_gpu', true),
+      modelIdleMinutes: readInt('model_idle_minutes', 5),
     );
   }
 }

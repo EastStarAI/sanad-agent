@@ -89,3 +89,11 @@ key.properties
 __pycache__/
 *.py[cod]
 .venv/
+
+# Native dictation runtime: per-platform build products, produced by
+# agent/tool/ensure_native_stt.dart (checked against agent/native/checksums.json).
+# Tracking them would add a few megabytes to git history on every rebuild.
+agent/native/*/*.dylib
+agent/native/*/*.so
+agent/native/*/*.so.*
+agent/native/*/*.dll

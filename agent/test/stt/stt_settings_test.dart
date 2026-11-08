@@ -21,6 +21,16 @@ void main() {
   }
 
   group('stt settings', () {
+    test('the default thread count follows the machine width', () {
+      // Small machines never oversubscribe; wide ones stop at the measured knee.
+      expect(sttThreadsFor(2), 2);
+      expect(sttThreadsFor(4), 4);
+      expect(sttThreadsFor(6), 4);
+      expect(sttThreadsFor(8), 6);
+      expect(sttThreadsFor(10), 6);
+      expect(sttThreadsFor(0), 4);
+    });
+
     test('defaults are used when config.yaml is absent', () {
       final settings = SttSettings.load(sanadHome: home.path);
       expect(settings.enabled, isTrue);
@@ -28,6 +38,10 @@ void main() {
       expect(settings.language, 'ar');
       expect(settings.threads, 4);
       expect(settings.modelPath, isNull);
+      // Metal on by default on macOS arm64; the model stays warm for 5 minutes.
+      expect(settings.useGpu, isTrue);
+      expect(settings.modelIdleMinutes, 5);
+      expect(settings.keepsModelWarm, isTrue);
     });
 
     test('a full stt section is parsed', () {
@@ -38,6 +52,8 @@ stt:
   model_path: /tmp/models/whisper-x
   language: en
   threads: 4
+  use_gpu: false
+  model_idle_minutes: 0
 ''');
       final settings = SttSettings.load(sanadHome: home.path);
       expect(settings.enabled, isFalse);
@@ -45,6 +61,9 @@ stt:
       expect(settings.modelPath, '/tmp/models/whisper-x');
       expect(settings.language, 'en');
       expect(settings.threads, 4);
+      expect(settings.useGpu, isFalse);
+      expect(settings.modelIdleMinutes, 0);
+      expect(settings.keepsModelWarm, isFalse);
     });
 
     test('an unknown model id fails with the offending key', () {

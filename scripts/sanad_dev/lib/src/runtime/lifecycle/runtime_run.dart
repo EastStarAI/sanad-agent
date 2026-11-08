@@ -448,6 +448,12 @@ Future<void> handleRun({
     watchStartupSignal(ProcessSignal.sighup);
   }
 
+  // The whisper runtime is not tracked in git (per-platform build products), so
+  // a fresh clone has none. Prepare it **in the background** so the daemon and
+  // client start immediately; dictation becomes available as soon as the build
+  // finishes (the library is only opened when a session starts), no restart.
+  if (startsAgent) unawaited(_prepareNativeDictation(agentDirectory));
+
   try {
     final agentStart = startsAgent
         ? Process.start(
@@ -677,4 +683,47 @@ Future<void> handleRun({
   );
   final clientExitCode = await controller.run();
   if (clientExitCode != 0) exitCode = clientExitCode;
+}
+
+/// Prepares the native dictation runtime before the daemon starts.
+///
+/// `agent/native/<platform>/` is not tracked: the whisper shim and its ggml
+/// libraries are per-platform build products. A fresh clone therefore has none,
+/// and `tool/ensure_native_stt.dart` verifies, downloads or builds them. This
+/// runs the script once per machine; a failure only leaves dictation
+/// unavailable (the daemon reports `native_runtime_missing`), never blocks run.
+Future<void> _prepareNativeDictation(String agentDirectory) async {
+  final platformDir = Platform.isMacOS
+      ? 'macos'
+      : (Platform.isWindows ? 'windows' : 'linux');
+  final shimName = Platform.isMacOS
+      ? 'libsanad_whisper.dylib'
+      : (Platform.isWindows ? 'sanad_whisper.dll' : 'libsanad_whisper.so');
+  final shim = File('$agentDirectory/native/$platformDir/$shimName');
+  if (shim.existsSync()) return;
+
+  stdout.writeln(
+    'Preparing the native dictation runtime in the background '
+    '(dictation works as soon as it finishes)…',
+  );
+  // Detached on purpose: `sanad-dev run` exits as soon as the daemon is
+  // published, so an awaited child would be killed mid-build. The shell form
+  // keeps the log next to the marker the daemon watches.
+  final logFile = Platform.isWindows ? 'NUL' : 'native/.stt-prepare.log';
+  final command = Platform.isWindows
+      ? 'fvm dart run tool\\ensure_native_stt.dart > $logFile 2>&1'
+      : 'fvm dart run tool/ensure_native_stt.dart > $logFile 2>&1';
+  try {
+    await Process.start(
+      Platform.isWindows ? 'cmd' : '/bin/sh',
+      Platform.isWindows ? ['/c', command] : ['-c', command],
+      workingDirectory: agentDirectory,
+      mode: ProcessStartMode.detached,
+    );
+  } on Object catch (error) {
+    stderr.writeln(
+      'Could not start the native dictation build ($error). '
+      'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
+    );
+  }
 }

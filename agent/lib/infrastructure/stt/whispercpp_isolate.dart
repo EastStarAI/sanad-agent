@@ -80,6 +80,11 @@ class _WhisperCppWorker {
         _speech.clear();
         _bufferedSamples = 0;
         _out.send({'evt': 'idle'});
+      case 'reset':
+        // The loaded context survives; only this session's audio goes away.
+        _speech.clear();
+        _bufferedSamples = 0;
+        _out.send({'evt': 'idle'});
       case 'dispose':
         _dispose();
       default:
@@ -91,12 +96,24 @@ class _WhisperCppWorker {
     }
   }
 
+  static void _log(String message) => _logger.info(message);
+
   void _init(Map message) {
     final stopwatch = Stopwatch()..start();
     _modelId = message['modelId'] as String? ?? '';
     final library = WhisperCppLibrary.open(message['library'] as String?);
     _library = library;
-    _context = library.loadModel(message['model'] as String);
+    final modelPath = message['model'] as String;
+    final useGpu = message['useGpu'] as bool? ?? true;
+    try {
+      _context = library.loadModel(modelPath, useGpu: useGpu);
+    } on SttException catch (error) {
+      // A model that cannot open on Metal must still dictate: reopen on the CPU
+      // rather than failing the session. The reason is a code, never audio.
+      if (!useGpu) rethrow;
+      _log('metal load failed (${error.code}); falling back to CPU');
+      _context = library.loadModel(modelPath, useGpu: false);
+    }
     stopwatch.stop();
     _out.send({
       'evt': 'ready',

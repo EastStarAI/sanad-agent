@@ -112,6 +112,19 @@ class _SttWorker {
         _speech.clear();
         _bufferedSamples = 0;
         _out.send({'evt': 'idle'});
+      case 'reset':
+        // A warm engine starts the next session from a clean slate: the model
+        // and the online stream stay allocated, only the session counters go.
+        _speech.clear();
+        _bufferedSamples = 0;
+        _lastPartial = '';
+        _audioChunks = 0;
+        _acceptedSamples = 0;
+        _partialCount = 0;
+        _endpoints = 0;
+        _streamPeak = 0;
+        _streamGain = 0;
+        _out.send({'evt': 'idle'});
       case 'dispose':
         _dispose();
       default:

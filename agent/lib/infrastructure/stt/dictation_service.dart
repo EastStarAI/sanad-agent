@@ -15,6 +15,7 @@ import 'stt_catalog.dart';
 import 'stt_model_store.dart';
 import 'stt_settings.dart';
 import 'stt_types.dart';
+import 'whispercpp_bindings.dart';
 
 /// Readiness/installation/model-selection surface for local dictation.
 ///
@@ -52,8 +53,13 @@ class DictationService {
   SttSettings get settings => _settings;
 
   static bool _isSupportedPlatform() {
-    if (!Platform.isMacOS) return false;
-    return Abi.current() == Abi.macosArm64;
+    final abi = Abi.current();
+    if (Platform.isMacOS) return abi == Abi.macosArm64;
+    if (Platform.isWindows) {
+      return abi == Abi.windowsX64 || abi == Abi.windowsArm64;
+    }
+    if (Platform.isLinux) return abi == Abi.linuxX64 || abi == Abi.linuxArm64;
+    return false;
   }
 
   SttReadiness readiness() {
@@ -66,7 +72,45 @@ class DictationService {
     if (!_platformSupported) {
       return const SttReadiness.unavailable('unsupported_platform');
     }
+    // Whisper needs its native shim on disk. Report that as its own reason so a
+    // fresh clone shows "run ensure_native_stt" instead of a generic failure.
+    final entry = selectedEntry;
+    if (entry != null &&
+        entry.engine == SttEngineKind.whisperCpp &&
+        !WhisperCppLibrary.isAvailable) {
+      return SttReadiness.unavailable(
+        WhisperCppLibrary.isBeingPrepared
+            ? 'native_runtime_preparing'
+            : 'native_runtime_missing',
+        isSupported: true,
+      );
+    }
     return const SttReadiness.ready();
+  }
+
+  /// Starts `tool/ensure_native_stt.dart` in the background.
+  ///
+  /// Only meaningful in a dev checkout: packaged builds ship the shim beside the
+  /// executable. Returns false when the tool or shell is unavailable so the
+  /// caller can show the manual instruction instead of pretending it retried.
+  bool prepareNativeRuntime() {
+    final logFile = 'native/.stt-prepare.log';
+    final command = 'fvm dart run tool/ensure_native_stt.dart >> $logFile 2>&1';
+    try {
+      unawaited(
+        Process.start(
+          Platform.isWindows ? 'cmd' : '/bin/sh',
+          Platform.isWindows ? ['/c', command] : ['-c', command],
+          workingDirectory: Directory.current.path,
+          mode: ProcessStartMode.detached,
+        ),
+      );
+      _logger.info('native dictation prepare requested');
+      return true;
+    } on Object catch (error) {
+      _logger.warning('native dictation prepare unavailable: $error');
+      return false;
+    }
   }
 
   /// Reloads `config.yaml` so an edited file takes effect without a restart.
@@ -77,6 +121,8 @@ class DictationService {
     } on SttException catch (error) {
       _configError = error;
     }
+    // A config that no longer keeps models warm must not leave one resident.
+    if (!_settings.keepsModelWarm) unawaited(unloadWarmEngine());
   }
 
   String get _selectionPath => '${_store.modelsRoot}/selection.json';
@@ -138,6 +184,88 @@ class DictationService {
 
   void releaseSession() => _activeSessions = 0;
 
+  // --- Warm recogniser -------------------------------------------------------
+  //
+  // Reloading the model for every session dominated the latency the owner
+  // measured (3.5 s decode, plus a load that hidden the first word). A warm
+  // engine keeps the same model for `settings.modelIdleMinutes` after a session
+  // ends, so a burst of dictation pays the load once; an idle timer frees it so
+  // the daemon does not hold a model the user stopped using.
+
+  SttEngine? _warmEngine;
+  String? _warmModelId;
+  Timer? _warmTimer;
+
+  /// True while a recogniser is kept loaded but idle.
+  bool get hasWarmEngine => _warmEngine != null;
+
+  /// Starts (or reuses) the engine for [files].
+  Future<SttEngine> acquireEngine(SttModelFiles files) async {
+    final warm = _warmEngine;
+    if (warm != null) {
+      _warmTimer?.cancel();
+      _warmTimer = null;
+      _warmEngine = null;
+      final sameModel = _warmModelId == files.modelId;
+      _warmModelId = null;
+      if (sameModel) {
+        await warm.reset();
+        _logger.info('dictation reusing warm model=${files.modelId}');
+        return warm;
+      }
+      await warm.dispose();
+    }
+    final engine = createEngineFor(files);
+    try {
+      await engine.start(
+        files,
+        modelId: files.modelId,
+        threads: _settings.threads,
+        useGpu: _settings.useGpu,
+      );
+    } on Object {
+      await engine.dispose();
+      rethrow;
+    }
+    return engine;
+  }
+
+  /// Takes an engine back from a finished session.
+  Future<void> releaseEngine(SttEngine engine, String modelId) async {
+    if (!_settings.keepsModelWarm) {
+      await engine.dispose();
+      return;
+    }
+    await _dropWarmEngine();
+    _warmEngine = engine;
+    _warmModelId = modelId;
+    final minutes = _settings.modelIdleMinutes;
+    if (minutes > 0) {
+      _warmTimer = Timer(
+        Duration(minutes: minutes),
+        () => unawaited(_dropWarmEngine()),
+      );
+      _logger.info(
+        'dictation keeping model warm for ${minutes}m model=$modelId',
+      );
+    }
+  }
+
+  /// Frees the warm recogniser now (config change, model switch, shutdown).
+  Future<void> unloadWarmEngine() => _dropWarmEngine();
+
+  Future<void> _dropWarmEngine() async {
+    _warmTimer?.cancel();
+    _warmTimer = null;
+    final engine = _warmEngine;
+    _warmEngine = null;
+    final modelId = _warmModelId;
+    _warmModelId = null;
+    if (engine == null) return;
+    _logger.info('dictation unloaded warm model=$modelId');
+    await engine.dispose();
+  }
+
   /// True when `stt.model_path` points at files the engine can actually load.
   bool _resolveOverrideExists() {
     try {
@@ -159,6 +287,7 @@ class DictationService {
         installedOverrides != null && _resolveOverrideExists();
     return {
       'supported': readiness.isSupported,
+      'ready': readiness.isReady,
       if (readiness.reason != null) 'reason': readiness.reason,
       'busy': isBusy,
       'selected': selectedModelId,
@@ -335,6 +464,17 @@ class _DictationConnection {
           transport.send('stt_status', service.statusPayload());
         case DictationCommand.start:
           await _startSession();
+        case DictationCommand.prepareRuntime:
+          final started = service.prepareNativeRuntime();
+          transport.send('stt_status', service.statusPayload());
+          if (!started) {
+            transport.send('dictation_error', {
+              'code': 'prepare_unavailable',
+              'reason': 'prepare_unavailable',
+              'message':
+                  'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
+            });
+          }
         case DictationCommand.stop:
         case DictationCommand.cancel:
           // Owned by the active session; harmless when none is running.
@@ -403,9 +543,10 @@ class _DictationConnection {
     if (_session != null) return;
     service._applySettingsFromDisk();
     final readiness = service.readiness();
-    if (!readiness.isSupported) {
+    if (!readiness.isReady) {
       transport.send('dictation_error', {
-        'code': 'unsupported',
+        'code': 'unavailable',
+        'reason': readiness.reason ?? 'dictation unavailable',
         'message': readiness.reason ?? 'dictation unavailable',
       });
       return;
@@ -429,13 +570,9 @@ class _DictationConnection {
       });
       return;
     }
-    final engine = service.createEngineFor(files);
+    final SttEngine engine;
     try {
-      await engine.start(
-        files,
-        modelId: files.modelId,
-        threads: service.settings.threads,
-      );
+      engine = await service.acquireEngine(files);
     } on Object {
       service.releaseSession();
       rethrow;
@@ -446,6 +583,9 @@ class _DictationConnection {
       transport: _SessionChannel(transport, audioIn.stream),
       engine: engine,
       modelId: files.modelId,
+      // The service owns the recogniser's lifetime now: it parks it warm or
+      // frees it according to `stt.model_idle_minutes`.
+      onRelease: (finished) => service.releaseEngine(finished, files.modelId),
     );
     _session = session;
     await session.start();
