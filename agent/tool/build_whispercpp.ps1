@@ -35,17 +35,27 @@ try {
 
     New-Item -ItemType Directory -Force -Path $out | Out-Null
 
-    cl.exe /nologo /O2 /LD /I "$WhisperSrc\include" /I "$WhisperSrc\ggml\include" `
-        "$here\native\whispercpp\sanad_whisper.c" `
-        /link /LIBPATH:"$WhisperSrc\build\bin\Release" `
-        whisper.lib ggml.lib ggml-base.lib ggml-cpu.lib `
-        /OUT:"$out\sanad_whisper.dll"
+    # MSVC puts import libraries under build\lib\Release and DLLs under
+    # build\bin\Release; search both so the link step does not depend on the
+    # generator's layout.
+    $includeArgs = @("/I", "$WhisperSrc\include", "/I", "$WhisperSrc\ggml\include")
+    $libDirs = @("$WhisperSrc\build\bin\Release", "$WhisperSrc\build\lib\Release")
+    $linkArgs = @()
+    foreach ($dir in $libDirs) {
+        if (Test-Path $dir) { $linkArgs += "/LIBPATH:$dir" }
+    }
+    $linkArgs += @("whisper.lib", "ggml.lib", "ggml-base.lib", "ggml-cpu.lib", "/OUT:$out\sanad_whisper.dll")
+
+    cl.exe /nologo /O2 /LD @includeArgs "$here\native\whispercpp\sanad_whisper.c" /link @linkArgs
     if ($LASTEXITCODE -ne 0) { throw "shim build failed" }
 
     $libs = @("whisper.dll", "ggml.dll", "ggml-base.dll", "ggml-cpu.dll")
-    foreach ($lib in $libs) {
-        $src = Join-Path "$WhisperSrc\build\bin\Release" $lib
-        if (Test-Path $src) { Copy-Item -Force $src $out }
+    foreach ($dir in $libDirs) {
+        if (-not (Test-Path $dir)) { continue }
+        foreach ($lib in $libs) {
+            $src = Join-Path $dir $lib
+            if (Test-Path $src) { Copy-Item -Force $src $out }
+        }
     }
 
     Write-Host "built: $out\sanad_whisper.dll"
