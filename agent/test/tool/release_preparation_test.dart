@@ -163,6 +163,35 @@ void main() {
     }
   });
 
+  test('check rejects a contract without the Linux arm64 Agent target', () {
+    final path = 'release/release-contract.json';
+    final contract = jsonDecode(readFixture(path)) as Map<String, dynamic>;
+    contract['artifacts'] = (contract['artifacts'] as List)
+        .where(
+          (raw) =>
+              raw is! Map ||
+              raw['component'] != 'agent' ||
+              raw['platform'] != 'linux' ||
+              raw['architecture'] != 'arm64',
+        )
+        .toList();
+    writeFixture(
+      path,
+      '${const JsonEncoder.withIndent('  ').convert(contract)}\n',
+    );
+
+    expect(
+      () => ReleasePreparation(fixture).check(),
+      throwsA(
+        isA<FormatException>().having(
+          (error) => error.message,
+          'message',
+          contains('linux/arm64'),
+        ),
+      ),
+    );
+  });
+
   test('check rejects a stale sanad-client CLI version constant', () async {
     final preparation = ReleasePreparation(fixture);
     preparation.check();

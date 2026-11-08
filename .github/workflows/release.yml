@@ -130,6 +130,16 @@ jobs:
             architecture: x64
             extension: ''
             environment: release-build
+          # GitHub-hosted arm64 runner. Linux carries SHA-256 plus GitHub
+          # attestation and no platform code signature, so arm64 uses the same
+          # trust policy, Environment, and gates as Linux x64; the public
+          # installer resolves the Agent by platform plus architecture and never
+          # substitutes another target.
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            architecture: arm64
+            extension: ''
+            environment: release-build
           - runner: windows-2025
             platform: windows
             architecture: x64

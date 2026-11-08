@@ -20,7 +20,13 @@ Official installer scripts download those verified assets.
 - `sanad-agent-<version>-macos-arm64`
 - `sanad-agent-<version>-macos-x64`
 - `sanad-agent-<version>-linux-x64`
+- `sanad-agent-<version>-linux-arm64`
 - `sanad-agent-<version>-windows-x64.exe`
+
+These five targets are also declared as `requiredAgentReleaseTargets` in
+`release/contract/lib/release_contract.dart`, and both the release matrix and
+`validate-contract` are checked against that list. A target is published or the
+release fails; it is never silently dropped.
 
 The release workflow must verify each asset's platform and architecture,
 version output, checksum/signature, clean installation, service lifecycle,

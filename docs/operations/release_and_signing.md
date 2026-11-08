@@ -55,6 +55,23 @@ protected deployment is `release-publication`.
 The Agent job validates the same release surface on macOS, Linux, and Windows,
 so every gate has to mean the same thing on all three.
 
+Linux arm64 is a supported Agent target and uses the GitHub-hosted
+`ubuntu-24.04-arm` runner with the same steps, `release-build` Environment, and
+trust policy as Linux x64: both carry SHA-256 plus GitHub attestation and no
+platform code signature. `requiredAgentReleaseTargets` in
+`release/contract/lib/release_contract.dart` is the single declaration of that
+matrix; `validate-contract` and `check-preparation` fail when a contract omits a
+declared target, and the release-security CI job fails when the release matrix
+and that list disagree. Adding an architecture therefore means adding the
+contract row and the release job together. The public installer resolves the
+Agent by platform plus architecture only, so it reports the requested target
+instead of substituting a different architecture's binary.
+
+The official Agent target list is a build-matrix statement, not a statement
+about packaging. A Linux arm64 **Client** package (`.deb` and portable `tar.gz`)
+remains a separate follow-up: it needs an arm64 Linux build gate, an arm64
+`flutter build linux` verification, and its own manifest and alias handling.
+
 Generated sources are compared and hashed as canonical LF text.
 `agent/tool/generate_bundled_skills.dart` and
 `agent/tool/generate_model_capability_defaults.dart` compare the rendered output
@@ -94,6 +111,7 @@ result, so it keeps its own exit-code handling.
 |---|---|---|---|
 | Agent | macOS arm64/x64 | GitHub Release | Developer ID, notarization, and GitHub attestation |
 | Agent | Linux x64 | GitHub Release | SHA-256 plus GitHub attestation |
+| Agent | Linux arm64 | GitHub Release | SHA-256 plus GitHub attestation |
 | Agent | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | macOS universal | GitHub Release | Developer ID, notarization, Sparkle EdDSA |
 | Client | Linux x64 `.deb` and portable `tar.gz` | GitHub Release | SHA-256 plus GitHub attestation |
