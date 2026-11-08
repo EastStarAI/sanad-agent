@@ -334,8 +334,14 @@ class Capability {
   }
 
   /// The declared frame bound, clamped to the contract maximum.
+  ///
+  /// A value of the wrong type is a malformed advertisement, not an exception:
+  /// capability parsing must never throw on input another device chose.
   static int _parseDictationRelayMaxFrameBytes(dynamic raw) {
-    final declared = raw is Map ? (raw['max_frame_bytes'] as num?)?.toInt() : null;
+    final value = raw is Map ? raw['max_frame_bytes'] : null;
+    // Only an integer is a declared bound: a fractional or textual value
+    // is malformed, and truncating it would invent a bound nobody sent.
+    final declared = value is int ? value : null;
     if (declared == null || declared <= 0) {
       return dictationRelayContractMaxFrameBytes;
     }
@@ -346,7 +352,10 @@ class Capability {
 
   /// The declared session byte bound, clamped to the contract maximum.
   static int _parseDictationRelayMaxSessionBytes(dynamic raw) {
-    final declared = raw is Map ? (raw['max_session_bytes'] as num?)?.toInt() : null;
+    final value = raw is Map ? raw['max_session_bytes'] : null;
+    // Only an integer is a declared bound: a fractional or textual value
+    // is malformed, and truncating it would invent a bound nobody sent.
+    final declared = value is int ? value : null;
     if (declared == null || declared <= 0) {
       return dictationRelayContractMaxSessionBytes;
     }
@@ -357,8 +366,10 @@ class Capability {
 
   /// The declared session duration bound, clamped to the contract maximum.
   static int _parseDictationRelayMaxSessionSeconds(dynamic raw) {
-    final declared =
-        raw is Map ? (raw['max_session_seconds'] as num?)?.toInt() : null;
+    final value = raw is Map ? raw['max_session_seconds'] : null;
+    // Only an integer is a declared bound: a fractional or textual value
+    // is malformed, and truncating it would invent a bound nobody sent.
+    final declared = value is int ? value : null;
     if (declared == null || declared <= 0) {
       return dictationRelayContractMaxSessionSeconds;
     }

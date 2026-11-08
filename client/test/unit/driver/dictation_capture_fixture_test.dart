@@ -30,9 +30,11 @@ List<int> _pcm(int bytes) => List<int>.generate(bytes, (index) => index % 256);
 
 void main() {
   test('the production capture factory still builds the real microphone', () {
-    // Nothing in this isolate installs the driver seam, so the default is what
-    // every real user gets.
-    expect(dictationCaptureFactory(), isA<DictationAudioCapture>());
+    // Nothing in this isolate installs the driver seam, so the installed factory
+    // is exactly the production constructor tear-off. Comparing the tear-off
+    // (rather than constructing it) keeps the real `record` plugin out of a unit
+    // test: building the microphone capture registers a platform channel.
+    expect(dictationCaptureFactory, equals(DictationAudioCapture.new));
   });
 
   group('pcm fixture', () {
@@ -40,7 +42,7 @@ void main() {
       final fixture = DictationPcmFixture(
         pcm16le: _pcm(960),
         chunkBytes: 320,
-        chunkInterval: const Duration(milliseconds: 5),
+        chunkInterval: const Duration(milliseconds: 10),
       );
 
       final chunks = await fixture.start().toList();
@@ -112,7 +114,7 @@ void main() {
       wrapper.arm(DictationPcmFixture(
         pcm16le: _pcm(640),
         chunkBytes: 320,
-        chunkInterval: const Duration(milliseconds: 5),
+        chunkInterval: const Duration(milliseconds: 10),
       ));
 
       expect(await wrapper.hasPermission(), isTrue);

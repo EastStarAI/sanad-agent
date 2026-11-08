@@ -245,8 +245,9 @@ void main() {
       expect(cubit.state.model.blockedReason, 'native_runtime_missing');
       expect(cubit.state.model.busy, isTrue);
       expect(cubit.state.model.models.single.labelCode, 'path_override');
-      // A path override row is ready even though no catalog model is installed.
-      expect(cubit.state.model.isReady, isTrue);
+      // Supported but not ready: the runtime is missing, and the path-override
+      // row is a model detail — it never turns readiness into ready.
+      expect(cubit.state.model.isReady, isFalse);
     });
 
     test('dictation_ready clears the readiness reason', () async {

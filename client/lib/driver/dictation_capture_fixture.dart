@@ -22,6 +22,14 @@ class DriverDictationCapture implements DictationCapture {
   DictationPcmFixture? _armed;
   int _activeSessions = 0;
 
+  /// The capture this session actually acquired.
+  ///
+  /// `stop()` must release only what `start()` took: a start that threw (no
+  /// microphone, no permission) must not make the stop path acquire the device a
+  /// second time, which is how a failed start turned into an escaping error
+  /// instead of a reported one.
+  DictationCapture? _sessionCapture;
+
   bool get isSessionActive => _activeSessions > 0;
 
   /// The fixture that is armed for the next session, or null when the real
@@ -59,6 +67,7 @@ class DriverDictationCapture implements DictationCapture {
   Future<Stream<List<int>>> start() async {
     final delegate = _delegate;
     _activeSessions++;
+    _sessionCapture = delegate;
     final StreamSubscription<List<int>> subscription;
     try {
       final source = await delegate.start();
@@ -103,16 +112,17 @@ class DriverDictationCapture implements DictationCapture {
 
   @override
   Future<void> stop() async {
-    try {
-      await _delegate.stop();
-    } finally {
-      _activeSessions = 0;
-    }
+    final delegate = _sessionCapture;
+    _sessionCapture = null;
+    _activeSessions = 0;
+    if (delegate == null) return;
+    await delegate.stop();
   }
 
   @override
   Future<void> dispose() async {
     _activeSessions = 0;
+    _sessionCapture = null;
     _armed = null;
     await _real?.dispose();
     _real = null;
