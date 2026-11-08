@@ -75,7 +75,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Community and Contribution Governance](docs/operations/community_governance.md): Operating model for Discord, Discussions, Issues, plans, pull requests, labels, protected review, and public-repository handoff.
 - [Public CI Pipeline and Merge Queue](docs/operations/continuous_integration.md): Job layout, cross-component path classification, test sharding, toolchain caching, required-check aggregate, slow-test evidence, and the protected merge-queue runbook for Public CI.
 - [Develop Sanad Agent](docs/operations/developer_guide.md): Set up the public repository, run the Dart agent and Flutter client, test changes, and use isolated development runtimes.
-- [Release, Signing, and Deployment Architecture](docs/operations/release_and_signing.md): The stable release pipeline, protected signing boundaries, artifact publication, and live-release handoff.
+- [Release, Signing, and Deployment Architecture](docs/operations/release_and_signing.md): The stable release pipeline, protected signing boundaries, artifact publication, live-release handoff, and the post-Production Discord announcement.
 - [Install and Use Sanad Agent](docs/operations/user_guide.md): Install the Sanad client and agent, connect local or remote devices, configure providers, manage the service, and update Sanad.
 - [خارطة متطلبات المنتج والأعمال](docs/product/MOC.md): فهرس وخارطة وثائق متطلبات المنتج، تجربة المستخدم، والأعمال الاستراتيجية للمشروع.
 - [Sanad Client Interface](docs/product/client_interface.md): Current user experience for devices, workspaces, conversations, attachments, View Image media, providers, permissions, and active agent interactions.

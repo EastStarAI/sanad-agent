@@ -1,32 +1,142 @@
 name: Discord community notifications
 
+# Releases are published with the workflow's own GITHUB_TOKEN, and GitHub never
+# starts a workflow from an event that token produced. The retired
+# `release: published` subscription therefore announced nothing after
+# v1.0.0-rc.1. This workflow follows the completing release workflow run instead
+# and announces a Stable Release only once that same run has published it and
+# deployed the Production assets.
 on:
   push:
     branches: [main]
-  release:
-    types: [published]
+  workflow_run:
+    workflows: ["Prepare stable release"]
+    types: [completed]
 
 permissions:
+  actions: read
   contents: read
   pull-requests: read
+
+concurrency:
+  # Serialize announcements so a concurrent re-run cannot pass the announce-once
+  # ledger check before the first run has recorded it.
+  group: discord-community-notifications
+  cancel-in-progress: false
+
+env:
+  # GitHub reports the reusable Production deployment that release.yml calls
+  # after publication as "<caller job name> / <called job id>". Those names are
+  # read back from the completing run, so an announcement can never precede
+  # Production even if the run-level conclusion alone would allow it.
+  PRODUCTION_JOB_PREFIX: 'Deploy Stable Production assets / '
+  # Announce-once ledger artifact, written only after a successful send.
+  ANNOUNCEMENT_LEDGER_PREFIX: discord-announcement-
 
 jobs:
   notify:
     name: Notify Discord
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
-      - name: Build approved community notification
-        id: message
+      - name: Resolve the Stable Release published by the completing run
+        id: release
+        if: github.event_name == 'workflow_run'
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CREATED_AT: ${{ github.event.workflow_run.created_at }}
         run: |
           set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "release" ]]; then
-            title="Release $(jq -r '.release.name // .release.tag_name' "$GITHUB_EVENT_PATH")"
-            url="$(jq -r '.release.html_url' "$GITHUB_EVENT_PATH")"
-            description="Published by @$(jq -r '.release.author.login' "$GITHUB_EVENT_PATH")."
+          # Every exit path writes `announce` exactly once, so the value is never
+          # derived from how the runner resolves a duplicated output key.
+          skip_announcement() {
+            echo "announce=false" >> "$GITHUB_OUTPUT"
+            echo "$1"
+            exit 0
+          }
+          if [[ "$RUN_CONCLUSION" != success ]]; then
+            skip_announcement "Release run $RUN_ID concluded '$RUN_CONCLUSION'; a failed or cancelled run publishes nothing to announce."
+          fi
+          # Only a Release that this run itself published qualifies: a published
+          # Stable Release whose publication falls inside the run's lifetime.
+          # A validation-only dispatch, an RC candidate, and a Draft therefore
+          # resolve to no Release, and a re-run never picks up an older one.
+          release="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+            | jq -c --arg created "$RUN_CREATED_AT" '
+              map(select(
+                .draft == false
+                and .prerelease == false
+                and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+$"))
+                and ((.published_at | fromdateiso8601) >= ($created | fromdateiso8601))
+              ))
+              | sort_by(.published_at)
+              | last
+              | select(. != null)
+            ')"
+          if [[ -z "$release" ]]; then
+            skip_announcement "Release run $RUN_ID published no Stable Release; nothing to announce."
+          fi
+          tag="$(jq -r '.tag_name' <<<"$release")"
+          title="$(jq -r '.name // .tag_name' <<<"$release")"
+          url="$(jq -r '.html_url' <<<"$release")"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Resolved Release tag '$tag' is not a Stable tag."
+            exit 1
+          fi
+          if [[ "$title$url" == *$'\n'* ]]; then
+            echo "::error::Resolved Release identity contains a line break; refusing to build a notification."
+            exit 1
+          fi
+          # The tag must point at the commit this run built, so a Release that
+          # merely exists for another commit is never announced here.
+          tag_commit="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${tag}" --jq '.sha')"
+          if [[ "$tag_commit" != "$RUN_SHA" ]]; then
+            skip_announcement "Release $tag belongs to commit $tag_commit, not to release run $RUN_ID at $RUN_SHA; nothing to announce."
+          fi
+          # Announce only after Production: every serialized asset surface of the
+          # reusable deployment must report success inside this same run.
+          jobs="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/jobs?per_page=100" \
+            --jq '.jobs[] | [.name, .conclusion] | @tsv')"
+          for surface in updates web installers; do
+            job="${PRODUCTION_JOB_PREFIX}${surface}"
+            conclusion="$(awk -F '\t' -v name="$job" '$1 == name { print $2; exit }' <<<"$jobs")"
+            if [[ "$conclusion" != success ]]; then
+              echo "::error::Production asset job '$job' is '${conclusion:-absent}' in release run $RUN_ID; the announcement must not precede Production."
+              exit 1
+            fi
+          done
+          # Announce each tag once. The ledger artifact is written only after a
+          # successful send, so re-running this workflow or the release run
+          # cannot repeat the announcement for the same tag.
+          ledger="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?name=${ANNOUNCEMENT_LEDGER_PREFIX}${tag}&per_page=100" \
+            --jq '[.artifacts[] | select(.expired == false)] | length')"
+          if [[ "$ledger" != 0 ]]; then
+            skip_announcement "Release $tag was already announced; nothing is sent again."
+          fi
+          {
+            echo "announce=true"
+            echo "tag=$tag"
+            echo "title=$title"
+            echo "url=$url"
+          } >> "$GITHUB_OUTPUT"
+      - name: Build approved community notification
+        id: message
+        if: github.event_name == 'push' || steps.release.outputs.announce == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TITLE: ${{ steps.release.outputs.title }}
+          RELEASE_URL: ${{ steps.release.outputs.url }}
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_run" ]]; then
+            title="Release $RELEASE_TITLE"
+            url="$RELEASE_URL"
+            description="Stable release is live: Production assets deployed."
           else
             commit_message="$(jq -r '.head_commit.message // ""' "$GITHUB_EVENT_PATH")"
             number="$(grep -oE '\(#[0-9]+\)' <<<"$commit_message" | grep -oE '[0-9]+' | tail -1 || true)"
@@ -81,3 +191,25 @@ jobs:
             --data "$PAYLOAD" \
             --output /dev/null \
             "$DISCORD_WEBHOOK_URL"
+      - name: Record the announced Release
+        if: github.event_name == 'workflow_run' && steps.message.outputs.send == 'true'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p announcements
+          printf 'tag=%s\nannounced_at=%s\nrun=%s\n' \
+            "$RELEASE_TAG" \
+            "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            > "announcements/${RELEASE_TAG}.txt"
+      - name: Upload the announcement ledger
+        if: github.event_name == 'workflow_run' && steps.message.outputs.send == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: discord-announcement-${{ steps.release.outputs.tag }}
+          path: announcements
+          retention-days: 90
+          overwrite: true
+          if-no-files-found: error
