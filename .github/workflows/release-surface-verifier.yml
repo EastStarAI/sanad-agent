@@ -1,0 +1,91 @@
+name: Verify Production release surfaces
+
+# Prove that every version-bearing public Production surface serves the newest
+# published Stable release. This is the only check that reads the live surfaces
+# without cache-busting, so a stale surface, a stale intermediary, or a missed
+# Production handoff becomes visible after the release instead of on a user's
+# machine.
+#
+# Read-only: no secret, no deployment, no Environment, contents: read only.
+# While the newest release is still a Draft, Production legitimately serves the
+# previous Stable release, so the run reports an open release window and skips.
+
+on:
+  workflow_run:
+    # The release pipeline that owns publication and the Production asset handoff.
+    workflows: ['Prepare stable release']
+    types: [completed]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-production-release-surfaces
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  verify:
+    name: Verify Production surfaces
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out the verification tooling
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Verify the verifier against recorded fixtures
+        run: scripts/release/test_verify_production_surfaces.sh
+      - name: Resolve the newest published Stable release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          releases="$RUNNER_TEMP/releases.json"
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" >"$releases"
+          scripts/release/verify_production_surfaces.sh resolve \
+            --releases "$releases" \
+            --github-output "$GITHUB_OUTPUT"
+      - name: Report an open release window
+        if: steps.release.outputs.window == 'open'
+        run: |
+          {
+            printf '### Release window open\n\n'
+            printf 'The newest release is still a Draft, so Production serves the\n'
+            printf 'previous Stable release by design. Surface verification resumes\n'
+            printf 'when the Draft is published.\n'
+          } >>"$GITHUB_STEP_SUMMARY"
+          echo "::notice::Release window open: the newest release is a Draft, so Production still serves the previous Stable release."
+      - name: Verify every Production surface
+        if: steps.release.outputs.window == 'closed'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -uo pipefail
+          tag_tree="$RUNNER_TEMP/tag-tree"
+          summary="$RUNNER_TEMP/surfaces.md"
+          mkdir -p "$tag_tree"
+          commit="$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")"
+          git archive "$RELEASE_TAG" \
+            release/release-contract.json scripts/install.sh scripts/install.ps1 |
+            tar -x -C "$tag_tree"
+
+          status=0
+          scripts/release/verify_production_surfaces.sh verify \
+            --tag "$RELEASE_TAG" \
+            --tag-commit "$commit" \
+            --tag-tree "$tag_tree" \
+            --surfaces scripts/release/production-surfaces.json \
+            --summary-out "$summary" || status=$?
+          if [[ -f "$summary" ]]; then
+            cat "$summary" >>"$GITHUB_STEP_SUMMARY"
+          fi
+          exit "$status"
