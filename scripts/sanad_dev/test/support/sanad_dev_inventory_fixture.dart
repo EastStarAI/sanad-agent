@@ -171,6 +171,9 @@ class FakeInventoryGit {
     required this.entries,
     required this.dirty,
     required this.tracking,
+    this.upstreams = const {},
+    this.upstreamTracking = const {},
+    this.commitTimes = const {},
   }) {
     final listing = StringBuffer();
     for (final entry in entries) {
@@ -194,6 +197,16 @@ class FakeInventoryGit {
   final List<FakeWorktreeEntry> entries;
   final Map<String, int> dirty;
   final Map<String, ({int behind, int ahead})> tracking;
+
+  /// Configured upstream per working directory; absent means none.
+  final Map<String, String> upstreams;
+
+  /// Upstream ahead/behind per working directory; absent means the ref is gone.
+  final Map<String, ({int behind, int ahead})> upstreamTracking;
+
+  /// Committer unix seconds per working directory; absent means no history.
+  final Map<String, int> commitTimes;
+
   late final String _listing;
 
   Future<ProcessResult> call(String workingDirectory, List<String> args) async {
@@ -206,8 +219,26 @@ class FakeInventoryGit {
     if (args.contains('rev-parse') && args.contains('--show-toplevel')) {
       return ProcessResult(0, 0, '$workingDirectory\n', '');
     }
+    if (args.contains('rev-parse') && args.contains('--symbolic-full-name')) {
+      final upstream = upstreams[workingDirectory];
+      if (upstream == null) {
+        return ProcessResult(0, 128, '', 'no upstream configured');
+      }
+      return ProcessResult(0, 0, '$upstream\n', '');
+    }
     if (args.contains('rev-parse') && args.contains('--abbrev-ref')) {
       return ProcessResult(0, 0, 'main\n', '');
+    }
+    if (args.contains('log')) {
+      final seconds = commitTimes[workingDirectory];
+      if (seconds == null) return ProcessResult(0, 128, '', 'no commits yet');
+      return ProcessResult(0, 0, '$seconds\n', '');
+    }
+    if (args.contains('rev-list') &&
+        args.any((argument) => argument.startsWith('@{upstream}'))) {
+      final counts = upstreamTracking[workingDirectory];
+      if (counts == null) return ProcessResult(0, 128, '', 'unknown revision');
+      return ProcessResult(0, 0, '${counts.behind}\t${counts.ahead}\n', '');
     }
     if (args.contains('worktree') && args.contains('--porcelain')) {
       return ProcessResult(0, 0, _listing, '');

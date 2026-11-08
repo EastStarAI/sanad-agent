@@ -9,10 +9,14 @@ part of '../../../sanad_dev_cli.dart';
 Future<void> handleSanadDevInventory({
   required bool showAll,
   required bool json,
+  bool pullRequests = false,
 }) async {
   final SanadDevInventory inventory;
   try {
-    inventory = await collectSanadDevInventory(callerDirectory: _callerDirectory);
+    inventory = await collectSanadDevInventory(
+      callerDirectory: _callerDirectory,
+      pullRequests: pullRequests,
+    );
   } on ProcessException {
     stderr.writeln(
       'Error: Git is not installed or could not be found in your PATH.',
@@ -78,6 +82,7 @@ void printSanadDevInventory(
       '${inventoryAgentProbeTimeout.inSeconds}s',
     );
   }
+  print(_inventoryPullRequestLookupLine(inventory));
 
   if (inventory.worktrees.isNotEmpty) {
     print('');
@@ -88,6 +93,13 @@ void printSanadDevInventory(
         'dirty=${worktree.dirtyCount}',
         'ahead=${worktree.ahead ?? '-'}',
         'behind=${worktree.behind ?? '-'}',
+        'age=${formatInventoryAge(worktree.lastCommitAgeSeconds)}',
+        'disk=${_inventoryDiskLabel(worktree)}',
+        'upstream=${_inventoryUpstreamLabel(worktree)}',
+        if (worktree.pullRequestLookup !=
+            InventoryPullRequestLookup.notRequested)
+          'pr=${_inventoryPullRequestLabel(worktree)}',
+        'remove=${worktree.removal.verdict.name}',
         if (worktree.locked) 'locked',
         if (worktree.prunable) 'prunable',
         if (worktree.missing) 'missing',
@@ -112,6 +124,32 @@ void printSanadDevInventory(
       print(
         '    tracking: ahead=${worktree.ahead ?? '-'} '
         'behind=${worktree.behind ?? '-'} of origin/main',
+      );
+      print(
+        '    last commit: '
+        '${worktree.lastCommitAt?.toIso8601String() ?? '-'} '
+        '(${formatInventoryAge(worktree.lastCommitAgeSeconds)} ago)',
+      );
+      final diskLabel = worktree.diskBytes == null
+          ? worktree.diskScan.name
+          : '${formatInventoryBytes(worktree.diskBytes!)} '
+                '(${worktree.diskScan.name})';
+      print('    disk: $diskLabel');
+      print('    upstream: ${_inventoryUpstreamDetail(worktree)}');
+      if (worktree.pullRequest case final pullRequest?) {
+        print(
+          '    pull request: #${pullRequest.number} '
+          '${pullRequest.state.toLowerCase()} '
+          '${pullRequest.url ?? ''} '
+          '(${pullRequest.source})',
+        );
+      } else if (worktree.pullRequestLookup ==
+          InventoryPullRequestLookup.ok) {
+        print('    pull request: none reported');
+      }
+      print(
+        '    removal: ${worktree.removal.verdict.name} - '
+        '${worktree.removal.reason}',
       );
       print(
         '    derived home: ${abbreviate(worktree.home)}'
@@ -233,7 +271,8 @@ void printSanadDevInventory(
     '${inventory.liveRuntimes.length} live runtimes, '
     '${inventory.clients.length} clients, '
     '${inventory.testHomes.length} test homes, '
-    '${inventory.orphans.length} orphans.',
+    '${inventory.orphans.length} orphans, '
+    '${inventory.removableWorktrees.length} safe to remove.',
   );
 }
 
@@ -257,6 +296,57 @@ String _inventoryOrphanKindLabel(InventoryOrphanKind kind) => switch (kind) {
   InventoryOrphanKind.runtimeRecord => 'runtime_record',
   InventoryOrphanKind.endpointRecord => 'endpoint_record',
 };
+
+/// One line that states whether the optional `gh` pull-request pass ran.
+String _inventoryPullRequestLookupLine(SanadDevInventory inventory) {
+  switch (inventory.pullRequestLookup) {
+    case InventoryPullRequestLookup.notRequested:
+      return 'PR lookup: skipped (pass --pr to query gh; answers are cached)';
+    case InventoryPullRequestLookup.ok:
+      return 'PR lookup: ok';
+    case InventoryPullRequestLookup.timeout:
+      return 'PR lookup: timed out after '
+          '${inventoryPullRequestBudget.inSeconds}s';
+    case InventoryPullRequestLookup.unavailable:
+      final reason = inventory.pullRequestUnavailableReason;
+      return 'PR lookup: unavailable${reason == null ? '' : ' ($reason)'}';
+  }
+}
+
+String _inventoryDiskLabel(InventoryWorktree worktree) {
+  if (worktree.diskScan == InventoryDiskScan.missing) return 'missing';
+  final bytes = worktree.diskBytes;
+  if (bytes == null) return worktree.diskScan.name;
+  return formatInventoryBytes(bytes);
+}
+
+String _inventoryUpstreamLabel(InventoryWorktree worktree) {
+  final upstream = worktree.upstream;
+  if (upstream == null) return 'none';
+  if (worktree.upstreamState == InventoryUpstreamState.gone) {
+    return '$upstream/gone';
+  }
+  return '$upstream/+${worktree.upstreamAhead ?? '-'}/-${worktree.upstreamBehind ?? '-'}';
+}
+
+String _inventoryUpstreamDetail(InventoryWorktree worktree) {
+  final upstream = worktree.upstream;
+  if (upstream == null) return 'none configured';
+  if (worktree.upstreamState == InventoryUpstreamState.gone) {
+    return '$upstream (gone)';
+  }
+  return '$upstream (ahead ${worktree.upstreamAhead ?? '-'}, '
+      'behind ${worktree.upstreamBehind ?? '-'})';
+}
+
+String _inventoryPullRequestLabel(InventoryWorktree worktree) {
+  final pullRequest = worktree.pullRequest;
+  final lookup = worktree.pullRequestLookup;
+  if (lookup == InventoryPullRequestLookup.unavailable) return 'unavailable';
+  if (lookup == InventoryPullRequestLookup.timeout) return 'timeout';
+  if (pullRequest == null) return 'none';
+  return '#${pullRequest.number}/${pullRequest.state.toLowerCase()}';
+}
 
 int _inventoryColumnWidth(Iterable<String> values, {required int maximum}) {
   var width = 0;

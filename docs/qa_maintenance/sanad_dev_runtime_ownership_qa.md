@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership QA"
-description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, continuous source handoff, the read-only inventory projection, and the reset, apply, refresh, cli, status, and doctor runtime tooling."
+description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, continuous source handoff, the read-only inventory projection with its worktree health columns, the confirmed dev-area orphan cleanup, and the reset, apply, refresh, cli, status, and doctor runtime tooling."
 ---
 
 # sanad-dev Runtime Ownership QA
@@ -239,8 +239,57 @@ testers instead of rebuilding worktree, port, and orphan state by hand.
 | `inventory` with no live runtime, no Clients, and no orphans | Only the worktree and runtime sections print; empty sections are hidden. |
 | `inventory --all` | Every row is followed by its detail lines (full HEAD, path, tracking, Homes, lease identity, source commit, Client source, orphan target/detail/cleanup). |
 | A hung or filtered Agent port | The probe ends at its deadline, the command completes, and `agent_probe_timed_out` is reported instead of blocking; runtime classes then reflect only observed evidence. |
-| `inventory` on a machine with about ten worktrees and forty records | Completes well under two seconds using the prepared runtime CLI; Git and Home reads are bounded, and only loopback `/health` is contacted. |
+| `inventory` on a machine with about ten worktrees and forty records | Completes well under two seconds using the prepared runtime CLI; Git and Home reads are bounded, and only loopback `/health` is contacted. The optional disk and `gh` passes are separately capped and never extend an individual probe deadline. |
 | `inventory` run while no prepared runtime CLI exists | Fails with the standard `sanad-dev setup` recovery command and never bootstraps implicitly. |
+
+### Worktree health columns
+
+| Scenario | Expected result |
+|---|---|
+| Clean worktree fully merged into `origin/main`, no live runtime, no Test Home | `remove=safe` with `clean and merged into origin/main`. |
+| Clean worktree in sync with its own pushed upstream while ahead of `origin/main` | `remove=safe` with `clean and pushed to <upstream>`. |
+| Dirty worktree, unpushed commits, deleted upstream, locked worktree, detached HEAD, missing directory, live runtime, or Test Home | `remove=keep`, and the row names the first blocking reason in operator order. |
+| `gh` reports a merged pull request for a branch with unpushed commits | `remove=safe` with `clean and merged via PR #N`, because the merge proves the work landed. |
+| Worktree whose Home is an absolute `~/.sanad-test*` path | `remove=keep` with `Test Home`, even when the tree is clean and merged. |
+| Primary checkout that is clean and merged | `remove=keep` with `primary checkout`; it is never a removal candidate. |
+| Large worktree that exhausts the disk budget or the entry cap | `disk_scan=skipped` and no byte count; the report still completes inside its budget. |
+| Worktree directory deleted while Git still lists it | `disk_scan=missing`; no size walk and no Git status child run for it. |
+| Symlink inside a worktree pointing at a large tree elsewhere | The size walk never follows it; the reported size covers only real content inside the worktree. |
+| Branch with no configured upstream | `upstream_state=none`, no ahead/behind, and the verdict falls back to `origin/main` evidence. |
+| Branch whose configured upstream ref was deleted | `upstream_state=gone`; the verdict keeps the worktree unless `origin/main` already contains every commit. |
+| `inventory` without `--pr` | `pull_request_lookup=not_requested`, no `gh` child is started, and no file is created anywhere. |
+| `inventory --pr` with no `gh` on PATH | `pull_request_lookup=unavailable` with `gh is not installed`; every row is still reported and the command exits 0. |
+| `inventory --pr` with an unauthenticated or offline `gh` | `pull_request_lookup=unavailable` with one bounded reason line; no credential, token, or process argument appears in the output. |
+| `inventory --pr` with a `gh` child that never answers | The child is killed at its cap, the row reports `timeout`, and the command completes. |
+| `inventory --pr` run twice with an unchanged branch head | The second run answers from `.sanad-dev/inventory/pr-cache.json` and starts no `gh` child, including for a cached "no pull request" answer. |
+| A branch head moves after a cached answer | The cache entry is stale, so the next `--pr` run queries `gh` again. |
+| Edit `.sanad-dev/inventory/pr-cache.json` to be corrupt or an unknown version | The cache is a miss, `gh` is consulted again, and the report still succeeds. |
+| `inventory --json` on schema 2 | Every schema-1 key keeps its name and order, the new health and verdict keys are appended, `summary` adds `removal_safe`/`removal_keep`, and `schema` is `2`. |
+
+## Orphan cleanup matrix
+
+`sanad-dev cleanup-orphans` is the only command that deletes dev-area orphans. It
+is dry-run by default, lists every target with its action, and never signals a
+process.
+
+| Scenario | Expected result |
+|---|---|
+| `cleanup-orphans` with no flags | Prints the dry-run plan and deletes nothing; every listed target still exists afterwards. |
+| `cleanup-orphans` with no orphans | Prints `No orphan targets found.` and exits 0. |
+| `cleanup-orphans --confirm` with a deletable dev Home and runtime record | Deletes exactly those two targets, leaves every refused target untouched, and exits 0. |
+| A second `--confirm` run after the first succeeded | Reports `Nothing to clean` and deletes nothing. |
+| `cleanup-orphans --confirm` while the target already vanished | Reports `absent`, does not fail, and continues with the remaining targets. |
+| A deletion fails (permission denied) | Reports `failed` with the error, reports the remaining targets as not attempted, stops, and returns nonzero. |
+| Orphan target is the primary Home's own data (`~/.sanad/…` outside `dev/`) | Refused with `outside the sanad-dev dev area`; nothing is read or deleted. |
+| Orphan target is a Test Home or anything inside one | Refused with `target is a Test Home`; the Home directory survives. |
+| Orphan target is `<primary home>/dev` itself or a `homes`/`runtimes` group directory | Refused with the matching named reason. |
+| Orphan target is a symbolic link, including one created after the dry run | Refused with `target is a symbolic link`; the link is never followed or deleted. |
+| A dev-area parent directory is replaced by a link to another tree between the plan and the delete | The deletion re-checks containment, refuses with `refusing to delete outside the sanad-dev dev area`, and the outside target survives. |
+| A live runtime or lease claims the same Home or worktree id | Refused with `live runtime (<agent port>)`; no pid is signalled. |
+| A runtime or worktree appears between the dry run and `--confirm` | The confirmed run re-reads the projection first, so the new evidence is honoured and the target is refused. |
+| `cleanup-orphans --json` | Prints the stable plan document (`schema`, `generated_at`, `confirm`, `dev_area`, `user_home`, `primary_home`, `summary`, `targets`) or, with `--confirm`, the same document plus `results`. |
+| `cleanup-orphans --home <path>` | Usage error 64: the command targets the primary dev area and never a workspace-scoped Home. |
+| `cleanup-orphans --json` inspected for secrets | No token, credential header, `.env` value, or process argument vector appears. |
 
 ## Hermetic test boundary
 
@@ -249,10 +298,14 @@ lease records, process identities, and endpoint numbers. Stop behavior receives
 an injected launcher-request transport; target cleanup receives an injected
 terminator. Tests assert fake calls and never invoke real process termination
 or a user-owned endpoint. Inventory tests build their fake Git output, Home
-trees, runtime records, and leases under `test/support/` and inject liveness and
-probe seams, so no test reads the developer's own Home, binds a port, or starts a
-runtime; one suite runs real `git worktree list --porcelain` against a throwaway
-repository to keep the parser honest. SQLite-backed Agent tests persist a
+trees, runtime records, and leases under `test/support/` and inject liveness,
+probe, disk, and `gh` seams, so no test reads the developer's own Home, binds a
+port, starts a runtime, or calls GitHub; one suite runs real
+`git worktree list --porcelain` against a throwaway repository to keep the parser
+honest. Orphan cleanup tests build a throwaway user home with real dev-area
+entries and inject the projection and the delete seam, so a dry run, a confirmed
+deletion, a refusal, and a failure are proven without touching the operator's own
+records. SQLite-backed Agent tests persist a
 deferred descriptor, resolve a terminal manifest once, and verify the completed
 original tool result is reused.
 
