@@ -1,7 +1,8 @@
-# Builds the whisper.cpp shim for Windows (x64 or arm64) into native/windows.
+# Builds the whisper.cpp shim for one Windows CPU architecture.
 #
 # Usage:
 #   pwsh -File tool/build_whispercpp.ps1 <whisper.cpp-source> [output-dir]
+#       [-Arch x64|arm64]
 #
 # Requirements: CMake + a Visual Studio C++ toolchain (`cl.exe`). Run from a
 # "Developer PowerShell" or after `vcvarsall.bat` so cl.exe is on PATH.
@@ -9,12 +10,31 @@
 # The daemon loads sanad_whisper.dll through dart:ffi; whisper.dll and the
 # ggml-*.dll backends must sit beside it. Metal is macOS-only, so Windows uses
 # the CPU backend (a CUDA/Vulkan backend can be added later the same way).
+#
+# The architecture is explicit because the output directory is
+# architecture-qualified (`native/windows-x64`, `native/windows-arm64`, …). A
+# cross-architecture build is refused: the MSVC toolchain here targets the host,
+# so publishing the other slice under this directory name would be a lie the
+# daemon can only discover at load time.
 param(
     [Parameter(Mandatory = $true)][string]$WhisperSrc,
-    [string]$OutDir = "native/windows"
+    [string]$OutDir = "",
+    [string]$Arch = ""
 )
 
 $ErrorActionPreference = "Stop"
+
+switch -Regex ($env:PROCESSOR_ARCHITECTURE) {
+    '^(AMD64|x86)$' { $hostArch = "x64" }
+    '^ARM64$' { $hostArch = "arm64" }
+    default { throw "Unsupported host CPU: $env:PROCESSOR_ARCHITECTURE" }
+}
+if ([string]::IsNullOrEmpty($Arch)) { $Arch = $hostArch }
+if ($Arch -ne $hostArch) {
+    throw "Refusing to build $Arch on a $hostArch host: the artifact would not run on the machines its directory name claims."
+}
+if ([string]::IsNullOrEmpty($OutDir)) { $OutDir = "native/windows-$Arch" }
+
 # Make the source path absolute before pushing into it: a relative path is
 # resolved twice once the working directory changes, which silently points the
 # include directories at whisper.cpp\whisper.cpp and breaks the shim build.
@@ -28,7 +48,7 @@ try {
         -DBUILD_SHARED_LIBS=ON `
         -DGGML_METAL=OFF `
         -DWHISPER_BUILD_TESTS=OFF `
-        -DWHISPER_BUILD_EXAMPLES=OFF
+        -DWHISPER_BUILD_EXAMPLES=OFF -A $Arch
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
     cmake --build build --config Release
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
@@ -61,7 +81,7 @@ try {
         if ($src) { Copy-Item -Force $src $out }
     }
 
-    Write-Host "built: $out\sanad_whisper.dll"
+    Write-Host "built: $out\sanad_whisper.dll (windows-$Arch)"
 }
 finally {
     Pop-Location

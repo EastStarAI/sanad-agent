@@ -12,6 +12,7 @@ import 'dart:typed_data';
 
 import 'package:ffi/ffi.dart';
 
+import 'stt_native_platform.dart';
 import 'stt_types.dart';
 
 typedef _LoadNative =
@@ -68,21 +69,33 @@ class WhisperCppLibrary {
   static WhisperCppLibrary? _instance;
   static String? _loadedFrom;
 
+  /// Architecture-qualified runtime target for this process, or null when the
+  /// local engine does not exist for the running ABI.
+  static SttNativeTarget? get target => SttNativeTarget.tryCurrent();
+
   /// Where the shim is expected: an explicit env override, next to the running
   /// executable, or inside the checkout (tests and `dart run`).
   static String get defaultLibraryPath {
     final override = Platform.environment['SANAD_WHISPER_LIB'];
     if (override != null && override.isNotEmpty) return override;
-    for (final candidate in _candidates) {
+    final candidates = _candidates;
+    for (final candidate in candidates) {
       if (File(candidate).existsSync()) return candidate;
     }
-    return _candidates.first;
+    return candidates.isEmpty ? _fallbackLibraryName : candidates.first;
   }
 
   static const String _libraryBase = 'libsanad_whisper';
 
   /// Native extension differs per OS; the shim is the same C file everywhere.
-  static String get libraryFileName {
+  ///
+  /// The architecture never changes the file name: macOS Intel and Apple
+  /// Silicon both load `libsanad_whisper.dylib`, so the directory (not the
+  /// name) keeps the two builds apart.
+  static String get libraryFileName =>
+      target?.shimFileName ?? _fallbackLibraryName;
+
+  static String get _fallbackLibraryName {
     if (Platform.isMacOS) return '$_libraryBase.dylib';
     if (Platform.isWindows) return 'sanad_whisper.dll';
     return '$_libraryBase.so';
@@ -90,33 +103,37 @@ class WhisperCppLibrary {
 
   /// Directory that holds the prebuilt shim and its ggml/whisper libraries.
   static String get platformDir {
+    final resolved = target;
+    if (resolved != null) return resolved.nativeDirectory;
     if (Platform.isMacOS) return 'macos';
     if (Platform.isWindows) return 'windows';
     return 'linux';
   }
 
   static List<String> get _candidates {
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final cwd = Directory.current.path;
-    final name = libraryFileName;
-    final dir = platformDir;
-    final override = Platform.environment['SANAD_WHISPER_LIBRARY']?.trim();
-    return <String>[
-      if (override != null && override.isNotEmpty) override,
-      '$exeDir/native/$dir/$name',
-      '$exeDir/../native/$dir/$name',
-      '$cwd/native/$dir/$name',
-      '$cwd/agent/native/$dir/$name',
-    ];
+    final resolved = target;
+    if (resolved == null) return const [];
+    return nativeLibraryCandidates(
+      target: resolved,
+      executableDirectory: File(Platform.resolvedExecutable).parent.path,
+      workingDirectory: Directory.current.path,
+      overridePath: Platform.environment['SANAD_WHISPER_LIBRARY'],
+    );
   }
 
-  /// True when the shim (and therefore its ggml/whisper siblings) is on disk.
+  /// True when the shim (and therefore its ggml/whisper siblings) is on disk
+  /// for the architecture this process runs as.
   ///
   /// Readiness uses this instead of opening the library: a missing runtime must
-  /// be reportable without loading anything into the daemon.
+  /// be reportable without loading anything into the daemon. Existence alone is
+  /// not enough, because a leftover build for the other architecture would make
+  /// readiness promise a runtime that cannot load.
   static bool get isAvailable {
+    final resolved = target;
+    if (resolved == null) return false;
     for (final candidate in _candidates) {
-      if (File(candidate).existsSync()) return true;
+      if (!File(candidate).existsSync()) continue;
+      if (nativeLibraryMatchesTarget(candidate, resolved)) return true;
     }
     return false;
   }
@@ -127,8 +144,15 @@ class WhisperCppLibrary {
   /// it finishes, so the UI can show "preparing" instead of "missing". Stale
   /// markers (a killed build) expire so the state never sticks.
   static bool get isBeingPrepared {
-    for (final candidate in _candidates) {
-      final marker = File('${File(candidate).parent.path}/.stt-preparing');
+    final resolved = target;
+    if (resolved == null) return false;
+    final markers = preparingMarkerCandidates(
+      target: resolved,
+      executableDirectory: File(Platform.resolvedExecutable).parent.path,
+      workingDirectory: Directory.current.path,
+    );
+    for (final path in markers) {
+      final marker = File(path);
       if (!marker.existsSync()) continue;
       final age = DateTime.now().difference(marker.lastModifiedSync());
       if (age < const Duration(minutes: 30)) return true;
@@ -137,16 +161,16 @@ class WhisperCppLibrary {
   }
 
   static WhisperCppLibrary open([String? path]) {
-    final target = path ?? defaultLibraryPath;
+    final targetPath = path ?? defaultLibraryPath;
     final cached = _instance;
-    if (cached != null && _loadedFrom == target) return cached;
-    if (!File(target).existsSync()) {
+    if (cached != null && _loadedFrom == targetPath) return cached;
+    if (!File(targetPath).existsSync()) {
       throw SttException(
         'engine_missing',
-        'the whisper.cpp library is missing at $target',
+        'the whisper.cpp library is missing at $targetPath',
       );
     }
-    final lib = DynamicLibrary.open(target);
+    final lib = DynamicLibrary.open(targetPath);
     final instance = WhisperCppLibrary._(
       lib,
       lib.lookupFunction<_LoadNative, _LoadDart>('sanad_whisper_load'),
@@ -154,7 +178,7 @@ class WhisperCppLibrary {
       lib.lookupFunction<_RunNative, _RunDart>('sanad_whisper_run'),
     );
     _instance = instance;
-    _loadedFrom = target;
+    _loadedFrom = targetPath;
     return instance;
   }
 

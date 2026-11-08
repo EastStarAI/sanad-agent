@@ -141,6 +141,32 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      - name: Fetch whisper.cpp
+        uses: actions/checkout@v6
+        with:
+          repository: ggerganov/whisper.cpp
+          ref: v1.9.5
+          path: whisper.cpp
+      - name: Cache whisper build
+        uses: actions/cache@v4
+        with:
+          path: whisper.cpp/build
+          key: whisper-${{ matrix.runner }}-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+      - name: Require the runner CPU the matrix label claims
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ matrix.architecture }}"
+          if [ "$expected" = "x64" ]; then expected=x86_64; fi
+          actual="$(uname -m)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::${{ matrix.runner }} reported $actual, expected $expected"
+            exit 1
+          fi
+      - name: Set up MSVC
+        if: matrix.platform == 'windows'
+        uses: ilammy/msvc-dev-cmd@v1
       - name: Install dependencies and test
         if: matrix.platform != 'windows'
         working-directory: agent
@@ -185,6 +211,35 @@ jobs:
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
+      # Audit D9: the packaged Agent must carry the native dictation runtime
+      # beside its executable. It is built in the same matrix entry as the
+      # executable, so one platform's payload cannot silently receive another
+      # platform's libraries, and a failed build fails the release. Every
+      # Windows step in this job stays PowerShell: the runner's fvm entry point
+      # is a `.bat` shim and this lane has no verified Git-Bash semantics.
+      - name: Build and verify the native dictation runtime
+        if: matrix.platform != 'windows'
+        working-directory: agent
+        shell: bash
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+          EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
+        run: |
+          set -euo pipefail
+          fvm dart run tool/ensure_native_stt.dart --expect-target "$EXPECTED"
+          fvm dart run tool/ensure_native_stt.dart --verify --expect-target "$EXPECTED"
+      - name: Build and verify the native dictation runtime
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+          EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --expect-target $env:EXPECTED
+          fvm dart run tool/ensure_native_stt.dart --verify --expect-target $env:EXPECTED
       - name: Smoke-test embedded skills on Windows
         if: matrix.platform == 'windows'
         shell: pwsh
@@ -266,6 +321,7 @@ jobs:
             sed -n 's/.*"\(Developer ID Application: NanoSoft LY LLC ([^"]*)\)".*/\1/p' |
             head -n 1)"
           test -n "$identity"
+          echo "MACOS_SIGNING_IDENTITY=$identity" >> "$GITHUB_ENV"
           agent="dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}${{ matrix.extension }}"
           codesign --force --options runtime --timestamp \
             --identifier "$SANAD_AGENT_CODESIGN_IDENTIFIER" \
@@ -286,6 +342,88 @@ jobs:
           printf '%s\n' "$designated_requirement" |
             grep -E 'certificate leaf\[subject\.OU\] = "?UC2824B99G"?' >/dev/null
           "$agent" version | grep -F "Version: ${{ needs.validate.outputs.version }}"
+      # Hardened runtime enables library validation, so a staged dylib that is
+      # not signed by this team would be refused even when it is present. Sign
+      # the libraries with the same identity as the Agent instead of weakening
+      # the Agent with the disable-library-validation entitlement.
+      - name: Sign the native dictation runtime
+        if: matrix.platform == 'macos'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$MACOS_SIGNING_IDENTITY"
+          expected_arch="${{ matrix.architecture }}"
+          if [ "$expected_arch" = "x64" ]; then expected_arch=x86_64; fi
+          directory="agent/native/${{ matrix.platform }}-${{ matrix.architecture }}"
+          count=0
+          while IFS= read -r -d '' library; do
+            codesign --force --timestamp --sign "$MACOS_SIGNING_IDENTITY" "$library"
+            codesign --verify --strict --verbose=2 "$library"
+            count=$((count + 1))
+          done < <(find "$directory" -type f -name '*.dylib' -print0)
+          if [ "$count" -eq 0 ]; then
+            echo "::error::no staged native libraries were signed"
+            exit 1
+          fi
+          # Signing must not change the slice the loader will accept.
+          lipo -archs "$directory/libsanad_whisper.dylib" | grep -F "$expected_arch" >/dev/null
+      - name: Stage and archive the native dictation runtime
+        if: matrix.platform != 'windows'
+        working-directory: agent
+        shell: bash
+        env:
+          EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
+          ARCHIVE_NAME: sanad-agent-runtime-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}.tar.gz
+        run: |
+          set -euo pipefail
+          fvm dart run tool/ensure_native_stt.dart --verify \
+            --expect-target "$EXPECTED" \
+            --stage ../dist \
+            --archive ../dist \
+            --archive-name "$ARCHIVE_NAME"
+          test -f "../dist/$ARCHIVE_NAME"
+      - name: Stage and archive the native dictation runtime
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
+          ARCHIVE_NAME: sanad-agent-runtime-${{ needs.validate.outputs.artifact_version }}-${{ matrix.platform }}-${{ matrix.architecture }}.tar.gz
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --verify `
+            --expect-target $env:EXPECTED `
+            --stage ../dist `
+            --archive ../dist `
+            --archive-name $env:ARCHIVE_NAME
+          if (-not (Test-Path -LiteralPath (Join-Path ../dist $env:ARCHIVE_NAME))) {
+            throw "The staged runtime archive is missing."
+          }
+      # The staged layout is enforced by `stageSttRuntime` and covered by
+      # agent/test/tool/stt_native_runtime_test.dart; the archive member naming
+      # by agent/test/tool/native_runtime_package_contract_test.dart. This step
+      # stays one command per shell instead of find/tar pipelines the guard
+      # cannot see.
+      - name: Load the packaged runtime in a real process
+        if: matrix.platform != 'windows'
+        working-directory: agent
+        shell: bash
+        # Required only here: the full suite above runs before the runtime is
+        # built, so the flag belongs on this step rather than on the job.
+        env:
+          SANAD_STT_REQUIRE_NATIVE: '1'
+        run: fvm dart test test/stt/native_runtime_smoke_test.dart
+      - name: Load the packaged runtime in a real process
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          SANAD_STT_REQUIRE_NATIVE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/native_runtime_smoke_test.dart
       - name: Notarize macOS agent
         if: matrix.platform == 'macos'
         shell: bash

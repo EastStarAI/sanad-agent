@@ -1,0 +1,132 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
+import 'package:test/test.dart';
+
+import '../../tool/stt_native_runtime.dart';
+
+/// The tool and `tool/build_whispercpp.sh` are two halves of one argument
+/// contract. A mismatch here is invisible on Apple Silicon (`arm64` happens to
+/// equal the CMake spelling) and fatal on Intel, so it is asserted directly.
+///
+/// The script's plan mode runs the same validation and the same architecture
+/// mapping as a real build and then exits before touching a compiler or the
+/// filesystem, which keeps this test host-independent.
+void main() {
+  final windows = Platform.isWindows;
+  final bash = windows
+      ? null
+      : Process.runSync('bash', ['--version']).exitCode == 0;
+
+  test('the tool builds the vector the POSIX script accepts', () {
+    if (windows || bash != true) {
+      markTestSkipped('bash is required to exercise the POSIX builder script');
+      return;
+    }
+    final target = SttNativeTarget.tryCurrent();
+    if (target == null) {
+      markTestSkipped('this host has no native dictation target');
+      return;
+    }
+
+    final arguments = sttPosixBuilderArguments(
+      target: target,
+      whisperSource: Directory.current.path,
+      outputDirectory: 'native/.plan-only',
+    );
+    final result = Process.runSync(
+      'bash',
+      arguments,
+      environment: {'SANAD_BUILD_PLAN_ONLY': '1'},
+    );
+
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    final plan = <String, String>{
+      for (final line in LineSplitter().convert(result.stdout as String))
+        if (line.contains('=')) line.split('=').first: line.split('=').last,
+    };
+    expect(plan['build_plan_arch'], target.cpuName);
+    expect(plan['build_plan_out'], 'native/.plan-only');
+    // The CMake spelling is the script's job: `x64` must arrive as `x86_64`.
+    if (target.os == SttNativeOs.macos) {
+      expect(
+        plan['build_plan_cmake_arch'],
+        target.cpu == SttNativeCpu.x64 ? 'x86_64' : 'arm64',
+      );
+      expect(
+        plan['build_plan_deploy_target'],
+        SttNativeTarget.macosMinimumDeploymentTarget,
+      );
+    } else {
+      expect(plan['build_plan_metal'], 'OFF');
+    }
+  });
+
+  test('the script refuses the other architecture', () {
+    if (windows || bash != true) {
+      markTestSkipped('bash is required to exercise the POSIX builder script');
+      return;
+    }
+    final target = SttNativeTarget.tryCurrent();
+    if (target == null) {
+      markTestSkipped('this host has no native dictation target');
+      return;
+    }
+    final other = target.cpu == SttNativeCpu.x64 ? 'arm64' : 'x64';
+    final result = Process.runSync('bash', [
+      'tool/build_whispercpp.sh',
+      Directory.current.path,
+      'native/.plan-only',
+      other,
+      SttNativeTarget.macosMinimumDeploymentTarget,
+    ], environment: {'SANAD_BUILD_PLAN_ONLY': '1'});
+
+    expect(result.exitCode, isNot(0));
+    expect(result.stderr as String, contains('Refusing to build $other'));
+  });
+
+  test('the script rejects the CMake spelling on macOS', () {
+    if (windows || bash != true) {
+      markTestSkipped('bash is required to exercise the POSIX builder script');
+      return;
+    }
+    if (!Platform.isMacOS) {
+      // Linux takes no architecture argument at all, so there is nothing to
+      // reject there.
+      markTestSkipped('only the macOS path maps a tag-style architecture');
+      return;
+    }
+
+    final result = Process.runSync('bash', [
+      'tool/build_whispercpp.sh',
+      Directory.current.path,
+      'native/.plan-only',
+      'x86_64',
+      SttNativeTarget.macosMinimumDeploymentTarget,
+    ], environment: {'SANAD_BUILD_PLAN_ONLY': '1'});
+
+    expect(result.exitCode, isNot(0));
+    expect(result.stderr as String, contains('x86_64'));
+  });
+
+  test('the Windows vector carries the tag-style architecture', () {
+    final arguments = sttWindowsBuilderArguments(
+      target: SttNativeTarget.windowsX64,
+      whisperSource: r'C:\src\whisper.cpp',
+      outputDirectory: r'native\windows-x64.tmp',
+    );
+
+    expect(arguments, [
+      '-ExecutionPolicy',
+      'Bypass',
+      '-File',
+      'tool/build_whispercpp.ps1',
+      r'C:\src\whisper.cpp',
+      r'native\windows-x64.tmp',
+      '-Arch',
+      'x64',
+    ]);
+    expect(arguments, isNot(contains('x86_64')));
+  });
+}

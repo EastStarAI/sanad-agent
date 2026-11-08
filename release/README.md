@@ -23,3 +23,13 @@ Public assets use:
 For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share the same marketing version.
 
 Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa` until the documented Authenticode transition is completed. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.
+
+## Agent native dictation runtime
+
+Every Agent platform also declares one `agent-runtime` artifact:
+
+`agent-runtime-<release-version>-<platform>-<architecture>.tar.gz`
+
+The archive is produced from the same verified build as the Agent executable, holds `native/<platform>-<architecture>/` with the allowlisted whisper.cpp libraries only (never a model), and is reproducible byte-for-byte from the same libraries. `scripts/install.sh` and `scripts/install.ps1` verify its size and SHA-256 from the manifest, reject any layout other than `native/<tag>/` with library files, and install it as `<home>/bin/native/<platform>-<architecture>/` beside the executable, which is the first location the loader searches. macOS libraries are signed with the same Developer ID identity as the Agent because the released Agent runs with the hardened runtime.
+
+The runtime is a separate component rather than a second `agent` entry: `findArtifact(component: 'agent')`, the Client bootstrap installer, and the installers keep selecting exactly one single-file Agent executable. A release that predates this entry installs the executable alone.
