@@ -170,6 +170,7 @@ class WhisperCppLibrary {
         'the whisper.cpp library is missing at $targetPath',
       );
     }
+    _loadWindowsDependencies(targetPath);
     final lib = DynamicLibrary.open(targetPath);
     final instance = WhisperCppLibrary._(
       lib,
@@ -180,6 +181,38 @@ class WhisperCppLibrary {
     _instance = instance;
     _loadedFrom = targetPath;
     return instance;
+  }
+
+  /// The DLLs that ship beside the shim on Windows, dependencies first.
+  ///
+  /// The builder stages exactly this set, and [open] loads each one before the
+  /// shim: Windows resolves a DLL's imports from the application directory, the
+  /// system directories, and `PATH`, never from the directory of the DLL being
+  /// loaded, so opening the shim first fails with "module could not be found"
+  /// (error 126) even though every file is present.
+  static const windowsRuntimeLibraries = [
+    'ggml.dll',
+    'ggml-base.dll',
+    'ggml-cpu.dll',
+    'whisper.dll',
+  ];
+
+  /// Registers the sibling runtime DLLs with the Windows loader.
+  ///
+  /// A failure here is not reported: the shim open below owns the real error, and
+  /// a dependency the loader already has cannot be loaded twice.
+  static void _loadWindowsDependencies(String shimPath) {
+    if (!Platform.isWindows) return;
+    final directory = File(shimPath).parent.path;
+    for (final name in windowsRuntimeLibraries) {
+      final file = File('$directory${Platform.pathSeparator}$name');
+      if (!file.existsSync()) continue;
+      try {
+        DynamicLibrary.open(file.path);
+      } on Object {
+        // The shim open reports the authoritative failure.
+      }
+    }
   }
 
   /// Opens a ggml model with mmap. Throws [SttException] with the C reason.

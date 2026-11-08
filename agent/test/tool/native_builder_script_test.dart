@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
+import 'package:sanad_agent/infrastructure/stt/whispercpp_bindings.dart';
 import 'package:test/test.dart';
 
 import '../../tool/stt_native_runtime.dart';
@@ -149,6 +150,16 @@ void main() {
       lessThan(configure),
       reason: 'the stale-cache guard must run before cmake configures',
     );
+  });
+
+  test('the Windows builder stages exactly the DLLs the loader preloads', () {
+    // The loader registers each sibling DLL before opening the shim, because
+    // Windows does not search the shim's directory for its imports. If the
+    // builder stops staging one of these, the load fails at runtime instead.
+    final script = File('tool/build_whispercpp.ps1').readAsStringSync();
+    for (final name in WhisperCppLibrary.windowsRuntimeLibraries) {
+      expect(script, contains(name), reason: '$name must be staged');
+    }
   });
 
   test('the shim exports every symbol the FFI bindings look up', () {
