@@ -74,6 +74,67 @@ void main() {
       expect(plan.wallTimeout, const Duration(milliseconds: 15550));
     });
 
+    test('a long press extends the tap wall clock', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'tap',
+        '--key',
+        'dictation_mic_btn',
+        '--hold-ms',
+        '800',
+      ]);
+      // 30 s action + 10 s grace + 300 ms post-delay + 2000 ms verification
+      // + 800 ms hold.
+      expect(plan.wallTimeout, const Duration(milliseconds: 43100));
+      expect(plan.activatesUi, isTrue);
+    });
+
+    test('a batch long press extends the recipe budget', () {
+      final plan = sanad_dev.planUiDriverRun(
+        ['batch', '--file', 'recipe.json'],
+        batchSteps: const [
+          sanad_dev.UiDriverBatchStepBudget(
+            action: 'tap',
+            timeoutSeconds: 30,
+            holdMs: 900,
+          ),
+        ],
+      );
+      // 30 s step + 300 ms delay + 2000 ms verify + 900 ms hold (rounded up to
+      // whole seconds) + 10 s grace.
+      expect(plan.wallTimeout, const Duration(seconds: 44));
+    });
+
+    test('ext is forwarded with its name and argument values intact', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'ext',
+        '--name',
+        'ext.sanad_client.inspect_ui',
+        '--args',
+        '{"within":"--home"}',
+        '--timeout',
+        '5',
+        '--home',
+        '/tmp/home',
+      ]);
+
+      // `--name` and `--args` consume their values, so a value that looks like
+      // a launcher flag survives; the real launcher flag is still stripped.
+      expect(plan.driverArguments, [
+        'ext',
+        '--name',
+        'ext.sanad_client.inspect_ui',
+        '--args',
+        '{"within":"--home"}',
+        '--timeout',
+        '5',
+      ]);
+      // ext never takes focus from the user.
+      expect(plan.activateWindow, isTrue);
+      expect(plan.activatesUi, isFalse);
+      expect(plan.wallTimeout, const Duration(seconds: 15));
+      expect(plan.isBatch, isFalse);
+    });
+
     test('scales the wall clock with each step timeout and wait', () {
       final plan = sanad_dev.planUiDriverRun(
         ['batch', '--file', 'recipe.json'],

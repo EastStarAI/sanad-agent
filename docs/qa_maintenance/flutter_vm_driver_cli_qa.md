@@ -65,6 +65,18 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Artifact disappearance | An artifact that disappears after the cache check falls back to the JIT path instead of failing the action |
 | Launcher argument fidelity | A driver value that equals a launcher flag (for example `enter-text --text --home`) is forwarded verbatim, while launcher flags before the sub-command or after `--` are stripped |
 | Batch action plus wait | One `batch` recipe chains a tap with a `wait_for` step and returns both results from a single connection |
+| Long press | `tap --hold-ms 800` forwards `hold_ms` to `ext.sanad_client.tap`, which holds the press before `PointerUp`; a batch tap step's `hold_ms` does the same |
+| Long-press bound | `--hold-ms` above 5000, negative, or non-numeric fails before connecting with the bound named, and the Client rejects the same range authoritatively without dispatching |
+| Long-press wall clock | The launcher cap includes the requested hold for a single tap and for a batch step, so a hold is never killed by a budget that ignored it |
+| Tooltip projection | A keyed control whose `Tooltip` is a child (for example `IconButton(tooltip: …)`) exposes that message in `snapshot` and `find`, and a descendant tooltip probe stops at its bound |
+| Tooltip bound | A tooltip longer than 200 characters is cut and reported with `tooltip_truncated: true` instead of inflating the snapshot |
+| Generic extension call | `ext --name ext.sanad_client.<name> --args <json>` runs on the isolate that advertises that extension and prints one `{status, extension, result}` document with its arguments flattened to strings |
+| Extension allowlist | Any name outside `ext.sanad_client.` (`ext.flutter.reassemble`), a missing `--name`, and `--args` that is not a flat object of scalars are all refused before a connection is opened |
+| Extension failure | A Client rejection is printed as `{status: error, extension, error}` with exit status `1`, and the failed extension is named |
+| Extension focus | `ext` never activates the owning Client window, because it may be a read-only probe |
+| Obscured target | A keyed target whose hit test does not include it reports `verified: false`, `verification: obscured`, the blocker's bounds and nearest key, and dispatches no pointer event |
+| Obscured evidence bound | `blocker_probe_truncated` is set when the bounded element probe runs out before naming the blocker, so an unnamed blocker is never presented as no blocker |
+| Unobscured target | A target whose hit test reaches its own render subtree taps normally and reports no `obscured` channel |
 
 ## Managed Runtime Coverage
 

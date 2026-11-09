@@ -65,6 +65,7 @@ const Set<String> _uiDriverValueFlags = {
   '--coords',
   '--timeout',
   '--delay',
+  '--hold-ms',
   '--verify-timeout',
   '--expect',
   '--expect-key',
@@ -76,6 +77,8 @@ const Set<String> _uiDriverValueFlags = {
   '-f',
   '--json-steps',
   '--report-file',
+  '--name',
+  '--args',
   '--out',
   '-o',
   '--filter',
@@ -139,12 +142,16 @@ class UiDriverBatchStepBudget {
     required this.action,
     this.timeoutSeconds,
     this.delayMs,
+    this.holdMs,
     this.sleepMs,
   });
 
   final String action;
   final int? timeoutSeconds;
   final int? delayMs;
+
+  /// Press duration a `tap` step holds before releasing, in milliseconds.
+  final int? holdMs;
   final int? sleepMs;
 
   bool get _verifies =>
@@ -256,11 +263,18 @@ UiDriverRunPlan planUiDriverRun(
     final verifyMs = int.tryParse(
       _uiDriverOptionValue(driverArgs, '--verify-timeout') ?? '',
     );
+    // A long press holds the same pointer sequence longer, so the wall clock
+    // that covers the action has to grow with it or the launcher would kill a
+    // tap the action deadline itself still allows.
+    final holdMs = int.tryParse(
+      _uiDriverOptionValue(driverArgs, '--hold-ms') ?? '',
+    );
     wallTimeout = Duration(
       seconds: actionSeconds + uiDriverChildGraceSeconds,
       milliseconds:
           (delayMs ?? (verifies ? uiDriverDefaultDelayMs : 0)) +
-          (verifyMs ?? (verifies ? uiDriverDefaultVerifyMs : 0)),
+          (verifyMs ?? (verifies ? uiDriverDefaultVerifyMs : 0)) +
+          (holdMs ?? 0),
     );
   }
 
@@ -306,6 +320,7 @@ int uiDriverBatchBudgetSeconds(
     if (step._verifies) {
       total += ((step.delayMs ?? uiDriverDefaultDelayMs) / 1000).ceil();
       total += ((stepVerifyWindowMs(stepTimeout)) / 1000).ceil();
+      total += ((step.holdMs ?? 0) / 1000).ceil();
     }
   }
   return total == 0 ? 0 : total;
@@ -360,6 +375,7 @@ List<UiDriverBatchStepBudget>? readUiDriverBatchSteps(List<String> driverArgs) {
             timeoutSeconds:
                 map['timeout_seconds'] as int? ?? map['timeout'] as int?,
             delayMs: map['delay_ms'] as int? ?? map['delay'] as int?,
+            holdMs: map['hold_ms'] as int?,
             sleepMs:
                 map['sleep_ms'] as int? ??
                 map['sleep'] as int? ??

@@ -3,8 +3,209 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show ScrollDirection;
+import 'package:flutter/rendering.dart' show RendererBinding, ScrollDirection;
 import 'package:sanad_client/driver/driver_widget_filters.dart';
+import 'package:sanad_client/driver/ui_bounds.dart';
+
+/// Press duration that keeps a dispatched tap a tap, in milliseconds.
+const int tapPressDelayMs = 60;
+
+/// Longest hold a `hold_ms` request may ask for, in milliseconds.
+///
+/// The bound keeps one driver call from pinning the Client's event loop or
+/// turning a mistyped duration into an unbounded press. The driver CLI rejects
+/// the same range before it connects, so this is the authoritative check rather
+/// than the only one.
+const int maxTapHoldMs = 5000;
+
+/// Deepest render-object ancestor chain walked when matching a hit to a target.
+const int maxHitTestAncestorDepth = 256;
+
+/// Most elements probed when naming the widget that covers a tap target.
+const int maxObstructionProbeElements = 4000;
+
+/// A resolved `hold_ms` request: the duration to hold and, when the request was
+/// invalid, the message that rejects it.
+typedef TapHoldRequest = ({int holdMs, String? error});
+
+/// Resolves a `hold_ms` parameter into a bounded press duration.
+///
+/// A long press is the same pointer sequence as a tap with a longer delay
+/// between `PointerDown` and `PointerUp`, so the caller expresses it as data
+/// instead of the driver hard-coding one press duration for every target.
+TapHoldRequest parseTapHoldMs(
+  String? raw, {
+  int defaultHoldMs = tapPressDelayMs,
+}) {
+  if (raw == null || raw.trim().isEmpty) {
+    return (holdMs: defaultHoldMs, error: null);
+  }
+  final parsed = int.tryParse(raw.trim());
+  if (parsed == null) {
+    return (
+      holdMs: defaultHoldMs,
+      error: 'hold_ms must be an integer number of milliseconds',
+    );
+  }
+  if (parsed < 0 || parsed > maxTapHoldMs) {
+    return (
+      holdMs: defaultHoldMs,
+      error: 'hold_ms must be between 0 and $maxTapHoldMs',
+    );
+  }
+  return (holdMs: parsed, error: null);
+}
+
+/// Whether [candidate] is [root] or one of its render descendants.
+bool _renderSubtreeContains(RenderObject? candidate, RenderObject root) {
+  var node = candidate;
+  for (var depth = 0; node != null && depth <= maxHitTestAncestorDepth; depth++) {
+    if (identical(node, root)) return true;
+    node = node.parent;
+  }
+  return false;
+}
+
+/// Hit-tests [position] inside the view that owns [element].
+///
+/// Returns null when the owning view cannot be resolved, so a caller can skip
+/// the obstruction check instead of reporting a false obstruction for every
+/// tap in an unusual embedding.
+HitTestResult? hitTestElementAt(Element element, Offset position) {
+  final view = View.maybeOf(element);
+  if (view == null) return null;
+  final result = HitTestResult();
+  RendererBinding.instance.hitTestInView(result, position, view.viewId);
+  return result;
+}
+
+/// Whether a hit-test path reaches [root] or something inside it.
+bool hitPathIncludesRenderSubtree(HitTestResult hitPath, RenderObject? root) {
+  if (root == null) return false;
+  for (final entry in hitPath.path) {
+    final target = entry.target;
+    if (target is RenderObject && _renderSubtreeContains(target, root)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/// The render object that would receive a pointer event instead of the target.
+///
+/// Only meaningful when [hitPathIncludesRenderSubtree] is false: the first path
+/// entry is then whatever is painted above the target at that point. Returns
+/// null when the path already reaches the target or is empty.
+RenderObject? topmostHitObstruction(
+  HitTestResult hitPath,
+  RenderObject? root,
+) {
+  if (root == null || hitPathIncludesRenderSubtree(hitPath, root)) {
+    return null;
+  }
+  for (final entry in hitPath.path) {
+    final target = entry.target;
+    if (target is RenderObject) return target;
+  }
+  return null;
+}
+
+/// Bounded element lookup by the render object it owns.
+typedef RenderObjectElementProbe = ({Element? element, bool truncated});
+
+/// Finds the element whose own render object is [renderObject].
+///
+/// Reaching the probe bound without a match reports truncation, so a caller
+/// never presents an unsearched tree as a widget without a blocker.
+RenderObjectElementProbe probeElementForRenderObject(
+  Element root,
+  RenderObject renderObject, {
+  int maxVisited = maxObstructionProbeElements,
+}) {
+  Element? found;
+  var visited = 0;
+
+  void visit(Element element) {
+    if (found != null || visited >= maxVisited) return;
+    visited++;
+    if (element is RenderObjectElement &&
+        identical(element.renderObject, renderObject)) {
+      found = element;
+      return;
+    }
+    element.visitChildren(visit);
+  }
+
+  visit(root);
+  return (element: found, truncated: found == null && visited >= maxVisited);
+}
+
+/// Nearest key carried by [element] or one of its ancestors.
+String? nearestKeyedLabel(Element element) {
+  String? labelOf(Widget widget) {
+    final key = widget.key;
+    if (key == null) return null;
+    final value = key is ValueKey ? key.value.toString() : key.toString();
+    return value.isEmpty ? null : value;
+  }
+
+  final own = labelOf(element.widget);
+  if (own != null) return own;
+
+  String? found;
+  element.visitAncestorElements((ancestor) {
+    final label = labelOf(ancestor.widget);
+    if (label == null) return true;
+    found = label;
+    return false;
+  });
+  return found;
+}
+
+/// Describes what covers [target] at [position].
+///
+/// Returns null when the hit test reaches the target itself. A non-null result
+/// means a pointer event dispatched at that point would land on something else,
+/// which is the difference between "the control did nothing" and "the control
+/// was never reached" — the failure the live tester could not diagnose.
+Map<String, dynamic>? describeObstruction(Element target, Offset position) {
+  final renderObject = target.renderObject;
+  if (renderObject == null) return null;
+
+  final hitPath = hitTestElementAt(target, position);
+  if (hitPath == null) return null;
+  if (hitPathIncludesRenderSubtree(hitPath, renderObject)) return null;
+
+  final blocker = topmostHitObstruction(hitPath, renderObject);
+  final root = WidgetsBinding.instance.rootElement;
+  final probe = blocker == null || root == null
+      ? (element: null, truncated: false)
+      : probeElementForRenderObject(root, blocker);
+  final blockerElement = probe.element;
+  final blockerKey = blockerElement == null
+      ? null
+      : nearestKeyedLabel(blockerElement);
+
+  return {
+    'obscured': true,
+    'resolved_at': {
+      'x': position.dx.round(),
+      'y': position.dy.round(),
+    },
+    if (globalBoundsOf(renderObject) case final bounds?)
+      'target_bounds': bounds,
+    if (blocker != null)
+      'blocker': {
+        'type':
+            blockerElement?.widget.runtimeType.toString() ??
+            blocker.runtimeType.toString(),
+        if (globalBoundsOf(blocker) case final blockerBounds?)
+          'bounds': blockerBounds,
+      },
+    if (blockerKey != null) 'blocker_key': blockerKey,
+    if (probe.truncated) 'blocker_probe_truncated': true,
+  };
+}
 
 /// Collects tap targets for a selector in render order.
 ///
@@ -278,7 +479,17 @@ void registerTapExtension() {
       final targetType = parameters['type']?.trim();
       final withinTarget = parameters['within']?.trim();
       final targetIndex = int.tryParse(parameters['index'] ?? '0') ?? 0;
+      final holdRequest = parseTapHoldMs(parameters['hold_ms']);
+      final holdError = holdRequest.error;
+      if (holdError != null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': holdError}),
+        );
+      }
+      final holdMs = holdRequest.holdMs;
       final root = WidgetsBinding.instance.rootElement;
+      Element? targetElement;
 
       if (targetX == null || targetY == null) {
         if (root == null) {
@@ -314,7 +525,7 @@ void registerTapExtension() {
             }),
           );
         }
-        final targetElement = matchingElements[targetIndex];
+        targetElement = matchingElements[targetIndex];
 
         // Auto-scroll the element into view if enclosed in a Scrollable
         try {
@@ -334,6 +545,21 @@ void registerTapExtension() {
       }
 
       final position = Offset(targetX, targetY);
+
+      // A keyed target whose hit test does not include it is behind a route or
+      // overlay. Dispatching anyway delivers the press to whatever is painted
+      // on top, which is how a tap intended for the composer once landed on an
+      // unrelated row. Report the obstruction instead of tapping.
+      final keyedTarget = targetElement;
+      if (keyedTarget != null) {
+        final obstruction = describeObstruction(keyedTarget, position);
+        if (obstruction != null) {
+          return developer.ServiceExtensionResponse.result(
+            json.encode({'status': 'obscured', ...obstruction}),
+          );
+        }
+      }
+
       final pointer = DateTime.now().millisecondsSinceEpoch;
 
       GestureBinding.instance.handlePointerEvent(
@@ -352,7 +578,7 @@ void registerTapExtension() {
         ),
       );
 
-      await Future<void>.delayed(const Duration(milliseconds: 60));
+      await Future<void>.delayed(Duration(milliseconds: holdMs));
 
       GestureBinding.instance.handlePointerEvent(
         PointerUpEvent(
@@ -373,6 +599,7 @@ void registerTapExtension() {
       return developer.ServiceExtensionResponse.result(
         json.encode({
           'status': 'ok',
+          'hold_ms': holdMs,
           'tapped_at': {'x': targetX.round(), 'y': targetY.round()},
         }),
       );
@@ -447,18 +674,7 @@ void registerRevealExtension() {
         );
       } catch (_) {}
 
-      final renderBox = targetElement.renderObject;
-      Map<String, dynamic>? bounds;
-      if (renderBox is RenderBox && renderBox.attached) {
-        final translation = renderBox.getTransformTo(null).getTranslation();
-        final size = renderBox.size;
-        bounds = {
-          'x': translation.x.round(),
-          'y': translation.y.round(),
-          'width': size.width.round(),
-          'height': size.height.round(),
-        };
-      }
+      final bounds = globalBoundsOf(targetElement.renderObject);
       return developer.ServiceExtensionResponse.result(
         json.encode({
           'status': 'ok',

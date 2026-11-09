@@ -98,6 +98,9 @@ class CliRunner {
         case 'run':
           return await _handleBatch(commandArgs, explicitUrl, isJson);
 
+        case 'ext':
+          return await _handleExt(commandArgs, explicitUrl);
+
         default:
           print('❌ Unknown command: "$command"');
           _printUsage();
@@ -331,6 +334,16 @@ class CliRunner {
         _getOption(cmdArgs, '--expect-absent') ??
         _getOption(cmdArgs, '--expect-gone');
     final noVerify = _hasFlag(cmdArgs, '--no-verify');
+    // `--hold-ms` turns the same pointer sequence into a long press. It is
+    // rejected here, before a connection, so a typo cannot become a 5-minute
+    // press that the Client has to survive.
+    final holdOption = _getOption(cmdArgs, '--hold-ms');
+    final holdMs = holdOption == null ? null : int.tryParse(holdOption);
+    if (holdOption != null &&
+        (holdMs == null || holdMs < 0 || holdMs > maxTapHoldMs)) {
+      print('❌ --hold-ms must be an integer between 0 and $maxTapHoldMs');
+      return 1;
+    }
     // `--verify` opts into strict verification: the same unchanged tree that a
     // plain tap reports becomes a failure.
     final strictVerify =
@@ -361,6 +374,7 @@ class CliRunner {
         index: index,
         x: targetX,
         y: targetY,
+        holdMs: holdMs,
         timeout: Duration(seconds: timeoutSec),
         postDelay: Duration(milliseconds: delayMs),
         expect: expect,
@@ -704,6 +718,64 @@ class CliRunner {
     }
   }
 
+  /// Calls one allowlisted Sanad Client extension and prints its JSON payload.
+  ///
+  /// The command exists so a tester can exercise an extension whose typed
+  /// command is not (yet) part of this CLI without hand-writing a VM Service
+  /// client. The name allowlist is the whole safety boundary: `ext` never
+  /// reaches framework or engine controls.
+  Future<int> _handleExt(List<String> cmdArgs, String? explicitUrl) async {
+    final name = _getOption(cmdArgs, '--name');
+    final nameError = validateSanadExtensionName(name);
+    if (nameError != null) {
+      print('❌ $nameError');
+      return 1;
+    }
+
+    final parsedArgs = parseExtensionArguments(
+      _getOption(cmdArgs, '--args'),
+    );
+    final argsError = parsedArgs.error;
+    if (argsError != null) {
+      print('❌ $argsError');
+      return 1;
+    }
+
+    final extensionName = name!.trim();
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
+    final controller = await _connect(
+      explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
+    );
+    try {
+      final result = await controller.callExtension(
+        extensionName,
+        parsedArgs.arguments ?? const {},
+      );
+      _printJson({
+        'status': 'ok',
+        'extension': extensionName,
+        'result': result,
+      });
+      return 0;
+    } catch (error) {
+      // The Client's own rejection is the useful diagnostic here; a raw stack
+      // trace from the RPC layer would only repeat it.
+      _printJson({
+        'status': 'error',
+        'extension': extensionName,
+        'error': error.toString().split('\n').first.trim(),
+      });
+      return 1;
+    } finally {
+      await controller.close();
+    }
+  }
+
   void _printElementsFormatted(
     List<UiElement> elements, {
     bool compact = false,
@@ -747,12 +819,18 @@ Commands:
 
   tap            Tap an element (auto-scroll, then tap) and report the evidence
                  Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y,
-                          --verify, --expect <key>, --expect-absent <key>, --no-verify, --verify-timeout <ms>,
-                          --timeout <sec>, --delay <ms>, --json
+                          --hold-ms <ms> (long press), --verify, --expect <key>, --expect-absent <key>,
+                          --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
                  A plain tap exits 0 and reports `verified: false` with
                  `verification: no_observable_change` when nothing changed.
                  --verify, --expect, or --expect-absent make that a failure; the
                  reported `verification` stays `no_observable_change`.
+                 --hold-ms holds the press for that many milliseconds (0-$maxTapHoldMs)
+                 without changing anything else about the sequence; a hold of 600 ms
+                 or more registers as a long press.
+                 A keyed target that the hit test does not reach behind an overlay is
+                 refused with `verification: obscured`, the blocker's bounds and key,
+                 and no pointer event dispatched; navigate back rather than retrying.
 
   enter-text     Enter text into an input field and verify the effect
                  Options: --key <k>, --text <t>, --no-tap-first, --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
@@ -779,7 +857,18 @@ Commands:
                  Options: --file <path>, --json-steps '<json>', --report-file <path>, --json, --timeout <sec> (default per-step deadline)
                  Steps: tap, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
                  A step's own timeout_seconds replaces the batch --timeout for that step.
+                 A tap step accepts `hold_ms` for a long press.
                  --report-file receives each completed step before the next starts.
+
+  ext            Call one allowlisted Sanad Client extension and print its JSON
+                 Options: --name $sanadClientExtensionPrefix<name>, --args '<json object>', --timeout <sec>
+                 Only $sanadClientExtensionPrefix names are accepted; framework and
+                 engine controls (ext.flutter.*) are refused before connecting.
+                 --args takes a flat JSON object of string, number, or boolean values,
+                 which become the extension's string parameters. The output is one JSON
+                 document: {"status":"ok","extension":...,"result":{...}}.
+                 The extension runs on the same discovered managed Client as every other
+                 command; it never takes window focus.
 
 Global Options:
   --vm-url <url>     VM service endpoint (injected automatically by sanad-dev ui)
@@ -806,12 +895,14 @@ JSON Contract:
   Action results (tap, enter-text, scroll, wait-for, and every batch step)
   always carry `verified` as a boolean and `verification` as one of:
     key, present, absent, text, tree     -> verified: true
-    no_observable_change, none, type_census -> verified: false
+    no_observable_change, obscured, none, type_census -> verified: false
   `no_observable_change` means the action was dispatched and nothing observable
-  changed in the window, with or without --verify; `none` means no evidence
-  channel produced a verdict (verification disabled, the action failed before
-  observation, or the step makes no post-condition claim); `type_census` means
-  the rendered type census proved the requested absence is unprovable right now.
+  changed in the window, with or without --verify; `obscured` means a keyed tap
+  target was behind a route or overlay, so nothing was dispatched and the
+  result carries the blocker instead; `none` means no evidence channel produced
+  a verdict (verification disabled, the action failed before observation, or the
+  step makes no post-condition claim); `type_census` means the rendered type
+  census proved the requested absence is unprovable right now.
   Observation commands (snapshot, find, auth-url) report `status` and no
   post-condition verdict. `snapshot --fresh` sets `fresh: true` and then reports
   `settled`, which is false when the quiescence window expired first; a default

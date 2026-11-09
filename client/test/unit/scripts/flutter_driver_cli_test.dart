@@ -96,6 +96,120 @@ void main() {
       );
     });
 
+    test('tap rejects a hold outside the bound before connecting', () async {
+      // The unreachable endpoint proves nothing was contacted: the value is
+      // rejected locally instead of becoming a Client-side surprise.
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          '${maxTapHoldMs + 1}',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          '-1',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          'long',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+    });
+
+    test('ext refuses a non-sanad extension before connecting', () async {
+      for (final name in <String>[
+        'ext.flutter.reassemble',
+        'ext.sanad_client',
+        'ext.sanad_client.',
+        'reassemble',
+      ]) {
+        expect(
+          await CliRunner([
+            'ext',
+            '--name',
+            name,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: '$name must be refused',
+        );
+      }
+      expect(
+        await CliRunner(const ['ext', '--vm-url', 'http://127.0.0.1:1/']).run(),
+        1,
+      );
+    });
+
+    test('ext refuses malformed arguments before connecting', () async {
+      for (final raw in <String>[
+        'not-json',
+        '[]',
+        '{"nested":{"a":1}}',
+        '{"list":[1,2]}',
+        '{"": "empty-key"}',
+      ]) {
+        expect(
+          await CliRunner([
+            'ext',
+            '--name',
+            'ext.sanad_client.inspect_ui',
+            '--args',
+            raw,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: '$raw must be refused',
+        );
+      }
+    });
+
+    test('extension name validation accepts the allowlisted shape', () {
+      expect(validateSanadExtensionName('ext.sanad_client.inspect_ui'), isNull);
+      expect(validateSanadExtensionName('ext.sanad_client.dictation_control'), isNull);
+      expect(validateSanadExtensionName(null), isNotNull);
+      expect(validateSanadExtensionName('ext.flutter.screenshot'), isNotNull);
+      expect(
+        validateSanadExtensionName('ext.sanad_client.inspect-ui'),
+        isNotNull,
+      );
+    });
+
+    test('extension arguments flatten scalars and drop nulls', () {
+      final parsed = parseExtensionArguments(
+        '{"onlyWithKeys":true,"limit":5,"text":"a b","empty":null}',
+      );
+      expect(parsed.error, isNull);
+      expect(parsed.arguments, {
+        'onlyWithKeys': 'true',
+        'limit': '5',
+        'text': 'a b',
+      });
+      expect(parseExtensionArguments(null).arguments, isEmpty);
+    });
+
     test('auth-url selects the isolate that advertises the extension', () async {
       const expectedUrl = 'https://portal.example.test/authorize?id=active';
       final fakeService = await _FakeVmService.start(
@@ -849,6 +963,152 @@ void main() {
       }
     });
 
+    test('ext prints the extension payload and forwards flattened arguments',
+        () async {
+      final fakeService = await _FakeVmService.start(
+        extensionName: 'ext.sanad_client.inspect_ui',
+        extensionResult: const {
+          'status': 'ok',
+          'count': 1,
+          'elements': [
+            {'type': 'Text', 'key': 'only_row'},
+          ],
+        },
+      );
+      try {
+        final result = await _runCli([
+          'ext',
+          '--name',
+          'ext.sanad_client.inspect_ui',
+          '--args',
+          '{"onlyWithKeys":"true","interactive":true}',
+          '--vm-url',
+          fakeService.httpUrl,
+        ]);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['status'], 'ok');
+        expect(payload['extension'], 'ext.sanad_client.inspect_ui');
+        expect(payload['result']['count'], 1);
+
+        // The extension runs on the isolate that advertises it, and receives
+        // its arguments as the flat string map the Client extensions read.
+        final call = fakeService.extensionCalls.single;
+        expect(call['isolateId'], 'isolates/main');
+        expect(call['onlyWithKeys'], 'true');
+        expect(call['interactive'], 'true');
+      } finally {
+        await fakeService.close();
+      }
+    });
+
+    test('ext reports a client rejection as error JSON', () async {
+      final fakeService = await _FakeVmService.start(
+        extensionName: 'ext.sanad_client.inspect_ui',
+        extensionError: 'UI inspection is disabled for this Client',
+      );
+      try {
+        final result = await _runCli([
+          'ext',
+          '--name',
+          'ext.sanad_client.inspect_ui',
+          '--vm-url',
+          fakeService.httpUrl,
+        ]);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['status'], 'error');
+        expect(payload['extension'], 'ext.sanad_client.inspect_ui');
+        expect(payload['error'], contains('UI inspection is disabled'));
+      } finally {
+        await fakeService.close();
+      }
+    });
+
+    test('tap forwards a bounded long press to the client', () async {
+      final fake = await _FakeDriverVm.start();
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'send_message_btn',
+          '--hold-ms',
+          '800',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.tapCalls.single['hold_ms'], '800');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('a batch tap step forwards hold_ms', () async {
+      final fake = await _FakeDriverVm.start(
+        mutateOnTapKey: 'send_message_btn',
+        tapAdds: {'type': 'Text', 'key': 'sent_marker', 'text': 'sent'},
+      );
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          '[{"action":"tap","key":"send_message_btn","hold_ms":900}]',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.tapCalls.single['hold_ms'], '900');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('an obscured tap names the blocker and dispatches nothing', () async {
+      final fake = await _FakeDriverVm.start(
+        tapResult: const {
+          'status': 'obscured',
+          'obscured': true,
+          'resolved_at': {'x': 40, 'y': 60},
+          'blocker_key': 'settings_overlay',
+          'blocker': {
+            'type': 'ColoredBox',
+            'bounds': {'x': 0, 'y': 0, 'width': 800, 'height': 600},
+          },
+        },
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        // The action did not happen, so it must not exit successfully.
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isFalse);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'obscured');
+        expect(payload['key'], 'dictation_mic_btn');
+        expect(payload['message'], contains('settings_overlay'));
+        expect(payload['message'], contains('no pointer event was dispatched'));
+        // The blocker evidence is passed through for the caller to inspect.
+        expect(payload['data']['blocker_key'], 'settings_overlay');
+      } finally {
+        await fake.close();
+      }
+    });
+
     test('tap reports the resolved key, coordinates, and verification', () async {
       final fake = await _FakeDriverVm.start(
         elements: [
@@ -1586,6 +1846,7 @@ void main() {
         'text',
         'tree',
         'no_observable_change',
+        'obscured',
         'none',
         'type_census',
       ]);
@@ -1632,6 +1893,38 @@ void main() {
       expect(payload.containsKey('verification'), isTrue);
       expect(payload['verified'], isFalse);
       expect(payload['verification'], 'none');
+    });
+
+    test('obscured is a non-proving channel', () {
+      expect(UiVerification.obscured.verified, isFalse);
+      expect(UiVerification.fromWire('obscured'), UiVerification.obscured);
+      expect(
+        const DriverActionResult(
+          success: false,
+          action: 'tap',
+          message: 'obscured',
+          duration: Duration.zero,
+          verification: UiVerification.obscured,
+        ).toJson()['verification'],
+        'obscured',
+      );
+    });
+
+    test('a batch tap step round-trips hold_ms', () {
+      final step = BatchStep.fromJson(const {
+        'action': 'tap',
+        'key': 'dictation_mic_btn',
+        'hold_ms': 800,
+      });
+
+      expect(step.holdMs, 800);
+      expect(step.toJson()['hold_ms'], 800);
+      expect(BatchStep.fromJson(const {'action': 'tap'}).holdMs, isNull);
+      final longPress = BatchStep.fromJson(const {
+        'action': 'tap',
+        'hold_ms': 600,
+      });
+      expect(longPress.toJson()['hold_ms'], 600);
     });
 
     test('UI matching covers agent-facing labels', () {
@@ -1809,11 +2102,18 @@ class _FakeDriverVm {
   final Set<String> obscuredKeys = {};
   final Map<String, Map<String, dynamic>> enterTextAdds = {};
 
+  /// Parameters of every `ext.sanad_client.tap` call, in order.
+  final List<Map<String, dynamic>> tapCalls = [];
+
   /// Ordered record of driver RPCs, used to prove reveal-before-capture.
   final List<String> rpcOrder = [];
 
   String? mutateOnTapKey;
   Map<String, dynamic>? tapAdds;
+
+  /// Overrides the tap extension's payload, so a test can model a Client that
+  /// refuses an obscured target instead of dispatching.
+  Map<String, dynamic>? tapResult;
   int? appearAfterInspectCalls;
   Map<String, dynamic>? appearElement;
   bool mutateOnInspect = false;
@@ -1860,6 +2160,7 @@ class _FakeDriverVm {
     bool revealAvailable = true,
     int inspectDelayMs = 0,
     bool mutateOnInspect = false,
+    Map<String, dynamic>? tapResult,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fake = _FakeDriverVm._(
@@ -1883,6 +2184,7 @@ class _FakeDriverVm {
     fake.revealAvailable = revealAvailable;
     fake.inspectDelayMs = inspectDelayMs;
     fake.mutateOnInspect = mutateOnInspect;
+    fake.tapResult = tapResult;
     if (obscuredKeys != null) fake.obscuredKeys.addAll(obscuredKeys);
     if (enterTextAdds != null) fake.enterTextAdds.addAll(enterTextAdds);
     server.listen(fake._handleRequest);
@@ -1993,6 +2295,7 @@ class _FakeDriverVm {
           };
         case 'ext.sanad_client.tap':
           rpcOrder.add('tap');
+          tapCalls.add(Map<String, dynamic>.from(params));
           final key = params['key'] as String?;
           if (key != null && key == mutateOnTapKey) {
             final adds = tapAdds;
@@ -2001,10 +2304,12 @@ class _FakeDriverVm {
               _elements.add(Map<String, dynamic>.from(adds));
             }
           }
-          response['result'] = {
-            'status': 'ok',
-            'tapped_at': {'x': 12, 'y': 34},
-          };
+          response['result'] =
+              tapResult ??
+              {
+                'status': 'ok',
+                'tapped_at': {'x': 12, 'y': 34},
+              };
         case 'ext.sanad_client.enter_text':
           final key = params['key'] as String?;
           final text = params['text'] as String? ?? '';
@@ -2071,14 +2376,21 @@ class _FakeVmService {
     required this.extensionResult,
     required this.extensionError,
     required this.advertiseExtension,
+    required this.extensionName,
   });
 
   final HttpServer _server;
   final Map<String, dynamic>? extensionResult;
   final String? extensionError;
   final bool advertiseExtension;
+
+  /// Extension this fake advertises and answers.
+  final String extensionName;
   final List<WebSocket> _sockets = [];
   final List<String> authUrlIsolateIds = [];
+
+  /// Parameters of every call to [extensionName], in order.
+  final List<Map<String, dynamic>> extensionCalls = [];
 
   String get httpUrl => 'http://127.0.0.1:${_server.port}/';
 
@@ -2086,6 +2398,7 @@ class _FakeVmService {
     Map<String, dynamic>? extensionResult,
     String? extensionError,
     bool advertiseExtension = true,
+    String extensionName = 'ext.sanad_client.auth_url',
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final service = _FakeVmService._(
@@ -2093,6 +2406,7 @@ class _FakeVmService {
       extensionResult: extensionResult,
       extensionError: extensionError,
       advertiseExtension: advertiseExtension,
+      extensionName: extensionName,
     );
     server.listen(service._handleRequest);
     return service;
@@ -2123,27 +2437,30 @@ class _FakeVmService {
         case 'getIsolate':
           response['result'] = {
             'extensionRPCs': advertiseExtension && params['isolateId'] == 'isolates/main'
-                ? ['ext.sanad_client.auth_url']
+                ? [extensionName]
                 : ['ext.unrelated'],
           };
-        case 'ext.sanad_client.auth_url':
-          authUrlIsolateIds.add(params['isolateId'] as String);
-          if (extensionError != null) {
-            response['error'] = {
-              'code': -32000,
-              'message': 'Service extension failed',
-              'data': {
-                'details': json.encode({'error': extensionError}),
-              },
-            };
-          } else {
-            response['result'] = extensionResult;
-          }
         default:
-          response['error'] = {
-            'code': -32601,
-            'message': 'Method not found',
-          };
+          if (method == extensionName) {
+            extensionCalls.add(params);
+            authUrlIsolateIds.add(params['isolateId'] as String);
+            if (extensionError != null) {
+              response['error'] = {
+                'code': -32000,
+                'message': 'Service extension failed',
+                'data': {
+                  'details': json.encode({'error': extensionError}),
+                },
+              };
+            } else {
+              response['result'] = extensionResult;
+            }
+          } else {
+            response['error'] = {
+              'code': -32601,
+              'message': 'Method not found',
+            };
+          }
       }
       socket.add(json.encode(response));
     });

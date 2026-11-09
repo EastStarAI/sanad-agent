@@ -464,6 +464,7 @@ class FlutterVmController {
     int index = 0,
     double? x,
     double? y,
+    int? holdMs,
     Duration timeout = const Duration(seconds: 30),
     Duration postDelay = const Duration(milliseconds: 300),
     String? expect,
@@ -511,9 +512,38 @@ class FlutterVmController {
             if (index > 0) 'index': index.toString(),
             if (x != null) 'x': x.toString(),
             if (y != null) 'y': y.toString(),
+            if (holdMs != null) 'hold_ms': holdMs.toString(),
           }) as Map<String, dynamic>?;
     } catch (error) {
       extensionError = error;
+    }
+
+    if (res != null && res['status'] == 'obscured') {
+      stopwatch.stop();
+      // The Client refused to dispatch because the press would have landed on
+      // whatever is painted above the target. Reporting `no_observable_change`
+      // here is what made an obscured composer read as an inert button.
+      final blockerKey = res['blocker_key'];
+      final blocker = res['blocker'];
+      final blockerType = blocker is Map ? blocker['type'] : null;
+      final blockerLabel = blockerKey is String
+          ? 'by $blockerKey'
+          : blockerType is String
+          ? 'by $blockerType'
+          : 'by a widget above it';
+      return DriverActionResult(
+        success: false,
+        action: 'tap',
+        message:
+            'Tap target $targetDesc$withinDesc is obscured $blockerLabel; no '
+            'pointer event was dispatched. Dismiss the route or overlay above '
+            'the target (navigate back) and re-snapshot before tapping again.',
+        data: res,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.obscured,
+        generation: _nextGeneration(),
+      );
     }
 
     if (res == null || res['status'] != 'ok') {
@@ -628,6 +658,25 @@ class FlutterVmController {
       verification: outcome.verification,
       generation: _nextGeneration(),
     );
+  }
+
+  /// Calls one allowlisted Sanad Client extension and returns its payload.
+  ///
+  /// The isolate is selected by the extension the caller named, so an extension
+  /// that this Client does not register fails closed instead of reaching an
+  /// unrelated isolate. Arguments are flat string values because the Client
+  /// extensions read their parameters from the VM Service string map.
+  Future<Map<String, dynamic>> callExtension(
+    String name,
+    Map<String, String> arguments,
+  ) async {
+    final isolateId = await _discoverIsolateId(name);
+    final result = await _callRpc(name, {
+      'isolateId': isolateId,
+      ...arguments,
+    });
+    if (result is Map) return Map<String, dynamic>.from(result);
+    return {'status': 'ok', 'value': result};
   }
 
   /// Scrolls a selector into view without dispatching a pointer event.
@@ -1288,6 +1337,7 @@ class FlutterVmController {
             index: step.index ?? 0,
             x: step.x,
             y: step.y,
+            holdMs: step.holdMs,
             timeout: stepTimeout,
             postDelay: stepDelay,
             expect: step.expect,
