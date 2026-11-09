@@ -436,6 +436,8 @@ confirms the same authoritative outcome:
 - **Owner identities** (`identities`): `session_id`, active `run_id`, `work_item_id`, `request_id`, `pending_request_id`, `history_revision`, and `route_revision` when present.
 - **Execution status** (`status`): `idle`, `running`, `resuming`, `retrying`, `blocked`, `stopping`, `needs_input`, or `needs_permission`. It is derived from the daemon's durable execution projection first (an unowned `idle`/`queued` projection is not `running`, Task 134; a `running` projection with no in-flight partial stream is still `running`, because a tool executes without streaming), and a runtime notice that promises a resume outranks both as `retrying`. `retrying` means the daemon is retrying the turn on its own; `blocked` means it will not continue without an operator.
 - **Recovery state** (`execution_state`, `runtime_notice`, `retry`): the durable snapshot state, the daemon's active recovery notice verbatim (including `status`, `reason`, `retry_attempt`, `retry_budget`, `resume_at`), and the derived classification — `pending` (auto-retry scheduled), `stopped` (needs an operator), `attempt`/`budget`, `resume_in_ms`, and a `label` (`retrying (n/N)` or `needs_intervention`). Every observer classifies on these fields, never on notice prose. A durable `idle` snapshot outranks the notice: a leftover `waiting` notice after the turn ended is neither `pending` nor `stopped`, so an observer settles instead of following a retry that will never arrive.
+
+  The notice half of that projection is the **durable** row (`session_runtime_notices`), not only the in-memory recovery state: every non-`cleared` row is projected, with the compaction `warning` special case kept as stored and the recovery actions (`stop`, `retry`, `changeProvider`) widened so a scheduled wait is actionable. A history query therefore answers the same recovery state the live `session.runtime_notice` broadcast published, including for a turn that was re-attached after a daemon restart. The projection emits the live notice's wire vocabulary (`upstream_rate_limit`), not the row's enum spelling, so both publishers classify identically. Restricting the durable projection to `blocked` made a scheduled retry invisible to `session show`, `session retry`, the re-attached relay, and the supervisor while the Client — reading the broadcast — showed the truth (2026-11-09).
 - **Pending intervention** (`pending_permission_request`) and in-flight execution (`in_flight`, `execution_snapshot`).
 - **Effective route**: `model`, `model_display`, `provider_instance_id`, `model_provider`, `route_revision`, `route_updated_at`, and `thinking_mode`.
 - **Timestamps**: `created_at`, `updated_at`, `last_user_message_at`.
@@ -581,14 +583,20 @@ non-interactive equivalent of that action.
    configuration decision.
 3. **Pre-check (nothing is sent when it cannot help).** The command reads the session
    projection first and refuses with `not_blocked` (exit `3`) unless the session is in a
-   retryable recovery state: the daemon's `runtime_notice` status is `blocked` or
-   `waiting`, or the durable execution snapshot state is `blocked`/`waiting` (restored
-   blocked work can be projected before its notice is rehydrated). A `waiting` session is
-   retryable because a manual retry shortens the remaining cooldown, and a `retrying`
-   session is the same case observed one step later: the daemon scheduled the attempt, and
-   the manual retry only shortens that wait instead of starting a second turn. Idle,
-   queued, running, resuming, and stopping sessions are not retried, so the command never
-   turns a healthy session into a second turn.
+   retryable recovery state. The classification is the same `RuntimeRetryState` that
+   `session show` derives, never a second rule: a `waiting` notice (with or without
+   attempt counters), a retryable reason with budget left, or a parked turn. A `waiting`
+   notice is retryable whatever durable state the daemon published next to it, because a
+   scheduled rate-limit retry is written while its ownership row is still `resuming` — a
+   shape that was refused with the older `blocked`/`waiting`-only rule (2026-11-09). A
+   `waiting` session is retryable because a manual retry shortens the remaining cooldown,
+   and a `retrying` session is the same case observed one step later: the daemon scheduled
+   the attempt, and the manual retry only shortens that wait instead of starting a second
+   turn. A `resuming` notice on its own is *not* retryable: the daemon already restarted
+   the attempt. Idle, queued, running, resuming (with no scheduled wait), and stopping
+   sessions are not retried, so the command never turns a healthy session into a second
+   turn. Daemons that publish neither counters nor a classification keep the older
+   `blocked`/`waiting` notice-status and execution-snapshot fallback.
 4. **What the acknowledgement proves.** Accepted means the daemon's recovery projection
    moved the session to `resuming` after the dispatch; it never proves the resumed provider
    request succeeded. The daemon resumes under the **turn's** request id, so a `resuming`
