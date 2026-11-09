@@ -1,5 +1,5 @@
+import 'package:flutter/cupertino.dart' show CupertinoIcons;
 import 'package:flutter/material.dart';
-import 'package:flutter_sficon/flutter_sficon.dart' as sf;
 
 class MessageBarButton extends StatelessWidget {
   final GestureTapCallback? onTap;
@@ -25,10 +25,10 @@ class MessageBarButton extends StatelessWidget {
           width: 40,
           height: 40,
           alignment: Alignment.center,
-          child: sf.SFIcon(
-            sf.SFIcons.sf_arrow_up,
+          child: Icon(
+            CupertinoIcons.arrow_up,
             color: Theme.of(ctx).colorScheme.onPrimary,
-            fontSize: 16,
+            size: 16,
           ),
         ),
       ),
