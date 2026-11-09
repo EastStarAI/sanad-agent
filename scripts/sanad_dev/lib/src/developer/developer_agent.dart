@@ -97,9 +97,22 @@ Future<bool> handleAgentRestart(
       '${ownership.classification.name}; a live matching sanad-dev launcher '
       'lease is required.',
     );
+    // A refusal that names only the class leaves the operator without a
+    // subject: the Home owner record says which process (and which launcher)
+    // is actually holding the state root.
+    final holder = await describeHomeHolder(activeHome);
+    if (holder != null) stderr.writeln(holder);
     if (exitOnError) exitCode = 1;
     return false;
   }
+
+  // The daemon answering now is the one about to be asked to exit. Its pid is
+  // the only evidence that separates it from the replacement that inherits the
+  // same launcher identity, so it is captured before the request.
+  final previousDaemonPid = await readRestartBaselineDaemonPid(
+    activeHome,
+    instance.port,
+  );
 
   print(
     'Sending restart request to local agent daemon on port ${instance.port}...',
@@ -158,11 +171,30 @@ Future<bool> handleAgentRestart(
         launcherId: record.launcherId,
         runtimeNonce: record.runtimeNonce,
         sanadHome: activeHome,
+        previousDaemonPid: previousDaemonPid,
         timeout: Duration(seconds: timeoutSeconds),
       );
       if (probe.matched) {
         print('✓ Agent daemon restarted and healthy on port ${instance.port}.');
         return true;
+      }
+      if (probe.sawForeignHolder) {
+        // The Home itself was handed to another process. That is the failure
+        // the original incident produced for minutes, so it is named with the
+        // holder rather than left to the operator's process list.
+        final holder = probe.recordedHolder;
+        stderr.writeln(
+          'Restart failed: the Sanad Home served by port ${instance.port} is '
+          'held by ${holder == null ? 'an unreadable owner record' : holder.describe()}, '
+          'not by launcher ${record.launcherId} with nonce '
+          '${record.runtimeNonce}; the restart did not take effect.',
+        );
+        stderr.writeln(
+          'Stop the recorded holder from a human terminal before retrying: a '
+          'foreign Agent keeps winning the Home lock on every restart.',
+        );
+        if (exitOnError) exitCode = 1;
+        return false;
       }
       if (probe.sawForeignIdentity) {
         final foreignPid = await readRecordedDaemonPid(
@@ -184,9 +216,9 @@ Future<bool> handleAgentRestart(
         return false;
       }
       stderr.writeln(
-        'Restart failed: daemon accepted the request, but no Agent proved '
-        'launcher ${record.launcherId} on port ${instance.port} within '
-        '${timeoutSeconds}s.',
+        'Restart failed: daemon accepted the request, but no replacement Agent '
+        'proved launcher ${record.launcherId} on port ${instance.port} within '
+        '${timeoutSeconds}s (${probe.describeStalledRestart()}).',
       );
       if (exitOnError) exitCode = 1;
       return false;

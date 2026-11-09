@@ -106,7 +106,12 @@ String? clientSelectionFailureReason(
     return 'the Client on VM port ${blocked.first.port} '
         '${_clientBlockReason(blocked.first, agent: agent)}';
   }
-  return null;
+  // Silence here was the whole diagnosis for a Client that never attached: a
+  // managed Agent was answering, no Client was owned, and the command printed
+  // no reason at all. Only an actually-owned Client removes the reason.
+  if (state.ownedClients.isNotEmpty) return null;
+  return 'the Agent on port ${agent.port} is managed, but no launched Client '
+      'reports this worktree\'s launcher identity';
 }
 
 /// Why one Client is not part of the selected Agent's ownership.
@@ -205,7 +210,9 @@ Future<ClientInstance?> selectClientInstance(
       state,
       agentPort: runtime.agentPort,
     );
-    if (reason != null) print('Reason: $reason.');
+    print(
+      'Reason: ${reason ?? 'no Client reports this worktree launcher identity'}.',
+    );
     final ownerHint = explicitHomeOwnerHint(
       explicitHome: sanadHomePath,
       runtime: runtime,
@@ -387,6 +394,18 @@ Future<AgentInstance?> selectAgentInstance(
     stderr.writeln(
       'Error: No running agent instances found for the current worktree (${runtime.worktreeId}).',
     );
+    // An absent Agent and a Home held by another process look identical from
+    // the port scan alone. The owner record separates them, so it is named
+    // before the list of unrelated instances.
+    final homes = <String>{
+      runtime.sanadHome,
+      for (final inst in instances)
+        if (inst.sanadHome != null) inst.sanadHome!,
+    };
+    for (final home in homes) {
+      final holder = await describeHomeHolder(home);
+      if (holder != null) stderr.writeln('$home: $holder');
+    }
     stderr.writeln('Active instances in other worktrees:');
     for (final inst in instances) {
       stderr.writeln(

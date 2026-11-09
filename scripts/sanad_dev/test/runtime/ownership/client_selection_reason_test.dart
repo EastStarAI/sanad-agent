@@ -69,6 +69,20 @@ void main() {
     );
   });
 
+  test('a managed Agent with no attached Client still names a reason', () {
+    // The failure branch runs only when no Client is owned, so returning null
+    // here printed "Error: No owned running client instances found" with no
+    // reason at all: the whole diagnosis was the absence of a diagnosis.
+    final reason = clientSelectionFailureReason(
+      state(matchedAgent: agent()),
+      agentPort: 58085,
+    );
+
+    expect(reason, isNotNull);
+    expect(reason, contains('58085'));
+    expect(reason, contains('no launched Client'));
+  });
+
   test('a Client launched by another launcher names both identities', () {
     // This is the shape of the incident: the Client belonged to the live
     // launcher while the Agent on the port answered with another one. The old

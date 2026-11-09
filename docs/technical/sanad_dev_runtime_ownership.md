@@ -973,14 +973,46 @@ previous policy allowed five failures inside a 15-second window, so a child that
 forever (28 restarts in 150 s, observed). The retained window value is reported beside the
 count as flapping density and never decides the exit.
 
-**Restart success requires the lease identity.** After `/restart`, `sanad-dev` waits for
-`/health` to present the lease's `launcher_id` and `runtime_nonce`
-(`matchesSanadDevAgentHealth`). A healthy answer carrying another identity is a foreign
-owner of the port: the command fails immediately, names the port and the foreign Agent's
-recorded pid (from the Home's `.local_gateway_endpoint.json`), and states that the restart
-did not take effect. Waiting longer cannot change who answers, so the probe does not wait;
-an unanswered port keeps polling to the bounded timeout. The workspace hash alone is only
-used where adopting an unmanaged Agent is the point (`takeover`).
+**Restart success requires a replacement generation, not just the lease identity.** The
+lease identity is inherited across a supervised respawn: the supervisor and its environment
+survive the child, so the daemon that accepted `/restart` still presents the right
+`launcher_id` and `runtime_nonce` while it is shutting down. `sanad-dev restart agent`
+therefore captures the pre-restart owner pid (`readRestartBaselineDaemonPid`: the Home
+`.runtime-owner.json` pid, falling back to `.local_gateway_endpoint.json`) *before* posting
+the request, and accepts success only when all three hold:
+
+1. `.runtime-owner.json` names a pid different from the captured baseline;
+2. that record carries the lease's `launcher_id` and `runtime_nonce`;
+3. `/health` reports the same identity (`matchesSanadDevAgentHealth`).
+
+One live run returned `restarted and healthy` 17–20 ms after the request — 5.9 s before the
+replacement existed — because a bare identity match was the whole check; in the original
+incident that false success hid the Home being taken by a foreign daemon. Three terminal
+outcomes are distinct now. A healthy answer with another identity is a foreign owner of the
+port: the command fails immediately, names the port and the foreign Agent's recorded pid
+(from the Home's `.local_gateway_endpoint.json`), and states the restart did not take effect.
+A *live* recorded owner that is not this lease — an unmanaged holder, or another
+`launcher_id`/`runtime_nonce` — fails immediately as a foreign Home holder and is named by
+pid, where the description says `unmanaged` for an empty launcher identity, so the operator
+never has to reconstruct who held the state root from a process list. A dead recorded holder
+is history rather than an owner, so it never ends the wait early. Anything else keeps
+polling to the bounded timeout, and the timeout line names the pre-restart owner and the
+current Home owner (`describeStalledRestart`) instead of reporting only that nothing proved
+the lease. A Home with no readable owner record can never prove a replacement and therefore
+never reports success; that is the safe direction, and it only affects a daemon predating
+the record. The workspace hash alone is only used where adopting an unmanaged Agent is the
+point (`takeover`).
+
+**A refusal names the Home holder.** Refusing to restart an unmanaged runtime used to report
+the ownership classification alone, leaving ownership class as the only subject. It now also
+prints `Home holder: pid <pid> (launcher <id>, nonce <nonce>)` from `.runtime-owner.json`
+(omitted when the record is unreadable). The same rule applies when no Agent answers for the
+worktree: `selectAgentInstance` prints one line per candidate Home — the runtime Home plus
+every discovered instance Home, de-duplicated — naming each recorded holder before it lists
+unrelated instances. Client selection has no silent branch left: the only state that removes
+the failure reason is an actually-owned Client, so a managed Agent with no attached Client
+reports that no launched Client carries the worktree's launcher identity instead of printing
+an error with no reason at all.
 
 **The same lease has a face on the daemon side.** `SanadRuntimeOwnership` records the lock
 holder — pid plus the inherited launcher id/nonce and acquisition time — in
