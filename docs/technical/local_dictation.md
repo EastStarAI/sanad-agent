@@ -122,22 +122,62 @@ The catalog is data, not code: adding a model is an entry with pinned URL, size
 and SHA-256. A model is installed through the same hosted download path,
 verified against its SHA-256, and activated atomically.
 
-| Entry | Mode | Size | Note |
-|---|---|---|---|
-| `egy-whisper-turbo-ggml-q8` | batch | 834 MB | default; ~1.2 GB RAM while listening |
-| `egy-whisper-turbo-ggml-q5` | batch | 547 MB | lighter; ~0.95 GB |
-| `whisper-base-int8` | batch | 153 MB | fastest, lowest Arabic accuracy; ~0.76 GB |
-| `egy-whisper-turbo-ggml-f16` | batch | 1.6 GB | unquantized; hidden until its artifact is hosted |
-| `en-streaming-zipformer-20m` | streaming | 45 MB | English-only proof entry; ~0.2 GB |
+Pin the size and the digest from the hosting provider's own metadata — the
+Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and
+`x-linked-etag` headers of the `resolve` URL — never from a mirror listing or a
+number carried over from an earlier entry. `whisper-turbo-ggml-q5` was pinned
+81,672 bytes too large, and the download was rejected before the digest was ever
+compared, so a correct SHA-256 could not save it.
 
-The model is **not** kept loaded between sessions. It loads on `start`
-(0.2–0.3 s for whisper.cpp, ~1 s for the Egyptian ONNX path) and is freed on
-stop, because holding 1–2 GB all day is not acceptable on the machines this runs
-on. Measured peaks: daemon idle 46 MB, listening ~1.2 GB with the q8 entry,
-~0.6 GB after a session and flat across sessions (no leak).
+| Entry | Decode language | Mode | Size | Note |
+|---|---|---|---|---|
+| `egy-whisper-turbo-ggml-q8` | `ar` | batch | 834 MB | default; ~1.2 GB RAM while listening |
+| `egy-whisper-turbo-ggml-q5` | `ar` | batch | 547 MB | lighter; ~0.95 GB |
+| `egy-whisper-turbo-ggml-f16` | `ar` | batch | 1.6 GB | unquantized; ~1.9 GB |
+| `whisper-base-int8` | `ar` | batch | 153 MB | fastest, lowest Arabic accuracy; ~0.76 GB; sherpa |
+| `whisper-small-en-ggml-q8` | `en` | batch | 264 MB | recommended English; ~0.5 GB |
+| `whisper-medium-en-ggml-q8` | `en` | batch | 823 MB | more accurate English, ~3× slower on a CPU |
+| `whisper-turbo-ggml-q5` | `auto` | batch | 574 MB | multilingual, hidden; installed by id |
+| `en-streaming-zipformer-kroko-2025-08-06` | `en` | streaming | 71 MB | live English text, sherpa builds only |
+| `multilingual-streaming-zipformer-2025-02-10` | `ar` | streaming | 339 MB | live Arabic/English text, sherpa builds only |
+
+### The decode language of a model
+
+A whisper.cpp entry is decoded with the language it declares, because the entry
+is the only thing that knows what the checkpoint was trained for: an Arabic
+fine-tune handed English audio returns fluent Arabic, and an English-only
+checkpoint handed `'ar'` returns Arabic too. `SttModelStore.resolve` therefore
+passes `entry.language`, and the value travels unchanged through
+`stt_engine.dart` → the whisper worker isolate → `sanad_whisper_run` →
+`whisper_full_params.language`.
+
+Two rules follow, and both are pinned by tests:
+
+- `'auto'` is valid only for a multilingual checkpoint. whisper.cpp detects a
+  language by scoring the language token of every language, and an English-only
+  (`.en`) vocabulary contains none of them, so `'auto'` there would index
+  outside the logits. Detection also costs one extra encoder pass, so it is not
+  a free default.
+- `stt.language` describes a `stt.model_path` override, which has no catalog
+  metadata, and never overrides a catalog row.
+
+`recommended` is a per-language badge: exactly one row per language carries it,
+and `isDefault` stays unique, because the device still picks one row on its own.
+
+### Residency
+
+The recognizer is not reloaded on every press: the session releases it to the
+service, which parks it warm and frees it when `stt.model_idle_minutes` (default
+5) elapses — `0` frees it as soon as the session ends. Reloading a 1–2 GB model
+per press would cost more than the wait it saves, and holding it all day is not
+acceptable on the machines this runs on either. A cold load of the 874 MB
+Arabic entry measured 1.5 s on a 4 vCPU arm64 host. Measured peaks: daemon idle
+46 MB, listening ~1.2 GB with the q8 entry, ~0.6 GB after a session and flat
+across sessions (no leak).
 
 `stt.model_path` overrides the catalog with a local directory (a sherpa
 directory or a single `.bin` ggml file) and requires no download or checksum;
+that model has no declared language, so `stt.language` is its decode language.
 `stt.model_id` pins an entry, including hidden ones.
 
 ### The shared VAD asset

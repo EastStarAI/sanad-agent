@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_catalog.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:test/test.dart';
 
 import '../support/native_binary_fixture.dart';
@@ -142,6 +143,11 @@ void main() {
         expect(description['en'], isNotEmpty);
         expect(description['ar'], isNotEmpty);
         expect(row['speed_tier'], inInclusiveRange(1, 4));
+        // The row's language is the decode language, so the Client and the
+        // daemon cannot disagree about what a selection will do.
+        final entry = sttEntryById(row['id'] as String)!;
+        expect(row['language'], entry.language, reason: entry.id);
+        expect(row['language'], isNotEmpty, reason: entry.id);
         expect(row['streaming'], isA<bool>());
         expect(row['location'], 'local');
         expect(row['size_bytes'], isA<int>());
@@ -162,17 +168,29 @@ void main() {
           .toList();
 
       expect(badges, contains('recommended'));
-      expect(badges.where((badge) => badge == 'recommended'), hasLength(1));
       for (final badge in badges) {
         expect(
           {'recommended', 'faster', 'more_accurate', 'custom'},
           contains(badge),
         );
       }
-      // The recommended row is the catalog default, so "recommended" and
-      // "what the device picks on its own" cannot drift apart.
+      // "Recommended" is a per-language answer now that the catalog ships an
+      // Arabic row and an English one: exactly one row per language carries it,
+      // and the device default is the Arabic one, so "recommended" and "what
+      // the device picks on its own" still cannot drift apart.
+      for (final language in {'ar', 'en'}) {
+        final recommended = kSttCatalog
+            .where(
+              (entry) =>
+                  entry.language == language &&
+                  entry.badge == SttModelBadge.recommended,
+            )
+            .toList();
+        expect(recommended, hasLength(1), reason: language);
+      }
       final defaultEntry = kSttCatalog.firstWhere((entry) => entry.isDefault);
       expect(defaultEntry.badge.code, 'recommended');
+      expect(defaultEntry.language, 'ar');
     });
 
     test('model names are proper nouns, not per-locale copy', () {

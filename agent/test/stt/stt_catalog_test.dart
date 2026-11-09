@@ -111,6 +111,74 @@ void main() {
       expect(light.totalBytes, lessThan(defaultSttEntry.totalBytes));
     });
 
+    test('English has a recommended whisper row and an accuracy row', () {
+      final english = kSttCatalog
+          .where(
+            (entry) =>
+                entry.language == 'en' &&
+                entry.mode == SttModelMode.batchVad &&
+                entry.engine == SttEngineKind.whisperCpp,
+          )
+          .map((entry) => entry.id)
+          .toList();
+      expect(english, [
+        'whisper-small-en-ggml-q8',
+        'whisper-medium-en-ggml-q8',
+      ]);
+      for (final id in english) {
+        final entry = sttEntryById(id)!;
+        // Hidden rows never reach the model sheet, and the whisper-only Linux
+        // arm64 build has no other English model at all: hiding either of these
+        // would leave that build unable to take English dictation.
+        expect(entry.hidden, isFalse, reason: id);
+        expect(entry.hosted, isTrue, reason: id);
+        expect(entry.isDefault, isFalse, reason: id);
+        expect(entry.files, hasLength(1), reason: id);
+      }
+      final small = sttEntryById('whisper-small-en-ggml-q8')!;
+      final medium = sttEntryById('whisper-medium-en-ggml-q8')!;
+      expect(small.files.single.name, 'ggml-small.en-q8_0.bin');
+      expect(medium.files.single.name, 'ggml-medium.en-q8_0.bin');
+      // The recommended English row is the faster one: decode latency on a
+      // CPU-only 4 vCPU build is the product constraint, so the accuracy tier
+      // stays opt-in.
+      expect(small.totalBytes, lessThan(medium.totalBytes));
+      expect(small.speedTier, greaterThan(medium.speedTier));
+      expect(small.badge, SttModelBadge.recommended);
+      expect(medium.badge, SttModelBadge.moreAccurate);
+    });
+
+    test('an English-only checkpoint is never handed auto', () {
+      // whisper.cpp auto-detects by scoring the language token of every language,
+      // and an English-only (.en) vocabulary has none of them: the decode would
+      // read outside the logits. So a .en entry must pin its language.
+      for (final entry in kSttCatalog) {
+        final englishOnly = entry.files.any(
+          (file) => file.name.contains('.en-') || file.name.contains('.en.'),
+        );
+        if (!englishOnly) continue;
+        expect(entry.language, 'en', reason: entry.id);
+      }
+    });
+
+    test('the multilingual entry declares auto and pins the hosted size', () {
+      final entry = sttEntryById('whisper-turbo-ggml-q5')!;
+      // A multilingual checkpoint carries no single language: forcing 'ar' on it
+      // is what made an English clip come back as Arabic text.
+      expect(entry.language, 'auto');
+      expect(entry.hidden, isTrue);
+      final file = entry.files.single;
+      // Pinned from the hosting LFS digest and verified by download. A stale
+      // size rejects the download before the checksum is ever compared, which is
+      // exactly how this row became un-installable.
+      expect(file.name, 'ggml-large-v3-turbo-q5_0.bin');
+      expect(file.sizeBytes, 574041195);
+      expect(
+        file.sha256,
+        '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
+      );
+    });
+
     test('the f16 precision entry is offered once its artifact is hosted', () {
       final precise = sttEntryById('egy-whisper-turbo-ggml-f16');
       expect(precise, isNotNull);
