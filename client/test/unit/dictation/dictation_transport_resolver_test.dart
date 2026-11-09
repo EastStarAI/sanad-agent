@@ -258,6 +258,15 @@ void main() {
       expect(transport.maxSessionBytes, 4096);
       expect(transport.maxSessionSeconds, 45);
       expect(transport.maxFrameBytes, 8192);
+      // Choosing a transport writes nothing: the route is opened by `start`,
+      // after the claim command that authorizes it (order is contract).
+      expect(
+        cloudSocket.capturedCommands.where(
+          (command) => command['event'] == 'dictation_start',
+        ),
+        isEmpty,
+      );
+      transport.sendCommand('start');
       final start = cloudSocket.capturedCommands.firstWhere(
         (command) => command['event'] == 'dictation_start',
       );
