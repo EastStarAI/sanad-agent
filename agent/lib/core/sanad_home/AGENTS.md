@@ -13,6 +13,14 @@ no writer outside this helper reaches the filesystem.
 - `SanadHomeBootstrap` resolves the canonical home, asserts the resolved
   path stays inside the configured root, refuses `..` and symlink
   escapes, and applies owner-only permissions before any byte is written.
+- `InstalledHomeRecord` is the single owner of "the Home this executable was
+  installed into". `scripts/install.sh|install.ps1` place the artifact at
+  `<home>/bin/sanad` and `service install` records the non-secret
+  `<home>/service.json` beside it, so that pair is the only local evidence of
+  which Home a binary serves. The probe stats the record with
+  `followLinks: false` and returns no Home for a source run, a copy outside a
+  Home, a Home without the record, or a symlinked record; it never reads `.env`,
+  a credential, or any file content, and it creates nothing.
 - `LoopbackPolicy` is the single authority for "is this address
   loopback"; it rejects `0.0.0.0` and `::` as wildcard and accepts only
   literal loopback values.
@@ -55,3 +63,8 @@ no writer outside this helper reaches the filesystem.
 - `agent/test/core/sanad_home/loopback_policy_test.dart` — `0.0.0.0`
   rejection, `127.0.0.1` and `::1` acceptance, `localhost` acceptance,
   `192.168.x.x` rejection.
+- `agent/test/core/sanad_home/installed_home_record_test.dart` — the
+  install-record probe (artifact layout, absent record, symlinked record) and
+  the ordered Home resolution (`--home`, `SANAD_HOME`, install record, account
+  default), including the dedicated-account shape whose record Home is also the
+  account's own `$HOME`.

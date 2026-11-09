@@ -100,7 +100,13 @@ on real clean hosts under G6 and G7:
    reporting `Running` (not `Failed` and not "not installed"), and the same
    `service restart`/`stop`/`start` acting on the installed unit rather than
    claiming it is absent — for both the dedicated account and
-   `--run-as-user <account>`;
+   `--run-as-user <account>`. Run every one of those commands **without**
+   `SANAD_HOME` and confirm the CLI resolves the unit's Home from the install
+   record beside `<home>/bin/sanad`: no `<home>/.sanad` directory may appear, and
+   `cd /tmp && <home>/bin/sanad service status` must still report that unit (not
+   a Home created from the caller's working directory); the same holds for root
+   running `<home>/bin/sanad service status` from a shell whose `HOME` is
+   `/root`;
 
 4. OpenRC installation on a clean supported distribution.
 5. SSH logout and reboot, followed by bounded polling for `Running` and Online.
