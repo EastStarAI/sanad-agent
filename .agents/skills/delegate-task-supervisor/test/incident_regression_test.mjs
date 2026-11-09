@@ -641,8 +641,18 @@ test('2026-11-09/continue-session-pin: a new session becomes the task pin a plai
     '--json', '--verify-sec', '5',
   ], env);
   await waitForCondition(() => (readJsonFile(manifestPath).tasks.pinned.attempt === 3 ? true : null));
-  const runs = readFileSync(env.MOCK_LOG, 'utf8').split('\n').filter(Boolean)
-    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'run');
+  // The third attempt's own invocation, not just the manifest's attempt counter:
+  // the mock writes that record as the process starts, so the assertion waits for
+  // the log line instead of assuming the manifest beat the fixture to it (the
+  // Linux runner lost that race).
+  const runs = await waitForCondition(() => {
+    const entries = readFileSync(env.MOCK_LOG, 'utf8').split('\n').filter(Boolean)
+      .flatMap((line) => {
+        try { return [JSON.parse(line)]; } catch { return []; }
+      })
+      .filter((entry) => entry.kind === 'run');
+    return entries.length >= 3 ? entries : null;
+  }, 20_000, 'the third attempt invocation');
   assert.equal(runs[2].pinned, 'ses_mock_2', 'the third attempt resumes the pinned session');
   closeRun(runDir, env);
 });
