@@ -68,6 +68,7 @@ Do not introduce convenience code that weakens these boundaries.
 - Monospace is one constant: `AppTypography.mono(...)` for code, diffs, terminals, paths, shell commands, and raw JSON. Machine-readable text is deliberately fixed and never follows the user's app font.
 - Cairo is the default font for a profile with no saved preference and ships as a bundled Flutter asset family (`client/assets/fonts/Cairo-{Regular,Medium,SemiBold,Bold}.ttf`), so the default renders offline on every platform from the first frame. Inter and Roboto stay runtime-fetched Google Fonts; Cairo is never fetched at runtime.
 - A stored `system` value is an explicit user choice and is never migrated to the default. Only a missing preference resolves to Cairo.
+- No Apple-provided font may be bundled: text and iOS-style icons use Flutter-authored font assets (`CupertinoIcons` for the composer send arrow), because an embedded system typeface fails App Store validation as `ITMS-91182` (enforced from 2027-10-01), and `client/test/guards/no_apple_font_bundle_guard_test.dart` fails on any dependency, lock entry, asset name, or build manifest that carries one.
 - `client/test/guards/no_hardcoded_font_guard_test.dart` fails on any `fontFamily:` literal or direct `GoogleFonts.<family>(` call outside `core/theme/app_themes.dart` and `core/theme/app_typography.dart`.
 
 ### Provider and Configuration Ownership
