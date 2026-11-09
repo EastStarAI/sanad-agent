@@ -145,7 +145,7 @@ sanad-dev inventory [--all] [--pr] [--json]
 sanad-dev cleanup-orphans [--confirm] [--json]
 sanad-dev doctor
 sanad-dev doctor --fix
-sanad-dev takeover
+sanad-dev takeover [--force]
 sanad-dev cleanup-target-orphans
 ```
 
@@ -177,6 +177,18 @@ an OS permission dialog; a missing grant prints `unknown — check System Settin
 Privacy & Security`. `doctor --fix` removes only a proven stale lease and never
 signals a live process. `takeover` converts exactly one complete manual pair into
 a managed runtime after a safe Agent checkpoint.
+
+`takeover` also reclaims this worktree's orphaned runtime when the old lease is
+still evidence of the process on the port: either its launcher tree is live and
+proven, or exactly one dead launcher lease is proven by its recorded PID and
+process identity. It prints the evidence it collected and never prompts, so it
+is safe to run from a script. The default ladder asks the foreign daemon for its
+own permanent restart; a daemon that refuses that drain is stopped only with
+`--force`, and only through a proven parent tree (or, as a last resort, the
+proven Agent chain, outermost first). An unproven lineage, a live foreign
+launcher, and an Agent-only lease are refused with the next action named —
+`doctor` names `takeover` only when that same assessment succeeds. The relaunch
+always writes a new launcher identity and nonce, never the old one.
 
 ### 10. Reset with Home fixtures
 

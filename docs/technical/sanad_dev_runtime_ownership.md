@@ -154,6 +154,28 @@ shutdown so the previous source supervisor cannot respawn on the claimed port;
 incomplete or Agent-tool-origin takeover is refused. A
 failed managed launch attempts to restore the previous manual pair.
 
+The same command also reclaims the orphan class without `--force` when the
+expired lease is still evidence of ownership: the launcher identity must have a
+live SIGKILL-proven launcher in its process tree, or exactly one dead launcher
+lease must be proven by its recorded PID and process identity. Only when both
+identities are proven may the daemon on the port be treated as the leaked child
+of that launcher. A live foreign launcher, an Agent-only lease, or a dead
+launcher served by a daemon whose lineage is unproven stays refused with a
+named next action; `doctor` names `takeover` only after the same read-only
+assessment succeeds, so a listed next action is never a blind permission.
+
+Reclaim prints the collected evidence block (lease identity, listening
+daemon, Home holder record, cross-Home port claims, and owned clients) and
+requires no interactive prompt, so it stays usable from a script. Its ladder is
+strictly ordered: (A1, default) ask the foreign daemon for its own permanent
+restart and require a proven exit; (A2, `--force` only) terminate its proven
+parent tree after printing the impact; (A3, `--force` only, last resort)
+terminate the proven Agent chain outermost first. A2/A3 never run without
+`--force`, A3 never runs unless its lineage is proven, and the reclaimed Home
+writes a new lease with new launcher identity and nonce rather than adopting the
+old one. Reclaim therefore relocates ownership of one Home; it never kills a
+process it cannot attribute.
+
 `sanad-dev run [all|agent|client]` is idempotent for components already active
 in one healthy managed group. Missing components are started through a
 nonce-bound component request consumed by the existing launcher. `run all`
