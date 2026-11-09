@@ -62,6 +62,7 @@ This contract applies to `client/lib/features/provider_setup/`.
 
 ## Presentation
 - Localize user-visible copy through the Client localization owner with equivalent English/Arabic meaning; do not introduce hard-coded language-specific UI strings.
+- The setup flow is reachable from a conversation even when the device has no provider: the composer's model/provider picker is always available and its Settings action opens this feature's providers section for the selected device. A device with no configured provider therefore has one in-conversation path into setup, not none.
 - Keep widgets reusable and controller-driven; they must not own polling, transport, or provider state.
 - The shared flow must support both bounded overlays and unbounded page embeddings: bounded hosts scroll inside the flow, while Settings retains ownership of its page-level scroll.
 - Details, OAuth, and model steps keep their current actions in a fixed footer for bounded hosts and let only the body scroll; unbounded Settings embedding keeps normal document flow.

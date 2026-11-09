@@ -80,28 +80,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (targetDevice != null) {
         _selectedDeviceId = targetDevice.id;
-
-        if (section == 'providers') {
-          _destination = SettingsDestination.providers;
-        } else if (section == 'device' || section == 'overview') {
-          _destination = SettingsDestination.overview;
-        } else if (section == 'mcp') {
-          _destination = SettingsDestination.mcp;
-        } else if (section == 'skills') {
-          _destination = SettingsDestination.skills;
-        } else if (section != null) {
-          final matchedDest = SettingsDestination.values.where((d) => d.name == section).firstOrNull;
-          if (matchedDest != null) {
-            _destination = matchedDest;
-          }
-        } else {
-          _destination = SettingsDestination.overview;
-        }
-        if (_destination == SettingsDestination.workspace && queryWorkspaceId != null && queryWorkspaceId.isNotEmpty) {
-          _selectedWorkspaceId = queryWorkspaceId;
-          _showAllWorkspaces = true;
-        }
         unawaited(_cache.refreshWorkspaces(targetDevice));
+      }
+
+      // Personal sections resolve without a device: the account owns Profile and
+      // General, and a brand-new account has no device to scope them to. A
+      // device-scoped section without a device keeps the empty-device page.
+      if (section == null) {
+        if (targetDevice != null) {
+          _destination = SettingsDestination.overview;
+        }
+      } else if (section == 'providers') {
+        _destination = SettingsDestination.providers;
+      } else if (section == 'device' || section == 'overview') {
+        _destination = SettingsDestination.overview;
+      } else if (section == 'mcp') {
+        _destination = SettingsDestination.mcp;
+      } else if (section == 'skills') {
+        _destination = SettingsDestination.skills;
+      } else {
+        final matchedDest = SettingsDestination.values.where((d) => d.name == section).firstOrNull;
+        if (matchedDest != null) {
+          _destination = matchedDest;
+        }
+      }
+      if (_destination == SettingsDestination.workspace &&
+          targetDevice != null &&
+          queryWorkspaceId != null &&
+          queryWorkspaceId.isNotEmpty) {
+        _selectedWorkspaceId = queryWorkspaceId;
+        _showAllWorkspaces = true;
       }
     }
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 
 import 'package:sanad_client/features/settings/data/workspace_security_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -19,15 +20,12 @@ import 'package:sanad_client/features/conversations/presentation/bloc/conversati
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_sidebar_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_search_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/conversation_app_bar.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_capabilities_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/devices/domain/stores/device_capabilities_store.dart';
-import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/repositories/conversation_repository.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
@@ -35,7 +33,9 @@ import 'package:sanad_client/features/conversations/data/repositories/conversati
 import 'package:sanad_client/features/devices/domain/device_preferences_repository.dart';
 import 'package:sanad_client/features/conversations/presentation/screens/brain_activity_view.dart';
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/sidebar_composition.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/conversation_sidebar_scope.dart';
 import 'package:sanad_client/features/home/presentation/widgets/conversation_workspace_layout.dart';
+import 'package:sanad_client/features/home/presentation/widgets/home_shell_scaffold.dart';
 import 'package:sanad_client/features/home/presentation/widgets/sidebar_drawer.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
@@ -43,11 +43,8 @@ import 'package:sanad_client/features/provider_setup/presentation/widgets/provid
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_tool_runtime_context.dart';
 import 'package:sanad_client/infrastructure/platform/window_manager_service.dart';
-import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 
-import 'package:sanad_client/features/home/presentation/widgets/status_bar.dart';
 import 'package:sanad_client/features/schedules/presentation/schedules_chrome_scope.dart';
-
 /// The root home screen.  It is an "orchestration screen" that spans the
 /// [auth], [devices], and [conversations] features.  Placed in its own
 /// [home] feature following the Widget Composition rule.
@@ -177,50 +174,36 @@ class _HomeScreenState extends State<HomeScreen> {
           value: conversationCacheRepository,
         ),
         RepositoryProvider<IDevicePreferencesRepository>.value(value: preferencesRepository),
-        BlocProvider(
-          create: (context) => SessionSidebarCubit(
-            cacheRepository: context.read<ConversationCacheRepository>(),
-          ),
-        ),
-        BlocProvider(
-          create: (context) => SessionSearchCubit(
-            repository: context.read<ConversationRepository>(),
-          ),
-        ),
-        BlocProvider(
-          create: (context) => SessionCubit(
-            agentCubit: context.read<DeviceCubit>(),
-            socketService: context.read<SanadSocketService>(),
-            conversationRepository: context.read<ConversationRepository>(),
-            historyController: getIt<ConversationHistoryController>(),
-            conversationCacheRepository: context.read<ConversationCacheRepository>(),
-            connectionCoordinator: getIt<DeviceConnectionCoordinator>(),
-          ),
-        ),
-        BlocProvider(
-          create: (context) => SessionMessagesCubit(
-            agentCubit: context.read<DeviceCubit>(),
-            sessionCubit: context.read<SessionCubit>(),
-            conversationRepository: context.read<ConversationRepository>(),
-            conversationCacheRepository: context.read<ConversationCacheRepository>(),
-            preferencesRepository: context.read<IDevicePreferencesRepository>(),
-            capabilitiesStore: getIt<DeviceCapabilitiesStore>(),
-            localToolRuntime: getIt<LocalToolRuntimeService>(),
-            workspaceRuntimeContext: getIt<WorkspaceToolRuntimeContext>(),
-            workspaceSecurityClient: getIt.isRegistered<WorkspaceSecurityClient>()
-                ? getIt<WorkspaceSecurityClient>()
-                : null,
-          ),
-        ),
-        BlocProvider(
-          create: (context) => ConversationInputCubit(
-            messagesCubit: context.read<SessionMessagesCubit>(),
-          ),
-        ),
       ],
-      child: _HomeScreenContent(
-        destination: widget.destination,
-        deviceContent: widget.deviceContent,
+      child: ConversationSidebarScope(
+        child: MultiBlocProvider(
+          providers: [
+            BlocProvider(
+              create: (context) => SessionMessagesCubit(
+                agentCubit: context.read<DeviceCubit>(),
+                sessionCubit: context.read<SessionCubit>(),
+                conversationRepository: context.read<ConversationRepository>(),
+                conversationCacheRepository: context.read<ConversationCacheRepository>(),
+                preferencesRepository: context.read<IDevicePreferencesRepository>(),
+                capabilitiesStore: getIt<DeviceCapabilitiesStore>(),
+                localToolRuntime: getIt<LocalToolRuntimeService>(),
+                workspaceRuntimeContext: getIt<WorkspaceToolRuntimeContext>(),
+                workspaceSecurityClient: getIt.isRegistered<WorkspaceSecurityClient>()
+                    ? getIt<WorkspaceSecurityClient>()
+                    : null,
+              ),
+            ),
+            BlocProvider(
+              create: (context) => ConversationInputCubit(
+                messagesCubit: context.read<SessionMessagesCubit>(),
+              ),
+            ),
+          ],
+          child: _HomeScreenContent(
+            destination: widget.destination,
+            deviceContent: widget.deviceContent,
+          ),
+        ),
       ),
     );
   }
@@ -575,34 +558,26 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
               valueListenable: WindowManagerService.compactModeListenable,
               builder: (context, isCompactWindow, _) {
                 final deviceContent = widget.deviceContent;
+                final content = isDesktop
+                    ? ConversationWorkspaceLayout(
+                        child: deviceContent ?? const _MainContent(isMobile: false),
+                      )
+                    : (deviceContent ?? const _MainContent(isMobile: true));
                 return SchedulesChromeScope(
-                  child: Scaffold(
-                    key: _scaffoldKey,
-                    backgroundColor: Colors.transparent,
+                  child: HomeShellScaffold(
+                    scaffoldKey: _scaffoldKey,
                     drawer: isDesktop ? null : const SidebarDrawer(),
-                    body: Column(
+                    body: Stack(
                       children: [
-                        Expanded(
-                          child: Stack(
-                            children: [
-                              if (isDesktop)
-                                ConversationWorkspaceLayout(
-                                  child: deviceContent ?? const _MainContent(isMobile: false),
-                                )
-                              else
-                                deviceContent ?? const _MainContent(isMobile: true),
-                              if (_providerSetupDevice != null && deviceContent == null)
-                                _ProviderSetupGate(
-                                  device: _providerSetupDevice!,
-                                  onReady: (readiness) => _dismissProviderSetupGate(
-                                    readiness: readiness,
-                                  ),
-                                  onSkip: () => _dismissProviderSetupGate(skipped: true),
-                                ),
-                            ],
+                        Positioned.fill(child: content),
+                        if (_providerSetupDevice != null && deviceContent == null)
+                          _ProviderSetupGate(
+                            device: _providerSetupDevice!,
+                            onReady: (readiness) => _dismissProviderSetupGate(
+                              readiness: readiness,
+                            ),
+                            onSkip: () => _dismissProviderSetupGate(skipped: true),
                           ),
-                        ),
-                        const DesktopOnlyStatusBar(),
                       ],
                     ),
                   ),
@@ -630,15 +605,24 @@ class _ProviderSetupGate extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    // A bounded overlay has to fit the device it is shown on: a fixed 760x700
+    // card is clamped by the viewport anyway, so state the clamp explicitly and
+    // give a phone its width back instead of relying on silent clamping.
+    final viewport = MediaQuery.sizeOf(context);
+    final margin = viewport.width < 600 ? 12.0 : 24.0;
     return Positioned.fill(
       child: ColoredBox(
         color: theme.colorScheme.scrim.withValues(alpha: 0.72),
         child: Center(
           child: Container(
-            width: 760,
-            constraints: const BoxConstraints(maxWidth: 760, maxHeight: 700),
-            margin: const EdgeInsets.all(24),
-            padding: const EdgeInsets.all(24),
+            key: const Key('provider_setup_gate'),
+            width: math.min(760, viewport.width - margin * 2),
+            constraints: BoxConstraints(
+              maxWidth: 760,
+              maxHeight: math.min(700, viewport.height - margin * 2),
+            ),
+            margin: EdgeInsets.all(margin),
+            padding: EdgeInsets.all(viewport.width < 600 ? 16 : 24),
             decoration: BoxDecoration(
               color: theme.colorScheme.surface,
               borderRadius: BorderRadius.circular(24),
@@ -668,6 +652,7 @@ class _ProviderSetupGate extends StatelessWidget {
                       ),
                     ),
                     IconButton(
+                      key: const Key('provider_setup_gate_close'),
                       onPressed: onSkip,
                       icon: const Icon(Icons.close),
                       tooltip: 'Close provider setup',
