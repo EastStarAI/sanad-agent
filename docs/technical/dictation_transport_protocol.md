@@ -601,13 +601,30 @@ session, cubit, and UI need no new states:
 | `busy` | `dictation_busy` |
 | `size_limit`, `rate_limited` | `session_limit` |
 | `invalid_request` | `relay_invalid_request` |
-| everything else | `relay_unavailable` |
+| `forbidden`, `origin_conflict` | `relay_forbidden` |
+| `incompatible` | `update_required` |
+| `offline`, `expired`, `unavailable`, anything undeclared | `relay_unavailable` |
 
 `relay_invalid_request` exists because "the request this Client just built was
 refused as malformed" is diagnosable and is not a retry-later outcome; folding it
 into `relay_unavailable` hid a wire-encoding defect behind a generic connection
 notice. It is still not a version mismatch, so it is never promoted to
 `update_required`.
+
+`relay_forbidden` exists for the opposite reason: `forbidden` means there was no
+claim for this route or order, and `origin_conflict` means the id is already bound
+to another producer. Both are refusals of **authority**, not connectivity — a
+Client-ordering defect surfaced to the owner as "this device cannot relay
+dictation on the current connection", which blames a network that was never
+involved. One code covers both: what the owner must do is identical (start a fresh
+session), and the raw Gateway code stays in the transport log for diagnosis.
+
+`incompatible` is a version mismatch: retrying the same build can never clear it,
+so it is the one refusal that is actionable and it reuses the existing
+`update_required` verdict instead of a new sentence.
+
+`offline`, `expired`, `unavailable`, and any code a later Gateway adds remain
+retry-later outcomes.
 
 Recognition failures keep their daemon codes (`unavailable`, `model_unknown`,
 `model_not_installed`, `dictation_busy`, `session_limit`, `no_speech`,

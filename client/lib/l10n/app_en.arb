@@ -696,6 +696,7 @@
   "dictationBusy": "Another dictation session is already running.",
   "dictationRelayUnavailable": "This device cannot relay dictation on the current connection. Update the Agent, or work on the same machine.",
   "dictationRelayInvalidRequest": "This device rejected the dictation request as malformed. Update the app, then try again.",
+  "dictationRelayForbidden": "This dictation request was not authorized for this device. Try again.",
   "dictationDisabled": "Dictation is turned off on this device.",
   "dictationUpdateRequired": "Update the Agent to use dictation on this device.",
   "dictationUnavailable": "Dictation is not available on this device.",

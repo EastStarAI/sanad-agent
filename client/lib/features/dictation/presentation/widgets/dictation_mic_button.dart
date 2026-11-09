@@ -5,6 +5,7 @@ import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:logging/logging.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/presentation/widgets/stop_action_button.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
@@ -220,6 +221,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       // failure notice.
       'relay_unavailable' => l10n.dictationRelayUnavailable,
       'relay_invalid_request' => l10n.dictationRelayInvalidRequest,
+      'relay_forbidden' => l10n.dictationRelayForbidden,
       'dictation_disabled' => l10n.dictationDisabled,
       'update_required' => l10n.dictationUpdateRequired,
       'invalid_session_identity' => l10n.dictationFailedGeneric,
@@ -291,6 +293,17 @@ class _DictationMicButtonState extends State<DictationMicButton> {
         final notReady =
             !state.model.isReady || state.model.blockedReason != null;
         final heldByPeer = !isActive && state.model.busy;
+        if (state.status == DictationStatus.listening) {
+          // The session control IS the product's stop control: the same widget
+          // the conversation composer uses, so the two cannot drift apart. Only
+          // the key and the action belong to dictation.
+          return StopActionButton(
+            buttonKey: const Key('dictation_mic_btn'),
+            tooltip: l10n.dictationStopTooltip,
+            onPressed: widget.device == null ? null : () => _onPressed(state),
+            onLongPress: widget.device == null ? null : () => _openSheet(state),
+          );
+        }
         final color = isActive
             ? Theme.of(context).colorScheme.error
             : notReady
@@ -336,12 +349,6 @@ class _DictationMicButtonState extends State<DictationMicButton> {
                           height: 16,
                           child: AppProgressIndicator(strokeWidth: 2, color: color),
                         )
-                      : state.status == DictationStatus.listening
-                      // The button is the session control, not the meter: the
-                      // meter lives in the composer row while audio is captured,
-                      // so the button stays a plain, obvious Stop. Its tooltip is
-                      // the only label — the control carries no visible text.
-                      ? Icon(Symbols.stop, size: 20, color: color)
                       : Icon(
                           Symbols.mic,
                           size: 18,

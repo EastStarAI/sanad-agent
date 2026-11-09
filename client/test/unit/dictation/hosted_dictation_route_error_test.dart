@@ -52,20 +52,30 @@ void main() {
     // collapsing into the generic relay verdict.
     expect(await mappedCodeFor('invalid_request'), 'relay_invalid_request');
 
-    // A version mismatch is a retry-later outcome; it is not promoted into an
-    // "update required" verdict §8 never declared.
-    for (final wireCode in const [
-      'incompatible',
-      'offline',
-      'forbidden',
-      'expired',
-    ]) {
+    // A refusal that names *authority* is not an outage: no claim for this
+    // route/order (`forbidden`) or an id already bound to another producer
+    // (`origin_conflict`) reads as "the relay is unreachable" today, which sent
+    // a client-ordering defect to the owner as an infrastructure failure.
+    expect(await mappedCodeFor('forbidden'), 'relay_forbidden');
+    expect(await mappedCodeFor('origin_conflict'), 'relay_forbidden');
+
+    // A version mismatch is actionable: retrying the same Client can never
+    // clear it, so it is promoted to the verdict that says "update".
+    expect(await mappedCodeFor('incompatible'), 'update_required');
+
+    // The remaining refusals really are retry-later: the daemon vanished
+    // (`offline`), the route idled out (`expired`), or the peer state is
+    // transient (`unavailable`).
+    for (final wireCode in const ['offline', 'expired', 'unavailable']) {
       expect(
         await mappedCodeFor(wireCode),
         'relay_unavailable',
         reason: '$wireCode must follow the canonical fallback',
       );
     }
+
+    // An undeclared future code still gets a verdict, never a crash.
+    expect(await mappedCodeFor('something_new'), 'relay_unavailable');
   });
 
   test('a route error for another dictation session is ignored', () async {

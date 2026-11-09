@@ -671,6 +671,39 @@ Owner decisions recorded here (not implemented, deliberately):
   mistake, not a product defect: a leg must re-arm the fixture on the exact
   Client that presses.
 
+## G21 — Two clearer refusals, and one stop control (owner decisions 2026-11-09)
+
+Live-4 exposed a wording defect and a visual one. Neither changed protocol or
+behaviour: a refusal that never mentioned the network read as a network outage,
+and the two Stop buttons in the product were drawn differently.
+
+- [x] **U1 — `forbidden`/`origin_conflict` no longer read as an outage.**
+      `forbidden` means no claim existed for this route or order and
+      `origin_conflict` means the id is bound to another producer; both are
+      refusals of authority, and both were mapped to `relay_unavailable`, whose
+      sentence blames the connection. They map to a new `relay_forbidden` with
+      its own en/ar sentence, mirroring the `relay_invalid_request` precedent.
+      `incompatible` now reuses `update_required` (a version mismatch never
+      clears by retrying), while `offline`/`expired`/`unavailable` and undeclared
+      codes stay `relay_unavailable`. Pinned by
+      `client/test/unit/dictation/hosted_dictation_route_error_test.dart` (the
+      whole canonical table) and by
+      `client/test/widget/dictation/dictation_mic_button_test.dart`, which proves
+      the owner sees the new sentence and not the relay-unavailable one.
+      Raw Gateway codes stay in the one transport log line
+      (`gateway=forbidden`), which is what keeps one client code diagnosable.
+- [x] **The dictation Stop is the product's Stop.** The listening state drew its
+      own button (`Symbols.stop`, 20 px, no outline, 0.12 tint) beside the
+      conversation's (`Icons.stop_circle_outlined`, 16 px, error outline, 0.10
+      tint) — one meaning, two designs. That design now has a single owner,
+      `client/lib/core/presentation/widgets/stop_action_button.dart`, used by
+      both `ComposerSendStopButton` and `DictationMicButton`. Each caller keeps
+      its own key on the `IconButton` (`stop_message_btn`,
+      `dictation_mic_btn`), its tooltip, and its action; dictation keeps its
+      long-press sheet gesture. Pinned by
+      `dictation_mic_button_test.dart` (the control is a `StopActionButton` while
+      listening, carries the shared glyph, and still dispatches `stop`).
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:material_symbols_icons/symbols.dart';
+import 'package:sanad_client/core/presentation/widgets/stop_action_button.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
@@ -14,6 +14,7 @@ import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubi
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
 import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 class _Transport implements DictationTransport {
   final StreamController<Map<String, dynamic>> eventsController =
@@ -286,8 +287,9 @@ void main() {
     expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
 
     await emitReady(tester);
-    // The meter moved to the composer row, so the button is a plain Stop: no
-    // bars inside it, and its tooltip is the only label it carries.
+    // The meter moved to the composer row, so the button is the shared stop
+    // control: no bars inside it, the product's own stop glyph, and its tooltip
+    // is the only label it carries.
     expect(
       find.descendant(
         of: find.byKey(const Key('dictation_mic_btn')),
@@ -298,11 +300,55 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const Key('dictation_mic_btn')),
-        matching: find.byIcon(Symbols.stop),
+        matching: find.byIcon(Icons.stop_circle_outlined),
       ),
       findsOneWidget,
     );
     expect(find.byKey(const Key('dictation_elapsed')), findsNothing);
+  });
+
+  testWidgets('while listening, the stop control is the shared stop design', (
+    tester,
+  ) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    final stop = find.byKey(const Key('dictation_mic_btn'));
+    // One design, one owner: the control that ends a dictation session is the
+    // same widget that ends a reply, so the two can never drift apart again.
+    expect(find.byType(StopActionButton), findsOneWidget);
+    expect(
+      find.ancestor(
+        of: find.byIcon(Icons.stop_circle_outlined),
+        matching: find.byType(StopActionButton),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: stop,
+        matching: find.byIcon(Icons.stop_circle_outlined),
+      ),
+      findsOneWidget,
+    );
+
+    // Sharing the design must not share the action: this still stops dictation.
+    transport.commands.clear();
+    await tester.tap(stop);
+    await settle(tester);
+    expect(transport.commands, contains('stop'));
+
+    // The stop arms a drain timeout; let the daemon close the session so no
+    // timer outlives the test.
+    transport.eventsController.add({'event': 'dictation_done', 'segments': 0});
+    await settle(tester);
+    expect(cubit.state.status, DictationStatus.idle);
+
+    // A drain with no speech announces a notice, which owns a real auto-close
+    // timer; let it fire so none outlives the test.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 400));
   });
 
   testWidgets('a press starts recording when a model is ready', (tester) async {
@@ -448,6 +494,46 @@ void main() {
     // not rewrite it as part of its own range.
     expect(RegExp('First').allMatches(text), hasLength(1));
     expect(RegExp('Second').allMatches(text), hasLength(1));
+  });
+
+  testWidgets('a forbidden relay refusal names authority, not an outage', (
+    tester,
+  ) async {
+    // The toast surface is the app-wide feedback owner, so the sentence is
+    // captured at the seam it publishes through.
+    final announced = <String>[];
+    ToastUtils.debugOnShowInfo = announced.add;
+    addTearDown(() => ToastUtils.debugOnShowInfo = null);
+
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    // `forbidden` from the Gateway: no claim for this route/order. Today the
+    // owner reads "cannot relay dictation on the current connection", which
+    // blames the network for a refusal that never mentioned it.
+    transport.eventsController.add({
+      'event': 'dictation_error',
+      'code': 'relay_forbidden',
+    });
+    await tester.pump();
+    await settle(tester);
+
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    expect(announced, isNotEmpty);
+    expect(
+      announced.last,
+      'This dictation request was not authorized for this device. '
+      'Try again.',
+    );
+    // The two verdicts it must never be confused with.
+    expect(announced.last, isNot(l10n.dictationRelayUnavailable));
+    expect(announced.last, isNot(l10n.dictationRelayInvalidRequest));
+
+    // The notice owns a real auto-close timer; let it fire so none outlives the
+    // test.
+    await tester.pump(const Duration(seconds: 6));
+    await tester.pump(const Duration(milliseconds: 400));
   });
 }
 

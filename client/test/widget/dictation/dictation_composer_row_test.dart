@@ -334,7 +334,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byKey(const Key('dictation_mic_btn')),
-        matching: find.byIcon(Symbols.stop),
+        matching: find.byIcon(Icons.stop_circle_outlined),
       ),
       findsOneWidget,
     );
@@ -394,7 +394,7 @@ void main() {
     );
     // The newest sample enters on the leading edge: the right edge in RTL.
     expect(flip.transform.storage[0], -1);
-    expect(find.byIcon(Symbols.stop), findsOneWidget);
+    expect(find.byIcon(Icons.stop_circle_outlined), findsOneWidget);
   });
 
   // A streaming session keeps a partial in the composer until its segment is

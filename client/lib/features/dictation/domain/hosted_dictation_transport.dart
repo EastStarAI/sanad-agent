@@ -175,7 +175,16 @@ class HostedDictationTransport implements DictationTransport {
       // own code. It is still not a version problem, so it must never be
       // promoted into "update required".
       'invalid_request' => 'relay_invalid_request',
-      // Every other refusal is the same retry-later outcome.
+      // Canonical §8: no claim for this route/order, or an id already bound to
+      // another producer. That is a refusal of **authority**, not an outage —
+      // folding it into `relay_unavailable` told the owner the relay was
+      // unreachable when the request itself had never been authorized.
+      'forbidden' || 'origin_conflict' => 'relay_forbidden',
+      // A version mismatch never clears by retrying the same build, so it is the
+      // one refusal that is actionable: update.
+      'incompatible' => 'update_required',
+      // `offline`, `expired`, `unavailable` and any undeclared future code share
+      // the one retry-later verdict.
       _ => 'relay_unavailable',
     };
     _fail(mapped, gatewayCode: errorCode);

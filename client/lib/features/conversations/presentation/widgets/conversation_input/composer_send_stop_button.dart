@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/presentation/widgets/stop_action_button.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
@@ -98,37 +99,14 @@ class ComposerSendStopButton extends StatelessWidget {
         executionSnapshot?.hasActiveWork != true;
 
     if (showStopButton) {
-      return SizedBox(
-        width: 32,
-        height: 32,
-        child: IconButton(
-          key: const Key('stop_message_btn'),
-          tooltip: isStopping ? 'Stopping response' : 'Stop response',
-          onPressed: isStopping ? null : onStop,
-          style: IconButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.error.withValues(alpha: 0.1),
-            side: BorderSide(
-              color: Theme.of(context).colorScheme.error.withValues(alpha: 0.2),
-            ),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: EdgeInsets.zero,
-          ),
-          icon: isStopping
-              ? SizedBox(
-                  key: const Key('stop_message_progress_indicator'),
-                  width: 16,
-                  height: 16,
-                  child: AppProgressIndicator(
-                    strokeWidth: 2,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                )
-              : Icon(
-                  Icons.stop_circle_outlined,
-                  size: 16,
-                  color: Theme.of(context).colorScheme.error,
-                ),
-        ),
+      // One design, one owner: the stop that ends a reply is the same widget the
+      // dictation button becomes while listening.
+      return StopActionButton(
+        buttonKey: const Key('stop_message_btn'),
+        tooltip: isStopping ? 'Stopping response' : 'Stop response',
+        onPressed: isStopping ? null : onStop,
+        busy: isStopping,
+        progressIndicatorKey: const Key('stop_message_progress_indicator'),
       );
     }
 
