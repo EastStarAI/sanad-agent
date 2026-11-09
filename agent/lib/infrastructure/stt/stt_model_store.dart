@@ -329,7 +329,12 @@ class SttModelStore {
         decoder: '',
         tokens: '',
         vad: '',
-        language: settings.language,
+        // A catalog row decodes the language it declares. `stt.language`
+        // describes a `stt.model_path` override, which carries no catalog
+        // metadata: handing it to a catalog row mistranslated every non-Arabic
+        // entry, and `auto` on an English-only checkpoint reads outside
+        // whisper's logits.
+        language: entry.language,
         engine: SttEngineKind.whisperCpp,
         model: '$dir/${ggml.name}',
       );

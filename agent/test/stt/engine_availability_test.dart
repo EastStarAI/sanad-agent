@@ -70,6 +70,30 @@ void main() {
       expect(usable.any((entry) => entry.mode == SttModelMode.streaming), isFalse);
     });
 
+    test('a build without sherpa still offers an English model', () async {
+      // The Linux arm64 Agent links no sherpa engine, so English dictation used
+      // to be impossible there: every English row was a sherpa one. An English
+      // whisper entry has to survive the availability filter.
+      final english = usableSttEntries(withoutSherpa).where(
+        (entry) => entry.language == 'en',
+      );
+      expect(
+        english.map((entry) => entry.id),
+        containsAll(<String>[
+          'whisper-small-en-ggml-q8',
+          'whisper-medium-en-ggml-q8',
+        ]),
+      );
+      expect(
+        english.every((entry) => entry.engine == SttEngineKind.whisperCpp),
+        isTrue,
+      );
+      // ...and it is selectable, which is what a user's English choice needs.
+      final service = serviceFor(withoutSherpa);
+      await service.selectModel('whisper-small-en-ggml-q8');
+      expect(service.selectedModelId, 'whisper-small-en-ggml-q8');
+    });
+
     test('the default follows the build, not the catalog order', () {
       expect(defaultUsableSttEntry(withSherpa)?.id, defaultSttEntry.id);
       expect(defaultUsableSttEntry(withoutSherpa)?.id, defaultSttEntry.id);

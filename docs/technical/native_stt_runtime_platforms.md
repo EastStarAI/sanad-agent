@@ -37,6 +37,12 @@ all read it, and `agent/test/stt/engine_availability_test.dart` proves both
 builds on one machine. A build without sherpa is not a degraded error state —
 the Client already renders a stream that publishes finals only.
 
+That build still has an English model: `whisper-small-en-ggml-q8` and
+`whisper-medium-en-ggml-q8` are whisper.cpp batch entries. Before them every
+`language: 'en'` row was a sherpa streaming export, so a whisper-only build could
+not take English dictation at all — the engine decoded the clip with the Arabic
+model's language and returned Arabic text.
+
 ## Platform matrix
 
 One tag names everything: the directory under `agent/native/`, the
