@@ -392,6 +392,12 @@ Future<void> handleRun({
     device: device,
     environment: Platform.environment,
   );
+  await applySanadDevWebBrowserProfile(
+    flutterArguments,
+    device: device,
+    sanadHome: runtime.sanadHome,
+    clientInstanceSlot: clientInstanceSlot,
+  );
   final clientEnvironment = buildUnifiedSanadHomeEnvironment(
     Platform.environment,
     sanadHome: runtime.sanadHome,
