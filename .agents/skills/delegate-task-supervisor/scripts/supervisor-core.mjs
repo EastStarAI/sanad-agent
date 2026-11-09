@@ -12,7 +12,10 @@
 //    path.
 // 2. The run record's addressing: `runPaths` and `taskRunPaths` derive every
 //    path, `publicTask` projects one spec task into the manifest's task record,
-//    and `loadManifest`/`requireTask` are the two ways it is read.
+//    and `loadManifest`/`requireTask` are the two ways it is read. The task's own
+//    argument surface belongs to the same projection: `sessionPin` reads the
+//    daemon session a task pins, `stripSessionArguments` removes it for
+//    `--new-session`, and `effectiveTaskArgs` composes what is spawned.
 // 3. Durable primitives and run facts: atomic JSON writes, the hash the
 //    workspace registry keys an identity by, process liveness, and the
 //    `result.json` digest a terminal task is reported from.
@@ -109,6 +112,54 @@ export function getArgValue(args, taskId, ...flags) {
   return values[0] ?? null;
 }
 
+// A task either pins one daemon session (`--session <id>`, `-s <id>`,
+// `--session=<id>`) or it starts a fresh one on every attempt. `id` is the pinned
+// identifier; `pinned` also covers `--continue`, which resumes without naming an
+// id. Reading and stripping the same three forms from one place is what keeps
+// `--new-session` and the pin a session back into the task from disagreeing.
+export function sessionPin(args) {
+  const pinned = { id: null, pinned: false };
+  if (!Array.isArray(args)) return pinned;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--continue') return { id: null, pinned: true };
+    if (arg === '--session' || arg === '-s') {
+      const value = args[index + 1];
+      const named = typeof value === 'string' && value.trim() && !value.startsWith('-')
+        ? value.trim()
+        : null;
+      return { id: named, pinned: true };
+    }
+    if (arg.startsWith('--session=')) {
+      const named = arg.slice('--session='.length).trim();
+      return { id: named || null, pinned: true };
+    }
+  }
+  return pinned;
+}
+
+// `--new-session` drops the session pins so the next attempt starts a fresh
+// daemon session instead of resuming the finished one.
+export function stripSessionArguments(args) {
+  const stripped = [];
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === '--session' || arg === '-s') {
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith('--session=') || arg === '--continue') continue;
+    stripped.push(arg);
+  }
+  return stripped;
+}
+
+// The arguments a task is actually spawned with: its declared ones plus the
+// `--home` pin a managed custom Home injects.
+export function effectiveTaskArgs(args, home) {
+  return home ? [...args, '--home', home] : args;
+}
+
 export function runPaths(runDir) {
   return {
     manifest: join(runDir, 'manifest.json'),
@@ -178,6 +229,10 @@ export function publicTask(task, runDir, initialStatus = 'queued') {
     retryExhaustedAt: null,
     autoRetry: task.autoRetry ?? null,
     sessionId: null,
+    // The daemon session the task's own arguments pin, if any: every attempt of
+    // the task then resumes that conversation instead of opening a new one. It is
+    // a projection of `args`, so `--new-session` clears it with the pin itself.
+    pinnedSessionId: sessionPin(task.args).id,
     lastProgressAt: null,
     progressStall: null,
     progressStallMs: task.progressStallMs ?? null,
