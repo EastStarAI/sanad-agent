@@ -306,7 +306,7 @@ stt:
       }
       writeConfig('''
 stt:
-  model_id: whisper-turbo-ggml-q5
+  model_id: egy-whisper-turbo-ggml-f16
 ''');
       final readiness = service().readiness();
 

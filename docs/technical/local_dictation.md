@@ -125,9 +125,9 @@ verified against its SHA-256, and activated atomically.
 Pin the size and the digest from the hosting provider's own metadata — the
 Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and
 `x-linked-etag` headers of the `resolve` URL — never from a mirror listing or a
-number carried over from an earlier entry. `whisper-turbo-ggml-q5` was pinned
-81,672 bytes too large, and the download was rejected before the digest was ever
-compared, so a correct SHA-256 could not save it.
+number carried over from an earlier entry. A stale pinned size rejects the
+download before the digest is ever compared, so a correct SHA-256 cannot save a
+row whose size was never verified against the artifact itself.
 
 | Entry | Decode language | Mode | Size | Note |
 |---|---|---|---|---|
@@ -137,7 +137,6 @@ compared, so a correct SHA-256 could not save it.
 | `whisper-base-int8` | `ar` | batch | 153 MB | fastest, lowest Arabic accuracy; ~0.76 GB; sherpa |
 | `whisper-small-en-ggml-q8` | `en` | batch | 264 MB | recommended English; ~0.5 GB |
 | `whisper-medium-en-ggml-q8` | `en` | batch | 823 MB | more accurate English, ~3× slower on a CPU |
-| `whisper-turbo-ggml-q5` | `auto` | batch | 574 MB | multilingual, hidden; installed by id |
 | `en-streaming-zipformer-kroko-2025-08-06` | `en` | streaming | 71 MB | live English text, sherpa builds only |
 | `multilingual-streaming-zipformer-2025-02-10` | `ar` | streaming | 339 MB | live Arabic/English text, sherpa builds only |
 

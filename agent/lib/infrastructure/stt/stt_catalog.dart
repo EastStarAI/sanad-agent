@@ -135,30 +135,6 @@ const List<SttCatalogEntry> kSttCatalog = [
     ],
   ),
   SttCatalogEntry(
-    id: 'whisper-turbo-ggml-q5',
-    name: 'Whisper Large v3 Turbo Q5',
-    description: {
-      'en': 'Multilingual Whisper build kept for testing.',
-      'ar': 'نسخة Whisper متعددة اللغات — للاختبار.',
-    },
-    speedTier: 3,
-    mode: SttModelMode.batchVad,
-    language: 'auto',
-    isDefault: false,
-    hidden: true,
-    engine: SttEngineKind.whisperCpp,
-    files: [
-      SttModelFile(
-        name: 'ggml-large-v3-turbo-q5_0.bin',
-        url:
-            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
-        sizeBytes: 574041195,
-        sha256:
-            '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
-      ),
-    ],
-  ),
-  SttCatalogEntry(
     id: 'whisper-base-int8',
     name: 'Whisper Base Int8',
     description: {
