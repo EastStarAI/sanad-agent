@@ -305,35 +305,44 @@ class _ComposerModelChipState extends State<ComposerModelChip> {
                     const SizedBox(width: 6),
                   ],
                   if (useTwoLineLayout)
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.center,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Text(
-                          model,
-                          style: AppTypography.text(context,
-                            color: widget.dimTextColor,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w500,
+                    Flexible(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            model,
+                            style: AppTypography.text(context,
+                              color: widget.dimTextColor,
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                        Text(
-                          provider,
-                          style: AppTypography.text(context,
-                            color: widget.dimTextColor.withValues(alpha: 0.7),
-                            fontSize: 9,
+                          Text(
+                            provider,
+                            style: AppTypography.text(context,
+                              color: widget.dimTextColor.withValues(alpha: 0.7),
+                              fontSize: 9,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ],
+                        ],
+                      ),
                     )
                   else
-                    Text(
-                      text,
-                      style: AppTypography.text(context, color: widget.dimTextColor, fontSize: 11),
+                    // The always-available picker must stay horizontally bounded
+                    // in a narrow composer: the label shrinks instead of
+                    // overflowing the row.
+                    Flexible(
+                      child: Text(
+                        text,
+                        style: AppTypography.text(context, color: widget.dimTextColor, fontSize: 11),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   const SizedBox(width: 4),
                   Icon(Icons.keyboard_arrow_down, size: 12, color: widget.dimTextColor),

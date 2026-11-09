@@ -7,6 +7,8 @@ import 'package:sanad_client/features/conversations/domain/models/thinking_contr
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
@@ -102,12 +104,21 @@ void main() {
     SessionCubit? sessionCubit,
     ConversationInputCubit? inputCubit,
   }) {
+    // The composer's model/provider picker is always present, so the composer
+    // always needs the conversation scope it binds to. A test that passes no
+    // session gets the "no conversation context" stub rather than a missing
+    // provider.
+    final conversationScope = sessionCubit ?? _StubSessionCubit(null);
+    if (sessionCubit == null) addTearDown(conversationScope.close);
+    final messagesScope = _StubSessionMessagesCubit();
+    addTearDown(messagesScope.close);
     return tester.pumpWidget(
       MultiBlocProvider(
         providers: [
           BlocProvider<ComposerSlashCommandsCubit>.value(value: slashCubit),
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
-          if (sessionCubit != null) BlocProvider<SessionCubit>.value(value: sessionCubit),
+          BlocProvider<SessionCubit>.value(value: conversationScope),
+          BlocProvider<SessionMessagesCubit>.value(value: messagesScope),
           if (inputCubit != null) BlocProvider<ConversationInputCubit>.value(value: inputCubit),
         ],
         child: MaterialApp(
@@ -946,6 +957,13 @@ class _StubProviderSetupClient extends Fake implements ProviderSetupClient {
 
 class _StubSessionCubit extends Cubit<SessionState> implements SessionCubit {
   _StubSessionCubit(Session? session) : super(SessionState(selectedSession: session));
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+class _StubSessionMessagesCubit extends Cubit<SessionMessagesState> implements SessionMessagesCubit {
+  _StubSessionMessagesCubit() : super(const SessionMessagesState());
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
