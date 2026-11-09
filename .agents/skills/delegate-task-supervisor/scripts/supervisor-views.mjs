@@ -249,6 +249,9 @@ function resolveSessionDetails(task, manifest) {
   return {
     taskId: task.id,
     sessionState,
+    // The daemon session every attempt of this task resumes, when its arguments
+    // pin one. A task with no pin starts a fresh session on each attempt.
+    pinnedSessionId: task.pinnedSessionId ?? null,
     cause: cause || '-',
     stateSince: formatIso(stateSince, '[unknown time]'),
     lastProgressAt: formatIso(lastProgressAt, '-'),
@@ -277,6 +280,7 @@ function formatSessionFooter(details) {
     '--- Session Observability ---',
     `Task ID:            ${details.taskId}`,
     `Session State:      ${details.sessionState}`,
+    `Pinned Session:     ${details.pinnedSessionId ?? '-'}`,
     `Cause:              ${details.cause}`,
     `State Since:        ${details.stateSince}`,
     `Last Progress:      ${details.lastProgressAt}`,
@@ -389,6 +393,9 @@ function briefTaskLine(manifest, task) {
   if (progress.stalled) parts.push('PROGRESS_STALL');
   if (task.queueStall) parts.push('QUEUED_STALL');
   if ((task.attempt ?? 1) > 1) parts.push(`attempt ${task.attempt}`);
+  // The session every attempt of this task resumes. Without it the line cannot
+  // answer the one question a continuation depends on.
+  if (task.pinnedSessionId) parts.push(`session ${task.pinnedSessionId}`);
   // Retry facts belong on the task line: a blocked task without them looks like
   // a permanent stop, and an exhausted one looks identical to a fresh block.
   const retry = retryFacts(manifest, task);
@@ -458,6 +465,7 @@ function briefView(runDir, manifest) {
         id: task.id,
         status: task.status,
         attempt: task.attempt ?? 1,
+        pinnedSessionId: task.pinnedSessionId ?? null,
         elapsed: details.elapsed,
         progressAgeMs: progress.silentForMs,
         progressStalled: progress.stalled,

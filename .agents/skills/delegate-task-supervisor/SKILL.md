@@ -4,7 +4,7 @@ description: Bootstrap and orchestrate one or many delegated coding-agent CLI ta
 license: MIT
 compatibility: Requires Node.js 18+ and git. The bootstrap helper can install delegate-skills and supported implementer CLIs with explicit approval. Runtime scripts use Node built-ins only and support macOS, Linux, and Windows.
 metadata:
-  version: 0.4.1
+  version: 0.4.2
 ---
 
 # Delegate Task Supervisor
@@ -57,6 +57,8 @@ Use identity deliberately:
 - **Parallel work:** use separate sessions/conversations. Parallel write tasks also require separate worktrees.
 
 The supervisor records project/session/conversation identifiers from completed relay results in the user config directory. It does not silently resume them.
+
+A task is one conversation across its attempts. When an attempt starts without a `--session` pin, the session id the run reports — from a lifecycle event or from the terminal `result.json` — is pinned back into that task's own arguments and persisted, so every later `continue` resumes the conversation the attempt opened instead of starting another one. `continue --new-session` drops the pin for the next attempt and that attempt's own session is pinned the same way; an attempt that never reports an id pins nothing, and a task that already pins a session is never rewritten. `status` and `inspect` name the pin (`Pinned Session` / `pinnedSessionId`) and the journal records it once as `session_pinned`. The pin belongs to Sanad tasks, whose invocation contract the supervisor validates; another implementer's relay arguments stay opaque.
 
 ## 3. Prepare tasks
 
@@ -284,7 +286,7 @@ node "<skill-dir>/scripts/supervisor.mjs" logs --run <run-directory> --task <tas
 node "<skill-dir>/scripts/supervisor.mjs" inspect --run <run-directory> --task <task-id>
 ```
 
-`status`, `timeline`, and `logs` human outputs include a bounded **Session Observability** footer reporting true session state (`working`, `waiting for input`, `waiting for permission`, `waiting`, `retrying (n/N)`, `resuming`, `blocked`, `stopped`, `completed`, `following the daemon turn`, `follow lost`, or `unknown`), error cause (`provider_timeout`, `rate_limit`, `network_error`, `provider_quota`, `auth_error`), state-since, last progress timestamp, elapsed duration, observation source, current time, and — for a followed task — the follow start, deadline, poll count, and last poll. PID liveness is shown only as observation metadata and never establishes `working`; without persisted progress the state is `unknown`. Timelines strictly display full ISO timestamps with timezone (`YYYY-MM-DDTHH:mm:ss.sssZ`), distinguish stream receipt time (`(received: <ISO>)`), and label missing historical timestamps as `[unknown time]` without manufacturing fake times from file mtime. Observer attachments persist timing records in `observers/<pid>.json`, tracking start and cancellation cleanly without manufacturing durations when hard kills occur.
+`status`, `timeline`, and `logs` human outputs include a bounded **Session Observability** footer reporting true session state (`working`, `waiting for input`, `waiting for permission`, `waiting`, `retrying (n/N)`, `resuming`, `blocked`, `stopped`, `completed`, `following the daemon turn`, `follow lost`, or `unknown`), the daemon session this task resumes when its arguments pin one, error cause (`provider_timeout`, `rate_limit`, `network_error`, `provider_quota`, `auth_error`), state-since, last progress timestamp, elapsed duration, observation source, current time, and — for a followed task — the follow start, deadline, poll count, and last poll. PID liveness is shown only as observation metadata and never establishes `working`; without persisted progress the state is `unknown`. Timelines strictly display full ISO timestamps with timezone (`YYYY-MM-DDTHH:mm:ss.sssZ`), distinguish stream receipt time (`(received: <ISO>)`), and label missing historical timestamps as `[unknown time]` without manufacturing fake times from file mtime. Observer attachments persist timing records in `observers/<pid>.json`, tracking start and cancellation cleanly without manufacturing durations when hard kills occur.
 
 Default `watch-once` wakes on blocked, waiting, retrying, resuming, intervention, and terminal transitions; use `--all` only when routine transitions are also relevant. Use `--follow` only in a human-owned terminal. Agent tool calls use bounded reads or `watch-once`, never an indefinite follow stream. A task that is `following` a daemon-owned turn is observed through the session, so `status` reports where the observation came from instead of implying a live worker; plain progress still never wakes a watcher.
 
@@ -298,7 +300,7 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 
 - `scripts/supervisor.mjs` — the CLI entrypoint (flags, `HELP`, `main`), `start`, and the composition root for `__worker`; every command it dispatches lives in the module that owns that responsibility.
 - `scripts/supervisor-spec.mjs` — `validateTask`/`validateSpec`: the only place a submitted spec is accepted.
-- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, run paths and the run manifest, `publicTask`, atomic JSON, time parsing, and the `result.json` digest a terminal task is reported from.
+- `scripts/supervisor-core.mjs` — the shared primitives every other script imports: fail-fast errors and option helpers, run paths and the run manifest, `publicTask`, the task's argument surface (`sessionPin`, `stripSessionArguments`, `effectiveTaskArgs`), atomic JSON, time parsing, and the `result.json` digest a terminal task is reported from.
 - `scripts/supervisor-registry.mjs` — run identity and the workspace registry: the project/session remembered per workspace, keyed by the canonical workspace path.
 - `scripts/supervisor-windows.mjs` — the Windows broker, its handshake, and the batch quoting both launch paths share.
 - `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
@@ -308,11 +310,11 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 - `scripts/supervisor-worker/child-process.mjs` — process spawning, task environment composition, process-group signalling, and group-survival probes.
 - `scripts/supervisor-worker/reconcile.mjs` — `createReconciler`: progress-signal sampling (timeline, stdout/stderr, and result artifact growth), queue stall, progress stall, and lost-worker detection.
 - `scripts/supervisor-worker/scheduler.mjs` — `createScheduler`: monitor tick, run completion checks, request watcher/rescan, signal handling, and worker startup (`runWorker`).
-- `scripts/supervisor-worker/launcher.mjs` — `createLauncher`: slot concurrency, launch backoff, process exit handling (`finishTask`), and task launching.
-- `scripts/supervisor-worker/timeline.mjs` — `createTimelineObserver`: timeline file and relay stream observation, session id extraction.
+- `scripts/supervisor-worker/launcher.mjs` — `createLauncher`: slot concurrency, launch backoff, process exit handling (`finishTask`), and task launching; a result artifact that names its session is reported to the session owner like any lifecycle event.
+- `scripts/supervisor-worker/timeline.mjs` — `createTimelineObserver`: timeline file and relay stream observation, session id extraction into the session owner.
 - `scripts/supervisor-worker/follower.mjs` — `createFollower`: background turn follow loop, probe polling, and follow settlement.
-- `scripts/supervisor-worker/session.mjs` — `createSessionSupport`: auxiliary CLI command invocation (`show`, `stop`, `steer`, `retry`).
-- `scripts/supervisor-worker/requests.mjs` — `createRequestHandler`: control request processing (`cancel`, `continue`, `steer`, `retry`, `add`, `enqueue`, `set-concurrency`, `close`) and auto-retry evaluation.
+- `scripts/supervisor-worker/session.mjs` — `createSessionSupport`: auxiliary CLI command invocation (`show`, `stop`, `steer`, `retry`) and `recordTaskSession`, the one owner of the session a task's attempts belong to (it pins the id into the task's arguments when the attempt started unpinned).
+- `scripts/supervisor-worker/requests.mjs` — `createRequestHandler`: control request processing (`cancel`, `continue`, `steer`, `retry`, `add`, `enqueue`, `set-concurrency`, `close`) and auto-retry evaluation; `continue` rewrites the delta brief and, with `--new-session`, strips the session pin the session owner later restores.
 - `scripts/bootstrap.mjs` — discover and check delegate skills or implementer CLIs (`opencode`, `agy`, `sanad`).
 - `scripts/watch-once.mjs` — race-safe event-driven wait for intervention (`needs_input`, `needs_permission`) or terminal transitions.
 - `scripts/supervisor-events.mjs` — the shared journal vocabulary: terminal states, actionable notices, and the `watch-once` wake set.

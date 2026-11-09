@@ -2456,7 +2456,14 @@ function writeSanadMock(root) {
     const timeline = outDir + '/events.jsonl';
     const emit = (entry) => appendFileSync(timeline, JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n');
 
-    const sessionId = process.env.MOCK_SESSION === '' ? null : (process.env.MOCK_SESSION || 'ses_mock_1');
+    // The session this attempt runs in. An explicit '--session' pin is honoured
+    // the way the real CLI honours it, MOCK_SESSION forces one fixed id,
+    // MOCK_SESSION_SEQ numbers the attempts, and MOCK_SESSION='' reports none.
+    const pinnedSession = readFlag('--session');
+    const defaultSession = process.env.MOCK_SESSION_SEQ === '1' ? 'ses_mock_' + (priorRuns + 1) : 'ses_mock_1';
+    const sessionId = process.env.MOCK_SESSION === ''
+      ? null
+      : (process.env.MOCK_SESSION || pinnedSession || defaultSession);
     emit({type: 'running', session_id: sessionId});
     emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
 
@@ -2532,6 +2539,9 @@ function writeSanadMock(root) {
         branch: process.env.MOCK_BRANCH || null,
         head_sha: process.env.MOCK_SHA || null,
         pr_url: process.env.MOCK_PR || null,
+        // A real 'sanad run --json' artifact carries the session it ran in; a
+        // fixture can report it only here, with no lifecycle event naming it.
+        ...(process.env.MOCK_RESULT_SESSION ? {session_id: process.env.MOCK_RESULT_SESSION} : {}),
         text: process.env.MOCK_TEXT || 'Mock summary line.',
       }));
       emit({type: 'completed'});
@@ -3176,6 +3186,191 @@ test('continue re-dispatches a finished task as a numbered attempt and refuses a
     try { process.kill(taskPid, 'SIGKILL'); } catch {}
   }
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+// The attempts the fixture actually spawned, with the arguments each one ran
+// with: the spawn argv is the authoritative evidence of which session an attempt
+// resumed.
+function mockRunInvocations(logPath) {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'run');
+}
+
+function sessionPinOf(args) {
+  const index = args.indexOf('--session');
+  return index === -1 ? null : args[index + 1];
+}
+
+async function startPinnedTaskFixture(prefix, name, env) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const runDir = join(root, 'run');
+  writeBrief(root, 'brief.md', 'original brief');
+  const specPath = writeSpec(root, [sanadTask(root, name)]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+  const paths = {
+    root,
+    runDir,
+    manifest: join(runDir, 'manifest.json'),
+    tasks: join(runDir, 'tasks.json'),
+  };
+  await waitForCondition(() => (readJsonFile(paths.manifest).tasks[name].status === 'completed' ? true : null));
+  return paths;
+}
+
+// 2026-11-09: `continue --new-session` stripped the session pin, the attempt that
+// opened a fresh daemon session was never written back onto the task, and the
+// next plain `continue` opened yet another session — the conversation context the
+// operator expected to continue was gone.
+test('continue --new-session pins the session the new attempt opened', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-pin-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION_SEQ: '1' };
+  const paths = await startPinnedTaskFixture('delegate-continue-pin-test-', 'pin', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'pin').args;
+
+  // Attempt 1 started unpinned, so the session it opened is the task's session.
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_1');
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: also cover the pin.');
+  const continued = JSON.parse(runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'pin', '--brief-file', deltaBrief,
+    '--new-session', '--json', '--verify-sec', '5',
+  ], env));
+  assert.equal(continued.newSession, true);
+
+  const secondAttempt = await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.pin;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+  // The fresh session the new attempt opened is what the task now pins.
+  assert.equal(secondAttempt.sessionId, 'ses_mock_2');
+  assert.equal(secondAttempt.pinnedSessionId, 'ses_mock_2');
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_2');
+
+  // Every read surface names the pinned session instead of leaving it implicit.
+  const status = JSON.parse(runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--json'], env));
+  assert.equal(status.tasks.pin.pinnedSessionId, 'ses_mock_2');
+  const inspected = JSON.parse(runNode(SUPERVISOR, ['inspect', '--run', paths.runDir, '--task', 'pin'], env));
+  assert.equal(inspected.task.pinnedSessionId, 'ses_mock_2');
+  const verbose = runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--task', 'pin'], env);
+  assert.match(verbose, /Pinned Session:\s+ses_mock_2/);
+  assert.match(runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--brief'], env), /session ses_mock_2/);
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('a plain continue after --new-session resumes the pinned session', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-resume-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION_SEQ: '1' };
+  const paths = await startPinnedTaskFixture('delegate-continue-resume-test-', 'resume', env);
+
+  const firstDelta = writeBrief(paths.root, 'delta-1.md', 'Delta: cover the pin.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'resume', '--brief-file', firstDelta,
+    '--new-session', '--json', '--verify-sec', '5',
+  ], env);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.resume;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  // No `--new-session` this time: the pinned session is the one to resume.
+  const secondDelta = writeBrief(paths.root, 'delta-2.md', 'Delta: verify the resumed session.');
+  const continued = JSON.parse(runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'resume', '--brief-file', secondDelta,
+    '--json', '--verify-sec', '5',
+  ], env));
+  assert.equal(continued.newSession, false);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.resume;
+    return task.attempt === 3 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 3);
+  // The two `--new-session`-less spawns: the first started unpinned, and the one
+  // that follows the fresh-session attempt resumes exactly the session it opened.
+  assert.equal(sessionPinOf(runs[0].argv), null);
+  assert.equal(sessionPinOf(runs[1].argv), null);
+  assert.equal(sessionPinOf(runs[2].argv), 'ses_mock_2');
+  assert.equal(runs[2].briefBody, 'Delta: verify the resumed session.');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('plain continue keeps the session a task already used', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-keep-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300' };
+  const paths = await startPinnedTaskFixture('delegate-continue-keep-test-', 'keep', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'keep').args;
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_1');
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: keep the same conversation.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'keep', '--brief-file', deltaBrief,
+    '--json', '--verify-sec', '5',
+  ], env);
+  const secondAttempt = await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.keep;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 2);
+  // A task that was never re-scoped to a new session keeps the conversation its
+  // first attempt opened instead of silently starting a second one.
+  assert.equal(sessionPinOf(runs[1].argv), 'ses_mock_1');
+  assert.equal(secondAttempt.sessionId, 'ses_mock_1');
+  assert.equal(secondAttempt.pinnedSessionId, 'ses_mock_1');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('an attempt that never reports a session id pins nothing', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-unpinned-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION: '' };
+  const paths = await startPinnedTaskFixture('delegate-continue-unpinned-test-', 'unpinned', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'unpinned').args;
+  assert.equal(taskArgs().includes('--session'), false);
+  assert.equal(readJsonFile(paths.manifest).tasks.unpinned.pinnedSessionId, null);
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: nothing to resume.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'unpinned', '--brief-file', deltaBrief,
+    '--json', '--verify-sec', '5',
+  ], env);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.unpinned;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 2);
+  assert.equal(sessionPinOf(runs[1].argv), null);
+  assert.equal(sessionPinOf(taskArgs()), null);
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('a session id reported only by the attempt result is pinned too', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-result-pin-log-'))), 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_RUN_MS: '300',
+    MOCK_SESSION: '',
+    MOCK_RESULT_SESSION: 'ses_result_only',
+  };
+  const paths = await startPinnedTaskFixture('delegate-continue-result-pin-test-', 'resultpin', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'resultpin').args;
+
+  // The lifecycle events named no session; the terminal artifact did.
+  assert.equal(sessionPinOf(taskArgs()), 'ses_result_only');
+  const task = readJsonFile(paths.manifest).tasks.resultpin;
+  assert.equal(task.sessionId, 'ses_result_only');
+  assert.equal(task.pinnedSessionId, 'ses_result_only');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
 });
 
 test('steer relays a mid-turn message through the CLI contract and journals only its digest', async () => {
