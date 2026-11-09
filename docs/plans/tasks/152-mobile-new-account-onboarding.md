@@ -25,7 +25,10 @@ same rules hold on desktop.
 - **Defect 3 / D3 (b).** The composer's model/provider picker is visible
   whenever no request is pending; `supports_model_change` is never a visibility
   gate. `conversation_bottom_actions.dart` keeps the same one-line rule even
-  though the live composer no longer uses that widget.
+  though the live composer no longer uses that widget. An always-mounted control
+  must also fit: the chip label is flexible, single line, and ellipsized, and
+  the standalone composer harnesses supply the conversation scope the picker
+  reads.
 - **Defect 4 / D4 (a).** No new gate logic. The existing shared gate (online
   device + authoritative `has_provider == false`) is covered end to end, and the
   gate container is clamped to the viewport.
@@ -65,8 +68,10 @@ same rules hold on desktop.
 ### G3 — Verification and documentation
 - [x] `fvm flutter analyze` clean.
 - [x] Focused suites green: the new suite, the navigation suite, the composer
-      suites, the sidebar suites, settings/schedules widget suites, guards, and
-      the home/schedules route unit tests.
+      chip/parity/inventory/toggle/paste suites, the sidebar suites,
+      settings/schedules widget suites, guards, and the home/schedules route
+      unit tests. CI's first run caught the narrow-composer overflow this change
+      introduced; it is fixed and pinned by the 280 px case.
 - [x] Owning contracts updated (`home`, `devices`, `provider_setup`,
       `conversations/presentation`), product doc updated, QA page added,
       `docs/llms.txt` indexed.

@@ -25,11 +25,13 @@ window because the shared shell, picker, and gate are one implementation.
 | 4 | configured runtime never opens the gate | phone | no gate |
 | 4 | offline device never opens the gate | phone | no gate |
 | 4 | readiness failure never opens the gate | phone | no gate |
+| 3 | picker label stays bounded in a narrow composer | 280x500 | no overflow, picker and send button both present |
 
 Regression suites that must stay green with this change: the conversation
-navigation suite, the composer chip/parity/inventory suites, the sidebar
-structure and pagination suites, the settings and schedules widget suites, the
-repository guards, and the home/schedules route unit tests.
+navigation suite, the composer chip/parity/inventory suites, the composer
+toggle and paste/routing harnesses, the sidebar structure and pagination
+suites, the settings and schedules widget suites, the repository guards, and
+the home/schedules route unit tests.
 
 ## Manual scenario — iOS Simulator
 
