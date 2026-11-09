@@ -12,6 +12,7 @@ import 'package:sanad_client/features/conversations/domain/models/message_delive
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/composer_slash_commands_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_state.dart';
 import 'package:sanad_client/features/conversations/presentation/controllers/slash_command_text_controller.dart';
@@ -26,6 +27,7 @@ import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:sanad_client/shared/widgets/file_extension_icon.dart';
 import 'package:super_clipboard/super_clipboard.dart';
 
+import '../helpers/composer_conversation_scope.dart';
 import '../helpers/pump_app.dart' show FakeVoiceStreamCubit;
 
 class _FakeReadProgress extends Fake implements ReadProgress {
@@ -186,6 +188,10 @@ void main() {
       activeAgent: activeAgent,
       agents: [activeAgent],
     );
+    final sessionScope = StubSessionCubit();
+    final messagesScope = StubSessionMessagesCubit();
+    addTearDown(sessionScope.close);
+    addTearDown(messagesScope.close);
 
     await tester.pumpWidget(
       MultiBlocProvider(
@@ -193,6 +199,10 @@ void main() {
           BlocProvider<ComposerSlashCommandsCubit>.value(value: slashCubit),
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
           BlocProvider<ConversationInputCubit>.value(value: inputCubit),
+          // The composer's picker is always mounted, so the composer always
+          // needs the conversation scope it binds to.
+          BlocProvider<SessionCubit>.value(value: sessionScope),
+          BlocProvider<SessionMessagesCubit>.value(value: messagesScope),
         ],
         child: MaterialApp(
           locale: locale,
