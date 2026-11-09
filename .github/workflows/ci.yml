@@ -360,7 +360,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: whisper.cpp/build
-          key: whisper-build-v2-${{ matrix.os }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+          # `v3` because the libraries are now linked with an `$ORIGIN` install
+          # rpath: the Makefile generator compares timestamps only, so a tree
+          # restored under the old key would be reused with its absolute build
+          # rpath and would ship a runtime that cannot find its own siblings.
+          key: whisper-build-v3-${{ matrix.os }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
       - name: Require the runner CPU the matrix label claims
         if: runner.os == 'macOS'
         shell: bash

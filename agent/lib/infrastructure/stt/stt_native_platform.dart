@@ -393,6 +393,124 @@ SttNativeBinaryInfo inspectNativeBinary(Uint8List bytes) {
       const SttNativeBinaryInfo(format: SttNativeBinaryFormat.unknown);
 }
 
+/// Search path entry that makes a library find its siblings beside itself.
+const String elfOriginRunPath = r'$ORIGIN';
+
+/// `DT_RUNPATH`/`DT_RPATH` entries an ELF library records for its dependencies.
+///
+/// Returns null when [path] is not a readable ELF image, and an empty list when
+/// it is one that records no search path at all. The distinction matters: a
+/// library with no search path still loads when it is opened by absolute path
+/// *and* its `DT_NEEDED` siblings happen to sit on the loader's own path, so
+/// only "records `$ORIGIN`" is evidence that the folder is relocatable.
+///
+/// glibc resolves a library's `DT_NEEDED` through **that library's** RUNPATH; it
+/// does not inherit the search path of the image that loaded it, the way dyld
+/// walks the whole load chain for `@rpath`. A packaged Linux runtime therefore
+/// needs `$ORIGIN` on every shipped library, not only on the shim.
+List<String>? elfRunPathsOfFile(String path) {
+  final file = File(path);
+  if (!file.existsSync()) return null;
+  try {
+    return elfRunPaths(file.readAsBytesSync());
+  } on FileSystemException {
+    return null;
+  }
+}
+
+/// [elfRunPathsOfFile] for bytes that are already in memory.
+///
+/// The walk reads section headers rather than program headers, because
+/// `.dynamic` names its own string table through `sh_link`; that keeps the
+/// arithmetic to one level and needs no virtual-address mapping. A library whose
+/// section headers were stripped away reports null instead of "no search path",
+/// so an unreadable file can never be mistaken for a relocatable one.
+List<String>? elfRunPaths(Uint8List bytes) {
+  // 0x34 is the 32-bit header length; a 64-bit image needs 0x40 and is checked
+  // once the class byte has been read.
+  if (bytes.length < 0x34) return null;
+  if (bytes[0] != 0x7F ||
+      bytes[1] != 0x45 ||
+      bytes[2] != 0x4C ||
+      bytes[3] != 0x46) {
+    return null;
+  }
+  final is64 = bytes[4] == 2;
+  final littleEndian = bytes[5] != 2;
+  if (!is64 && bytes[4] != 1) return null;
+  int u16(int offset) =>
+      littleEndian ? _readUint16Le(bytes, offset) : _readUint16Be(bytes, offset);
+  int u32(int offset) =>
+      littleEndian ? _readUint32Le(bytes, offset) : _readUint32Be(bytes, offset);
+  int u64(int offset) =>
+      littleEndian ? _readUint64Le(bytes, offset) : _readUint64Be(bytes, offset);
+
+  final minimumSectionHeader = is64 ? 64 : 40;
+  if (bytes.length < (is64 ? 0x40 : 0x34)) return null;
+  final sectionOffset = is64 ? u64(0x28) : u32(0x20);
+  final sectionEntrySize = u16(is64 ? 0x3A : 0x2E);
+  final sectionCount = u16(is64 ? 0x3C : 0x30);
+  if (sectionOffset == 0 || sectionCount == 0) return null;
+  if (sectionEntrySize < minimumSectionHeader) return null;
+  if (sectionOffset + sectionEntrySize * sectionCount > bytes.length) {
+    return null;
+  }
+
+  int? dynamicOffset;
+  int? dynamicSize;
+  int? dynamicEntrySize;
+  int? stringTableIndex;
+  for (var index = 0; index < sectionCount; index++) {
+    final header = sectionOffset + index * sectionEntrySize;
+    if (u32(header + 4) != 6) continue; // SHT_DYNAMIC
+    dynamicOffset = is64 ? u64(header + 0x18) : u32(header + 0x10);
+    dynamicSize = is64 ? u64(header + 0x20) : u32(header + 0x14);
+    stringTableIndex = u32(header + (is64 ? 0x28 : 0x18));
+    dynamicEntrySize = is64 ? u64(header + 0x38) : u32(header + 0x24);
+    break;
+  }
+  if (dynamicOffset == null || stringTableIndex == null) return null;
+  if (stringTableIndex >= sectionCount) return null;
+
+  final stringTableHeader =
+      sectionOffset + stringTableIndex * sectionEntrySize;
+  if (stringTableHeader + minimumSectionHeader > bytes.length) return null;
+  final stringTableOffset =
+      is64 ? u64(stringTableHeader + 0x18) : u32(stringTableHeader + 0x10);
+
+  final entrySize = (dynamicEntrySize == null || dynamicEntrySize == 0)
+      ? (is64 ? 16 : 8)
+      : dynamicEntrySize;
+  final end = dynamicOffset + (dynamicSize ?? 0);
+  final paths = <String>[];
+  for (var entry = dynamicOffset; entry + entrySize <= end; entry += entrySize) {
+    if (entry + entrySize > bytes.length) break;
+    final tag = is64 ? u64(entry) : u32(entry);
+    if (tag == 0) break; // DT_NULL
+    // DT_RPATH is the pre-RUNPATH spelling; a library that still uses it is as
+    // relocatable as one that does not.
+    if (tag != 15 && tag != 29) continue;
+    final value = is64 ? u64(entry + 8) : u32(entry + 4);
+    final raw = _elfString(bytes, stringTableOffset + value);
+    if (raw == null) continue;
+    for (final part in raw.split(':')) {
+      if (part.isNotEmpty && !paths.contains(part)) paths.add(part);
+    }
+  }
+  return paths;
+}
+
+/// NUL-terminated string at [offset], or null when it is out of bounds.
+String? _elfString(Uint8List bytes, int offset) {
+  if (offset < 0 || offset >= bytes.length) return null;
+  var end = offset;
+  while (end < bytes.length && bytes[end] != 0) {
+    end++;
+  }
+  if (end >= bytes.length) return null;
+  return String.fromCharCodes(bytes.sublist(offset, end));
+}
+
 const int _machOMagic32 = 0xFEEDFACE;
 const int _machOMagic64 = 0xFEEDFACF;
 const int _machoCpuTypeX86_64 = 0x01000007;
@@ -527,6 +645,12 @@ int _readUint32Le(Uint8List bytes, int offset) =>
     (bytes[offset + 1] << 8) |
     (bytes[offset + 2] << 16) |
     (bytes[offset + 3] << 24);
+
+int _readUint64Le(Uint8List bytes, int offset) =>
+    _readUint32Le(bytes, offset) | (_readUint32Le(bytes, offset + 4) << 32);
+
+int _readUint64Be(Uint8List bytes, int offset) =>
+    (_readUint32Be(bytes, offset) << 32) | _readUint32Be(bytes, offset + 4);
 
 int _readUint32Be(Uint8List bytes, int offset) =>
     (bytes[offset] << 24) |

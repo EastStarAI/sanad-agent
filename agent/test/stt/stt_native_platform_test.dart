@@ -298,6 +298,37 @@ void main() {
       expect(inspectNativeBinary(Uint8List(0)).isRecognized, isFalse);
     });
 
+    test('reads the search path an ELF library records', () {
+      // glibc resolves a library's DT_NEEDED through that library's own
+      // RUNPATH, so `$ORIGIN` has to be on every shipped member and not only
+      // on the shim. A hash and an architecture check both pass on the broken
+      // shape, which is why the recorded path is read here.
+      expect(
+        elfRunPaths(elfLibrary(SttNativeCpu.arm64, runPaths: const [
+          elfOriginRunPath,
+        ])),
+        [elfOriginRunPath],
+      );
+      expect(
+        elfRunPaths(elfLibrary(SttNativeCpu.x64, runPaths: const [
+          elfOriginRunPath,
+          '/opt/sanad/lib',
+        ])),
+        [elfOriginRunPath, '/opt/sanad/lib'],
+      );
+      // A library with a `.dynamic` section and no search path answers with an
+      // empty list: "records nothing" is a different fact from "unreadable".
+      expect(elfRunPaths(elfLibrary(SttNativeCpu.x64)), isEmpty);
+    });
+
+    test('a file without a section table is unreadable, not relocatable', () {
+      // A header-only image (or a stripped one) cannot prove a search path, so
+      // it reports null and the verifier fails closed instead of passing.
+      expect(elfRunPaths(elfBinary(SttNativeCpu.x64)), isNull);
+      expect(elfRunPaths(Uint8List.fromList([0x7F, 0x45, 0x4C, 0x46])), isNull);
+      expect(elfRunPaths(peBinary(SttNativeCpu.x64)), isNull);
+    });
+
     test('a foreign-architecture file does not match the target', () {
       final directory = Directory.systemTemp.createTempSync('stt-native-arch-');
       addTearDown(() => directory.deleteSync(recursive: true));

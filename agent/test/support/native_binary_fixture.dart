@@ -87,6 +87,71 @@ Uint8List elfBinary(SttNativeCpu cpu) {
   return bytes;
 }
 
+/// A 64-bit ELF library that records [runPaths] as `DT_RUNPATH`.
+///
+/// The section table is real: the relocatability rule walks `.dynamic` through
+/// its `sh_link` to the string table, so a header-only fixture cannot prove it.
+/// Passing no [runPaths] writes a `.dynamic` section with only `DT_NULL`, which
+/// is the shape a cmake build produces when no install rpath is configured.
+Uint8List elfLibrary(SttNativeCpu cpu, {List<String>? runPaths}) {
+  const headerSize = 64;
+  const sectionHeaderSize = 64;
+  const dynamicEntrySize = 16;
+  final dynamicOffset = headerSize;
+  final dynamicCount = runPaths == null ? 1 : 2;
+  final dynamicSize = dynamicEntrySize * dynamicCount;
+  final stringTableOffset = dynamicOffset + dynamicSize;
+  final stringTable = utf8.encode('\u0000${runPaths?.join(':') ?? ''}\u0000');
+  final sectionOffset = stringTableOffset + stringTable.length + 7 & ~7;
+  final bytes = Uint8List(sectionOffset + sectionHeaderSize * 3);
+  final data = bytes.buffer.asByteData();
+
+  bytes
+    ..[0] = 0x7F
+    ..[1] = 0x45
+    ..[2] = 0x4C
+    ..[3] = 0x46
+    ..[4] = 2 // 64-bit
+    ..[5] = 1 // little endian
+    ..[6] = 1; // current version
+  data.setUint16(16, 3, Endian.little); // e_type: ET_DYN
+  data.setUint16(18, cpu == SttNativeCpu.x64 ? 0x3E : 0xB7, Endian.little);
+  data.setUint32(20, 1, Endian.little); // e_version
+  data.setUint64(40, sectionOffset, Endian.little); // e_shoff
+  data.setUint16(52, headerSize, Endian.little); // e_ehsize
+  data.setUint16(58, sectionHeaderSize, Endian.little); // e_shentsize
+  data.setUint16(60, 3, Endian.little); // e_shnum
+
+  if (runPaths != null) {
+    // DT_RUNPATH points one byte into the string table, past its leading NUL.
+    data.setUint64(dynamicOffset, 29, Endian.little);
+    data.setUint64(dynamicOffset + 8, 1, Endian.little);
+  }
+  bytes.setRange(
+    stringTableOffset,
+    stringTableOffset + stringTable.length,
+    stringTable,
+  );
+
+  // Section 1: SHT_DYNAMIC, linked to section 2 through sh_link.
+  final dynamicHeader = sectionOffset + sectionHeaderSize;
+  data.setUint32(dynamicHeader + 4, 6, Endian.little);
+  data.setUint64(dynamicHeader + 0x18, dynamicOffset, Endian.little);
+  data.setUint64(dynamicHeader + 0x20, dynamicSize, Endian.little);
+  data.setUint32(dynamicHeader + 0x28, 2, Endian.little);
+  data.setUint64(dynamicHeader + 0x30, 8, Endian.little);
+  data.setUint64(dynamicHeader + 0x38, dynamicEntrySize, Endian.little);
+
+  // Section 2: SHT_STRTAB holding the search path.
+  final stringHeader = sectionOffset + sectionHeaderSize * 2;
+  data.setUint32(stringHeader + 4, 3, Endian.little);
+  data.setUint64(stringHeader + 0x18, stringTableOffset, Endian.little);
+  data.setUint64(stringHeader + 0x20, stringTable.length, Endian.little);
+  data.setUint64(stringHeader + 0x30, 1, Endian.little);
+
+  return bytes;
+}
+
 /// A PE header for [cpu].
 Uint8List peBinary(SttNativeCpu cpu) {
   final bytes = Uint8List(0x100);
@@ -112,7 +177,9 @@ Uint8List nativeBinaryFor(
 }) {
   return switch (os) {
     SttNativeOs.macos => machOThin(cpu: cpu, minimumMacOs: minimumMacOs),
-    SttNativeOs.linux => elfBinary(cpu),
+    // A packaged Linux library carries the `$ORIGIN` search path the build now
+    // records, so the fixture matches what the builder produces.
+    SttNativeOs.linux => elfLibrary(cpu, runPaths: const [elfOriginRunPath]),
     SttNativeOs.windows => peBinary(cpu),
   };
 }

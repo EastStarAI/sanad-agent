@@ -107,6 +107,7 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
     );
     _printVerification(verification, version);
     if (!verification.ok) return 1;
+    if (!await _printLoaderResolution(target, directory)) return 1;
     if (options.stageDirectory == null && options.archiveDirectory == null) {
       return 0;
     }
@@ -261,8 +262,19 @@ Future<int> _stageAndArchive({
         target: target,
         manifest: manifest,
       );
-  if (verification == null) _printVerification(checked, version);
+  if (verification == null) {
+    _printVerification(checked, version);
+  }
   if (!checked.ok) return 1;
+  // The `--stage` path can be reached without `--verify`, so the loader gate
+  // runs here too; it is the same bytes either way.
+  if (verification == null &&
+      !await _printLoaderResolution(
+        target,
+        '${nativeRoot.path}/${target.nativeDirectory}',
+      )) {
+    return 1;
+  }
 
   final stageRootPath = options.stageDirectory;
   final SttRuntimeStage? stage;
@@ -389,6 +401,16 @@ void _printVerification(SttRuntimeVerification verification, String version) {
   if (verification.warnings.isNotEmpty) {
     stdout.writeln('native_stt_warnings=${verification.warnings.join(',')}');
   }
+  // The relocatability evidence: a Linux library that does not record `$ORIGIN`
+  // cannot find its siblings once the payload leaves the build tree, which no
+  // hash and no architecture check can reveal.
+  final names = verification.runPaths.keys.toList()..sort();
+  for (final name in names) {
+    final paths = verification.runPaths[name]!.isEmpty
+        ? 'none'
+        : verification.runPaths[name]!.join(':');
+    stdout.writeln('native_stt_runpath_$name=$paths');
+  }
   if (verification.ok) {
     final pin = verification.pinned ? 'pinned' : verification.pinState.name;
     stdout.writeln(
@@ -401,6 +423,34 @@ void _printVerification(SttRuntimeVerification verification, String version) {
       '${verification.problems.join(', ')}',
     );
   }
+}
+
+/// Prints the loader's answer for [directory] and reports whether it passed.
+///
+/// The check is skipped on hosts that cannot answer (not Linux, no `ldd`), and
+/// it prints the skip so a log never looks like a pass it did not earn.
+Future<bool> _printLoaderResolution(
+  SttNativeTarget target,
+  String directory,
+) async {
+  final check = await checkLoaderResolution(
+    target: target,
+    directory: directory,
+  );
+  if (check.skipped) {
+    stdout.writeln('native_stt_ldd=skipped');
+    return true;
+  }
+  for (final line in check.evidence) {
+    stdout.writeln(line);
+  }
+  if (!check.ok) {
+    stderr.writeln(
+      'native stt runtime is not relocatable for ${check.target.tag}: '
+      '${check.unresolved.join(', ')} did not resolve from outside $directory',
+    );
+  }
+  return check.ok;
 }
 
 /// What the local architecture directory currently contains.

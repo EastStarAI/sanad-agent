@@ -111,6 +111,31 @@ void main() {
     expect(result.stderr as String, contains('x86_64'));
   });
 
+  test('the POSIX builder links every shipped Linux library self-relatively', () {
+    // The shim's own rpath is not enough: glibc resolves `libwhisper.so.1`'s
+    // DT_NEEDED through that library's RUNPATH, so an arm64 install shipped a
+    // runtime that could not find its ggml siblings. Every library the script
+    // copies out of the build tree has to carry `$ORIGIN`, and a restored build
+    // cache must not be reused without it.
+    final script = File('tool/build_whispercpp.sh').readAsStringSync();
+    expect(script, contains(r"-Wl,-rpath,'$ORIGIN'"));
+    expect(script, contains(r"-DCMAKE_INSTALL_RPATH='$ORIGIN'"));
+    expect(script, contains('-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON'));
+
+    // A cached tree is only relinked when its link command is re-run, and the
+    // Makefile generator compares timestamps only, so the guard has to discard a
+    // tree that does not record the contract before cmake configures.
+    final guard = script.lastIndexOf(r'CMAKE_INSTALL_RPATH:STRING=$ORIGIN');
+    final configure = script.lastIndexOf('cmake -B build');
+    expect(guard, isNonNegative);
+    expect(configure, isNonNegative);
+    expect(
+      guard,
+      lessThan(configure),
+      reason: 'the stale-cache guard must run before cmake configures',
+    );
+  });
+
   test('the Windows vector carries the tag-style architecture', () {
     final arguments = sttWindowsBuilderArguments(
       target: SttNativeTarget.windowsX64,
