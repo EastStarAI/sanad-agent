@@ -229,6 +229,64 @@ be inferred from process signals. Component-aware `sanad-dev stop` commands
 select the mode explicitly; force is meaningful only for a target that owns the
 Agent and never changes Client-only shutdown semantics.
 
+## Fast in-place restart
+
+`restart agent` is the fast path for loading new source into a runtime that is
+already running, the development equivalent of a Client hot reload, and it must
+stay that way: readiness latency is part of the contract, so a slower ordinary
+restart is a defect in this mechanism rather than a reason to relaunch
+components. The owning law is `scripts/sanad_dev/AGENTS.md` §10.
+
+The distance between an accepted request and a healthy daemon is one child
+process lifetime. The supervisor that owns the runtime is the parent of the
+daemon child, so an accepted restart exits only that child and the same
+supervisor starts the next one from the source on disk. The launcher lease,
+Sanad Home, Agent port, and every attached Client survive unchanged: the
+ordinary path performs no supervisor handoff, no fresh launcher, and no Client
+restart. Restarting from inside one of the daemon's own sessions is the same
+transport with the requester's session and tool-call identity attached, so the
+conversations that were running continue after the daemon returns and the
+requesting tool call resolves through its deferred result.
+
+The CLI's restart transport is `POST /restart`. `force`, `permanent`, and
+`timeout_seconds` are validated before anything moves (`invalid_force`,
+`invalid_permanent`, `invalid_timeout`), `timeout_seconds` is bounded to
+1–3600, and an omitted timeout falls back to
+`SessionRunOrchestrator.controlledRestartCheckpointTimeout` — one minute, which
+is also the default of `sanad-dev restart agent --timeout`. After acceptance the
+CLI waits for the authenticated `/health` endpoint of the same port and
+workspace hash for at most that timeout, so a restart that never returns is
+reported instead of assumed.
+
+An accepted request crosses the same all-session admission drain as a resumable
+shutdown: `beginControlledRestartDrain()` followed by
+`waitForControlledRestartCheckpoint(...)`. The outcomes are explicit:
+
+- `safe` — every session reached a durable checkpoint;
+- `timeout` — runtime work was still in flight at the bound and the caller did
+  not select force. The drain is cancelled, the daemon keeps running, and the
+  CLI exits nonzero with the daemon's message and its blocker list;
+- `provider_requests_interrupted` — only provider requests remained, so the
+  restart is accepted and those requests are cancelled without automatic
+  replay;
+- `already_in_progress`, `cancelled`, and `internal_error` — nothing exits.
+
+A blocker is a session whose active work item is running or resuming without a
+recognized checkpoint, with a provider request in flight, or with a tool still
+executing. A durable interactive wait is not a blocker, and the requesting
+tool call is never a blocker of its own restart, which is what lets the Agent
+restart itself mid-session. Only an explicit force requests the forced outcome;
+the supervisor's own manual restart (`r` in the Agent terminal) leaves the child
+running when the request is rejected or unavailable. A rejected restart must
+never leave the runtime down, and an accepted one must never degrade into an
+unconditional kill.
+
+Replacing the supervisor is a separate, authorized operation: source handoff and
+`takeover` request a permanent supervised shutdown (exit code 123) so the old
+supervisor cannot respawn and race the new owner. Reliability work on restart
+preserves the supervised respawn instead of adopting that permanent handoff as
+its implementation.
+
 ## Bootstrap and source profile
 
 Bootstrap is owned by the platform wrappers because Dart cannot run before FVM
@@ -946,6 +1004,10 @@ so `sanad-dev reset` names the child's error instead of only
 because an Agent that cannot start makes that Client useless.
 
 ## Agent supervision and restart identity
+
+The restart contract itself — purpose, safety boundary, refusal, and self-restart
+continuity — is owned by *Fast in-place restart*; this section owns the supervisor and how
+a completed restart is proven.
 
 The Agent runs under the in-process `HotRestartManager` supervisor. That supervisor is a
 process owner, so every rule below exists to keep it from becoming a second owner of the
