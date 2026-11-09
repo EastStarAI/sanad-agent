@@ -187,10 +187,18 @@ An installed unit is only rewritten by `sanad service install`. The Client's
 update lifecycle re-registers an existing macOS or Linux definition only when
 `sanad service definition` reports `matches: false`, and that read-only report
 compares the executable, arguments, `SANAD_HOME`, and service instance — not the
-rest of the unit body. A unit written by a release that predates
-`SuccessExitStatus` therefore keeps the old body after an in-place upgrade; a
-fresh installation through `scripts/install.sh` always writes the current unit,
-because the installer runs `service install` itself. Run
+rest of the unit body. It inspects the definition the queried Home's ownership
+metadata records, so a system-scope installation is compared at
+`/etc/systemd/system/sanad-agent.service` instead of the caller's own user unit;
+a Home that records no installation falls back to the caller's user definition,
+read in the form the recorded scope names (launchd plist or systemd unit). An
+OpenRC script records its Home but carries no `ExecStart`, so the report does
+not compare it. A Home whose metadata this process may not read also falls back
+to the caller's user definition: run the command as the account the service runs
+as, or with `sudo`, to inspect that installation. A unit written by a release
+that predates `SuccessExitStatus` therefore keeps the old body after an in-place
+upgrade; a fresh installation through `scripts/install.sh` always writes the
+current unit, because the installer runs `service install` itself. Run
 `sanad service install` once after an in-place upgrade: it replaces the definition
 without interrupting a running Agent, because activation only starts a unit that
 is not already active. Until then the only difference is the reported state — a
@@ -204,6 +212,15 @@ A successful installation writes non-secret `service.json` ownership metadata
 inside the controlling Sanad Home — the Home the unit itself runs with. Uninstall
 removes only a definition whose scope and path match this metadata. An unowned
 definition is reported but not deleted.
+
+Reporting is Home-scoped. A definition declares the Home it serves in its own
+text (`Environment="SANAD_HOME=…"`, or `export SANAD_HOME=…` in an OpenRC
+script), so a Home that holds no metadata claims only a definition that names
+that Home: a definition serving another Home on the same host is that Home's
+service, and an explicit `--home` that never installed anything answers
+`Missing` instead of `Failed`. A definition that declares no Home at all stays
+unattributable and is still reported as an unowned service, so a legacy unit is
+never hidden.
 
 That file is written last, by the installing process, after the Home already
 belongs to the unit's account, so `service install` hands the file to that

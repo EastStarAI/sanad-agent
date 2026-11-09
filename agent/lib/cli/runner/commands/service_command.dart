@@ -241,7 +241,7 @@ class ServiceDefinitionCommand extends SanadCommand {
 
   @override
   Future<int> execute() async {
-    stdoutSink.writeln(jsonEncode(ServiceDefinitionInspector.report()));
+    stdoutSink.writeln(jsonEncode(await ServiceDefinitionInspector.report()));
     return 0;
   }
 }

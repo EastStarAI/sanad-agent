@@ -81,6 +81,27 @@ depend() {
 }
 ''';
 
+  /// The Sanad Home a definition's own text declares, or null when it declares
+  /// none.
+  ///
+  /// `service status` reads it so a definition that belongs to another Home on
+  /// the same host is never reported as the queried Home's unowned service, and
+  /// the definition inspector reads it instead of re-deriving the Home from the
+  /// rest of the unit body.
+  static String? declaredSanadHome(String content) {
+    final systemd = RegExp(
+      r'^Environment="SANAD_HOME=(.*)"\s*$',
+      multiLine: true,
+    ).firstMatch(content);
+    if (systemd != null) return _systemdUnescape(systemd.group(1)!);
+    final openRc = RegExp(
+      r"^export SANAD_HOME='(.*)'\s*$",
+      multiLine: true,
+    ).firstMatch(content);
+    if (openRc != null) return openRc.group(1)!.replaceAll("'\\''", "'");
+    return null;
+  }
+
   static String _systemdPath(String value) => value
       .replaceAll('\\', r'\x5c')
       .replaceAll(' ', r'\x20')
@@ -95,6 +116,10 @@ depend() {
       .replaceAll('"', r'\"')
       .replaceAll('%', '%%')
       .replaceAll('\n', ' ');
+  static String _systemdUnescape(String value) => value
+      .replaceAll(r'\"', '"')
+      .replaceAll(r'\\', r'\')
+      .replaceAll('%%', '%');
   static String _shellQuote(String value) =>
       "'${value.replaceAll("'", "'\\''")}'";
 }
