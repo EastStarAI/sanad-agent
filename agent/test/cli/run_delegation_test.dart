@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:sanad_agent/cli/artifacts/run_artifacts.dart';
 import 'package:sanad_agent/cli/client/cli_turn_client.dart';
 import 'package:sanad_agent/cli/models/cli_events.dart';
+import 'package:sanad_agent/cli/models/runtime_retry_state.dart';
 import 'package:sanad_agent/cli/oneshot/oneshot_runner.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
@@ -178,6 +179,39 @@ class MockDelegationTurnClient extends CliTurnClientBase {
         finalMessage: finalMessage,
         sessionId: sessionId,
         errorCode: errorCode,
+      ),
+    );
+  }
+
+  /// A daemon runtime notice, in the shape the gateway broadcasts.
+  ///
+  /// [isBlocked] is derived from `status == 'blocked' && !isAutoRetrying`, so a
+  /// caller that passes retry counters is emitting a retry the daemon still owns
+  /// rather than a parked turn — the distinction the run must never blur.
+  void emitRuntimeNotice({
+    String? sessionId,
+    String status = 'blocked',
+    String code = 'network_error',
+    String message = 'the provider is unreachable',
+    int? retryAttempt,
+    int? retryBudget,
+    int? retryAfterMs,
+  }) {
+    _requireEventSubscriber('emitRuntimeNotice');
+    _events.add(
+      CliRuntimeNoticeEvent(
+        code: code,
+        message: message,
+        status: status,
+        retry: RuntimeRetryState(
+          noticeStatus: status,
+          reason: code,
+          attempt: retryAttempt,
+          budget: retryBudget,
+          retryAfterMs: retryAfterMs,
+          message: message,
+        ),
+        sessionId: sessionId,
       ),
     );
   }
@@ -1349,6 +1383,124 @@ void main() {
             'Task 97f completed: event loop unblocked and all tests passed.',
           ),
         );
+      },
+    );
+
+    test(
+      'a parked turn is published on the timeline before the run exits',
+      () async {
+        final outDir = Directory(p.join(tempDir.path, 'out-blocked-record'))
+          ..createSync();
+        final fakeClient = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Execute task 97f',
+          session: 'sess-blocked-record',
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        await fakeClient.turnDispatched.future;
+        fakeClient.emitRuntimeNotice(
+          sessionId: 'sess-blocked-record',
+          status: 'blocked',
+          code: 'network_error',
+          message: 'Automatic retry gave up after 2 attempts',
+          retryAfterMs: 120000,
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, equals(1));
+
+        final store = RunArtifactStore(outDir.path);
+        final events = await store.readEvents();
+        // One `blocked` record, and it precedes the terminal record: the whole
+        // point of the change is that an observer learns the block while the
+        // turn is still being reported, not after the transport leaves.
+        final blocked = events
+            .where((event) => event.type == 'blocked')
+            .toList();
+        expect(blocked, hasLength(1));
+        expect(events.indexOf(blocked.single), equals(events.length - 2));
+        expect(blocked.single.sessionId, equals('sess-blocked-record'));
+        expect(blocked.single.data['status'], equals('blocked'));
+        expect(blocked.single.data['code'], equals('network_error'));
+        expect(blocked.single.data['cause'], equals('network_error'));
+        expect(
+          blocked.single.data['message'],
+          equals('Automatic retry gave up after 2 attempts'),
+        );
+        expect(blocked.single.data['session_id'], 'sess-blocked-record');
+        expect(blocked.single.data['retry_after_ms'], equals(120000));
+
+        // The terminal contract is unchanged: exit 1, `failed`, cause `blocked`.
+        expect(events.last.type, equals('failed'));
+        expect(events.last.data['cause'], equals('blocked'));
+        final result = await store.readResult();
+        expect(result, isNotNull);
+        expect(result!.status, equals('failed'));
+        expect(result.exitCode, equals(1));
+        expect(result.cause, equals('blocked'));
+        expect(result.isTerminal, isTrue);
+      },
+    );
+
+    test(
+      'a block that still promises an automatic retry never becomes a blocked record',
+      () async {
+        final outDir = Directory(
+          p.join(tempDir.path, 'out-retrying-not-blocked'),
+        )..createSync();
+        final fakeClient = MockDelegationTurnClient();
+        final oneshot = OneshotRunner(stdinReader: () async => null);
+
+        final runFuture = oneshot.run(
+          prompt: 'Execute task 97f',
+          session: 'sess-retrying-not-blocked',
+          outDir: outDir.path,
+          client: fakeClient,
+          stdoutSink: stdoutBuf,
+          stderrSink: stderrBuf,
+        );
+
+        await fakeClient.turnDispatched.future;
+        // The daemon owns the resume (`retry_attempt < retry_budget`), so this
+        // notice is progress, not a verdict: a `blocked` record here would be
+        // the 2026-10-23 false stop, one layer lower.
+        fakeClient.emitRuntimeNotice(
+          sessionId: 'sess-retrying-not-blocked',
+          status: 'blocked',
+          code: 'network_error',
+          message: 'scheduled another attempt',
+          retryAttempt: 1,
+          retryBudget: 2,
+        );
+        await waitFor(
+          () async => (await RunArtifactStore(outDir.path).readEvents())
+              .any((event) => event.type == 'retrying'),
+        );
+        fakeClient.emitTurnComplete(
+          sessionId: 'sess-retrying-not-blocked',
+          finalMessage: 'Task 97f completed after the retry.',
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, equals(0));
+
+        final events = await RunArtifactStore(outDir.path).readEvents();
+        expect(
+          events.where((event) => event.type == 'blocked'),
+          isEmpty,
+          reason: 'a daemon-scheduled retry is never reported as a parked turn',
+        );
+        expect(
+          events.where((event) => event.type == 'retrying'),
+          hasLength(1),
+        );
+        expect(events.last.type, equals('completed'));
       },
     );
   });

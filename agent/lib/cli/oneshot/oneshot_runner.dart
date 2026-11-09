@@ -712,6 +712,19 @@ class OneshotRunner {
                 : 'blocked: $reason Intervene with '
                       'sanad session stop $effectiveSessionId or retry '
                       'from a client.';
+            // The reclaimed turn is parked, and this reader is the only witness
+            // left: the notice that reached the socket which died is not
+            // replayed by the new transport. Publish it in the same record the
+            // live path writes, before the exit, so a supervisor journals
+            // `blocked` when it happens instead of after this transport leaves.
+            coordinator.recordRuntimeNotice(
+              status: 'blocked',
+              code: durableTurn.retry.reason ?? 'blocked',
+              message: durableTurn.noticeMessage,
+              provider: finalProvider,
+              model: finalModel,
+              retryAfterMs: durableTurn.retry.retryAfterMs,
+            );
             if (!json) err.writeln('Error: $errorMessage');
             if (!completer.isCompleted) completer.complete(1);
             return;
@@ -1049,6 +1062,23 @@ class OneshotRunner {
                   // resume — so the daemon will not continue on its own.
                   if (event.isBlocked) {
                     if (completer.isCompleted) return;
+                    // One record at the moment the daemon states it will not
+                    // continue, before this transport exits. Without it the
+                    // only observer of a parked turn is the supervisor's probe
+                    // after the worker leaves, so a `blocked` alert arrived one
+                    // CLI exit late and a probe that failed during a daemon
+                    // restart reported the block as an unreadable or failed
+                    // turn (2026-11-09). It is the record the `retrying` branch
+                    // above already writes, so no consumer learns a new
+                    // vocabulary, and `isBlocked` excludes a scheduled retry.
+                    coordinator.recordRuntimeNotice(
+                      status: 'blocked',
+                      code: event.code,
+                      message: event.message,
+                      provider: finalProvider,
+                      model: finalModel,
+                      retryAfterMs: event.retry.retryAfterMs,
+                    );
                     hasError = true;
                     wasBlocked = true;
                     terminalCause = 'blocked';

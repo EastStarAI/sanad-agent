@@ -914,7 +914,27 @@ void main() {
       expect(jsonResult['exit_code'], 1);
       expect(jsonResult['error_code'], 'blocked');
       expect(jsonResult['error'], contains('Provider credentials are invalid.'));
+      // The reclaimed turn is parked and this reader is its only witness, so the
+      // block is published on the timeline before the run exits instead of being
+      // discoverable only from the worker's terminal artifact or a probe.
+      final blockedRecords =
+          events.where((e) => e.type == 'blocked').toList();
+      expect(blockedRecords, hasLength(1));
+      expect(blockedRecords.single.data['status'], 'blocked');
+      expect(blockedRecords.single.data['code'], 'blocked');
+      expect(blockedRecords.single.data['cause'], 'blocked');
+      expect(
+        blockedRecords.single.data['message'],
+        'Provider credentials are invalid.',
+      );
+      expect(blockedRecords.single.data['session_id'], 'sess-blocked-1');
+      expect(blockedRecords.single.data['retry_after_ms'], 30000);
       final failedEvent = events.firstWhere((e) => e.type == 'failed');
+      expect(
+        events.indexOf(blockedRecords.single),
+        lessThan(events.indexOf(failedEvent)),
+        reason: 'the block must precede the terminal record it explains',
+      );
       expect(failedEvent.data['cause'], 'blocked');
       expect(events.map((e) => e.type), isNot(contains('re_attached')));
     });

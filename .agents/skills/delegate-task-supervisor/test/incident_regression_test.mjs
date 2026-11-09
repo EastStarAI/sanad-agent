@@ -15,6 +15,8 @@
 //   2026-11-09/continue-session-pin            --new-session keeps its pin
 //   2026-11-09/stale-supervisor-code           merged but not deployed is visible
 //   2026-11-09/watcher-keeps-consuming         alerts after the first batch arrive
+//   2026-11-09/block-reaches-the-journal-early  a block is recorded when it happens
+//   2026-11-09/blocked-artifact-is-followed     a parked artifact is not a dead end
 //
 // Modules introduced by these fixes are imported dynamically inside the scenario
 // that needs them, so running this file against older scripts yields a failing
@@ -186,8 +188,7 @@ function writeFixtureImplementer(root) {
       JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n',
     );
     emit({type: 'running', session_id: sessionId});
-    if (process.env.MOCK_RUN_RESULT === 'completed') {
-      writeFileSync(join(outDir, 'result.json'), JSON.stringify({
+    if (process.env.MOCK_RUN_RESULT === 'completed') {      writeFileSync(join(outDir, 'result.json'), JSON.stringify({
         status: 'completed',
         exit_code: 0,
         session_id: sessionId,
@@ -198,7 +199,39 @@ function writeFixtureImplementer(root) {
       emit({type: 'completed', session_id: sessionId});
       process.exit(0);
     }
+    if (process.env.MOCK_RUN_RESULT === 'blocked-artifact') {
+      // A transport killed between the parked record and its terminal write: the
+      // artifact is blocked, which the daemon still owns. The supervisor must
+      // follow it instead of leaving a non-terminal task with no process.
+      emit({type: 'blocked', session_id: sessionId, data: {cause: 'network_error'}});
+      writeFileSync(join(outDir, 'result.json'), JSON.stringify({
+        status: 'blocked',
+        exit_code: 1,
+        cause: 'network_error',
+        session_id: sessionId,
+        started_at: startedAt,
+        ended_at: new Date().toISOString(),
+        text: '',
+        error: 'blocked: the provider is unreachable',
+      }));
+      process.exit(1);
+    }
     emit({type: 'retrying', session_id: sessionId, data: {cause: 'network_error'}});
+    if (process.env.MOCK_BLOCK_NOTICE === '1') {
+      // What sanad run publishes when the daemon states it will not continue,
+      // emitted while the transport is still attached. The hold is what lets a
+      // test prove the supervisor journaled the block before the exit instead of
+      // inferring it from a follow probe afterwards.
+      emit({type: 'blocked', session_id: sessionId, data: {
+        status: 'blocked',
+        code: 'network_error',
+        cause: 'network_error',
+        message: 'Automatic retry gave up after 2 attempts',
+        session_id: sessionId,
+        retry_after_ms: 120000,
+      }});
+      await new Promise((resolveHold) => setTimeout(resolveHold, 1500));
+    }
     writeFileSync(join(outDir, 'result.json'), JSON.stringify({
       status: 'failed',
       exit_code: 1,
@@ -227,12 +260,13 @@ function incidentRoot(prefix) {
   return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 }
 
-function fixtureEnv(root) {
+function fixtureEnv(root, extra = {}) {
   const sessionFile = join(root, 'session.json');
   return {
     ...process.env,
     MOCK_SESSION_FILE: sessionFile,
     MOCK_LOG: join(root, 'mock.log'),
+    ...extra,
   };
 }
 
@@ -771,4 +805,131 @@ test('2026-11-09/watcher-keeps-consuming: an alert arriving after the first batc
   assert.equal(cursor.runs[runDir].seq, 2, 'the cursor advanced only for what was printed');
   watcher.kill('SIGTERM');
   await exited;
+});
+
+// ===========================================================================
+// 2026-11-09 — the block that arrived one CLI exit late
+//
+// `sanad run` exited on a parked turn without publishing it, so the only
+// observer of the block was the supervisor's probe after the worker left: the
+// alert arrived one transport-exit late (1–7 s on the observable tasks, and
+// never at all when the probe itself failed during a daemon restart, where the
+// block was then reported as `failed`). The promise: a block reaches the journal
+// when it happens, from the task's own timeline, while the worker is attached.
+// ===========================================================================
+test('2026-11-09/block-reaches-the-journal-early: a block is journaled before the worker exits', async () => {
+  const root = incidentRoot('delegate-incident-block-early-');
+  const runDir = join(root, 'run');
+  const env = fixtureEnv(root, { MOCK_BLOCK_NOTICE: '1' });
+  const command = writeFixtureImplementer(root);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'blocked',
+    updated_at: new Date().toISOString(),
+    execution_snapshot: { state: 'blocked', updated_at: new Date().toISOString(), cause: 'network_error' },
+    summary: { message_count: 3, user_messages: 1, final_answers: 0, tool_calls: 1, tool_results: 1 },
+  });
+  const spec = writeSpec(root, [outageTask(root, 'parked', command)]);
+
+  startRun(runDir, spec, env);
+  // The block is journaled while the transport is still attached. Waiting on the
+  // manifest condition (blocked **and** still owning a pid) is what proves the
+  // record came from the task's own timeline: a probe after the exit can only
+  // ever report the block for a task that no longer has a process.
+  await waitForCondition(() => {
+    const parked = readJsonFile(join(runDir, 'manifest.json')).tasks.parked;
+    return parked?.status === 'blocked' && parked.pid ? true : null;
+  }, 20_000, 'a block recorded while the worker is still attached');
+  const blocked = readJournal(runDir).find((event) => event.taskId === 'parked' && event.to === 'blocked');
+  assert.equal(blocked.cause, 'network_error');
+  assert.equal(blocked.retryAfterMs, 120_000, 'the wait the daemon stated travels with the block');
+  assert.equal(isActionableEvent(blocked), true, 'a parked turn is a coordinator decision');
+
+  // The wake-up a coordinator reads, printed by the watcher with the transition
+  // that actually happened: the daemon scheduled a retry, spent its budget, and
+  // parked the turn — never a synthetic `following` invented after the exit.
+  const cursor = join(root, 'cursor.json');
+  const printed = runNode(SUPERVISOR, ['watch', '--run', runDir, '--cursor', cursor, '--once'], env);
+  assert.match(printed, /parked\s+retrying -> blocked/);
+
+  // Once the worker exits, the follow mirrors the same block. The mirrored record
+  // repeats the cause it already had, so a reader sees one consistent claim even
+  // though the entry transition (`following`) sits between the two: the early
+  // record is what a coordinator acts on, and everything after it says the same
+  // thing about the same parked turn.
+  const following = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.taskId === 'parked' && event.kind === 'following'),
+    20_000,
+    'the follow of the parked turn',
+  );
+  const blockedRecords = readJournal(runDir).filter((event) => event.taskId === 'parked' && event.to === 'blocked');
+  assert.ok(blockedRecords.length >= 1, 'the block must stay journaled');
+  assert.ok(
+    blockedRecords[0].seq < following.seq,
+    'the first block record precedes the follow, so it came from the timeline and not from a probe',
+  );
+  for (const record of blockedRecords) {
+    assert.equal(record.cause, 'network_error', 'one block, one cause');
+  }
+  assert.equal(readJsonFile(join(runDir, 'manifest.json')).tasks.parked.cause, 'network_error');
+
+  // The turn is still the daemon's, so ending it is a coordinator action.
+  runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'parked', '--json'], env);
+  await waitForCondition(
+    () => TERMINAL_STATUSES.has(readJsonFile(join(runDir, 'manifest.json')).tasks.parked?.status),
+    20_000,
+    'the cancelled task',
+  );
+  closeRun(runDir, env);
+});
+
+// ===========================================================================
+// 2026-11-09 — the parked artifact that must not become a dead end
+//
+// Once the block is published before the exit, a transport killed between that
+// record and its terminal write leaves `result.json` at `blocked`. The launcher
+// never takes a non-terminal artifact as its verdict (it normalizes it to
+// `failed` for a non-zero exit), which is what makes such an exit a follow
+// candidate at all. The promise: a parked artifact is followed like any other
+// unfinished turn, so the durable state — including a later Retry in a client —
+// stays observable. Nothing here needs a new follow-candidate entry; the
+// scenario guards the composition, not a list.
+// ===========================================================================
+test('2026-11-09/blocked-artifact-is-followed: a parked artifact is still followed', async () => {
+  const root = incidentRoot('delegate-incident-blocked-artifact-');
+  const runDir = join(root, 'run');
+  const env = fixtureEnv(root, { MOCK_RUN_RESULT: 'blocked-artifact' });
+  const command = writeFixtureImplementer(root);
+  writeSessionState(env.MOCK_SESSION_FILE, {
+    session_id: 'ses_mock_1',
+    status: 'blocked',
+    updated_at: new Date().toISOString(),
+    execution_snapshot: { state: 'blocked', updated_at: new Date().toISOString(), cause: 'network_error' },
+    summary: { message_count: 3, user_messages: 1, final_answers: 0, tool_calls: 1, tool_results: 1 },
+  });
+  const spec = writeSpec(root, [outageTask(root, 'parked-exit', command)]);
+
+  startRun(runDir, spec, env);
+  const following = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.taskId === 'parked-exit' && event.kind === 'following'),
+    10_000,
+    'a follow for the parked artifact',
+  );
+  assert.equal(following.to, 'following');
+  assert.equal(following.pid, null, 'no process is left to own the turn');
+  // The durable state is still mirrored, so the task keeps reporting the block a
+  // coordinator must act on rather than a status nobody can explain.
+  const blocked = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.taskId === 'parked-exit' && event.to === 'blocked'),
+    10_000,
+    'the mirrored block',
+  );
+  assert.equal(blocked.cause, 'network_error');
+  runNode(SUPERVISOR, ['cancel', '--run', runDir, '--task', 'parked-exit', '--json'], env);
+  await waitForCondition(
+    () => TERMINAL_STATUSES.has(readJsonFile(join(runDir, 'manifest.json')).tasks['parked-exit']?.status),
+    20_000,
+    'the cancelled task',
+  );
+  closeRun(runDir, env);
 });

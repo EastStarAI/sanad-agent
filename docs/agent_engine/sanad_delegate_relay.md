@@ -148,6 +148,14 @@ A restart adds up to three non-terminal lifecycle records between `running` and 
 | `re_attached` | The durable turn was reclaimed and is being followed. `data.state` is the snapshot state, `data.request_id` the followed turn, and `data.recovery_scheduled` whether the daemon owns automatic recovery. When the durable projection shows a scheduled retry, one `retrying (n/N) – <reason>` record follows it (§4.4.1). |
 | `refused` | A dispatch was refused before sending anything. `data.reason` is the typed cause. |
 
+**A parked turn is published before the exit.** When the daemon states it will not continue the turn on its own — a non-retryable reason, a spent retry budget, or a cancelled resume — the run appends **one** `blocked` record and only then exits `1` with its terminal `failed`/`cause: blocked` record:
+
+```json
+{"timestamp":"2026-11-09T05:26:26.412Z","type":"blocked","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","data":{"status":"blocked","code":"network_error","cause":"network_error","message":"Automatic retry gave up after 2 attempts","session_id":"8fa27f42-498c-4573-8d07-285698b671a9","retry_after_ms":120000}}
+```
+
+The record uses the same vocabulary the run already publishes for `retrying`, `waiting`, and `resuming`, so an observer reads a parked turn from one event stream instead of inferring it from a worker exit: `data.code` is the daemon's reason, `data.cause` its classification, `data.message` the daemon's own wording, and `data.retry_after_ms` the wait it stated when the projection carried one. A `blocked` notice that still promises an automatic attempt never produces this record — it is progress (`retrying (n/N)`) — and the record changes neither the exit status nor the terminal result: the artifact still ends `failed` with `cause: blocked`. A run that re-attaches to an already-parked turn publishes the same record from the reclaimed projection, because the notice the previous socket received is never replayed.
+
 ### 4.3. Exit Codes & Scoped Cancellation
 
 `sanad session stop <session_id>` is session-scoped and transport-confirmed: the daemon-backed CLI dispatches one `stop` immediately (naming the in-flight `run_id` when the session projection reports one), then keeps its Local Gateway connection open through ordered state reads and returns success only after the target is authoritatively idle. A matching `stopped` event is only a signal to re-read; it never counts as confirmation on its own, a stop event for another session cannot complete the command, and an unconfirmed active stop fails instead of reporting false success. The owning contract is [Sanad CLI Architecture § 9.3](../technical/sanad_cli_architecture.md).
@@ -193,7 +201,7 @@ A retryable failure is not a verdict. The daemon publishes it as `waiting` — w
 |---|---|---|
 | Notice `waiting`/`resuming`, or `retry_attempt < retry_budget` | Keep following; prints `retrying (n/N)` on stderr and records artifact `status: retrying` | Task stays live as `retrying` with `daemonRetry: {attempt, budget}` |
 | A re-attached turn (`reconnected`/`re_attached`) whose durable projection carries a scheduled wait | Journals **one** `retrying (n/N) – <reason>` record — or bare `retrying` for a daemon that states a wait without counters — and still exits `0` when the retried attempt finishes | Task becomes `retrying` through the same timeline record an attached worker writes |
-| Notice `blocked` with the budget spent, notice `fatal`, or a non-retryable reason | Exit `1` with `cause: blocked` | Task `blocked`, then terminal `failed` with the block cause |
+| Notice `blocked` with the budget spent, notice `fatal`, or a non-retryable reason | Exit `1` with `cause: blocked`, after one `blocked` record | Task `blocked` at that record — before the CLI exits — and terminal `failed` with the block cause |
 | No notice, durable snapshot `waiting` (restored resume) | Keep following | Task stays live as `retrying` |
 | Notice `blocked`, durable snapshot `idle`, no answer | — | Task `failed` (`turn_interrupted` or the block cause) |
 
