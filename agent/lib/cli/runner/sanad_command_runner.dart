@@ -233,6 +233,7 @@ class SanadCommandRunner extends CommandRunner<int> {
     addCommand(McpCommand(customAction: handlerFor('mcp')));
     addCommand(MemoryCommand(customAction: handlerFor('memory')));
     addCommand(ScheduleCommand(customAction: handlerFor('schedule')));
+    addCommand(VaultCommand(customAction: handlerFor('vault')));
   }
 
   @override
@@ -445,6 +446,18 @@ class SanadCommandRunner extends CommandRunner<int> {
   /// runtime does, or stop belonging to this set.
   static const Set<String> runtimeSelectedCommandFamilies = {'run'};
 
+  /// Commands that open the vault themselves because they *are* the explicit
+  /// grant.
+  ///
+  /// `vault` holds the one interactive action a person takes to authorize the
+  /// Agent for its operating-system credential store. It opens the vault itself,
+  /// after it has validated its arguments and only in a process that may show
+  /// the dialog, so `sanad vault`, `sanad vault --help`, and an invocation from
+  /// a pipe or with `--json` never start one. No other family belongs here: an
+  /// ordinary command that can read a secret keeps opening the vault before
+  /// dispatch.
+  static const Set<String> explicitGrantCommandFamilies = {'vault'};
+
   /// Whether [arguments] must open the Agent vault before the command runs.
   ///
   /// The Agent vault is the OS credential vault (macOS Keychain, Windows DPAPI,
@@ -477,12 +490,25 @@ class SanadCommandRunner extends CommandRunner<int> {
     // `run` picks its runtime first and each runtime opens the vault it needs,
     // so the entry point must not open one on its behalf.
     if (runtimeSelectedCommandFamilies.contains(name)) return false;
+    // The explicit grant opens the vault itself, in a process that may prompt.
+    if (explicitGrantCommandFamilies.contains(name)) return false;
     final freeSubcommands = secretFreeSubcommands[name];
     if (freeSubcommands == null) return true;
     final subcommand = command.command?.name;
     if (subcommand == null) return true;
     return !freeSubcommands.contains(subcommand);
   }
+
+  /// Whether an entry point must open the Agent vault before dispatch.
+  ///
+  /// Two rules combine here, and both exist because a vault open can start an
+  /// operating-system authorization dialog:
+  /// * a daemon dispatch opens nothing — the daemon owns its own open, performs
+  ///   it without waiting, and never prompts, so querying the vault in the
+  ///   process that only hands over a Home is pure risk;
+  /// * every other command keeps [requiresSecretVault]'s per-subcommand answer.
+  static bool entryOpensSecretVault(List<String> arguments) =>
+      !dispatchesToDaemon(arguments) && requiresSecretVault(arguments);
 
   /// Whether [arguments] dispatch to the daemon instead of running a CLI
   /// command.

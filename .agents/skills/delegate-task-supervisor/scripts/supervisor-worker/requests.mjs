@@ -24,10 +24,12 @@ import { basename, isAbsolute, join, resolve } from 'node:path';
 
 import { TERMINAL_STATUSES } from '../supervisor-events.mjs';
 import {
+  effectiveTaskArgs,
   parseIsoMillis,
   processIsAlive,
   publicTask,
   sha256,
+  stripSessionArguments,
   withRunPaths,
   writeJsonAtomic,
 } from '../supervisor-core.mjs';
@@ -117,22 +119,6 @@ function replaceBriefArgument(args, briefPath) {
     }
   }
   return null;
-}
-
-// `--new-session` drops the session pins so the next attempt starts a fresh
-// daemon session instead of resuming the finished one.
-function stripSessionArguments(args) {
-  const stripped = [];
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
-    if (arg === '--session' || arg === '-s') {
-      index += 1;
-      continue;
-    }
-    if (arg.startsWith('--session=') || arg === '--continue') continue;
-    stripped.push(arg);
-  }
-  return stripped;
 }
 
   const cancelTask = (id) => {
@@ -283,13 +269,16 @@ function stripSessionArguments(args) {
       };
     }
     let nextArgs = replaced.args;
+    // `--new-session` strips the pin; the session the new attempt opens is pinned
+    // back by the worker's session owner as soon as the run reports it, so a later
+    // plain `continue` resumes that conversation.
     if (req.newSession) nextArgs = stripSessionArguments(nextArgs);
 
     const previousAttempt = state.attempt ?? 1;
     const attemptNumber = previousAttempt + 1;
     const archive = archiveAttemptArtifacts(state, previousAttempt);
     task.args = nextArgs;
-    task.effectiveArgs = task.home ? [...nextArgs, '--home', task.home] : nextArgs;
+    task.effectiveArgs = effectiveTaskArgs(nextArgs, task.home);
     ctx.persistTasks();
 
     const previousStatus = state.status;
