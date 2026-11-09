@@ -10,6 +10,7 @@ import 'package:sanad_client/driver/dictation_probe.dart';
 import 'package:sanad_client/driver/driver_widget_filters.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 
 /// Driver-only dictation seams for real Client acceptance.
@@ -75,6 +76,10 @@ void registerDictationDriverExtensions() {
       events: socket.events,
       isConnected: () => socket.isConnected,
     );
+    // The local channel never reaches the main socket, so the probe also counts
+    // the events the cubit consumed from the dictation transport. Resolved on
+    // every call because the mic (and therefore the cubit) may mount later.
+    probe.attachTransport(_dictationCubitOrNull()?.lifecycleEvents);
     switch (parameters['action']) {
       case 'expect':
         probe.expect(
@@ -113,7 +118,8 @@ void registerDictationDriverExtensions() {
         // leaves the app, so a run cannot leak a transcript into a log.
         return _ok(
           composerFacts(
-            text: cubit.state.visibleText,
+            text: driverComposerText(WidgetsBinding.instance.rootElement) ??
+                cubit.state.visibleText,
             expectedSha256: parameters['expected_sha256'],
           ),
         );
@@ -140,6 +146,20 @@ Map<String, Object?> composerFacts({required String text, String? expectedSha256
         expected.isNotEmpty &&
         sha256.convert(utf8.encode(text)).toString() == expected,
   };
+}
+
+/// Text the user actually sees in the composer, read from its controller.
+///
+/// The cubit owns a session, not the text: after `dictation_done` it resets to
+/// an empty session state while the transcript stays in the editor, so reading
+/// `state.visibleText` answered `present: false` for a successful session. The
+/// composer's own [TextEditingController] is the only truthful source, and it is
+/// reached through the button that already holds it.
+String? driverComposerText(Element? root) {
+  final mic = _findKeyed(root, 'dictation_mic_btn');
+  if (mic == null) return null;
+  final button = mic.findAncestorWidgetOfExactType<DictationMicButton>();
+  return button?.chatController.text;
 }
 
 Map<String, Object?> _captureStatus() {
@@ -183,3 +203,13 @@ String _errorCode(Object error) {
 /// `composer_not_mounted` even though the composer was mounted.
 Element? _findKeyed(Element? root, String key) =>
     root == null ? null : findElementByKey(root, key);
+
+/// The mounted dictation cubit, or null before the composer exists.
+DictationCubit? _dictationCubitOrNull() {
+  final element = _findKeyed(
+    WidgetsBinding.instance.rootElement,
+    'dictation_mic_btn',
+  );
+  if (element == null) return null;
+  return Provider.of<DictationCubit>(element, listen: false);
+}

@@ -114,8 +114,22 @@ directory or a single `.bin` ggml file) and requires no download or checksum;
 
 ## Platform gate
 
-macOS on arm64 only in v1. Elsewhere `supports_dictation` is false with a reason
-and the mic button is not actionable.
+The gate is the native target table, not a hard-coded OS list:
+`SttNativeTarget.values` in
+`agent/lib/infrastructure/stt/stt_native_platform.dart` names exactly the
+OS/architecture pairs a runtime is built for — macOS arm64 and x64, Windows x64
+and arm64, Linux x64 and arm64. `DictationService` asks
+`SttNativeTarget.tryCurrent()?.dictationSupported`, so the daemon and the release
+matrix cannot disagree, and an unresolvable host is reported as
+`unsupported_platform` instead of being optimistically enabled.
+
+Two facts narrow that table further at runtime, and neither is a platform
+verdict:
+
+- A build without the sherpa engine offers batch only (the Linux arm64 Agent);
+  see [Native Dictation Runtime Platforms](native_stt_runtime_platforms.md).
+- A device that is supported but has no usable model or no loadable runtime
+  reports `ready: false` with its own reason, exactly as described below.
 
 ## Readiness is two facts, not one
 
@@ -208,30 +222,45 @@ extensions:
   single-use; arming or disarming during an active session is refused, and
   cancellation stops its timer so no late chunk reaches the transport.
 - `dictation_probe` counts known dictation/voice event classes plus
-  device/dictation identity equality over the existing authenticated event
-  stream, for **both** transports: the relay classes and the local ones
-  (`stt_status`, `dictation_ready`, `dictation_partial`, `dictation_final`,
-  `dictation_done`, `dictation_error`). A local event carries no identity, so it
-  is never counted as foreign. It stores no audio, transcript, or per-frame
-  history.
-- `dictation_control` reports the cubit phase and can invoke the existing
-  `DictationCubit.cancel()` for a live control leg. It locates the composer with
-  the inspector's whole-tree traversal (`findElementByKey`), never a
-  visited-element cap: a bounded walk answered `composer_not_mounted` on every
-  Home with history while `inspect_ui` found the same key instantly.
+device/dictation identity equality, for **both** transports: the relay classes
+and the local ones (`stt_status`, `dictation_ready`, `dictation_partial`,
+`dictation_final`, `dictation_done`, `dictation_error`). The local channel opens
+its own WebSocket, so its events never appear on the main socket: the probe
+subscribes to the main socket **and** to the events the cubit consumed from the
+dictation transport (`DictationCubit.lifecycleEvents`), which is why a local leg
+is evidential without reading daemon logs. A local event carries no identity, so
+it is never counted as foreign. It stores no audio, transcript, or per-frame
+history.
+- `dictation_control` reports the cubit phase, can invoke the existing
+`DictationCubit.cancel()` for a live control leg, and reports the **composer**
+from the composer's own `TextEditingController` (`compose` →
+`present`/`chars`/hash match). Reading the session state instead answered
+`present: false, chars: 0` for a session that had just produced a transcript,
+because the cubit drops its text when the session settles while the editor keeps
+it. It locates the composer with the inspector's whole-tree traversal
+(`findElementByKey`), never a visited-element cap: a bounded walk answered
+`composer_not_mounted` on every Home with history while `inspect_ui` found the
+same key instantly.
+
 
 Committed acceptance audio:
 
-| Fixture | Leg | Shape |
-| --- | --- | --- |
-| `client/test/fixtures/dictation/en_streaming_quick_brown_fox.pcm` | English streaming | PCM16LE, 16 kHz mono, 2.7 s |
-| `client/test/fixtures/dictation/ar_batch_dictation_check.pcm` | Arabic batch | PCM16LE, 16 kHz mono, 4.9 s |
+| Fixture | Leg | Paired model | Shape |
+| --- | --- | --- | --- |
+| `client/test/fixtures/dictation/en_streaming_quick_brown_fox.pcm` | English streaming | `en-streaming-zipformer-kroko-2025-08-06` (any English streaming entry) | PCM16LE, 16 kHz mono, 2.7 s |
+| `client/test/fixtures/dictation/ar_batch_dictation_check.pcm` | Arabic batch | `egy-whisper-turbo-ggml-q8` (default) | PCM16LE, 16 kHz mono, 4.9 s |
 
-Both are raw PCM (no container header), so a leg arms them without conversion;
-`test/unit/dictation/dictation_audio_fixtures_test.dart` asserts their shape and
-that they are not silence. Regenerate with macOS `say` plus `afconvert -f WAVE -d
-LEI16@16000 -c 1` and strip the 44-byte header, or any 16 kHz mono PCM16LE
-encoder.
+**A fixture is only meaningful against its paired model.** English audio decoded
+by the Arabic q8 entry produces an empty final and **no error** — the engine is
+working, the language does not match — so a leg that pairs the wrong model reads
+like a product failure. Select the model the fixture belongs to (`select`) before
+arming it, and select the Arabic entry back when the leg is done.
+
+Both files are raw PCM (no container header), so a leg arms them without
+conversion; `test/unit/dictation/dictation_audio_fixtures_test.dart` asserts
+their shape and that they are not silence. Regenerate with macOS `say` plus
+`afconvert -f WAVE -d LEI16@16000 -c 1` and strip the 44-byte header, or any
+16 kHz mono PCM16LE encoder.
 
 Production `main.dart` never installs the seam, so the real microphone remains
 the default. Every response is a boolean, count, or phase: audio, transcript

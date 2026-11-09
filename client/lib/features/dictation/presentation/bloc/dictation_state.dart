@@ -189,7 +189,8 @@ class DictationState extends Equatable {
     this.status = DictationStatus.idle,
     this.model = const DictationModelStatus(),
     this.previewPolicy = DictationPreviewPolicy.live,
-    this.committedText = '',
+    this.segments = const [],
+    this.partialSeq,
     this.partialText = '',
     this.errorCode,
     this.sessionNeedsFirstUseSheet = false,
@@ -202,11 +203,29 @@ class DictationState extends Equatable {
   final DictationModelStatus model;
   final DictationPreviewPolicy previewPolicy;
 
-  /// Text the daemon finalized in this session (never mutated afterwards).
-  final String committedText;
+  /// Terminal text of each closed segment, indexed by the daemon's own `seq`.
+  ///
+  /// `seq` is the **replacement key**, not an append slot: a partial and its
+  /// final carry the same value, so the final replaces the segment it was
+  /// previewed as. Appending every final instead is what wrote one phrase into
+  /// the composer twice.
+  final List<String> segments;
+
+  /// `seq` of the segment the visible partial belongs to; null when no partial
+  /// is open.
+  final int? partialSeq;
 
   /// Unstable tail of the current segment; empty under [onStop].
   final String partialText;
+
+  /// Text the daemon finalized in this session, in segment order.
+  ///
+  /// A finalized segment is terminal: no later event mutates its text.
+  String get committedText =>
+      segments.where((segment) => segment.isNotEmpty).join(' ');
+
+  /// The `seq` a final without one belongs to: the next free slot.
+  int get nextSegmentSeq => segments.length;
 
   final String? errorCode;
 
@@ -241,7 +260,11 @@ class DictationState extends Equatable {
   /// onto the old one until the segment was committed and a space appeared — the
   /// text visibly "jumped". The separator is therefore added here, from the
   /// first frame the partial is visible.
+  ///
+  /// A partial for a segment that is already finalized is never shown: `seq`
+  /// replaces, so the final owns that slot from the moment it lands.
   String get visibleText {
+    if (partialSlotIsCommitted) return committedText;
     if (partialText.isEmpty) return committedText;
     if (committedText.isEmpty) return partialText;
     final needsSpace =
@@ -249,11 +272,20 @@ class DictationState extends Equatable {
     return needsSpace ? '$committedText $partialText' : '$committedText$partialText';
   }
 
+  /// True when [partialSeq] names a segment whose final already landed.
+  bool get partialSlotIsCommitted {
+    final seq = partialSeq;
+    if (seq == null || seq < 0 || seq >= segments.length) return false;
+    return segments[seq].isNotEmpty;
+  }
+
   DictationState copyWith({
     DictationStatus? status,
     DictationModelStatus? model,
     DictationPreviewPolicy? previewPolicy,
-    String? committedText,
+    List<String>? segments,
+    int? partialSeq,
+    bool clearPartialSeq = false,
     String? partialText,
     String? errorCode,
     bool clearError = false,
@@ -266,7 +298,8 @@ class DictationState extends Equatable {
       status: status ?? this.status,
       model: model ?? this.model,
       previewPolicy: previewPolicy ?? this.previewPolicy,
-      committedText: committedText ?? this.committedText,
+      segments: segments ?? this.segments,
+      partialSeq: clearPartialSeq ? null : (partialSeq ?? this.partialSeq),
       partialText: partialText ?? this.partialText,
       errorCode: clearError ? null : (errorCode ?? this.errorCode),
       sessionNeedsFirstUseSheet:
@@ -282,7 +315,8 @@ class DictationState extends Equatable {
         status,
         model,
         previewPolicy,
-        committedText,
+        segments,
+        partialSeq,
         partialText,
         errorCode,
         sessionNeedsFirstUseSheet,

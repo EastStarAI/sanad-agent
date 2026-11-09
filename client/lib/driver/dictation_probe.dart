@@ -17,6 +17,20 @@ class DriverDictationProbe {
     _subscription = events.listen(_onEvent);
   }
 
+  /// Subscribes to the dictation transport's own event stream.
+  ///
+  /// The local channel opens a separate WebSocket, so its events never appear on
+  /// the main socket: a local leg reported `total: 0` for a healthy session. The
+  /// cubit republishes what it consumed, which is the same vocabulary the relay
+  /// reshapes into, so one counter counts both channels.
+  void attachTransport(Stream<Map<String, dynamic>>? events) {
+    if (identical(events, _transportEvents)) return;
+    unawaited(_transportSubscription?.cancel());
+    _transportSubscription = null;
+    _transportEvents = events;
+    if (events != null) _transportSubscription = events.listen(_onEvent);
+  }
+
   /// Every event class a dictation leg can be evidenced by.
   ///
   /// The relay classes and the local classes are counted together: a local leg
@@ -41,6 +55,8 @@ class DriverDictationProbe {
 
   final bool Function() _isConnected;
   StreamSubscription<Map<String, dynamic>>? _subscription;
+  StreamSubscription<Map<String, dynamic>>? _transportSubscription;
+  Stream<Map<String, dynamic>>? _transportEvents;
 
   String? _expectedDeviceId;
   String? _expectedDictationId;
@@ -90,6 +106,9 @@ class DriverDictationProbe {
   void dispose() {
     unawaited(_subscription?.cancel());
     _subscription = null;
+    unawaited(_transportSubscription?.cancel());
+    _transportSubscription = null;
+    _transportEvents = null;
   }
 
   void _onEvent(Map<String, dynamic> event) {

@@ -350,6 +350,7 @@ class _ModelTile extends StatelessWidget {
                         if (size != null)
                           Text(
                             size,
+                            key: Key('dictation_model_size_${option.id}'),
                             style: theme.textTheme.labelSmall?.copyWith(
                               color: colorScheme.onSurfaceVariant,
                             ),

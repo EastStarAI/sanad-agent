@@ -60,6 +60,19 @@ class DictationCubit extends Cubit<DictationState> {
   Completer<void>? _statusCompleter;
   Completer<void>? _idle;
 
+  /// Events this session consumed, republished for the driver probe.
+  ///
+  /// A local dictation session never reaches `SanadSocketService.events` — it
+  /// arrives on the separate dictation WebSocket — so the probe cannot evidence
+  /// a local leg from the main socket alone. The cubit already listens to the
+  /// transport, so it republishes the same maps here: no second subscription on
+  /// the daemon side, and nothing above the transport learns the channel.
+  final StreamController<Map<String, dynamic>> _lifecycle =
+      StreamController<Map<String, dynamic>>.broadcast();
+
+  /// Daemon events this cubit consumed (`stt_status`, `dictation_partial`, …).
+  Stream<Map<String, dynamic>> get lifecycleEvents => _lifecycle.stream;
+
   /// Pending "send after dictation" wait; see [sendWhenSettled].
   Completer<bool>? _sendWaiter;
 
@@ -85,7 +98,8 @@ class DictationCubit extends Cubit<DictationState> {
       state.copyWith(
         status: DictationStatus.preparing,
         clearError: true,
-        committedText: '',
+        segments: const [],
+        clearPartialSeq: true,
         partialText: '',
         discardText: false,
       ),
@@ -397,6 +411,7 @@ class DictationCubit extends Cubit<DictationState> {
   }
 
   void _handleEvent(Map<String, dynamic> event) {
+    if (!_lifecycle.isClosed) _lifecycle.add(event);
     switch (event['event']) {
       case 'stt_status':
         _statusCompleter?.complete();
@@ -443,24 +458,47 @@ class DictationCubit extends Cubit<DictationState> {
         }
       case 'dictation_partial':
         final text = (event['text'] as String?) ?? '';
+        final seq = (event['seq'] as num?)?.toInt();
+        // A partial never rewrites a segment the daemon already finalized: `seq`
+        // is the replacement key of the open segment, so a late or repeated
+        // partial for a closed slot would resurrect text that already landed.
+        if (seq != null &&
+            seq >= 0 &&
+            seq < state.segments.length &&
+            state.segments[seq].isNotEmpty) {
+          return;
+        }
         emit(
           state.copyWith(
+            partialSeq: seq,
             partialText:
                 state.previewPolicy == DictationPreviewPolicy.live ? text : '',
           ),
         );
       case 'dictation_final':
-        // A batch model sends one final for the whole utterance, while a
-        // streaming model sends one per silence-closed segment. Appending covers
-        // both: later segments extend the transcript instead of wiping it.
+        // The daemon's `seq` is the replacement key of a segment: the final for
+        // a seq **replaces** that segment's text (the partial previewed it), and
+        // a repeated final for the same seq replaces it again instead of
+        // appending a second copy. Batch engines send one final for the whole
+        // utterance, streaming engines one per silence-closed segment, and both
+        // land in their own slot here.
         final text = ((event['text'] as String?) ?? '').trim();
-        final committed = state.committedText.trim();
-        final merged = text.isEmpty
-            ? committed
-            : committed.isEmpty
-            ? text
-            : '$committed $text';
-        emit(state.copyWith(committedText: merged, partialText: ''));
+        final rawSeq = (event['seq'] as num?)?.toInt();
+        // A malformed or absent seq falls back to the next free slot instead of
+        // throwing: one bad event must never drop a recognized transcript.
+        final seq = rawSeq == null || rawSeq < 0 ? state.nextSegmentSeq : rawSeq;
+        final segments = List<String>.of(state.segments);
+        while (segments.length <= seq) {
+          segments.add('');
+        }
+        if (text.isNotEmpty) segments[seq] = text;
+        emit(
+          state.copyWith(
+            segments: segments,
+            partialText: '',
+            clearPartialSeq: state.partialSeq == seq,
+          ),
+        );
       case 'dictation_done':
         final segments = (event['segments'] as num?)?.toInt() ?? 0;
         _logger.info('dictation drained: segments=$segments');
@@ -586,7 +624,8 @@ class DictationCubit extends Cubit<DictationState> {
         status: DictationStatus.idle,
         // The dictated text belongs to one session and was already inserted
         // into the composer; keeping it here would duplicate it next time.
-        committedText: '',
+        segments: const [],
+        clearPartialSeq: true,
         partialText: '',
         discardText: clearText,
         level: 0,
@@ -624,6 +663,7 @@ class DictationCubit extends Cubit<DictationState> {
     await _capture.dispose();
     await _eventSubscription?.cancel();
     await _transport?.close();
+    await _lifecycle.close();
     return super.close();
   }
 }

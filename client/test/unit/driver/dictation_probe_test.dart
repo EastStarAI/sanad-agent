@@ -118,4 +118,62 @@ void main() {
     expect(snapshot['matched'], 0);
     expect(snapshot['foreign'], 1);
   });
+
+  // The seam gap: a local session arrives on the separate dictation WebSocket,
+  // never on the main socket, so the probe could not evidence it at all.
+  group('the dictation transport stream', () {
+    late StreamController<Map<String, dynamic>> transport;
+
+    setUp(() {
+      transport = StreamController<Map<String, dynamic>>.broadcast();
+    });
+
+    tearDown(() async {
+      await transport.close();
+    });
+
+    test('counts a session that never reaches the main socket', () async {
+      probe.attachTransport(transport.stream);
+
+      transport.add({'event': 'stt_status', 'ready': true, 'supported': true});
+      transport.add({'event': 'dictation_ready', 'model_id': 'm1', 'load_ms': 4});
+      transport.add({'event': 'dictation_partial', 'seq': 0, 'text': 'hello'});
+      transport.add({'event': 'dictation_final', 'seq': 0, 'text': 'hello there'});
+      transport.add({'event': 'dictation_done', 'segments': 1});
+      await Future<void>.delayed(Duration.zero);
+
+      final snapshot = probe.snapshot();
+      expect(snapshot['total'], 5);
+      expect(snapshot['matched'], 5);
+      expect(snapshot['foreign'], 0);
+      expect(snapshot['phase'], 'done');
+      expect(
+        (snapshot['by_class'] as Map<String, int>)['dictation_final'],
+        1,
+      );
+    });
+
+    test('counting the transport twice is impossible', () async {
+      probe.attachTransport(transport.stream);
+      probe.attachTransport(transport.stream);
+
+      transport.add({'event': 'dictation_final', 'seq': 0, 'text': 'once'});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probe.snapshot()['total'], 1);
+    });
+
+    test('replacing the transport stops counting the old one', () async {
+      final other = StreamController<Map<String, dynamic>>.broadcast();
+      probe.attachTransport(transport.stream);
+      probe.attachTransport(other.stream);
+
+      transport.add({'event': 'dictation_final', 'seq': 0, 'text': 'old'});
+      other.add({'event': 'dictation_final', 'seq': 0, 'text': 'new'});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(probe.snapshot()['total'], 1);
+      await other.close();
+    });
+  });
 }

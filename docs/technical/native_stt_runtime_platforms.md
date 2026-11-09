@@ -493,11 +493,17 @@ The narrowed closure ships local and cloud dictation on the platforms below with
 the failure policy above. These items are explicitly **not** done and must not be
 read as delivered:
 
-- **Windows and Linux packaging proof.** The installers, the updater, and the
-  Client bootstrap implement the same policy on all three platforms, and the
-  Windows staged-restart transaction has unit coverage, but no Windows or Linux
-  release install, update, or dictation session was executed for this change.
-  Only macOS Apple Silicon was exercised locally.
+- **Executed install, update, and dictation proof on Windows and Linux.** The
+  installers, the updater, and the Client bootstrap implement the same policy on
+  all three platforms, and the Windows staged-restart transaction has unit
+  coverage, but no Windows or Linux release install, update, or dictation session
+  was executed for this change. Only macOS Apple Silicon was exercised locally.
+  This is a *proof* gap, not a support gap: `windows-x64`, `windows-arm64`,
+  `linux-x64`, and `linux-arm64` are declared rows in the platform matrix, the
+  manifest, and the installer contract, and the whisper-only Linux arm64 build
+  (whisper.cpp batch, no sherpa engine) is the decided behavior — it is delivered
+  as described in [Engine availability](#engine-availability), and its own
+  release install and dictation session remain unproven until that leg runs.
 - **Signing proof.** No notarized Agent, Developer-ID-signed runtime library, or
   GitHub attestation was produced or verified here. The release pipeline owns
   signing; this change asserts only that verification stays mandatory.

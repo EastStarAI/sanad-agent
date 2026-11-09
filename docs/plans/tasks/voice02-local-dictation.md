@@ -197,9 +197,11 @@ are required before the feature is closed.
 - [ ] **Residency statements.** `docs/technical/local_dictation.md` says the model is
       freed on stop; the implementation keeps it warm for `stt.model_idle_minutes`.
       Reconcile the document with the implemented behavior.
-- [ ] **Platform gate.** The readiness gate accepts Windows and Linux ABIs while the
-      documented gate says macOS arm64 only, and Intel is rejected by the gate. Make the
-      documentation and the gate agree, with G10 covering Intel.
+- [x] **Platform gate.** The readiness gate reads one table
+      (`SttNativeTarget.values`) covering macOS arm64/x64, Windows x64/arm64, and
+      Linux x64/arm64, and `docs/technical/local_dictation.md` now documents that
+      table instead of the stale macOS-arm64-only sentence. Intel's own closure
+      (native build, manifest row, matrix lane, live run) remains G10.
 - [ ] **Toast statements.** G8 states no toast for dictation lifecycle states, while G9
       moved dictation notices to `ToastUtils`. Record one behavior and make the docs match.
 - [ ] **Native packaging.** The native runtime is reproducible from a clean clone on every
@@ -454,6 +456,62 @@ the explicit settings route.
       resolves the engine directory from the packaged payload or the checkout's
       own package resolution and passes it explicitly; `null` (the macOS
       `DynamicLibrary.process()` path) is never used.
+
+## G17 — Live-2 findings on the streaming and relay paths (2026-11-09)
+
+A second live run (macOS Client on a Test Home plus the Web Client through the
+local stack) found three product defects and two seam gaps. Owner scope for this
+change set: D1, D3, D6, D7, D8 and three documentation contradictions. D2 (the
+hosted relay refusing every Web dictation session) is **documented and paused
+pending owner approval**; the out-of-scope driver items stay with their owner.
+
+- [x] **D1 — streaming text was duplicated in the composer.** The cubit appended
+      every `dictation_final` and never consumed the daemon's `seq`, so a partial
+      and its final (or a final delivered twice) produced the same phrase twice.
+      `DictationState.segments` is now indexed by `seq`: a final **replaces** its
+      segment, a repeated final replaces again, and a partial never rewrites a
+      finalized slot. `DictationInsertion` also recovers a lost owned range from
+      the text the session already wrote instead of appending it again.
+      Pinned by `client/test/unit/dictation/dictation_cubit_test.dart`
+      (replacement, late partial, missing `seq`),
+      `client/test/unit/dictation/dictation_state_test.dart`, and
+      `client/test/widget/dictation/dictation_streaming_replace_test.dart`
+      (partial+final same `seq`, multi-segment, stop mid-utterance, empty
+      partial, repeated final, composer read after settling).
+- [x] **D3 — `dictation_probe` could not evidence a local session.** A local
+      session arrives on the dictation WebSocket, never on
+      `SanadSocketService.events`, so the probe reported `total: 0` for a healthy
+      session. `DictationCubit.lifecycleEvents` republishes what the cubit
+      consumed and `DriverDictationProbe.attachTransport` counts it beside the
+      relay classes (idempotent, re-attached per call because the composer may
+      mount later). Pinned by
+      `client/test/unit/driver/dictation_probe_test.dart`.
+- [x] **D7 — the compose check reported an empty composer after a successful
+      session.** `compose` read `DictationState.visibleText`, which the cubit
+      clears when the session settles while the editor keeps the transcript.
+      It now reads the composer's own `TextEditingController` through the button
+      that holds it. Pinned by the seam leg in
+      `dictation_streaming_replace_test.dart`.
+- [x] **D6 — model size was not in the inspector projection.** The size `Text`
+      now carries `dictation_model_size_<id>` like every other row field, with no
+      visual change; `client/test/widget/dictation_model_sheet_test.dart` asserts
+      the key and its localized value.
+- [x] **D8 — fixture↔model pairing is documented.** English audio decoded by the
+      Arabic q8 entry yields an empty final with no error, which reads like a
+      failure. `local_dictation.md` and `client/lib/features/dictation/AGENTS.md`
+      now name the model each committed fixture belongs to.
+- [x] **Documentation contradictions removed.** `local_dictation.md` no longer
+      claims a macOS-arm64-only platform gate; `release/README.md` names the
+      runtime archive `sanad-agent-runtime-<version>-<platform>-<architecture>.tar.gz`
+      (it dropped the `sanad-agent-` prefix); and the
+      `native_stt_runtime_platforms.md` "Deferred" section now states the
+      whisper-only Linux arm64 build as delivered behavior whose *executed*
+      release proof is what remains deferred.
+- [ ] **D2 — the hosted relay refuses every Web dictation session**
+      (`dictation_route_error invalid_request`). Root cause and the proposed
+      Client fix are recorded in the delegate run's `live2-fixes/STUDY-D2.md`
+      (run `voice02-fullstack-20261108-b999`); no code changes until the owner
+      approves.
 
 ## Definition of done
 

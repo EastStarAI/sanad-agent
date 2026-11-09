@@ -230,6 +230,81 @@ void main() {
       expect(cubit.state.committedText, 'السلام عليكم عامل إيه');
     });
 
+    // The regression: every final was appended, so a segment delivered twice —
+    // or a final whose seq the partial already occupied — wrote the same phrase
+    // into the composer twice.
+    test('a final replaces its own seq instead of appending again', () async {
+      cubit = build();
+      await startSession();
+
+      transport.controller.add({
+        'event': 'dictation_partial',
+        'seq': 0,
+        'text': 'The lazy dog. the quick brown fox jump',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(cubit.state.visibleText, 'The lazy dog. the quick brown fox jump');
+
+      transport.controller.add({
+        'event': 'dictation_final',
+        'seq': 0,
+        'text': 'The lazy dog. the quick brown fox jumps over the lazy dog',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        cubit.state.committedText,
+        'The lazy dog. the quick brown fox jumps over the lazy dog',
+      );
+
+      // The same seq again — a retry, a relay replay, a re-drain.
+      transport.controller.add({
+        'event': 'dictation_final',
+        'seq': 0,
+        'text': 'The lazy dog. the quick brown fox jumps over the lazy dog',
+      });
+      await Future<void>.delayed(Duration.zero);
+      expect(
+        cubit.state.committedText,
+        'The lazy dog. the quick brown fox jumps over the lazy dog',
+      );
+      expect(cubit.state.segments, hasLength(1));
+    });
+
+    test('a late partial never rewrites a segment the daemon finalized', () async {
+      cubit = build();
+      await startSession();
+
+      transport.controller.add({
+        'event': 'dictation_final',
+        'seq': 0,
+        'text': 'Final words.',
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      transport.controller.add({
+        'event': 'dictation_partial',
+        'seq': 0,
+        'text': 'Final',
+      });
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.visibleText, 'Final words.');
+      expect(cubit.state.partialText, isEmpty);
+    });
+
+    test('a final without a seq takes the next free slot', () async {
+      cubit = build();
+      await startSession();
+
+      transport.controller.add({'event': 'dictation_final', 'seq': 0, 'text': 'One.'});
+      await Future<void>.delayed(Duration.zero);
+      transport.controller.add({'event': 'dictation_final', 'text': 'Two.'});
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.committedText, 'One. Two.');
+      expect(cubit.state.segments, hasLength(2));
+    });
+
     test('on_stop policy buffers partials but still commits finals', () async {
       cubit = build(policy: DictationPreviewPolicy.onStop);
       await startSession();

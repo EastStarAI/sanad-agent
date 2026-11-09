@@ -116,5 +116,48 @@ void main() {
       expect(controller.text, '');
       expect(insertion.hasRange, isFalse);
     });
+
+    // The regression: after the range was lost (a rebuild, a transient empty
+    // partial), the next write appended the session text to the copy already in
+    // the composer, so one phrase appeared twice.
+    test('a lost range replaces the session text instead of appending it', () {
+      controller.value = const TextEditingValue(
+        text: 'draft: ',
+        selection: TextSelection.collapsed(offset: 7),
+      );
+      insertion.begin(controller);
+      insertion.apply(
+        controller,
+        'The lazy dog. the quick brown fox jump',
+        previous: '',
+      );
+      expect(controller.text, 'draft: The lazy dog. the quick brown fox jump');
+
+      final lost = DictationInsertion()..begin(controller);
+      lost.apply(
+        controller,
+        'The lazy dog. the quick brown fox jumps over the lazy dog',
+        previous: 'The lazy dog. the quick brown fox jump',
+      );
+
+      expect(
+        controller.text,
+        'draft: The lazy dog. the quick brown fox jumps over the lazy dog',
+      );
+      expect(RegExp('The lazy dog').allMatches(controller.text), hasLength(1));
+    });
+
+    test('recovery never rewrites text the user typed', () {
+      controller.value = const TextEditingValue(
+        text: 'mine: dictated',
+        selection: TextSelection.collapsed(offset: 15),
+      );
+      final fresh = DictationInsertion();
+
+      // The remembered text is gone from the composer, so nothing is replaced
+      // and the new text lands at the caret.
+      fresh.apply(controller, 'next', previous: 'dictated elsewhere');
+      expect(controller.text, 'mine: dictated next');
+    });
   });
 }

@@ -110,7 +110,13 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       // composer, and user edits outside it are untouched.
       _insertion.removeOwned(widget.chatController);
     } else {
-      _insertion.apply(widget.chatController, text);
+      // `previous` is what this session already wrote: if the range was lost,
+      // the new text replaces it instead of being appended to it.
+      _insertion.apply(
+        widget.chatController,
+        text,
+        previous: _appliedText,
+      );
     }
     _appliedText = text;
   }

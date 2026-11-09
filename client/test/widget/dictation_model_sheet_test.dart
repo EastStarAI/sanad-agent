@@ -275,6 +275,22 @@ void main() {
       findsOneWidget,
     );
     expect(find.byKey(const Key('dictation_mode_streaming_badge')), findsOneWidget);
+    // The size is a row fact like the rest: keyed, so the driver projection can
+    // prove it instead of relying on a screenshot.
+    expect(
+      find.byKey(const Key('dictation_model_size_egy-whisper-turbo-ggml-q8')),
+      findsOneWidget,
+    );
+    expect(
+      tester
+          .widget<Text>(
+            find.byKey(
+              const Key('dictation_model_size_egy-whisper-turbo-ggml-q8'),
+            ),
+          )
+          .data,
+      l10n.dictationModelSizeMb('834'),
+    );
   });
 
   testWidgets('installed rows come first in the sheet', (tester) async {

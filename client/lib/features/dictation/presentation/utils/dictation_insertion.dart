@@ -9,6 +9,10 @@ import 'package:flutter/widgets.dart';
 ///   dictation last wrote.
 /// * If the user edited inside or around the range, dictation stops owning it
 ///   and only appends the not-yet-inserted tail at the caret.
+/// * A lost range never re-inserts text the session already wrote: when the
+///   range is gone but the previous text is still in the composer, that span is
+///   recovered (nearest the anchor) and **replaced**. Re-inserting it is what
+///   put one dictated phrase in the composer twice.
 /// * Writes never run while an IME composition is live: the update is deferred
 ///   and flushed when composition ends, so Arabic preedit is never destroyed.
 /// * Writes never steal a caret that sits outside the dictation range; only the
@@ -45,7 +49,16 @@ class DictationInsertion {
   }
 
   /// Applies [text] (the full session text so far) to [controller].
-  void apply(TextEditingController controller, String text) {
+  ///
+  /// [previous] is the text this session last wrote. It only matters when the
+  /// owned range was lost (a rebuild, a transient empty partial): the session
+  /// text must then *replace* what is already in the composer instead of being
+  /// inserted a second time — the failure mode that duplicated a phrase.
+  void apply(
+    TextEditingController controller,
+    String text, {
+    String? previous,
+  }) {
     if (text.isEmpty) {
       removeOwned(controller);
       return;
@@ -63,6 +76,14 @@ class DictationInsertion {
     final end = _end;
 
     if (start == null || end == null) {
+      final recovered = _recoverRange(controller, previous);
+      if (recovered != null) {
+        _replace(controller, value, recovered.$1, recovered.$2, text);
+        _start = recovered.$1;
+        _end = recovered.$1 + text.length;
+        _owned = text;
+        return;
+      }
       final caret = (_anchor ?? _caretOffset(value)).clamp(0, value.text.length);
       final separator = _needsSeparator(value.text, caret) ? ' ' : '';
       final insertAt = caret + separator.length;
@@ -109,7 +130,34 @@ class DictationInsertion {
       _pending = pending;
       return;
     }
-    apply(controller, pending);
+    apply(controller, pending, previous: _owned);
+  }
+
+  /// Locates the exact text this session last wrote, nearest the anchor.
+  ///
+  /// Only used when the owned range was lost: replacing the recovered span is
+  /// what keeps a revision from being appended to the copy it revises.
+  (int, int)? _recoverRange(
+    TextEditingController controller,
+    String? previous,
+  ) {
+    final target = previous?.trim();
+    if (target == null || target.isEmpty) return null;
+    final haystack = controller.text;
+    if (haystack.isEmpty) return null;
+    final anchor = (_anchor ?? _caretOffset(controller.value))
+        .clamp(0, haystack.length);
+    final matches = <int>[];
+    var index = haystack.indexOf(target);
+    while (index >= 0) {
+      matches.add(index);
+      if (matches.length > 32) break;
+      index = haystack.indexOf(target, index + 1);
+    }
+    if (matches.isEmpty) return null;
+    matches.sort((a, b) => (a - anchor).abs().compareTo((b - anchor).abs()));
+    final start = matches.first;
+    return (start, start + target.length);
   }
 
   /// Removes the range dictation owns, leaving user text untouched.
