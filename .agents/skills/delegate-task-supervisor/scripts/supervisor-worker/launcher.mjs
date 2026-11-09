@@ -289,6 +289,11 @@ function lastDiagnosticLine(path) {
       sessionId: result.sessionId ?? result.session_id ?? null,
     };
     if (result) recordIdentity(task, result);
+    // A result artifact that names its session is a session report like any
+    // lifecycle event: the worker's session owner records it and, when the
+    // attempt started unpinned, pins it so the next `continue` resumes that
+    // conversation. Nothing is recorded when the attempt never named a session.
+    if (identity?.sessionId) ctx.recordTaskSession(task, identity.sessionId);
     const finishedAt = new Date().toISOString();
     // A Sanad worker is only the transport for one daemon turn. When it exits
     // while the daemon still owns the turn, the task is followed instead of being
