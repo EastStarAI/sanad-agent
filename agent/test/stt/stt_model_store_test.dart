@@ -285,22 +285,9 @@ void main() {
       expect(files!.language, 'en');
     });
 
-    test('the multilingual entry resolves auto', () {
-      final entry = sttEntryById('whisper-turbo-ggml-q5')!;
-      installCatalogEntry(entry);
-
-      final files = store.resolve(
-        const SttSettings(),
-        selectedModelId: entry.id,
-      );
-
-      expect(files, isNotNull);
-      expect(files!.language, 'auto');
-    });
-
     test('a model_path holding one ggml file resolves to whisper.cpp', () {
       final dir = Directory('${home.path}/ggml-model')..createSync();
-      File('${dir.path}/ggml-large-v3-turbo-q5_0.bin').writeAsBytesSync(
+      File('${dir.path}/ggml-custom-turbo-q5_0.bin').writeAsBytesSync(
         const [1],
       );
 
@@ -308,7 +295,7 @@ void main() {
 
       expect(files, isNotNull);
       expect(files!.engine, SttEngineKind.whisperCpp);
-      expect(files.model, endsWith('ggml-large-v3-turbo-q5_0.bin'));
+      expect(files.model, endsWith('ggml-custom-turbo-q5_0.bin'));
     });
 
     test('model_path override discovers files by name and skips checksums', () {

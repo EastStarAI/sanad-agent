@@ -161,24 +161,6 @@ void main() {
       }
     });
 
-    test('the multilingual entry declares auto and pins the hosted size', () {
-      final entry = sttEntryById('whisper-turbo-ggml-q5')!;
-      // A multilingual checkpoint carries no single language: forcing 'ar' on it
-      // is what made an English clip come back as Arabic text.
-      expect(entry.language, 'auto');
-      expect(entry.hidden, isTrue);
-      final file = entry.files.single;
-      // Pinned from the hosting LFS digest and verified by download. A stale
-      // size rejects the download before the checksum is ever compared, which is
-      // exactly how this row became un-installable.
-      expect(file.name, 'ggml-large-v3-turbo-q5_0.bin');
-      expect(file.sizeBytes, 574041195);
-      expect(
-        file.sha256,
-        '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
-      );
-    });
-
     test('the f16 precision entry is offered once its artifact is hosted', () {
       final precise = sttEntryById('egy-whisper-turbo-ggml-f16');
       expect(precise, isNotNull);
