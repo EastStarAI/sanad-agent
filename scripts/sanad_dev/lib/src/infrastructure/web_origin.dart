@@ -1,34 +1,47 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'cloud_endpoints.dart';
 import 'runtime_context.dart';
+import 'secure_runtime_file.dart';
 
 /// Explicit override for the Web Client origin.
 ///
-/// A derived origin is stable per Home, Client slot, and client environment, so
-/// a deployment whose Portal already registers a different origin (for example
-/// the local stack pinned to a specific port) keeps working by setting this.
+/// A chosen origin is stable per Home and Client slot, so a deployment whose
+/// Portal registers a different origin keeps working by setting this.
 const String sanadDevWebPortEnvironmentKey = 'SANAD_DEV_WEB_PORT';
 
-/// First port of the reserved deterministic Web Client origin range.
+/// Ports every hosted Portal already accepts from a browser on this machine.
+///
+/// Each `sanad-portal` deployment builds its credentialed CORS allowlist as the
+/// built-in loopback defaults unioned with its own hosted origins, so these
+/// `localhost` origins answer the auth preflight on Production, Staging, and
+/// Development alike. Serving a Web Client anywhere else makes the browser block
+/// its first auth request, which is the opaque failure this constant removes.
+const List<int> sanadDevHostedPortalWebPorts = <int>[8080, 8082, 5173, 5174, 8083];
+
+/// First port of the reserved range used when the Portal itself is loopback.
+///
+/// A local deployment registers whatever origin its operator pinned, so it can
+/// accept a wide range instead of the hosted Portal's fixed loopback ports.
 const int sanadDevWebPortRangeStart = 52000;
 
-/// Number of ports reserved for deterministic Web Client origins.
+/// Number of ports reserved for a loopback Portal.
 ///
-/// The range must stay disjoint from the Agent (`58085-58185`) and VM-service
+/// It must stay disjoint from the Agent (`58085-58185`) and VM-service
 /// (`51000-51999`) ranges so one runtime can never derive another's port.
 const int sanadDevWebPortRangeSize = 1000;
 
-/// Last port of the reserved deterministic Web Client origin range.
+/// Last port of the loopback-Portal range.
 const int sanadDevWebPortRangeEnd =
     sanadDevWebPortRangeStart + sanadDevWebPortRangeSize - 1;
 
 /// Host the Web Client is always served from.
 ///
-/// flutter_tools defaults `--web-hostname` to `any`, which binds every
-/// interface and only *reports* `localhost`. Naming the loopback host keeps the
-/// browser origin deterministic and the dev server off the network.
+/// flutter_tools defaults `--web-hostname` to `any`, which binds every interface
+/// and only *reports* `localhost`. Naming the loopback host keeps the browser
+/// origin exactly `http://localhost:<port>` and the dev server off the network.
 const String sanadDevWebHostname = 'localhost';
 
 /// flutter_tools option that pins the Web dev server port.
@@ -36,6 +49,9 @@ const String sanadDevWebPortArgument = '--web-port=';
 
 /// flutter_tools option that pins the Web dev server host.
 const String sanadDevWebHostnameArgument = '--web-hostname=';
+
+/// Home-relative record of the origin each Client slot was last served from.
+const String sanadDevWebOriginRecordName = 'web-origin.json';
 
 /// Devices whose browser origin decides where the Web session is stored.
 ///
@@ -48,10 +64,10 @@ bool isSanadDevWebDevice(String device) =>
 String sanadDevWebOriginForPort(int port) =>
     'http://$sanadDevWebHostname:$port';
 
-/// Deterministic Web origin port for one Home, Client slot, and environment.
+/// Deterministic first choice for one Home, Client slot, and environment.
 ///
-/// The same inputs always resolve to the same origin, which is what lets a
-/// restarted Web Client resume the session stored under it. `environment`
+/// The same inputs always resolve to the same port, which is what lets a
+/// restarted Web Client resume the session stored under its origin. `environment`
 /// separates local, development, staging, and production origins so one Home
 /// never reuses another environment's browser storage.
 int deriveSanadDevWebPort({
@@ -77,33 +93,222 @@ int deriveSanadDevWebPort({
       stableHash(identity) % sanadDevWebPortRangeSize;
 }
 
-/// Port a Web Client must be served from: the explicit override, else the
-/// deterministic gap-free derivation.
+/// Who decides which browser origins may authenticate for this environment.
+enum SanadDevWebOriginAuthority {
+  /// The Portal is served on loopback by a deployment the developer owns, so its
+  /// registered Web origin can be aligned with any port the launcher chooses.
+  deploymentOwned,
+
+  /// The Portal is hosted: only its own CORS loopback defaults are reachable
+  /// from a browser on this machine, so the launcher must serve one of them.
+  hostedPortal,
+}
+
+/// Loopback Portal URLs are owned by a local deployment; anything else is the
+/// hosted Portal whose browser-reachable origins are its loopback defaults.
 ///
-/// There is deliberately no random fallback. A random port produces an origin
-/// no Portal registration and no stored browser session can follow.
-int resolveSanadDevWebPort({
+/// An empty URL means no Portal is configured at all (a local-only launch), so
+/// there is no hosted allowlist to satisfy.
+SanadDevWebOriginAuthority sanadDevWebOriginAuthorityFor(String portalUrl) {
+  final host = Uri.tryParse(portalUrl.trim())?.host.toLowerCase() ?? '';
+  if (host.isEmpty) return SanadDevWebOriginAuthority.deploymentOwned;
+  const loopbackHosts = {'127.0.0.1', 'localhost', '::1'};
+  return loopbackHosts.contains(host)
+      ? SanadDevWebOriginAuthority.deploymentOwned
+      : SanadDevWebOriginAuthority.hostedPortal;
+}
+
+/// Ports a browser served from this machine may use for this Portal, in the
+/// order the launcher tries them.
+///
+/// A hosted Portal can only answer for its own loopback defaults, so the first
+/// candidate is `8080` for a primary Client and a stable hash rotation of the
+/// remaining allowlisted ports for a secondary one. A loopback Portal — or no
+/// Portal at all — is deployment-owned and has exactly one derived candidate.
+List<int> sanadDevWebPortCandidates({
   required String sanadHome,
   required String clientEnvironment,
-  required Map<String, String> processEnvironment,
+  required String portalUrl,
   String? clientInstanceSlot,
 }) {
+  if (sanadDevWebOriginAuthorityFor(portalUrl) ==
+      SanadDevWebOriginAuthority.deploymentOwned) {
+    return [
+      deriveSanadDevWebPort(
+        sanadHome: sanadHome,
+        clientEnvironment: clientEnvironment,
+        clientInstanceSlot: clientInstanceSlot,
+      ),
+    ];
+  }
+  final slot = clientInstanceSlot?.trim() ?? '';
+  if (slot.isEmpty) return List<int>.of(sanadDevHostedPortalWebPorts);
+  // A named slot starts from the ports that are not the primary Client's, so a
+  // second Web Client never defaults to the first one's origin.
+  final secondary = sanadDevHostedPortalWebPorts.sublist(1);
+  final offset =
+      stableHash('web:$clientEnvironment:$slot:${sanadHome.trim()}') %
+      secondary.length;
+  return [
+    for (var index = 0; index < secondary.length; index++)
+      secondary[(offset + index) % secondary.length],
+    sanadDevHostedPortalWebPorts.first,
+  ];
+}
+
+/// Whether nothing else on this machine already owns [port] on loopback.
+Future<bool> sanadDevWebPortIsFree(int port) async {
+  try {
+    final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
+    await socket.close();
+    return true;
+  } on SocketException {
+    return false;
+  }
+}
+
+/// Port a Web Client must be served from.
+///
+/// Precedence: the explicit `SANAD_DEV_WEB_PORT` override, the port this Home
+/// and slot were last served from, then this slot's deterministic origin. A busy
+/// origin is an error that names the override rather than a silent move to
+/// another one: a different port is a different browser origin, and the Portal
+/// only accepts the origins it was configured with.
+Future<int> chooseSanadDevWebPort({
+  required String sanadHome,
+  required String clientEnvironment,
+  required String portalUrl,
+  required Map<String, String> processEnvironment,
+  String? clientInstanceSlot,
+  Future<bool> Function(int port)? portIsFree,
+}) async {
   final rawOverride =
       processEnvironment[sanadDevWebPortEnvironmentKey]?.trim() ?? '';
-  if (rawOverride.isEmpty) {
-    return deriveSanadDevWebPort(
-      sanadHome: sanadHome,
-      clientEnvironment: clientEnvironment,
-      clientInstanceSlot: clientInstanceSlot,
+  final isFree = portIsFree ?? sanadDevWebPortIsFree;
+  if (rawOverride.isNotEmpty) {
+    final port = int.tryParse(rawOverride);
+    if (port == null || port < 1 || port > 65535) {
+      throw FormatException(
+        '$sanadDevWebPortEnvironmentKey must be a valid TCP port: $rawOverride',
+      );
+    }
+    return port;
+  }
+  final candidates = sanadDevWebPortCandidates(
+    sanadHome: sanadHome,
+    clientEnvironment: clientEnvironment,
+    portalUrl: portalUrl,
+    clientInstanceSlot: clientInstanceSlot,
+  );
+  final recorded = await readSanadDevWebOriginRecord(
+    sanadHome: sanadHome,
+    clientInstanceSlot: clientInstanceSlot,
+  );
+  // A recorded origin is this slot's browser identity and wins over the current
+  // rotation, so a restart resumes the stored session. It is trusted only from
+  // the same client environment and only while it stays an origin the Portal in
+  // use can accept.
+  final port = recorded != null &&
+          recorded.environment == clientEnvironment.trim() &&
+          candidates.contains(recorded.port)
+      ? recorded.port
+      : candidates.first;
+  if (!await isFree(port)) {
+    throw StateError(
+      'Web origin ${sanadDevWebOriginForPort(port)} is already in use. Stop the '
+      'process holding it, or set $sanadDevWebPortEnvironmentKey to a free port '
+      'the deployment registers for $clientEnvironment.',
     );
   }
-  final port = int.tryParse(rawOverride);
-  if (port == null || port < 1 || port > 65535) {
-    throw FormatException(
-      '$sanadDevWebPortEnvironmentKey must be a valid TCP port: $rawOverride',
+  if (recorded == null ||
+      recorded.port != port ||
+      recorded.environment != clientEnvironment.trim()) {
+    await writeSanadDevWebOriginRecord(
+      sanadHome: sanadHome,
+      clientInstanceSlot: clientInstanceSlot,
+      environment: clientEnvironment.trim(),
+      port: port,
     );
   }
   return port;
+}
+
+/// One recorded origin for a Home and Client slot.
+class SanadDevWebOriginRecord {
+  const SanadDevWebOriginRecord({
+    required this.environment,
+    required this.port,
+  });
+
+  final String environment;
+  final int port;
+}
+
+String sanadDevWebOriginRecordPath(String sanadHome) => [
+  sanadHome.replaceAll(RegExp(r'[\\/]+$'), ''),
+  'dev',
+  sanadDevWebOriginRecordName,
+].join(Platform.pathSeparator);
+
+String _slotKey(String? clientInstanceSlot) {
+  final slot = clientInstanceSlot?.trim() ?? '';
+  return slot.isEmpty ? 'primary' : slot;
+}
+
+/// Last origin this Home served for [clientInstanceSlot], if any.
+Future<SanadDevWebOriginRecord?> readSanadDevWebOriginRecord({
+  required String sanadHome,
+  String? clientInstanceSlot,
+}) async {
+  final file = File(sanadDevWebOriginRecordPath(sanadHome));
+  if (!await file.exists()) return null;
+  try {
+    final decoded = jsonDecode(await file.readAsString());
+    if (decoded is! Map) return null;
+    final slots = decoded['slots'];
+    if (slots is! Map) return null;
+    final entry = slots[_slotKey(clientInstanceSlot)];
+    if (entry is! Map) return null;
+    final environment = entry['environment'];
+    final port = entry['port'];
+    if (environment is! String || port is! int) return null;
+    return SanadDevWebOriginRecord(environment: environment, port: port);
+  } on FormatException {
+    // A hand-edited or truncated record only loses the preference.
+    return null;
+  }
+}
+
+/// Records [port] so the next restart of this Home and slot reuses the origin.
+Future<void> writeSanadDevWebOriginRecord({
+  required String sanadHome,
+  required String? clientInstanceSlot,
+  required String environment,
+  required int port,
+}) async {
+  final file = File(sanadDevWebOriginRecordPath(sanadHome));
+  final slots = <String, Object?>{};
+  if (await file.exists()) {
+    try {
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is Map && decoded['slots'] is Map) {
+        slots.addAll(
+          Map<String, Object?>.from(decoded['slots'] as Map),
+        );
+      }
+    } on FormatException {
+      // Rebuilding a corrupt record is safer than failing the launch.
+    }
+  }
+  slots[_slotKey(clientInstanceSlot)] = {
+    'environment': environment,
+    'port': port,
+  };
+  await secureRuntimeAtomicWrite(
+    sanadHome,
+    file.path,
+    '${jsonEncode({'version': 1, 'slots': slots})}\n',
+  );
 }
 
 /// Pins a Web Client's browser origin on the flutter command line.
@@ -147,69 +352,31 @@ void _removeWebOriginArguments(List<String> arguments) {
   }
 }
 
-/// Refuses to start a Web Client whose port another process already owns.
-///
-/// A bound port means the derived origin cannot be served, so the launch would
-/// fail inside flutter_tools with a less instructive message. There is no
-/// fallback: a different port is a different origin and would silently drop the
-/// stored session again.
-Future<void> assertSanadDevWebPortAvailable({
-  required int port,
-  required String clientEnvironment,
-}) async {
-  try {
-    final socket = await ServerSocket.bind(InternetAddress.loopbackIPv4, port);
-    await socket.close();
-  } on SocketException {
-    throw StateError(
-      'Web origin ${sanadDevWebOriginForPort(port)} is already in use by '
-      'another process. Stop it, or set $sanadDevWebPortEnvironmentKey to a '
-      'free port and register that origin with the deployment that owns the '
-      'Portal ($clientEnvironment).',
-    );
-  }
-}
-
-/// Result of resolving the origin one Web Client launch will be served from.
+/// What the launch says about the origin it will serve.
 class SanadDevWebOriginLaunch {
-  const SanadDevWebOriginLaunch.ready({required this.port})
-    : refusal = null,
-      exitStatus = 0,
-      startupFailureReason = null;
-
-  const SanadDevWebOriginLaunch.refused({
-    required this.refusal,
-    required this.exitStatus,
-    required this.startupFailureReason,
-  }) : port = null;
+  const SanadDevWebOriginLaunch({required this.port, required this.warnings});
 
   final int? port;
 
-  /// Operator-facing reason the launch must not continue.
-  final String? refusal;
-
-  /// CLI exit status that must accompany [refusal].
-  final int exitStatus;
-
-  /// Startup-attempt reason recorded with the refusal.
-  final String? startupFailureReason;
-
-  bool get isRefused => refusal != null;
+  /// Operator-facing observations. Never a reason to abandon the launch: a Web
+  /// Client is legitimate in every environment, and only the Portal decides
+  /// whether a sign-in can complete.
+  final List<String> warnings;
 }
 
-/// Decides, prints, and refuses the Web origin of one launch.
+/// Resolves and reports the origin of one Web Client launch.
 ///
-/// The caller only has to ask before spawning: this resolves the client
-/// environment and the deterministic port, proves the port is free, verifies the
-/// Portal's allowlist, prints the origin once, and writes any refusal or warning
-/// to stderr. A returned launch is never missing its origin.
+/// It chooses the port, prints the origin once, probes the Portal's own CORS
+/// preflight for it, and returns guidance instead of blocking. The only failure
+/// is a Web domain with no free origin at all, which cannot be launched.
 Future<SanadDevWebOriginLaunch> prepareSanadDevWebOriginLaunch({
   required File configFile,
   required SanadCloudEndpoints? cloudEndpoints,
   required String sanadHome,
-  required bool cloudEnabled,
   required Map<String, String> processEnvironment,
   String? clientInstanceSlot,
+  Future<bool> Function(int port)? portIsFree,
+  Future<bool?> Function(String portalUrl, String origin)? probePortal,
 }) async {
   final String clientEnvironment;
   try {
@@ -217,175 +384,75 @@ Future<SanadDevWebOriginLaunch> prepareSanadDevWebOriginLaunch({
         cloudEndpoints?.environment ?? readSanadClientEnvironment(configFile);
   } on FormatException catch (error) {
     stderr.writeln(error.message);
-    return SanadDevWebOriginLaunch.refused(
-      refusal: error.message,
-      exitStatus: 64,
-      startupFailureReason: 'client environment is invalid',
-    );
+    return SanadDevWebOriginLaunch(port: null, warnings: [error.message]);
+  } on FileSystemException catch (error) {
+    final message = 'Client configuration is unreadable: ${error.path}';
+    stderr.writeln(message);
+    return SanadDevWebOriginLaunch(port: null, warnings: [message]);
   }
-
+  final portalUrl = cloudEndpoints?.portalUrl ?? '';
   final int port;
   try {
-    port = resolveSanadDevWebPort(
+    port = await chooseSanadDevWebPort(
       sanadHome: sanadHome,
       clientEnvironment: clientEnvironment,
+      portalUrl: portalUrl,
       processEnvironment: processEnvironment,
       clientInstanceSlot: clientInstanceSlot,
-    );
-  } on FormatException catch (error) {
-    stderr.writeln(error.message);
-    return SanadDevWebOriginLaunch.refused(
-      refusal: error.message,
-      exitStatus: 64,
-      startupFailureReason: 'client web origin is invalid',
-    );
-  }
-
-  final origin = sanadDevWebOriginForPort(port);
-  try {
-    await assertSanadDevWebPortAvailable(
-      port: port,
-      clientEnvironment: clientEnvironment,
+      portIsFree: portIsFree,
     );
   } on StateError catch (error) {
     stderr.writeln(error.message);
-    return SanadDevWebOriginLaunch.refused(
-      refusal: error.message,
-      exitStatus: 1,
-      startupFailureReason: 'client web origin is unavailable',
-    );
+    return SanadDevWebOriginLaunch(port: null, warnings: [error.message]);
+  } on FormatException catch (error) {
+    stderr.writeln(error.message);
+    return SanadDevWebOriginLaunch(port: null, warnings: [error.message]);
   }
 
-  final portalUrl = cloudEndpoints?.portalUrl ?? '';
-  final preflight = evaluateSanadDevWebOriginPreflight(
-    origin: origin,
-    portalUrl: portalUrl,
-    cloudEnabled: cloudEnabled,
-    deploymentAcceptsOrigin: cloudEnabled && portalUrl.isNotEmpty
-        ? await probeSanadDevPortalWebOrigin(
-            portalUrl: portalUrl,
-            origin: origin,
-          )
-        : null,
-  );
-  if (preflight.isRefused) {
-    stderr.writeln(preflight.message);
-    return SanadDevWebOriginLaunch.refused(
-      refusal: preflight.message,
-      exitStatus: 1,
-      startupFailureReason: 'client web origin cannot authenticate',
-    );
-  }
-  if (preflight.isUnverified) stderr.writeln(preflight.message);
+  final origin = sanadDevWebOriginForPort(port);
   print('Web origin: $origin');
-  return SanadDevWebOriginLaunch.ready(port: port);
-}
-
-/// Who decides which browser origins may authenticate for this environment.
-enum SanadDevWebOriginAuthority {
-  /// The Portal is served on loopback by a deployment the developer owns, so
-  /// its registered Web origin can be aligned with the derived origin.
-  deploymentOwned,
-
-  /// The Portal is hosted and registers exactly one HTTPS Web app origin, so a
-  /// loopback origin can never complete sign-in.
-  hostedPortal,
-}
-
-/// Outcome of the Web origin preflight.
-enum SanadDevWebOriginPreflightOutcome { ready, unverified, refused }
-
-/// One preflight decision plus the operator-facing explanation.
-class SanadDevWebOriginPreflight {
-  const SanadDevWebOriginPreflight(this.outcome, this.message);
-
-  final SanadDevWebOriginPreflightOutcome outcome;
-  final String message;
-
-  bool get isRefused => outcome == SanadDevWebOriginPreflightOutcome.refused;
-
-  bool get isUnverified =>
-      outcome == SanadDevWebOriginPreflightOutcome.unverified;
-}
-
-/// Loopback Portal URLs are owned by a local deployment; anything else is the
-/// hosted Portal whose Web registration is a single hosted app origin.
-SanadDevWebOriginAuthority sanadDevWebOriginAuthorityFor(String portalUrl) {
-  final host = Uri.tryParse(portalUrl.trim())?.host.toLowerCase() ?? '';
-  const loopbackHosts = {'127.0.0.1', 'localhost', '::1'};
-  return loopbackHosts.contains(host)
-      ? SanadDevWebOriginAuthority.deploymentOwned
-      : SanadDevWebOriginAuthority.hostedPortal;
-}
-
-/// Decides whether a Web Client launched at [origin] can ever authenticate.
-///
-/// [deploymentAcceptsOrigin] is the result of verifying the local Portal's own
-/// CORS allowlist, or `null` when it could not be verified. The decision is pure
-/// so the launch path stays testable without a network or a real Portal.
-SanadDevWebOriginPreflight evaluateSanadDevWebOriginPreflight({
-  required String origin,
-  required String portalUrl,
-  required bool cloudEnabled,
-  required bool? deploymentAcceptsOrigin,
-}) {
-  if (!cloudEnabled) {
-    return SanadDevWebOriginPreflight(
-      SanadDevWebOriginPreflightOutcome.unverified,
-      'Web origin pinned to $origin. The cloud gateway is disabled '
-      '(--no-cloud), so this launch does not sign in; enable it to verify that '
-      'the session persists.',
+  final warnings = <String>[];
+  final hosted =
+      sanadDevWebOriginAuthorityFor(portalUrl) ==
+      SanadDevWebOriginAuthority.hostedPortal;
+  if (hosted) {
+    // CORS already allows this loopback origin, so the launch is legitimate; the
+    // remaining gate is the Portal's own Web redirect_uri registration, which a
+    // localhost page cannot satisfy. Say so once, and name the supported path.
+    warnings.add(
+      'Web sign-in against $portalUrl completes only from the deployed Web app. '
+      'Local Web sign-in uses the local Docker stack: '
+      'sanad-dev run client -d chrome --config config/local.json, whose Portal '
+      'registers $origin. This launch continues; it serves pre-login UI work.',
     );
   }
-  if (sanadDevWebOriginAuthorityFor(portalUrl) ==
-      SanadDevWebOriginAuthority.hostedPortal) {
-    return SanadDevWebOriginPreflight(
-      SanadDevWebOriginPreflightOutcome.refused,
-      'Refusing to launch a Web Client at $origin: it can never sign in.\n'
-      'The hosted Portal at $portalUrl registers exactly one HTTPS Web '
-      'callback origin, served by the deployed Web app, so a loopback page is '
-      'rejected by its CORS preflight and by the exact redirect_uri check '
-      '("invalid_redirect_uri").\n'
-      'Use a native device (-d macos) for a signed-in Client, or run '
-      'config/local.json against the local stack, whose Portal Web origin this '
-      'launcher pins and verifies. For pre-login UI work only, relaunch with '
-      '--no-cloud so the origin is pinned without promising a sign-in.',
+  if (!hosted && portalUrl.isNotEmpty) {
+    final accepts = await (probePortal ??
+            (String url, String candidate) =>
+                probeSanadDevPortalWebOrigin(portalUrl: url, origin: candidate))(
+      portalUrl,
+      origin,
     );
+    if (accepts == false) {
+      warnings.add(
+        'The local Portal at $portalUrl rejected this origin. Register it with '
+        'SANAD_PORTAL_WEB_CLIENT_ORIGIN=$origin, '
+        'SANAD_PORTAL_CORS_ORIGINS=<existing>,$origin, and '
+        'BACKEND_CORS_ORIGINS, then recreate the Portal.',
+      );
+    }
   }
-  if (deploymentAcceptsOrigin == false) {
-    return SanadDevWebOriginPreflight(
-      SanadDevWebOriginPreflightOutcome.refused,
-      'Refusing to launch a Web Client at $origin: the local Portal at '
-      '$portalUrl rejects that origin. Register it in the services that decide '
-      'the browser origin:\n'
-      '  SANAD_PORTAL_WEB_CLIENT_ORIGIN=$origin\n'
-      '  SANAD_PORTAL_CORS_ORIGINS=<existing>,$origin\n'
-      '  BACKEND_CORS_ORIGINS=[...,"$origin"]\n'
-      'The Web callback is $origin/oauth/callback. Recreate the Portal and '
-      'Backend, then relaunch.',
-    );
+  for (final warning in warnings) {
+    stderr.writeln(warning);
   }
-  if (deploymentAcceptsOrigin == null) {
-    return SanadDevWebOriginPreflight(
-      SanadDevWebOriginPreflightOutcome.unverified,
-      'Web origin pinned to $origin, but $portalUrl did not answer the CORS '
-      'preflight, so its allowlist could not be verified. If sign-in fails, '
-      'register $origin (SANAD_PORTAL_WEB_CLIENT_ORIGIN and '
-      'SANAD_PORTAL_CORS_ORIGINS plus BACKEND_CORS_ORIGINS) and compare the '
-      'browser location.origin with it.',
-    );
-  }
-  return const SanadDevWebOriginPreflight(
-    SanadDevWebOriginPreflightOutcome.ready,
-    '',
-  );
+  return SanadDevWebOriginLaunch(port: port, warnings: warnings);
 }
 
 /// Asks the Portal whether it would accept a browser request from [origin].
 ///
 /// This is the browser's own credentialed CORS preflight, unauthenticated and
 /// side-effect free: it starts no transaction and carries no credential. The
-/// answer is advisory evidence for the preflight, never ownership or liveness.
+/// answer is advisory guidance for the launch, never ownership or liveness.
 /// `null` means the Portal could not be asked, never that it said no.
 Future<bool?> probeSanadDevPortalWebOrigin({
   required String portalUrl,

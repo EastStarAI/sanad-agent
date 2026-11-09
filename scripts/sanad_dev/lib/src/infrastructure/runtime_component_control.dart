@@ -56,6 +56,7 @@ class RuntimeComponentControlRequest {
     this.clientInstanceSlot,
     this.clientPid,
     this.vmServicePort,
+    this.webPort,
     this.force = false,
     this.openClientTerminal = true,
     this.message,
@@ -72,6 +73,15 @@ class RuntimeComponentControlRequest {
   final String? clientInstanceSlot;
   final int? clientPid;
   final int? vmServicePort;
+
+  /// Browser origin port the launcher already serves for this slot.
+  ///
+  /// The requester's environment is not the launcher's: a `SANAD_DEV_WEB_PORT`
+  /// override is a launcher-startup variable, so re-deriving the origin on the
+  /// requesting side can silently pick a different one. Carrying the resolved
+  /// port keeps one slot on exactly one browser origin.
+  final int? webPort;
+
   final bool force;
   final bool openClientTerminal;
   final String? message;
@@ -91,6 +101,7 @@ class RuntimeComponentControlRequest {
       clientInstanceSlot: clientInstanceSlot,
       clientPid: clientPid,
       vmServicePort: vmServicePort,
+      webPort: webPort,
       force: force,
       openClientTerminal: openClientTerminal,
       message: message ?? this.message,
@@ -110,6 +121,7 @@ class RuntimeComponentControlRequest {
     if (clientInstanceSlot != null) 'client_instance_slot': clientInstanceSlot,
     if (clientPid != null) 'client_pid': clientPid,
     if (vmServicePort != null) 'vm_service_port': vmServicePort,
+    if (webPort != null) 'web_port': webPort,
     'force': force,
     'open_client_terminal': openClientTerminal,
     if (message != null) 'message': message,
@@ -141,6 +153,7 @@ class RuntimeComponentControlRequest {
       clientInstanceSlot: json['client_instance_slot']?.toString(),
       clientPid: _optionalControlInt(json['client_pid']),
       vmServicePort: _optionalControlInt(json['vm_service_port']),
+      webPort: _optionalControlInt(json['web_port']),
       force: json['force'] == true,
       openClientTerminal: json['open_client_terminal'] != false,
       message: json['message']?.toString(),

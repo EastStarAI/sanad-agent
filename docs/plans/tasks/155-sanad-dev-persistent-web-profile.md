@@ -13,8 +13,9 @@ Home and instance slot, because `sanad-dev` stops letting flutter_tools create a
   `--user-data-dir` inside `--web-browser-flag`; the Web Client keeps its tokens and device identity only in `localStorage`,
   which browsers scope to the profile directory plus the origin. The temporary profile is therefore the whole defect.
 - The port and the shared-preferences namespace are already deterministic per Home. Neither changes here: a stable default
-  Web port derived from the Home was explicitly **out of scope for this record** (see the superseded note above), and
-  `SANAD_DEV_WEB_PORT` was its "random unless set" policy until plan 158 replaced it with a derived origin.
+  Web port was explicitly **out of scope for this record** (see the superseded note above), and `SANAD_DEV_WEB_PORT` was
+  its "random unless set" policy until plan 158 replaced it with a stable, Portal-accepted origin chosen per Home and slot
+  and reused across restarts.
 - The profile directory is `<SANAD_HOME>/dev/chrome-web/<slot|primary>`: runtime state beside the launcher lease, created
   through the existing secure runtime-file boundary so the chain is `0700`, and already excluded from Home fixtures because
   the fixture allowlist never captures `dev/`. Nothing is copied from any existing user browser profile.

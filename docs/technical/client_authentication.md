@@ -53,16 +53,26 @@ and no vault: the pair lives only in `localStorage` under the Client's shared-pr
 prefix, which browsers scope to the profile directory plus the origin. A Web session
 therefore survives a page reload and a Flutter hot restart, and survives a full Client
 restart only when both the origin (stable Web port) and the Chrome profile are unchanged
-— which is why `sanad-dev` pins a deterministic origin per Home, Client slot, and
-`ENVIRONMENT`, supplies a Home-scoped `--user-data-dir` for Chrome Clients, and refuses a
-launch whose origin the Portal in use cannot register.
+— which is why `sanad-dev` serves every Web Client from a stable origin per Home and
+Client slot, records the port it served last, and supplies a Home-scoped
+`--user-data-dir` for Chrome Clients.
 
 A loopback Web origin can only authenticate against a Portal that registers it: the
 Portal accepts exactly one `SANAD_PORTAL_WEB_CLIENT_ORIGIN` and mirrors it in
-`SANAD_PORTAL_CORS_ORIGINS`, so a local deployment registers its pinned
-`http://localhost:<port>` while each hosted deployment registers only its HTTPS Web app
-origin. A locally served Web Client therefore signs in against the local stack, and
-hosted Web sign-in belongs to the deployed Web app.
+`SANAD_PORTAL_CORS_ORIGINS`, so a local deployment registers its own
+`http://localhost:<port>`. Every `sanad-portal` deployment also allows the built-in
+loopback defaults (`localhost` and `127.0.0.1` on `5173`, `5174`, `8080`, `8082`,
+`8083`) in its credentialed CORS allowlist, which is why `sanad-dev` serves a hosted
+Web Client from `8080`: the browser can reach the auth API from that page.
+
+CORS is only the first gate. A hosted sign-in also requires the Portal to accept the
+page origin as a Web `redirect_uri` for the `sanad_flutter_web` client, and each
+hosted deployment registers only its deployed Web app origin, so the code produced
+for a hosted sign-in is delivered to a page that can never be the local one. The
+decision is therefore explicit: hosted Web sign-in belongs to the deployed Web app,
+local Web sign-in runs against the local Docker stack and its registered origin, and
+Production keeps an exact `redirect_uri` allowlist. A config-level redirect override
+is deliberately not offered: it would let any local page start a real hosted login.
 
 Web `postMessage` validates the exact Portal origin, popup source, message type,
 and payload. The Portal success page targets only the registered app origin;

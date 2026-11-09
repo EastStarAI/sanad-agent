@@ -145,6 +145,17 @@ Future<void> handleRun({
       final requestedVmPort = startsClient
           ? await _nextAvailableVmServicePort(runtime.vmServicePort)
           : null;
+      // The launcher owns the browser origin of every slot it serves. Send the
+      // port this Home already serves the slot from instead of deriving it here:
+      // the override that chose it is a launcher-startup variable, so this
+      // terminal's environment can differ and re-deriving would silently move
+      // the Client to a second origin.
+      final requestedWebPort = startsClient && isSanadDevWebDevice(device)
+          ? (await readSanadDevWebOriginRecord(
+              sanadHome: ownership.record!.sanadHome,
+              clientInstanceSlot: clientInstanceSlot,
+            ))?.port
+          : null;
       final succeeded = await requestManagedComponentAction(
         ownership.record!,
         action: RuntimeComponentAction.start,
@@ -152,6 +163,7 @@ Future<void> handleRun({
         deviceId: startsClient ? device : null,
         clientInstanceSlot: startsClient ? clientInstanceSlot : null,
         vmServicePort: requestedVmPort,
+        webPort: requestedWebPort,
         openClientTerminal: target == SanadDevComponentTarget.all,
       );
       if (!succeeded) {
@@ -275,26 +287,29 @@ Future<void> handleRun({
   }
 
   // A Web Client's sign-in survives a restart only when its browser origin is
-  // stable, so the origin is decided before any process exists: derived from
-  // Home, slot, and environment, never flutter_tools' random port.
+  // stable, so the origin is decided before any process exists: the explicit
+  // override, the origin this Home and slot last served, then the first free
+  // port the Portal in use accepts. flutter_tools would otherwise pick a random
+  // port, which is a fresh origin with no stored session. A Web Client is
+  // legitimate in every environment, so this reports guidance and never refuses
+  // merely because the Portal is hosted.
   int? webPort;
   if (startsClient && isSanadDevWebDevice(device)) {
     final webLaunch = await prepareSanadDevWebOriginLaunch(
       configFile: configFile,
       cloudEndpoints: cloudEndpoints,
       sanadHome: runtime.sanadHome,
-      cloudEnabled: cloudEnabled,
       processEnvironment: Platform.environment,
       clientInstanceSlot: clientInstanceSlot,
     );
-    if (webLaunch.isRefused) {
+    if (webLaunch.port == null) {
       await recordStartup(
         stage: SanadDevStartupStage.cleanup,
         outcome: SanadDevStartupOutcome.failed,
-        exitStatus: webLaunch.exitStatus,
-        failureReason: webLaunch.startupFailureReason,
+        exitStatus: 1,
+        failureReason: 'client web origin is unavailable',
       );
-      exitCode = webLaunch.exitStatus;
+      exitCode = 1;
       return;
     }
     webPort = webLaunch.port;

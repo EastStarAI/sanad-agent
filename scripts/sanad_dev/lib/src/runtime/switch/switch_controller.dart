@@ -376,32 +376,33 @@ class _SwitchableRuntimeController {
       } else {
         arguments.add(slotArgument);
       }
-      // The additional Client must reuse the same browser origin rule as a fresh
-      // launch: the port is derived from the same Home, slot, and environment, so
-      // one Home can never show two origins or silently drop a stored session.
+      // The launcher owns the origin of every slot it serves, so a port carried by
+      // the request is authoritative. Deriving one is only the fallback for a
+      // request that names none: it still uses this Home's own scheme, never
+      // flutter_tools' random port, and prefers the origin this slot already
+      // used, so a restart cannot move the browser session to a new origin.
       int? webPort;
       if (isSanadDevWebDevice(requestedDevice)) {
-        final clientEnvironment = readSanadClientEnvironmentFromLaunchArguments(
+        final endpoints = readSanadCloudEndpointsFromLaunchArguments(
           arguments: _clientArguments,
           clientDirectory: _clientDirectory,
         );
-        if (clientEnvironment == null) {
+        if (endpoints == null) {
           throw StateError(
             'A Web Client needs the configuration environment of its recorded '
-            'launch to derive a stable Web origin, and that launch names no '
+            'launch to keep a stable Web origin, and that launch names no '
             'readable client configuration.',
           );
         }
-        webPort = resolveSanadDevWebPort(
-          sanadHome: _launcherRecord.sanadHome,
-          clientEnvironment: clientEnvironment,
-          processEnvironment: _clientEnvironment,
-          clientInstanceSlot: requestedSlot,
-        );
-        await assertSanadDevWebPortAvailable(
-          port: webPort,
-          clientEnvironment: clientEnvironment,
-        );
+        webPort =
+            request.webPort ??
+            await chooseSanadDevWebPort(
+              sanadHome: _launcherRecord.sanadHome,
+              clientEnvironment: endpoints.environment,
+              portalUrl: endpoints.portalUrl,
+              processEnvironment: _clientEnvironment,
+              clientInstanceSlot: requestedSlot,
+            );
       }
       applySanadDevWebPort(
         arguments,

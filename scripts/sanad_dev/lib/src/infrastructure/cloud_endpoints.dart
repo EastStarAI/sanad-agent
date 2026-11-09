@@ -79,6 +79,44 @@ String? readSanadClientEnvironmentFromLaunchArguments({
   required List<String> arguments,
   required String clientDirectory,
 }) {
+  final configFile = clientConfigFileFromLaunchArguments(
+    arguments: arguments,
+    clientDirectory: clientDirectory,
+  );
+  if (configFile == null) return null;
+  try {
+    return readSanadClientEnvironment(configFile);
+  } on FormatException {
+    return null;
+  }
+}
+
+/// Cloud endpoints reached through a live launch argument vector.
+///
+/// The additional-Client path needs the Portal URL as well as the environment to
+/// keep a Web Client on the origin that Portal accepts. `null` means the recorded
+/// command line names no readable configuration, never a guessed endpoint.
+SanadCloudEndpoints? readSanadCloudEndpointsFromLaunchArguments({
+  required List<String> arguments,
+  required String clientDirectory,
+}) {
+  final configFile = clientConfigFileFromLaunchArguments(
+    arguments: arguments,
+    clientDirectory: clientDirectory,
+  );
+  if (configFile == null) return null;
+  try {
+    return readSanadCloudEndpoints(configFile);
+  } on FormatException {
+    return null;
+  }
+}
+
+/// Client configuration file named by `--dart-define-from-file=`.
+File? clientConfigFileFromLaunchArguments({
+  required List<String> arguments,
+  required String clientDirectory,
+}) {
   const flag = '--dart-define-from-file=';
   final argument = arguments.firstWhere(
     (value) => value.startsWith(flag),
@@ -91,17 +129,11 @@ String? readSanadClientEnvironmentFromLaunchArguments({
   final candidate = direct.isAbsolute
       ? direct
       : File('$clientDirectory${Platform.pathSeparator}$value');
-  final configFile = candidate.existsSync()
+  return candidate.existsSync()
       ? candidate
       : direct.existsSync()
       ? direct
       : null;
-  if (configFile == null) return null;
-  try {
-    return readSanadClientEnvironment(configFile);
-  } on FormatException {
-    return null;
-  }
 }
 
 Map<String, dynamic> _decodeClientConfiguration(File configFile) {
