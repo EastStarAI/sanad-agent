@@ -42,6 +42,11 @@ class ComposerSendStopButton extends StatelessWidget {
   /// the button waits for the transcript before dispatching; a session that
   /// recognised nothing (or failed, or timed out) sends nothing at all instead
   /// of an empty message.
+  ///
+  /// The wait resumes on this widget's own `context`, which is why the composer
+  /// keeps the trailing control in one stable slot: the row used to move Send
+  /// between branches when the session left `listening`, so this continuation
+  /// ran on an unmounted element and returned without dispatching.
   Future<void> _send(
     BuildContext context, {
     required bool isDictating,
@@ -89,7 +94,17 @@ class ComposerSendStopButton extends StatelessWidget {
 
     final executionSnapshot = inputSlice.executionSnapshot;
     final isStopping = executionSnapshot?.isStopping ?? false;
-    final showStopButton = capabilities.supportsStop && (executionSnapshot?.canStop == true || isStopping) && isEmpty;
+    // A running dictation owns the trailing control: while the user speaks, the
+    // Stop the row would otherwise show is the turn's, and pressing it beside
+    // the mic's own Stop is two controls for one gesture. The session's Send
+    // replaces it, and the turn Stop comes back the moment the composer is empty
+    // again — the same rule typed text already follows.
+    final showStopButton =
+        !dictating &&
+        !awaitingTranscript &&
+        capabilities.supportsStop &&
+        (executionSnapshot?.canStop == true || isStopping) &&
+        isEmpty;
 
     final showVoiceButton =
         capabilities.supportsVoiceCall &&
@@ -98,18 +113,9 @@ class ComposerSendStopButton extends StatelessWidget {
         isEmpty &&
         executionSnapshot?.hasActiveWork != true;
 
-    if (showStopButton) {
-      // One design, one owner: the stop that ends a reply is the same widget the
-      // dictation button becomes while listening.
-      return StopActionButton(
-        buttonKey: const Key('stop_message_btn'),
-        tooltip: isStopping ? 'Stopping response' : 'Stop response',
-        onPressed: isStopping ? null : onStop,
-        busy: isStopping,
-        progressIndicatorKey: const Key('stop_message_progress_indicator'),
-      );
-    }
-
+    // The waiting control comes first: while the transcript is decoding, the
+    // composer is still empty, so a turn Stop evaluated before this branch would
+    // take the slot the send wait is holding.
     if (awaitingTranscript) {
       // The transcript is being decoded. A spinner that also stops: pressing it
       // abandons the automatic send while keeping whatever text arrives.
@@ -139,6 +145,22 @@ class ComposerSendStopButton extends StatelessWidget {
             ),
           ),
         ),
+      );
+    }
+
+    if (showStopButton) {
+      // One design, one owner: the stop that ends a reply is the same widget the
+      // dictation button becomes while listening.
+      return StopActionButton(
+        buttonKey: const Key('stop_message_btn'),
+        tooltip: isStopping
+            ? AppLocalizations.of(context)?.composerStoppingTooltip ??
+                'Stopping response'
+            : AppLocalizations.of(context)?.composerStopTooltip ??
+                'Stop response',
+        onPressed: isStopping ? null : onStop,
+        busy: isStopping,
+        progressIndicatorKey: const Key('stop_message_progress_indicator'),
       );
     }
 
@@ -216,8 +238,10 @@ class ComposerSendStopButton extends StatelessWidget {
       child: IconButton(
         key: const Key('send_message_btn'),
         tooltip: executionSnapshot?.isExecuting == true
-            ? 'Press Enter to steer • Ctrl/Cmd+Enter to queue'
-            : 'Send message',
+            ? AppLocalizations.of(context)?.composerSendSteerTooltip ??
+                'Press Enter to steer • Ctrl/Cmd+Enter to queue'
+            : AppLocalizations.of(context)?.composerSendTooltip ??
+                'Send message',
         onPressed: canSend
             ? () => _send(context, isDictating: dictating)
             : null,

@@ -128,6 +128,11 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
       builder: (context, state) {
         final cubit = context.read<DictationCubit>();
         final model = state.model;
+        // An empty catalog has two very different causes. A refusal from the
+        // transport boundary never reached the daemon, so the reason — not the
+        // missing model — is what the user has to read; only an answer that
+        // genuinely listed nothing is the install state.
+        final channelReason = dictationChannelRefusalLabel(l10n, state.errorCode);
         return AlertDialog(
           key: const Key('dictation_model_sheet'),
           title: Text(l10n.dictationSheetTitle),
@@ -182,7 +187,18 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                     ),
                   if (model.models.isEmpty) ...[
                     const SizedBox(height: 12),
-                    Text(l10n.dictationModelRequired, style: bodyStyle),
+                    if (channelReason != null)
+                      Text(
+                        channelReason,
+                        key: const Key('dictation_sheet_channel_reason'),
+                        style: bodyStyle?.copyWith(color: colorScheme.error),
+                      )
+                    else
+                      Text(
+                        l10n.dictationModelRequired,
+                        key: const Key('dictation_sheet_model_required'),
+                        style: bodyStyle,
+                      ),
                   ],
                 ],
               ),

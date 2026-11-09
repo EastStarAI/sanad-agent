@@ -426,12 +426,12 @@ void main() {
     // delivers the final after the row already gave the meter back.
     await stopSession(tester);
     expect(find.byKey(const Key('dictation_row_meter')), findsNothing);
-    // The row moves the button between two branches, so Stop really does
-    // replace the widget that wrote the partial — the composer, not that
-    // widget's State, has to remember the range.
+    // The row keeps the mic in one slot, so the very element that wrote the
+    // partial is still mounted when the final lands; the range still belongs to
+    // the composer, because nothing about a widget's lifetime is a contract.
     expect(
       tester.element(find.byType(DictationMicButton)),
-      isNot(same(wrotePartial)),
+      same(wrotePartial),
     );
 
     await emit(tester, {

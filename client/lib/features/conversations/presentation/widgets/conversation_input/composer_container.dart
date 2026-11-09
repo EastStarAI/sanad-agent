@@ -346,6 +346,26 @@ class ComposerContainer extends StatelessWidget {
           )
         : null;
 
+    // The trailing controls are one slot in every layout, so the element that
+    // owns an in-flight action survives the row changing shape underneath it.
+    // Only the middle slot swaps (the meter while listening, the selectors
+    // otherwise); the mic and the Send/Stop control never move between branches.
+    // Moving them did move them: the send continuation resumed on a context the
+    // rebuild had already unmounted, and the transcript was never dispatched.
+    final isCompact = SidebarBreakpoints.isCompact(context);
+    final trailingGap = isCompact ? 4.0 : 8.0;
+    final trailingControls = Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        SizedBox(width: trailingGap),
+        if (dictationMicButton != null) ...[
+          dictationMicButton,
+          SizedBox(width: trailingGap),
+        ],
+        sendStopButton,
+      ],
+    );
+
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
       decoration: BoxDecoration(
@@ -354,7 +374,6 @@ class ComposerContainer extends StatelessWidget {
         ),
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
           Row(
@@ -393,68 +412,48 @@ class ComposerContainer extends StatelessWidget {
               ],
             ],
           ),
-          // While listening, the model and thinking selectors give the row to the
-          // meter, which fills the space they had. Nothing about their state
-          // changes, so they return exactly as they were when the session ends.
-          if (dictationActive)
-            const Expanded(
-              child: Padding(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                child: DictationComposerBackdrop(),
-              ),
-            )
-          else if (SidebarBreakpoints.isCompact(context))
-            Expanded(
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.end,
-                mainAxisSize: MainAxisSize.max,
-                children: [
-                  Flexible(
-                    child: Wrap(
-                      direction: Axis.horizontal,
-                      alignment: WrapAlignment.center,
-                      spacing: 4,
-                      runSpacing: 4,
-                      crossAxisAlignment: WrapCrossAlignment.center,
-                      children: [
-                        if (modelChip != null) modelChip,
-                        if (thinkingModeChip != null) thinkingModeChip,
-                      ],
-                    ),
+          // The middle slot is the only one that swaps. While listening, the
+          // model and thinking selectors give it to the meter, which fills the
+          // space they had; nothing about their state changes, so they return
+          // exactly as they were when the session ends.
+          Expanded(
+            child: dictationActive
+                ? const Padding(
+                    padding: EdgeInsetsDirectional.only(start: 8),
+                    child: DictationComposerBackdrop(),
+                  )
+                : isCompact
+                ? Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      Flexible(
+                        child: Wrap(
+                          direction: Axis.horizontal,
+                          alignment: WrapAlignment.center,
+                          spacing: 4,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            if (modelChip != null) modelChip,
+                            if (thinkingModeChip != null) thinkingModeChip,
+                          ],
+                        ),
+                      ),
+                    ],
+                  )
+                : Row(
+                    mainAxisAlignment: MainAxisAlignment.end,
+                    mainAxisSize: MainAxisSize.max,
+                    children: [
+                      if (modelChip != null) modelChip,
+                      if (modelChip != null && thinkingModeChip != null)
+                        const SizedBox(width: 8),
+                      if (thinkingModeChip != null) thinkingModeChip,
+                    ],
                   ),
-                  const SizedBox(width: 4),
-                  if (dictationMicButton != null) dictationMicButton,
-                  if (dictationMicButton != null) const SizedBox(width: 4),
-                  sendStopButton,
-                ],
-              ),
-            )
-          else
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (modelChip != null) ...[
-                  modelChip,
-                  const SizedBox(width: 8),
-                ],
-                if (thinkingModeChip != null) ...[
-                  thinkingModeChip,
-                  const SizedBox(width: 8),
-                ],
-                if (dictationMicButton != null) ...[
-                  dictationMicButton,
-                  const SizedBox(width: 8),
-                ],
-                sendStopButton,
-              ],
-            ),
-          // In the active layout the meter took the flexible slot, so the two
-          // controls that stay visible are pinned to the trailing edge here.
-          if (dictationActive) ...[
-            if (dictationMicButton != null) dictationMicButton,
-            if (dictationMicButton != null) const SizedBox(width: 8),
-            sendStopButton,
-          ],
+          ),
+          trailingControls,
         ],
       ),
     );

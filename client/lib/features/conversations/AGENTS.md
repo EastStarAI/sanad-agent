@@ -19,6 +19,9 @@ Incoming events follow:
 - User-message attachments preserve one strict ordered typed projection across live events, history, and cache. Reject unknown/private fields. Presentation receives cancellable bounded media loaders from the repository, renders image/file/unavailable cards before text, and never owns HTTP credentials or a private path.
 - Paste, picker, and drop feed the same ordered draft pipeline. On Send, the conversation data boundary computes SHA-256 and base64 only for the authenticated private `attachment.admit` command, waits for an `accepted` ACK containing opaque ids, then dispatches `think` with those ids and the same request identity. Text-only attachment drafts are valid. Clear the draft only after admission and dispatch; admission failure retains text and attachments and must not emit `think` or an optimistic user row.
 
+## Composer Surface
+- The bottom action row keeps its trailing control — the dictation mic plus the Send/Stop/voice control — in **one stable slot** in every layout; only the middle slot swaps (the dictation meter while listening, the model/thinking selectors otherwise). An action that awaits inside that control resumes on its own `BuildContext`, so moving it between branches unmounts the element mid-flight and the continuation returns without doing its work: a send pressed while dictating lost its transcript exactly that way. A layout change must never relocate a trailing control.
+
 ## Session Identity
 - Represent sessions with `Session` from `client/lib/features/conversations/domain/models/session.dart`.
 - A session may carry `deviceId` for routing context but must not carry agent/device runtime-type discriminators.

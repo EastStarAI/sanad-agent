@@ -58,3 +58,23 @@ String dictationReasonLabel(AppLocalizations l10n, String reason) {
     _ => l10n.dictationUnavailable,
   };
 }
+
+/// The localized sentence for a **channel** refusal, or null for any other code.
+///
+/// These are the codes the transport boundary raises before a single command
+/// leaves the Client: a hosted device without the relay, a Gateway that refuses
+/// the claim, a frame it read as malformed, or a build the Agent no longer
+/// accepts. Nothing reached the daemon, so the catalog is still unknown and
+/// empty — which is exactly why the model sheet must name this reason instead of
+/// claiming no model is installed. Every other code (a readiness reason, a
+/// session failure) has its own surface and returns null here.
+String? dictationChannelRefusalLabel(AppLocalizations l10n, String? code) {
+  return switch (code) {
+    'dictation_unavailable' => l10n.dictationUnavailable,
+    'relay_unavailable' => l10n.dictationRelayUnavailable,
+    'relay_forbidden' => l10n.dictationRelayForbidden,
+    'relay_invalid_request' => l10n.dictationRelayInvalidRequest,
+    'update_required' => l10n.dictationUpdateRequired,
+    _ => null,
+  };
+}
