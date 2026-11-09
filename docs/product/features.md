@@ -9,300 +9,224 @@ Sanad Agent combines a native Dart agent with a Flutter client. The agent owns
 execution and local state; the client gives you one interface for working with
 the agent on your current computer or on paired remote devices.
 
+This page is an overview. Every section links to the page that owns its details.
+
 ## Local-first or connected across devices
 
-On desktop, the client can connect directly to the agent on the same computer.
-With a local provider such as Ollama, LM Studio, or llama.cpp, conversations,
-workspace context, and supported tools can run without an internet connection.
+On desktop the client can connect directly to the agent on the same computer,
+and with a local provider the conversation, its workspace context, and the
+supported tools run without an internet connection. Enabling remote access adds
+paired computers and headless servers reached through the optional hosted
+identity and relay service, so the same interface follows you to another
+computer, the web app, or mobile. Workspace files and execution stay on the
+device running the agent, and a remote device only exposes the workspace folder
+it manages.
 
-When remote access is enabled, the same interface can manage paired computers
-and headless servers through the optional Sanad hosted identity and relay
-service. You can select a device, browse its independent workspaces and
-conversations, and continue work from the desktop, mobile, or web client.
-Workspace files and execution remain on the device running the agent. To add a
-workspace on a remote device, you pick or create a folder inside that device's
-own workspaces folder; the remote device never exposes folders outside it.
+See [Hosted Services Boundary](../technical/hosted_services_boundary.md),
+[Workspace Folder Mutation Protocol](../technical/workspace_folder_mutation_protocol.md),
+and the [User Guide](../operations/user_guide.md) for the channel each platform
+installs from.
+
+## Accounts, devices, and the hosted service
+
+The hosted service is optional and owns the account, not the work: it signs you
+in, lists your client sessions and registered Agents, and can revoke either of
+them. You can delete the whole account from your profile after an explicit
+confirmation, which removes the hosted identity and its credentials and leaves
+the Agent files and conversations on your own devices. Remote commands, remote
+dictation, and attached media travel through the same relay, so those features
+need a signed-in connection that both ends can authenticate.
+
+See [Hosted Services Boundary](../technical/hosted_services_boundary.md) and
+[Settings Hub](settings_hub.md).
 
 ## Parallel, durable sessions
 
-Each conversation has independent execution and recovery state. Different
-sessions can run concurrently without mixing their messages, tools, provider
-route, or workspace context. Capacity is determined by the computer and the
-connected model providers rather than by a fixed Sanad product limit.
+Each conversation keeps its own execution and recovery state, so sessions run
+side by side without mixing messages, tools, provider route, or workspace.
+Active work survives a client reconnect, and after an agent restart the client
+reconstructs what was running, queued, waiting, failed, or completed instead of
+replaying a tool whose outcome is unknown. You can search the selected device's
+conversation titles and messages, and a long conversation keeps working through
+compaction, which summarises older turns while preserving the goal.
 
-Active work survives client reconnects, and durable session state lets the
-client reconstruct running, queued, waiting, failed, and completed work after
-an agent restart. Recovery safeguards avoid silently replaying tool side
-effects whose outcome is ambiguous.
+See [Client Interface](client_interface.md), [Conversation Navigation](conversation_navigation_ux_spec.md),
+and [Context Compaction](../technical/context_compaction.md).
 
 ## Redirect active work without stopping it
 
-Sanad supports live steering. Send a normal message while a run is active and
-the agent can incorporate it at the next safe boundary, without cancelling the
-run or discarding its progress.
+Send a message while a run is active and the agent can take it at the next safe
+boundary; explicit queueing puts a request behind the current work, a queued
+request can be promoted to steering or removed, and Stop returns unexecuted text
+to your draft. The latest turn can also be edited or retried in place, and any
+final answer can be forked into an independent conversation that keeps the
+history behind it.
 
-Queueing is separate from steering:
+See [Client Interface](client_interface.md), [Message Edit and Retry](message_edit_retry_ux.md),
+and [Conversation Fork](conversation_fork_ux.md).
 
-- `Enter` or the Send button uses automatic delivery: steer an eligible active
-  run, otherwise begin normal work.
-- `Ctrl+Enter` on Windows/Linux or `Cmd+Enter` on macOS explicitly queues the
-  request behind existing work.
-- A queued request can be promoted to steering or removed.
-- Stop returns work that was not executed to the conversation draft instead of
-  losing it or sending it again automatically.
+## Files and images in the composer
+
+Paste, drop, or pick files and images and they enter the draft through one path;
+the agent can read them, and it can open an image directly when it needs to see
+one. Media sent back by the agent opens in a viewer and can be downloaded.
+
+See [Client Interface](client_interface.md) and
+[Multimodal Tool Results and View Image](../technical/multimodal_tool_results_and_view_image.md).
 
 ## Multiple providers and multiple accounts
 
-You can configure different model providers and create multiple instances of
-the same provider—for example, separate personal and work accounts. Every
-instance owns its credentials, default model, readiness, rate limit, and
-automatic-failover preference.
+Configure several providers, or several instances of one provider such as
+separate personal and work accounts, each with its own credentials, default
+model, readiness, and failover preference; the provider and model can be changed
+inside a conversation. Failover moves to another ready instance while preserving
+the selected model identity, and thinking level is chosen per model. Provider
+setup explains a rejected credential instead of echoing a provider response, and
+account-usage windows appear only where the provider publishes them.
 
-The provider and model can be changed inside a conversation. For eligible
-failures, Sanad can move to another ready instance that is allowed to receive
-failover while preserving the exact model identity. It does not silently
-replace the selected model with a different one.
-
-Provider templates include hosted APIs, ChatGPT Subscription, local runtimes,
-and custom OpenAI- or Anthropic-compatible endpoints.
-
-### Usage and limits
-
-The provider settings can show authoritative account-usage windows for
-ChatGPT Subscription, including the remaining Session and Weekly allowance and
-their reset times. Usage support is discovered per provider instance. Other
-providers will appear in this view when a compatible usage adapter is added;
-Sanad does not fabricate usage data for unsupported providers.
+See [Provider Protocol](../technical/provider_protocol.md) and
+[Provider Account Usage Limits](provider_account_usage_limits.md).
 
 ## Workspaces, permissions, and context
 
 Workspaces separate project context, sessions, drafts, provider selection, and
-tool policy. Each workspace can use its own permission mode and persisted
-approval decisions without changing another workspace.
+tool policy, and each one keeps its own permission mode and remembered
+approvals. Before a turn the agent assembles the project instructions, workspace
+skills, MCP servers, memory, and identity it supports, and the closest
+configuration wins over a broader default when the same capability is defined at
+both. Sensitive tools remain behind workspace policy, your approval, and
+operating-system permissions, and computer-use tools are opt-in.
 
-Before a turn, the agent assembles supported project instructions such as
-`AGENTS.md`, workspace skills, MCP servers, memory, and identity files. The
-closest workspace configuration takes priority over user-level defaults when
-the same capability is defined at both levels.
-
-Sensitive tools remain subject to workspace policy, user approval, and
-operating-system permissions. Computer-use tools such as screenshots,
-keyboard, and mouse control are opt-in and require the corresponding system
-access.
+See [Workspace Identity](../technical/workspace_identity_protocol.md), [Execution Trust and Permission Authority](../technical/execution_trust_and_permission_authority.md),
+and [Capability Runtime](../agent_engine/capability_runtime.md).
 
 ## Tools, MCP, and skills
 
-The built-in tool catalog covers files, editing, directory and text search,
-shell commands, web search and fetch, memory, user questions, and task
-scheduling.
+Sanad ships a built-in tool catalog; the owning page documents each tool family
+and the guarantees behind it. MCP servers can be configured for the user or for
+one workspace, and compatible third-party marketing, video, data, or development
+tools connect through MCP instead of being hard-coded into Sanad.
 
-MCP servers can be configured at user or workspace scope. Sanad supports
-stdio, Server-Sent Events, and streamable HTTP transports. Compatible
-third-party marketing, video, data, or development tools can be connected
-through MCP without being hard-coded into Sanad.
+Product skills ship inside the Agent executable and are reconciled into your
+Sanad Home on each start without overwriting skills you changed or deleted.
+Skills can be installed for the user or for one workspace, and a third-party
+skill installs from a public source with recorded provenance and content
+screening.
 
-Sanad includes `skill-creator`, `find-skills`, and `agent-browser` with the
-Agent installation. Their complete packages are embedded in the single Agent
-executable and installed automatically into the active Sanad Home; no separate
-skill download is required. A later Agent release can safely add, update, or
-remove its managed copies while preserving skills the user changed or deleted.
-
-Skills can also be installed globally for the user or locally for a workspace.
-The agent discovers supported `SKILL.md` formats and loads the selected skill
-when it is needed instead of injecting every skill into every prompt.
+See [Capability Runtime](../agent_engine/capability_runtime.md) and
+[MCP Server Configuration](../technical/mcp_server_configuration.md).
 
 ## The agent can ask you
 
-When the agent needs a decision or missing information, it can pause the
-current turn and display a question card in the conversation. The card can
-offer suggested answers and a custom-response option. After you answer, the
-same turn resumes with your response; it does not start an unrelated
-conversation.
+When the agent needs a decision or a missing detail it pauses the turn and shows
+a question card, with suggested answers and room for your own, and the same turn
+resumes with your reply. Permission requests use the same inline pattern and stay
+separate from ordinary questions. Credentials are requested the same way: a
+secret you store for a device is collected outside the conversation and is never
+read back from the transcript.
 
-Permission requests use the same inline interaction model while remaining
-separate from ordinary clarification questions.
+See [Capability Runtime](../agent_engine/capability_runtime.md), [Settings Hub](settings_hub.md),
+and [Secret Management Protocol](../technical/secret_management_protocol.md).
 
 ## Memory and identity
 
-File-backed long-term memory lets the agent preserve useful preferences and
-working context between sessions. Memory is inspectable and can be updated as
-work progresses.
+Long-term memory is file-backed and inspectable: an identity, a user profile, and
+a memory that the agent maintains across sessions, alongside the instructions
+each workspace contributes. Memory writes are bounded and applied atomically,
+become prompt-visible only in a later session, and never overwrite content the
+agent cannot safely rewrite; such content is preserved for you to inspect.
 
-`SOUL.md` customizes the agent's identity and general behavior. `USER.md` and
-`MEMORY.md` provide persistent user and memory context, while workspace
-instructions add project-specific guidance.
-
-Memory updates are bounded and explicit. The agent can combine related removals,
-replacements, and additions into one all-or-nothing update when space is tight.
-Successful writes return a short confirmation rather than repeating the full
-profile. Unsafe or incompatible file content is preserved for inspection instead
-of being silently overwritten, and new memory becomes active only in a later
-session snapshot.
+See [Agent Runtime](../technical/agent_runtime.md).
 
 ## Scheduling
 
-The agent can persist one-shot and recurring tasks for future execution and run
-them even when the client window is closed, as long as the daemon remains
-running. The model manages schedules through the action-oriented `schedule_task`
-tool (`create`, `list`, `cancel`, `update`, `pause`, `resume`, `run_now`), and you
-manage device-owned schedules directly on the [Schedules screen](#schedules-screen)
-without starting a conversation. A schedule carries an optional display name, set
-on `create` and `update`.
+Schedules let a device run one-shot or recurring work without you starting a
+conversation, and they survive a daemon restart. A Schedules page in the sidebar
+creates, edits, pauses, resumes, runs, and reviews the history of device-owned
+schedules, while the agent manages through its scheduling tool only the
+schedules its own conversation created. A conversation that owns schedules says
+so, and deleting it pauses them instead of losing them.
 
-A schedule's task text runs verbatim when it fires, with no earlier conversation
-to draw context from, so it must be self-contained. A prompt the user authored on
-a schedule screen is therefore never steered by content hidden from them, and
-compaction of the run's conversation owns any later growth.
-
-Recurring schedules use a bounded vocabulary:
-- `once`: absolute ISO-8601 timestamp (`at`) or relative delay (`in <n> <minutes|hours|days>`; the legacy `seconds` unit remains accepted for one-shot delays). An `at` value without an offset is wall-clock time in the schedule's zone.
-- `interval`: elapsed-time intervals (`every <n> <minutes|hours|days>`).
-- `interval` periods and `in` delays are capped at 366 days. Fields from different shapes cannot be mixed, and optional parameters sent as `null` or blank are treated as absent.
-- `daily`: wall-clock time `HH:MM`.
-- `weekly`: one or more weekdays (`mon..sun`) plus wall-clock time `HH:MM`.
-- `monthly`: day of month (`1..31`) plus wall-clock time `HH:MM` (skipping months that lack the day).
-
-Schedules carry an explicit timezone: `local` (host operating system rules) or a
-fixed UTC offset (`Z`, `+HH:MM`, `-HH:MM`). The agent-level default comes from
-`SCHEDULE_TIMEZONE` (default `local`) and is persisted with each schedule at
-creation. Mutation (`cancel`, `update`, `pause`, `resume`, `run_now`) is
-owner-scoped to the originating conversation, while `list` provides device-wide
-visibility. An `update` that omits `kind` changes only the supplied fields and
-keeps the existing shape (for example, a new `time` keeps a weekly schedule
-weekly); an `update` that supplies `kind` replaces the whole schedule definition.
-Next-run instants render as `YYYY-MM-DDTHH:MM:SS` with an explicit `Z` or
-`±HH:MM` designator.
-
-Every schedule records who owns it: the conversation that created it, or the
-device when a screen created it without one. A model turn may touch only the
-schedules its own conversation created; naming any other schedule is refused
-with the owner named and changes nothing. `list` shows each schedule's owner,
-its paused state, and its consecutive-failure count.
-
-A schedule can be paused and resumed. Pausing keeps the stored next run and stops
-the timer; resuming recomputes the next instant from now. A one-shot schedule
-whose instant has already passed cannot be resumed — it never fires
-retroactively. A schedule the model created belongs to the conversation that owns
-it, and if that conversation is deleted it can only be edited or deleted.
-`run_now` dispatches immediately, including on a paused schedule: it is recorded
-as a manual run, it does not shift the next scheduled instant, and it does not
-resume the schedule.
-
-### Wake, Recovery, and Missed-Occurrence Policy
-
-Schedules survive daemon restarts through SQLite persistence. When the daemon restarts:
-- **Advance before dispatch:** The next scheduled instant and status are persisted before emitting the run event (at-most-once delivery, preventing double fires).
-- **Startup re-arm with missed-occurrence policy:** Missed recurring occurrences are checked against a grace window (half the period clamped to `[120s, 2h]`). A missed instant inside grace fires once immediately and advances to the next future instant (`last_status = 'fired'`). A missed instant beyond grace fires zero times, advances without a burst, and records `last_status = 'skipped_missed'` with a logged reason; `last_run_at` is preserved from the previous execution (or remains null if never executed) so listings never imply a run that was skipped.
-- **Interval cadence anchoring:** `interval` recurrence anchors on its stored slot grid (the slot that fired, or the most recent due slot after a restart), never on timer lateness or the restart instant, preserving the cadence across fires and restarts.
-- **Startup delivery:** An occurrence dispatched during startup recovery is held until the gateway subscribes to the scheduler and then delivered once, so a fire recorded as `fired` is never dropped.
-- **Immediate mutation liveness:** `cancel` removes the in-memory timer and deletes the database row immediately; `update` stops the old timer and arms a new timer for the recomputed instant.
-- **Time awareness:** The system prompt's single per-turn date line reads `Date: YYYY-MM-DD (zone: <zone>)` with no clock time, keeping the prompt byte-stable within a day while informing the agent of today's date in the schedule's resolved timezone.
-
-### Schedules screen
-
-Every device also has a Schedules page in the sidebar, so you do not have to start a
-conversation to schedule work. The list shows each schedule's name (or a label
-derived from its task), a localized recurrence summary, its next run in the
-schedule's own timezone, whether it is paused, and — from the third consecutive
-failure — a failure badge. Each row offers Pause or Resume, Run now, Edit, and
-Delete with a confirmation; Run now stays available on a paused schedule and never
-resumes it.
-
-Selecting a row opens the schedule's detail page, with two tabs. **Details** shows
-the summary, who owns the schedule (a conversation or the device), the stored
-workspace, provider, and model, the conversation mode, and the same actions. **Run
-history** shows every attempt with its time, status (`running`, `succeeded`,
-`failed`, or `skipped`), trigger (`scheduled`, `manual`, or `recovery`), duration,
-and error text when it failed. **Open conversation** jumps to that run's own user
-message inside its conversation, so the history is a way back into the work rather
-than a log of it.
-
-**New schedule** opens one form, which Edit reuses: an optional name, the task
-text (required and self-contained, because a run starts from it alone), the
-recurrence, an optional timezone, a workspace, a provider and model chosen with
-the same pickers a new conversation uses, a conversation-mode switch, and a live
-next-run preview answered by the agent. Editing an active schedule applies to its
-next run, and the conversation that owns a model-created schedule cannot be
-changed.
-
-Conversation mode decides where runs land:
-
-- `continuous` (the default) keeps one conversation per schedule. It is created on
-  the first run or on Run now, with the stored workspace, provider, and model, and
-  every later run appends to it.
-- `new_each_run` creates a fresh conversation per run and links each one from its
-  run-history row.
-
-Conversations that own schedules carry a marker in the sidebar. Deleting such a
-conversation warns you first and **pauses** its schedules instead of deleting
-them; resuming one that the device owns continues in a new conversation. A
-schedule the model created belongs to its conversation and can only be edited or
-deleted once that conversation is gone.
-
-A failing run is visible in three places: the row's badge in the list, a
-non-modal notice in the run's conversation naming the schedule, and, after three
-consecutive failures, a suggestion to pause it. Nothing is paused or disabled for
-you. On an unreachable device the page says the schedules are unavailable, every
-action including New schedule is closed, and no cached row is presented as
-current; it recovers by itself when the device answers again. All of this is
-identical over a local and a cloud connection, and every string is localized in
-English and Arabic.
+See [Schedule Control Protocol](../technical/schedule_control_protocol.md).
 
 ## Local dictation
 
-Press the mic in the composer and speak: the text lands where the caret was,
-recognized locally by the agent on the same Mac. Audio never leaves the machine
-and recognition runs inside the agent daemon, not in the app. Four models are
-offered with the memory each one costs — an Egyptian model at ~1.2 GB of RAM as
-the default, a lighter Egyptian build at ~0.95 GB, a fast low-accuracy build at
-~0.76 GB, and an English streaming model at ~0.2 GB that writes text while you
-speak. Nothing stays loaded between sessions. Available on macOS arm64 in v1.
-See [Local Dictation](../technical/local_dictation.md).
+Press the microphone in the composer and speak: the words land where the caret
+was, and anything you typed stays yours. Recognition runs inside the Agent and
+never in the app, which only captures audio and inserts the text that comes back.
 
-## Experimental voice
+When the client and the agent are on the same computer the audio never leaves it.
+When the device is reached over the cloud, or the client is the web or mobile
+app, the audio travels through the Sanad relay to the Agent that transcribes it,
+so that channel is hosted rather than local.
 
-Sanad includes an experimental realtime voice path using Gemini Realtime,
-local WebSocket or hosted relay transport, PCM capture/playback, transcript
-events, and barge-in. Voice is hidden by default and is not part of the stable
-feature set. See [Experimental Realtime Voice](../technical/voice_streaming.md)
-for its current boundaries.
+Dictation runs on the desktop platforms where the Agent runs, and some platforms
+or older CPUs cannot run local recognition; a device that cannot dictate says
+why. You choose and download a local speech model for Arabic or English, and
+dictation is a stable, text-only feature, separate from the experimental
+realtime voice call below.
+
+See [Local Dictation](../technical/local_dictation.md),
+[Dictation Transport Protocol](../technical/dictation_transport_protocol.md), and
+[Native Dictation Runtime Platforms](../technical/native_stt_runtime_platforms.md).
+
+## English and Arabic, and your look
+
+The interface is fully English and Arabic with a right-to-left layout, and dates
+follow your locale. Theme, primary color, font family, and text size are set per
+device and follow you across a local and a cloud connection.
+
+See [Client Multilanguage](../technical/client_multilanguage.md), [Design System](../technical/design_system.md),
+and [Settings Hub](settings_hub.md).
+
+## Staying up to date
+
+The Client checks for and applies its own signed update, and the Agent updates
+through its command line, naming the trust stage that failed when verification
+does not pass.
+
+See [Release and Update Architecture](../technical/update_architecture.md) and the
+[User Guide](../operations/user_guide.md).
+
+## Command line and background operation
+
+`sanad` works against the Agent on the machine you are on, and `sanad-client`
+relays a command to another paired device through a running Client. Closing the
+desktop window does not stop the Client: its connections, agent link, and command
+endpoint stay up, with a tray control to reopen or quit.
+
+See [Sanad CLI Architecture](../technical/sanad_cli_architecture.md),
+[Remote CLI Relay Protocol](../technical/remote_cli_relay_protocol.md),
+[Client CLI and Background Operation](client_cli_and_background_operation.md), and
+[Desktop Background and System Tray](../technical/desktop_background_and_system_tray.md).
+
+## Experimental realtime voice
+
+Sanad also contains an experimental realtime voice call, hidden by default and
+outside the stable feature set. It is a separate path from the dictation above.
+
+See [Experimental Realtime Voice](../technical/voice_streaming.md).
 
 ## Designed for contributors and coding agents
 
-Sanad keeps its development knowledge close to the code. Layered `AGENTS.md`
-Runtime Contracts define durable ownership boundaries and local rules for the
-repository, Dart agent, Flutter client, and focused subdirectories. A curated
-[`docs/llms.txt`](../llms.txt) index makes the owning product, architecture,
-operations, and QA pages discoverable to both people and coding agents.
+Sanad keeps its development knowledge close to the code: layered `AGENTS.md`
+Runtime Contracts define durable ownership boundaries and local rules, and a
+curated [`docs/llms.txt`](../llms.txt) index makes the owning product,
+architecture, operations, and QA pages discoverable to people and coding agents.
+`sanad-dev` runs a matched agent/client pair per Git worktree with isolated ports,
+Sanad Home, preferences, and logs.
 
-The `sanad-dev` launcher can run a matched agent/client pair with isolated
-worktree ports, Sanad Home, client preferences, runtime metadata, and logs.
-Developers can inspect both processes, stream their logs, restart the Dart
-agent under its supervisor, and hot reload or hot restart the Flutter client
-without losing the worktree boundary.
-
-Sanad can also develop the same source checkout used by its active daemon rather
-than always launching a second copy. After a focused change passes analysis and
-tests, a restart requested from the active tool turn waits for the restart tool
-result to reach a durable checkpoint. The supervisor starts the updated source
-and runtime recovery reclaims the same turn with the rebuilt tool catalog. The
-turn can therefore repair a failed tool and retry its updated implementation, or
-add temporary instrumentation, restart, read bounded post-restart logs, and fix
-a stubborn runtime bug without starting another session or daemon. A live log
-stream in a human-owned terminal can reconnect across the restart, while agent
-tool calls use bounded log windows that terminate normally. Isolated worktrees
-remain the safer boundary for parallel, broad, or bootstrap-sensitive changes.
-
-The native Dart execution runtime and Flutter interface have explicit
-responsibilities, while nearby contracts document the boundaries that changes
-must preserve. See the [Developer Guide](../operations/developer_guide.md) for
-the complete contributor workflow.
+See the [Developer Guide](../operations/developer_guide.md) for the complete
+contributor workflow.
 
 ## Learn more
 
 - [Installation and operation](../operations/user_guide.md)
+- [Client interface](client_interface.md)
+- [Settings hub](settings_hub.md)
+- [Local dictation](../technical/local_dictation.md)
+- [Schedule control protocol](../technical/schedule_control_protocol.md)
 - [Contributor workflow](../operations/developer_guide.md)
 - [Provider configuration](../technical/provider_protocol.md)
 - [Capability runtime](../agent_engine/capability_runtime.md)
 - [Hosted services boundary](../technical/hosted_services_boundary.md)
-- [Client interface](client_interface.md)
