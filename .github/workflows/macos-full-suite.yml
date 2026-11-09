@@ -1,0 +1,98 @@
+# macOS full-suite coverage after merge.
+#
+# This workflow is NOT part of the required-check aggregate: `All required checks
+# pass` belongs to `ci.yml` only. It exists because the release lanes stopped
+# carrying the whole Agent suite on macOS — a release run now proves the full
+# suite on Linux plus the macOS platform subset
+# (`scripts/ci/list_test_shard.sh --platform-macos`) on both macOS
+# architectures, while the complete macOS suite runs here on every push to
+# `main`. A red run means the merge commit regressed macOS-only behavior and must
+# be fixed forward; wiring it into branch protection would block every unrelated
+# pull request on a post-merge signal.
+#
+# `docs/operations/continuous_integration.md` owns the model behind this split.
+name: macOS full suite
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A superseded `main` run has no value once a newer merge is proven, so a new
+# push cancels the older run instead of doubling the macOS queue draw.
+concurrency:
+  group: macos-full-suite-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  agent-tests:
+    name: Test agent macOS (${{ matrix.runner }} ${{ matrix.shard }}/4)
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # Both published macOS architectures, on the same runners the release
+        # matrix uses, so a macOS-only regression is caught on the merge commit.
+        runner: [macos-26, macos-15-intel]
+        shard: [1, 2, 3, 4]
+    env:
+      SHARD: ${{ matrix.shard }}
+      TOTAL_SHARDS: 4
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Test agent shard ${{ matrix.shard }}/4
+        working-directory: agent
+        run: |
+          set -o pipefail
+          fvm dart pub get
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . "$((SHARD - 1))" "$TOTAL_SHARDS")
+          echo "Shard $SHARD/$TOTAL_SHARDS runs ${#files[@]} test files."
+          status=0
+          fvm dart test "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/agent-tests.jsonl" || status=$?
+          echo "Agent shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-tests.jsonl")."
+          exit "$status"
+
+  # The suites that assign the process working directory cannot share a runner
+  # with any other suite, so they run alone and sequentially: one job per macOS
+  # architecture, both reading the same `--isolated` listing `ci.yml` uses.
+  agent-isolated:
+    name: Test CWD-sensitive suites macOS (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-26, macos-15-intel]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Test CWD-sensitive suites in isolation
+        working-directory: agent
+        run: |
+          set -o pipefail
+          fvm dart pub get
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . --isolated)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No suite assigns the process working directory."
+            exit 0
+          fi
+          status=0
+          fvm dart test --concurrency 1 "${files[@]}" \
+            --file-reporter "json:$RUNNER_TEMP/agent-isolated.jsonl" || status=$?
+          echo "CWD-sensitive suites ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-isolated.jsonl")."
+          exit "$status"

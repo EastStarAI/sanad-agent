@@ -15,6 +15,13 @@ import 'package:test/test.dart';
 
 import '../../support/memory_agent_secret_store.dart';
 
+/// Failure deadline for the first credential-store read an open performs.
+///
+/// The fake store signals that read itself, so this is never a wait: an open
+/// that crosses a real file-lock round trip before reaching the store simply
+/// takes as many event-loop turns as it takes.
+const _firstReadDeadline = Duration(seconds: 30);
+
 void main() {
   late Directory home;
   late MemoryAgentSecretStore vault;
@@ -288,7 +295,13 @@ void main() {
       expect(vaults.statusLabel, 'opening');
       expect(vaults.available, isFalse);
       expect(vaults.isReady, isFalse);
-      await Future<void>.delayed(Duration.zero);
+      // The store signals the read instead of the test guessing how many event
+      // loop turns the open needs to cross its file-lock round trip, so a loaded
+      // machine can delay the turn without failing the assertion.
+      await store.firstRead.future.timeout(
+        _firstReadDeadline,
+        onTimeout: () => fail('the open never reached the credential store'),
+      );
       expect(store.reads, greaterThan(0), reason: 'the open did start');
       expect(
         await vaults.readyWithin(const Duration(milliseconds: 50)),
@@ -307,7 +320,7 @@ void main() {
       store.refuse();
       await vaults.ready;
       expect(vaults.status, SecretVaultStatus.unavailable);
-    });
+    }, timeout: const Timeout(Duration(minutes: 1)));
 
     test('a secret written while the vault is opening fails as not ready', () async {
       final store = _NeverAnsweringStore();
@@ -409,6 +422,10 @@ final class _NeverAnsweringStore implements AgentSecretStore {
   final List<Completer<String?>> _pending = [];
   bool _refused = false;
 
+  /// Completed by the first read the open performs, so a test waits for the
+  /// state it asserts instead of for one event-loop turn.
+  final Completer<void> firstRead = Completer<void>();
+
   int get reads => _pending.length;
 
   /// Refuses every pending and future read, so a test owns the open's whole
@@ -422,6 +439,7 @@ final class _NeverAnsweringStore implements AgentSecretStore {
 
   @override
   Future<String?> read(String key) {
+    if (!firstRead.isCompleted) firstRead.complete();
     if (_refused) return Future<String?>.error(_refusedError);
     final completer = Completer<String?>();
     _pending.add(completer);

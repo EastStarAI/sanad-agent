@@ -121,11 +121,55 @@ listing keeps those suites out of every shard, `--isolated` prints them, and
 the agent lane runs them alone with `--concurrency 1`. They still run exactly
 once per CI run.
 
+`--platform-macos` prints the third selection: the suites whose behavior
+depends on the macOS host (real Keychain and file credential stores, launchd
+service management, POSIX permissions and atomic rollback, file locks and Home
+ownership, native dictation, build-tool paths) plus the process and filesystem
+owners that use POSIX-only primitives. `release.yml` runs it on both macOS
+agent lanes, and it excludes the `--isolated` suites for the same reason a
+shard does; the lane runs those alone. The listing is the single source of truth
+for what a macOS lane proves, so the release gate and the post-merge workflow
+cannot drift into two different definitions of "macOS coverage".
+
 Shard count is chosen from the measured critical path, not from the number of
 test files: setup cost dominates when shards are too small, and the slowest
 shard dominates when they are too large. Four shards keep the slowest client
 shard well under the per-shard setup cost while leaving every lane on a stock
 `ubuntu-24.04` runner.
+
+## Full macOS Suite After Merge
+
+The whole agent suite is 381 files. Running all of it unsharded on four lanes
+was the largest single term of a release run: the `macos-15-intel` lane spent
+10–15 minutes in `dart test` alone, executed the same work 2.4–3.0× slower per
+unit than the arm64 lane, and set the critical path of the workflow because
+`assemble` waits for it. Two structural facts made that spend redundant:
+
+- `ci.yml` already runs every one of those files on four Ubuntu shards for every
+  pull request, every push to `main`, and every merge-queue entry.
+- Every test that runs only on macOS — the two Keychain cases in
+  `test/core/agent_secret_store_test.dart:500,527`, the launchd cases in
+  `test/core/setup/service_manager_test.dart`, and the vault interaction policy —
+  sits inside the `--platform-macos` subset.
+
+So the coverage is split instead of duplicated:
+
+| Where | What it proves |
+| --- | --- |
+| Public CI (`ci.yml`, every pull request and merge) | The complete agent suite on four Ubuntu shards, the CWD-sensitive suites alone, and the Intel-native runtime build/verify/load on `macos-15-intel` |
+| Release (`release.yml`) | The complete agent suite on Linux x64 and arm64, and the `--platform-macos` subset plus the isolated suites on macOS arm64 and x64 — the platform-sensitive behavior a Linux lane cannot prove, on the same runners that build the shipped artifacts |
+| `macos-full-suite.yml` (every push to `main`) | The complete agent suite on `macos-26` and `macos-15-intel`, four file shards each, plus the CWD-sensitive suites alone on both |
+
+`macos-full-suite.yml` is deliberately **not** a required check. It reports on
+the merge commit within minutes of a merge and is fixed forward; wiring a
+post-merge signal into branch protection would block every unrelated pull
+request. A `concurrency` group per ref cancels a superseded `main` run, so a
+second merge never doubles the macOS queue draw.
+
+The split is safe in one direction only: a macOS-only regression now reaches
+`main` before it reaches a release lane, so a red `macOS full suite` run is a
+blocking defect for the next release even though it is not a required check.
+Do not treat "the release is green" as proof that the macOS suite is green.
 
 ## Toolchain Caching
 

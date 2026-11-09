@@ -7,6 +7,21 @@ import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:test/test.dart';
 
+/// Failure deadline for a spawned helper to report that it holds the lock.
+///
+/// The readiness line is the contract, so this only bounds the wait. It is 3×
+/// the 36 s worst-case Dart spawn-and-compile cost measured on the slowest
+/// release lane (`macos-15-intel`), because a fixed 10 s budget sat below a
+/// single spawn on that lane.
+const _helperReadyBudget = Duration(seconds: 120);
+
+/// Failure deadline for the helper to exit after it is told to release.
+const _helperExitBudget = Duration(seconds: 120);
+
+/// Stays above the helper spawn plus both deadlines above so a stalled helper
+/// reports its own assertion instead of a test-runner timeout.
+const _ownershipTestTimeout = Timeout(Duration(minutes: 5));
+
 void main() {
   late Directory home;
 
@@ -60,11 +75,9 @@ void main() {
               .transform(utf8.decoder)
               .transform(const LineSplitter())
               .first
-              .timeout(const Duration(seconds: 10));
+              .timeout(_helperReadyBudget);
         } on StateError {
-          final exitCode = await holder.exitCode.timeout(
-            const Duration(seconds: 10),
-          );
+          final exitCode = await holder.exitCode.timeout(_helperExitBudget);
           fail(
             'Runtime lock helper exited before readiness '
             '(exit $exitCode): ${helperStderr.toString().trim()}',
@@ -81,7 +94,7 @@ void main() {
 
         holder.stdin.writeln('release');
         await holder.stdin.flush();
-        expect(await holder.exitCode.timeout(const Duration(seconds: 10)), 0);
+        expect(await holder.exitCode.timeout(_helperExitBudget), 0);
 
         final lease = await SanadRuntimeOwnership.acquire();
         expect(lease.isReleased, isFalse);
@@ -92,5 +105,6 @@ void main() {
         await stderrSubscription.cancel();
       }
     },
+    timeout: _ownershipTestTimeout,
   );
 }
