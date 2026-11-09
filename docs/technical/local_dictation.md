@@ -281,6 +281,59 @@ The same `reason` string is projected twice — as the platform verdict when
 `supported` is false and as the readiness reason when it is true. There is no
 second status field on the wire.
 
+## The composer control while dictating
+
+The trailing control of the composer's bottom row — the dictation mic plus the
+Send/Stop control — lives in **one stable slot** in every layout. Only the middle
+slot swaps: the live meter while a session is listening, the model and thinking
+selectors otherwise. This is a correctness rule, not a layout preference.
+
+Pressing Send while speaking stops the session, waits for the final transcript to
+land in the composer, and dispatches it once. That wait resumes on the control's
+own `BuildContext`; when the row moved the control between branches as the
+session left `listening`, the element was unmounted mid-wait, the continuation
+returned silently, and the message was never sent (v1.0.22, PR337). The
+regression is pinned by
+`client/test/widget/dictation/dictation_composer_send_control_test.dart`, which
+also asserts that the `send_message_btn` element is identical before and after the
+session ends.
+
+The trailing control follows the session, not the turn:
+
+| Dictation state | Trailing control | Turn Stop |
+|---|---|---|
+| listening | **Send** (enabled, even with an empty composer) | hidden — the mic's own Stop is the only stop |
+| finalizing / awaiting transcript | spinner (`send_message_waiting_dictation`); pressing it abandons the automatic send and keeps the text | hidden — this branch is evaluated first |
+| idle, composer empty | Send (disabled without content) | shown when the turn can be stopped |
+| idle, composer holds text | **Send** | hidden until the text is sent or cleared |
+
+The last row is the ordinary typed-text rule, not a dictation exception: unsent
+text keeps the turn Stop hidden because the slot is the send action. A send is
+always dispatched as `MessageDeliveryIntent.auto`; the daemon alone decides
+whether that becomes a steer or a queued turn, so dictation adds no client-side
+delivery logic.
+
+## The first-use sheet states the channel reason
+
+An empty model list has two causes that look identical and mean opposite things:
+
+- **The daemon answered and listed nothing.** That is the install state, and the
+  sheet says so (`dictationModelRequired`).
+- **The transport boundary refused before any command left the Client.** A hosted
+  device without `dictation_relay_v1`, a Gateway that refuses the claim, a frame it
+  read as malformed, or an outdated Agent raises `dictation_unavailable`,
+  `relay_unavailable`, `relay_forbidden`, `relay_invalid_request`, or
+  `update_required` from the resolver. Nothing reached the daemon, so the catalog
+  is **unknown**, not empty.
+
+The second case renders the localized channel sentence in the empty slot
+(`dictationChannelRefusalLabel`), never the install instruction: a device that
+cannot relay very likely has models installed, and telling its owner to install
+one sends them after the wrong problem. Readiness reasons keep their own banner
+(`dictationReasonLabel`), because a device that answered and reported
+`model_not_installed` or a missing runtime is a different state with a different
+action.
+
 ## One channel, chosen in one place
 
 Dictation is transport-agnostic above the transport boundary. The local socket

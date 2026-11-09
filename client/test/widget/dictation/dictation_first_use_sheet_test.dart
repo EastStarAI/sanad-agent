@@ -52,6 +52,23 @@ class _Resolver implements DictationTransportResolver {
   }) async => transport;
 }
 
+/// What the resolver throws when the transport boundary refuses the channel.
+///
+/// A hosted device without the relay, an outdated Gateway, or a frame it read
+/// as malformed is refused *before* a single command leaves the Client, so no
+/// `stt_status` can ever arrive and the catalog stays unknown — not empty
+/// because the device has no model.
+class _RefusingResolver implements DictationTransportResolver {
+  _RefusingResolver(this.reason);
+  final String reason;
+
+  @override
+  Future<DictationTransport> resolve({
+    required DeviceConfig device,
+    required String sessionId,
+  }) async => throw DictationTransportUnavailable(reason);
+}
+
 class _Capture implements DictationCapture {
   final StreamController<List<int>> controller =
       StreamController<List<int>>.broadcast();
@@ -133,7 +150,24 @@ void main() {
     await tester.pump();
   }
 
-  Widget build() {
+  /// The daemon's own answer for a Home whose catalog is genuinely empty: it
+  /// answered, listed nothing, and named the readiness reason.
+  Future<void> seedEmptyCatalog(WidgetTester tester) async {
+    final pending = cubit.refreshStatus(device);
+    await tester.pump();
+    transport.eventsController.add({
+      'event': 'stt_status',
+      'supported': true,
+      'ready': false,
+      'reason': 'model_not_installed',
+      'models': const [],
+    });
+    await tester.pump();
+    await pending;
+    await tester.pump();
+  }
+
+  Widget build({DictationCubit? withCubit}) {
     return MaterialApp(
       localizationsDelegates: const [
         AppLocalizations.delegate,
@@ -143,7 +177,7 @@ void main() {
       supportedLocales: const [Locale('en'), Locale('ar')],
       home: Scaffold(
         body: BlocProvider.value(
-          value: cubit,
+          value: withCubit ?? cubit,
           child: DictationMicButton(
             chatController: chatController,
             device: device,
@@ -209,5 +243,59 @@ void main() {
 
     // Drain the notice and status timers so the test ends with no pending work.
     await tester.pump(const Duration(seconds: 6));
+  });
+
+  // The sheet's empty state has two causes, and telling them apart is the whole
+  // point: a channel refusal never reached the daemon, so the catalog is
+  // unknown and the reason is the only honest sentence. "Install a model"
+  // belongs to a catalog that answered and listed nothing.
+  testWidgets('a channel refusal names its reason, never the install sentence', (
+    tester,
+  ) async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    final refusing = DictationCubit(
+      resolver: _RefusingResolver('dictation_unavailable'),
+      capture: _Capture(),
+      sessionIdFactory: () => 's-refused',
+    );
+    addTearDown(refusing.close);
+
+    await tester.pumpWidget(build(withCubit: refusing));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const Key('dictation_model_sheet')), findsOneWidget);
+    final reason = find.byKey(const Key('dictation_sheet_channel_reason'));
+    expect(reason, findsOneWidget);
+    expect(tester.widget<Text>(reason).data, l10n.dictationUnavailable);
+    expect(find.text(l10n.dictationModelRequired), findsNothing);
+    expect(find.byKey(const Key('dictation_sheet_model_required')), findsNothing);
+    // Nothing was ever sent: the refusal happens at the transport boundary.
+    expect(refusing.state.errorCode, 'dictation_unavailable');
+
+    await tester.pump(const Duration(seconds: 6));
+  });
+
+  testWidgets('an answered catalog with no rows keeps the install sentence', (
+    tester,
+  ) async {
+    final l10n = await AppLocalizations.delegate.load(const Locale('en'));
+    await tester.pumpWidget(build());
+    await seedEmptyCatalog(tester);
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    // The press re-reads the catalog and waits for the reply or its fallback.
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('dictation_model_sheet')), findsOneWidget);
+    expect(find.byKey(const Key('dictation_sheet_model_required')), findsOneWidget);
+    expect(find.text(l10n.dictationModelRequired), findsOneWidget);
+    expect(find.byKey(const Key('dictation_sheet_channel_reason')), findsNothing);
+
+    await tester.pump(const Duration(seconds: 10));
   });
 }
