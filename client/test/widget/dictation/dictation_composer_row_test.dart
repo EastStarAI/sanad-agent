@@ -25,6 +25,7 @@ import 'package:sanad_client/features/dictation/domain/dictation_transport.dart'
 import 'package:sanad_client/features/dictation/domain/dictation_transport_resolver.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/workspace_policy.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -265,6 +266,32 @@ void main() {
     await tester.pump();
   }
 
+  Future<void> emit(WidgetTester tester, Map<String, dynamic> event) async {
+    transport.eventsController.add(event);
+    await tester.pump();
+    await tester.pump();
+  }
+
+  /// Lets the cubit's real teardown (capture close, transport detach) finish.
+  ///
+  /// The composer row is driven by the real cubit, whose session futures need
+  /// real event-loop turns, which only [WidgetTester.runAsync] supplies.
+  Future<void> settleRow(WidgetTester tester) async {
+    for (var i = 0; i < 4; i++) {
+      await tester.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await tester.pump();
+    }
+  }
+
+  /// Presses Stop in the real row, which also swaps the meter out.
+  Future<void> stopSession(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    await settleRow(tester);
+  }
+
   testWidgets('the idle row keeps every selector and draws no meter', (
     tester,
   ) async {
@@ -368,5 +395,161 @@ void main() {
     // The newest sample enters on the leading edge: the right edge in RTL.
     expect(flip.transform.storage[0], -1);
     expect(find.byIcon(Symbols.stop), findsOneWidget);
+  });
+
+  // A streaming session keeps a partial in the composer until its segment is
+  // finalized. The row itself is what made the final land twice: entering and
+  // leaving the listening layout moves the mic button between two branches, so
+  // the button that wrote the partial is not the button that receives the
+  // final. The composer range therefore has to belong to the composer, not to
+  // the widget that drew it — every ordering below is a live one (runs A–D of
+  // the Test Home 3 leg), and each must end with the final text exactly once.
+  const partial = 'The quick brown fox';
+  const finalText = 'The quick brown fox jumps over the lazy do';
+
+  testWidgets('a final that lands after Stop replaces the partial', (
+    tester,
+  ) async {
+    await pumpComposer(tester, inputSlice: idleSlice());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    await emit(tester, {
+      'event': 'dictation_partial',
+      'seq': 0,
+      'text': partial,
+    });
+    expect(chatController.text, partial);
+    final wrotePartial = tester.element(find.byType(DictationMicButton));
+
+    // Run A: the audio ended before the owner pressed Stop, so the daemon
+    // delivers the final after the row already gave the meter back.
+    await stopSession(tester);
+    expect(find.byKey(const Key('dictation_row_meter')), findsNothing);
+    // The row moves the button between two branches, so Stop really does
+    // replace the widget that wrote the partial — the composer, not that
+    // widget's State, has to remember the range.
+    expect(
+      tester.element(find.byType(DictationMicButton)),
+      isNot(same(wrotePartial)),
+    );
+
+    await emit(tester, {
+      'event': 'dictation_final',
+      'seq': 0,
+      'text': finalText,
+    });
+
+    expect(chatController.text, finalText);
+
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+    expect(cubit.state.status, DictationStatus.idle);
+    expect(chatController.text, finalText);
+  });
+
+  testWidgets('a final that lands while the meter is still up replaces the partial', (
+    tester,
+  ) async {
+    await pumpComposer(tester, inputSlice: idleSlice());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    await emit(tester, {
+      'event': 'dictation_partial',
+      'seq': 0,
+      'text': 'G. the quick',
+    });
+
+    // Run B: the daemon closes the segment while the user is still speaking.
+    await emit(tester, {
+      'event': 'dictation_final',
+      'seq': 0,
+      'text': 'G. the quick brown fox jumps over',
+    });
+    expect(chatController.text, 'G. the quick brown fox jumps over');
+
+    await stopSession(tester);
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+    expect(chatController.text, 'G. the quick brown fox jumps over');
+  });
+
+  testWidgets('a longer final never appends itself to the partial it revises', (
+    tester,
+  ) async {
+    await pumpComposer(tester, inputSlice: idleSlice());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    const runC = 'The lazy dog. the quick brown fox';
+    const runCFinal = 'The lazy dog. the quick brown fox jumps over the lazy dog';
+    await emit(tester, {'event': 'dictation_partial', 'seq': 0, 'text': runC});
+    await stopSession(tester);
+    await emit(tester, {
+      'event': 'dictation_final',
+      'seq': 0,
+      'text': runCFinal,
+    });
+
+    // Run C: 30-char partial + a 57-char final is one paragraph, not two.
+    expect(chatController.text, runCFinal);
+    expect(chatController.text.length, runCFinal.length);
+
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+    expect(chatController.text, runCFinal);
+  });
+
+  testWidgets('a final equal to the partial still lands once', (tester) async {
+    await pumpComposer(tester, inputSlice: idleSlice());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    const runD = 'The quick brown fox jumps over the';
+    await emit(tester, {'event': 'dictation_partial', 'seq': 0, 'text': runD});
+    await stopSession(tester);
+    // Run D: identical text, the masking case that used to hide the defect.
+    await emit(tester, {'event': 'dictation_final', 'seq': 0, 'text': runD});
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+
+    expect(chatController.text, runD);
+  });
+
+  testWidgets('the next session never rewrites the text it found', (tester) async {
+    await pumpComposer(tester, inputSlice: idleSlice());
+    await seedReadyModel(tester);
+    await startSession(tester);
+
+    await emit(tester, {'event': 'dictation_partial', 'seq': 0, 'text': partial});
+    await stopSession(tester);
+    await emit(tester, {
+      'event': 'dictation_final',
+      'seq': 0,
+      'text': finalText,
+    });
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+    expect(chatController.text, finalText);
+
+    // The finished transcript is ordinary user text now: a second session
+    // appends its own span and leaves the first one exactly as it was.
+    await startSession(tester);
+    await emit(tester, {
+      'event': 'dictation_partial',
+      'seq': 0,
+      'text': 'Second run',
+    });
+    await emit(tester, {
+      'event': 'dictation_final',
+      'seq': 0,
+      'text': 'Second run.',
+    });
+    await stopSession(tester);
+    await emit(tester, {'event': 'dictation_done', 'segments': 1});
+    await settleRow(tester);
+
+    expect(chatController.text, '$finalText Second run.');
   });
 }

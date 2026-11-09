@@ -529,6 +529,43 @@ with their owner.
       `backend/tests/unit/test_dictation_relay_wire_mirror.py` asserts from its
       own copy.
 
+## G18 — Live-3 re-check: D1 reopened, cloud N-items studied (2026-11-09)
+
+A third live run on the same Test Home re-tested the six G17 checks. D2, D3, D6
+and D7 held; **D1 did not** — the cubit fix was correct and the duplicate came
+back from the composer layer. Owner scope for this change set: the D1 re-fix
+only; the cloud findings N1–N5 are studied and awaiting an owner decision.
+
+- [x] **D1 (reopened) — a streaming final was appended to the partial it
+      revises.** The partial is written by the mic button that is mounted while
+      the meter holds the composer row, and Stop moves that button to a second
+      branch of the same row, so the `State` that receives the late
+      `dictation_final` is a *different* one. The insertion range lived on that
+      `State`: it died there, the text stayed in the editor, and the final took
+      the first-write branch — `The quick brown fox` + ` ` + the 42-character
+      final, 62 characters in the composer (live runs A and C). The range now
+      belongs to the composer: `DictationInsertion.of(controller)` keeps one
+      record per `TextEditingController` (bounded, least-recently-used), the
+      button adopts it instead of owning it, and settling a session no longer
+      releases it — only the next session's `begin` does, so finished text is
+      never rewritten. Pinned by
+      `client/test/widget/dictation/dictation_composer_row_test.dart`, which
+      drives the real composer row through the four live orderings (final after
+      Stop with the meter already gone, final while the meter is up, a longer
+      final, a final equal to the partial) and asserts the button element really
+      was replaced across Stop, plus the next-session leg; and by
+      `client/test/unit/dictation/dictation_insertion_test.dart` for the
+      composer-scoped record.
+- [ ] **N1–N5 — cloud relay findings, studied only.** N1 (the Web Client emits
+      `dictation_start` twice per press), N2 (an accepted hosted session that
+      never receives audio holds the engine for the full five minutes), N3 (the
+      cloud path never recovered after the first orphan), N5 (a model change on
+      one Client is not reflected in the other Client's dictation projection),
+      plus the UX point that a duplicate route surfaces as "relay unavailable".
+      Root causes, file:line on Client/Gateway/Agent and the proposed minimal
+      fixes are recorded in the delegate run's `live3-fixes/STUDY-N.md` (run
+      `voice02-fullstack-20261108-b999`). No code was written for them.
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

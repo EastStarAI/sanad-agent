@@ -24,6 +24,8 @@ This contract applies to `client/lib/features/dictation/`.
 
 ## Composer Insertion
 - `DictationInsertion` owns the composer range dictation writes into: partials replace only that range, finals commit and advance it, cancel removes it in one step.
+- The range belongs to the **composer**, not to the widget that draws the button: one record per `TextEditingController` (`DictationInsertion.of`), adopted by whichever mic-button `State` is mounted. The composer row moves that button between two branches when the meter takes the row, so entering and leaving the listening layout rebuilds it — a per-`State` range died exactly there, and the later final then appended itself to the partial it was revising.
+- A session's range is released by the next session's `begin`, never by settling: a stop that lands after the audio ended is followed by a final the daemon only delivers when it drains, and the row has already rebuilt the button by then. Text a finished session left in the composer is ordinary user text, so the following session must not own or rewrite it.
 - A manual edit inside the owned range ends dictation's ownership of it; the user's text is never overwritten.
 - A write never duplicates the session text: when the owned range was lost (a rebuild, a transient empty partial) the helper recovers it from the text this session already wrote and **replaces** that span. Appending the session text again is the defect that put one phrase in the composer twice.
 - A live IME composition defers the write and replays it when composition ends, so Arabic preedit is never destroyed.

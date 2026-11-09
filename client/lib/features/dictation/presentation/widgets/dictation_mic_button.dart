@@ -54,13 +54,15 @@ class DictationMicButton extends StatefulWidget {
 class _DictationMicButtonState extends State<DictationMicButton> {
   static final _logger = Logger('DictationMicButton');
 
-  final DictationInsertion _insertion = DictationInsertion();
-  String _appliedText = '';
+  /// The composer range this session writes into, shared with whichever button
+  /// `State` replaces this one when the row swaps the meter in or out.
+  late DictationInsertion _insertion;
   String? _announcedCode;
 
   @override
   void initState() {
     super.initState();
+    _insertion = DictationInsertion.of(widget.chatController);
     widget.chatController.addListener(_onControllerChanged);
   }
 
@@ -70,11 +72,14 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     if (oldWidget.chatController != widget.chatController) {
       oldWidget.chatController.removeListener(_onControllerChanged);
       widget.chatController.addListener(_onControllerChanged);
-      _resetLocalState();
+      // A range recorded against another editor says nothing about this one.
+      _insertion = DictationInsertion.of(widget.chatController);
     }
     if (oldWidget.scopeKey != widget.scopeKey) {
-      // A different conversation owns the composer now: drop this session.
-      _resetLocalState();
+      // A different conversation owns the composer now: drop this session. The
+      // range stays in the composer's record, so the cancel below still removes
+      // this session's text instead of leaving it in the new conversation.
+      _forgetAnnouncement();
       final cubit = context.read<DictationCubit>();
       if (cubit.state.isActive) unawaited(cubit.cancel());
     }
@@ -86,11 +91,11 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     super.dispose();
   }
 
-  void _resetLocalState() {
-    _insertion.reset();
-    _appliedText = '';
-    _announcedCode = null;
-  }
+  /// Forgets this widget's own watch on the last refusal.
+  ///
+  /// It never touches the composer range: that record belongs to the composer
+  /// and is released by the next session's `begin`, not by a rebuild.
+  void _forgetAnnouncement() => _announcedCode = null;
 
   /// Replays a write that was deferred while the IME composition was live.
   void _onControllerChanged() {
@@ -104,7 +109,11 @@ class _DictationMicButtonState extends State<DictationMicButton> {
 
   void _syncText(DictationState state) {
     final text = state.visibleText;
-    if (text == _appliedText) return;
+    // What this session already wrote into the composer. It lives with the
+    // composer (see `DictationInsertion.of`), so it is still here when the row
+    // rebuilt the button between the partial and the final.
+    final previous = _insertion.ownedText;
+    if (text == previous) return;
     if (text.isEmpty) {
       // Cancel/discard is one step: the whole session range leaves the
       // composer, and user edits outside it are untouched.
@@ -115,21 +124,24 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       _insertion.apply(
         widget.chatController,
         text,
-        previous: _appliedText,
+        previous: previous,
       );
     }
-    _appliedText = text;
   }
 
   /// Ends the session in the composer: cancelled text is removed, while a
-  /// finished one stays as ordinary user text that the next session must not
-  /// own or rewrite.
+  /// finished one stays as ordinary user text.
+  ///
+  /// The range itself is deliberately **not** released here. A stop that lands
+  /// after the audio ended leaves the client waiting for a final the daemon only
+  /// delivers when it drains, and the row has rebuilt this button by then; that
+  /// write has to replace the span this session owns instead of taking the
+  /// first-write branch beside it. Only the next session's `begin` releases the
+  /// range, so finished text is never rewritten by the following session.
   void _settle(DictationState state) {
     if (state.discardText) {
       _insertion.removeOwned(widget.chatController);
     }
-    _insertion.reset();
-    _appliedText = '';
   }
 
   Future<void> _onPressed(DictationState state) async {
@@ -138,7 +150,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     final cubit = context.read<DictationCubit>();
     switch (state.status) {
       case DictationStatus.idle:
-        _resetLocalState();
+        _forgetAnnouncement();
         // One press starts recording when a model is ready; the sheet only
         // appears when there is nothing to record with (or on long press).
         if (cubit.state.model.models.isEmpty || !cubit.state.model.isReady) {
@@ -249,8 +261,12 @@ class _DictationMicButtonState extends State<DictationMicButton> {
           unawaited(_openSheet(state));
         }
         if (state.status == DictationStatus.idle) {
+          // The session is over: cancelled text leaves, finished text stays.
           _settle(state);
         } else {
+          // Includes the final the daemon delivers after Stop: the row has
+          // already given the meter back, so this write has to replace the span
+          // the session owns instead of starting a new one beside it.
           _syncText(state);
         }
         if (state.status == DictationStatus.listening) {

@@ -159,5 +159,60 @@ void main() {
       fresh.apply(controller, 'next', previous: 'dictated elsewhere');
       expect(controller.text, 'mine: dictated next');
     });
+
+    group('composer ownership', () {
+      test('one composer controller keeps one range across rebuilds', () {
+        final first = DictationInsertion.of(controller)..begin(controller);
+        first.apply(controller, 'The quick brown fox');
+
+        // The composer row rebuilds the mic button when the meter takes the
+        // row, so the next write comes from a different widget. The range has
+        // to come from the composer, not from the widget that wrote it.
+        final rebuilt = DictationInsertion.of(controller);
+        expect(rebuilt, same(first));
+
+        rebuilt.apply(
+          controller,
+          'The quick brown fox jumps over the lazy do',
+          previous: rebuilt.ownedText,
+        );
+        expect(controller.text, 'The quick brown fox jumps over the lazy do');
+      });
+
+      test('a different controller gets its own range', () {
+        final other = TextEditingController();
+        addTearDown(other.dispose);
+
+        DictationInsertion.of(controller).apply(controller, 'dictated');
+        final theirs = DictationInsertion.of(other);
+
+        expect(theirs.hasRange, isFalse);
+        expect(theirs.ownedText, isEmpty);
+        theirs.apply(other, 'typed');
+        expect(other.text, 'typed');
+        expect(controller.text, 'dictated');
+      });
+
+      test('records do not accumulate for closed composers', () {
+        final controllers = <TextEditingController>[];
+        addTearDown(() {
+          for (final closed in controllers) {
+            closed.dispose();
+          }
+        });
+
+        final first = DictationInsertion.of(controller);
+        for (var i = 0; i < 6; i++) {
+          final fresh = TextEditingController();
+          controllers.add(fresh);
+          DictationInsertion.of(fresh);
+        }
+
+        // The oldest record was released, so a composer that comes back after
+        // others took its place starts without a stale range.
+        expect(DictationInsertion.of(controller), isNot(same(first)));
+        expect(DictationInsertion.of(controller).hasRange, isFalse);
+      });
+    });
   });
 }

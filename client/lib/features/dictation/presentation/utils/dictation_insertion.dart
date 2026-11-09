@@ -17,12 +17,43 @@ import 'package:flutter/widgets.dart';
 ///   and flushed when composition ends, so Arabic preedit is never destroyed.
 /// * Writes never steal a caret that sits outside the dictation range; only the
 ///   offsets after the replacement shift.
+/// * The record belongs to the **composer**, not to the widget that drew it:
+///   the composer row moves the mic button between two branches when the meter
+///   takes the row, which rebuilds the button's `State` exactly when the
+///   transcript moves from a partial to its final. See [of].
 class DictationInsertion {
   int? _start;
   int? _end;
   String _owned = '';
   String? _pending;
   int? _anchor;
+
+  /// The insertion record of one composer controller.
+  ///
+  /// A session's range is written by whichever `State` currently draws the mic
+  /// button, but it belongs to the composer: the row rebuilds that button when
+  /// the session starts and again when it ends, and a per-`State` record died
+  /// there while its text stayed in the editor. The late final then found no
+  /// range, took the first-write branch, and appended the whole transcript to
+  /// the partial it was revising — the duplicate the owner saw.
+  ///
+  /// Keyed by the controller because that object lives exactly as long as the
+  /// text it holds. Bounded, because a closed conversation must not pin its
+  /// editor (and the text it keeps) forever.
+  static DictationInsertion of(TextEditingController controller) {
+    final existing = _owners.remove(controller);
+    final record = existing ?? DictationInsertion();
+    // Re-inserted on every lookup, so the map is in least-recently-used order.
+    _owners[controller] = record;
+    if (_owners.length > _maxOwners) _owners.remove(_owners.keys.first);
+    return record;
+  }
+
+  static final Map<TextEditingController, DictationInsertion> _owners = {};
+
+  /// One record per live composer; older records only held text that was
+  /// already handed to the user.
+  static const int _maxOwners = 4;
 
   bool get hasRange => _start != null;
 
