@@ -91,10 +91,13 @@ Two consequences are recorded rather than hidden:
   `GGML_AVX2`/`FMA`/`F16C`/`BMI2` **on** (`INS_ENB` is `ON` whenever
   `GGML_NATIVE=OFF` and the build is not cross-compiling), so every x64 payload —
   Linux, macOS and Windows — requires AVX2. AVX-512 stays off. A CPU without
-  AVX2 (pre-2013 x64) cannot run local dictation on those targets. Lowering the
-  floor is a one-line change (`-DGGML_AVX2=OFF`, then `-DGGML_AVX=OFF` and
-  friends to match) but it decides which machines the product serves, so it is a
-  product decision recorded here, not a build detail.
+  AVX2 (pre-2013 x64) cannot run local dictation on those targets. **Decided by
+  the owner on 2026-11-09: the AVX2/FMA/F16C/BMI2 floor is kept because
+  performance is the priority on x64, and lowering it is not planned.** Lowering
+  it would be a one-line change (`-DGGML_AVX2=OFF`, then `-DGGML_AVX=OFF` and
+  friends to match), but it trades dictation speed for pre-2013 hardware, so
+  reviving it requires a new owner decision recorded here rather than a build
+  detail.
 - **`windows-arm64` is a declared row without a producer.** ggml aborts the
   configure when `GGML_NATIVE=OFF` is combined with MSVC on ARM ("use clang for
   `GGML_CPU_ARM_ARCH`"), so the Windows builder keeps native compilation for
