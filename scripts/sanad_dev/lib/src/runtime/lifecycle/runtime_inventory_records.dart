@@ -194,3 +194,38 @@ Future<List<InventoryRuntimeRecord>> readInventoryRuntimeRecords(
     );
   });
 }
+
+/// Whether [record] was written for the worktree at [worktreePath].
+///
+/// A record directory name is a namespace, not identity: a record written before
+/// the primary checkout id became path-only (`main-…`, `sanad-agent-…`) still
+/// belongs to its worktree. The stored workspace hash is authoritative when it is
+/// present; otherwise the eight-hex suffix of the directory name identifies the
+/// path. This is attribution evidence only — it never establishes liveness or
+/// ownership, and it never makes a record deletable.
+bool runtimeRecordBelongsToWorktree(
+  InventoryRuntimeRecord record, {
+  required String worktreeId,
+  required String worktreePath,
+}) {
+  if (record.worktreeId == worktreeId) return true;
+  final hash = worktreeHashSuffix(worktreePath);
+  final stored = record.workspaceHash?.trim();
+  if (stored != null && stored.isNotEmpty) return stored == hash;
+  return record.worktreeId.endsWith('-$hash');
+}
+
+/// The first record that belongs to the worktree at [worktreePath], or null.
+InventoryRuntimeRecord? runtimeRecordForWorktree(
+  Iterable<InventoryRuntimeRecord> records, {
+  required String worktreeId,
+  required String worktreePath,
+}) => records
+    .where(
+      (record) => runtimeRecordBelongsToWorktree(
+        record,
+        worktreeId: worktreeId,
+        worktreePath: worktreePath,
+      ),
+    )
+    .firstOrNull;

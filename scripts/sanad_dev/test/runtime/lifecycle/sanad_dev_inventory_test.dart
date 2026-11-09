@@ -346,6 +346,57 @@ void main() {
       );
     });
 
+    test(
+      'attributes a branch-derived primary record instead of orphaning it',
+      () async {
+        // A record written before the primary id became path-only: the directory
+        // still carries the branch name, the stored workspace hash does not.
+        final primaryHash = fixture.primaryId.split('-').last;
+        final legacyName = 'sanad-agent-$primaryHash';
+        fixture.writeRecord(
+          legacyName,
+          workspaceHash: primaryHash,
+          agentPort: 58085,
+          resolvedHome: fixture.primaryHome.path,
+        );
+
+        final inventory = await sanad_dev.collectSanadDevInventory(
+          callerDirectory: fixture.primaryPath,
+          environment: fixture.environment,
+          git: FakeInventoryGit(
+            entries: [
+              FakeWorktreeEntry(fixture.primaryPath, 'main', 'a' * 40),
+              FakeWorktreeEntry(fixture.linkedPath, 'feat/inventory', 'b' * 40),
+            ],
+            dirty: {fixture.primaryPath: 0, fixture.linkedPath: 0},
+            tracking: const {},
+          ).call,
+        );
+
+        expect(
+          inventory.orphans.any(
+            (orphan) =>
+                orphan.kind == sanad_dev.InventoryOrphanKind.runtimeRecord &&
+                orphan.target.endsWith(legacyName),
+          ),
+          isFalse,
+          reason:
+              'a rename must never turn a live worktree record into a target',
+        );
+        final primary = inventory.worktrees.singleWhere(
+          (worktree) => worktree.worktreeId == fixture.primaryId,
+        );
+        expect(primary.recordedHome, fixture.primaryHome.path);
+        expect(
+          Directory(
+            p.join(fixture.primaryHome.path, 'dev', 'runtimes', legacyName),
+          ).existsSync(),
+          isTrue,
+          reason: 'inventory is read-only and never renames a record',
+        );
+      },
+    );
+
     test('reports Test Home slots for worktrees using ~/.sanad-test* Homes',
         () async {
       final testHome = Directory(p.join(fixture.userHome.path, '.sanad-test'))

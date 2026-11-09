@@ -10,7 +10,7 @@ This contract governs foundational models, storage, process execution, and confi
 * `client_launch_profile.dart`: Extraction and reconstruction of Flutter compile-time defines.
 * `cloud_endpoints.dart`: Cloud environment resolution.
 * `component_journal.dart`: File-based, process-attached journal logging.
-* `runtime_context.dart`: Worktree path, branch, and port calculation models.
+* `runtime_context.dart`: Worktree path, branch, checkout-stable runtime id, and port calculation models.
 * `path_equivalence.dart`: Host-aware canonical path identity and Windows device-prefix normalization.
 * `runtime_component_control.dart`: Component control IPC manifest structures.
 * `startup_attempt.dart`, `startup_probe.dart`: Startup attempt, bounded readiness probe, and Agent crash-loop detection primitives.

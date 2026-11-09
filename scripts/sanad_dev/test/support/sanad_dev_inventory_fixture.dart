@@ -34,7 +34,11 @@ class InventoryFixture {
     // Ids are derived after the directories exist: the worktree hash resolves
     // symbolic links (for example /var -> /private/var on macOS), so the
     // production derivation must see the real directories.
-    primaryId = runtime_context.deriveWorktreeId(primaryPath, 'main');
+    primaryId = runtime_context.deriveWorktreeId(
+      primaryPath,
+      'main',
+      isPrimaryCheckout: true,
+    );
     linkedId = runtime_context.deriveWorktreeId(linkedPath, 'feat/inventory');
     testHomeWorktreeId = runtime_context.deriveWorktreeId(
       testHomePath,

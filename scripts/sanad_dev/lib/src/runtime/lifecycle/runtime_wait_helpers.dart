@@ -66,3 +66,40 @@ Future<bool> _waitForAgentPortToStop(int port, String sanadHome) async {
   }
   return false;
 }
+
+Future<bool> _waitForAgent(
+  SanadDevRuntime runtime, {
+  required String launcherId,
+  required String runtimeNonce,
+  bool Function()? shouldAbort,
+}) async {
+  final client = HttpClient();
+  try {
+    return await waitForSanadDevStartupProbe(
+      shouldAbort: shouldAbort,
+      probe: () async {
+        try {
+          final request = await client.getUrl(
+            Uri.parse('http://127.0.0.1:${runtime.agentPort}/health'),
+          );
+          await authorizeLocalGatewayRequest(request, runtime.sanadHome);
+          final response = await request.close().timeout(
+            const Duration(milliseconds: 500),
+          );
+          final body = await response.transform(utf8.decoder).join();
+          if (response.statusCode == 200 &&
+              matchesSanadDevAgentHealth(
+                jsonDecode(body),
+                launcherId: launcherId,
+                runtimeNonce: runtimeNonce,
+              )) {
+            return true;
+          }
+        } catch (_) {}
+        return false;
+      },
+    );
+  } finally {
+    client.close(force: true);
+  }
+}

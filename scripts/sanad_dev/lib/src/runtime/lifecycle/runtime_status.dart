@@ -14,6 +14,17 @@ Future<String> resolveStatusSourceCommit({
   return (await readHeadCommit()).trim();
 }
 
+/// The `worktree=` value `status` prints for one managed Client.
+///
+/// A linked worktree carries its own name define; a non-linked checkout prints
+/// `primary`, the same namespace its runtime id uses. The old `main` fallback
+/// read like a branch fact and hid the rename a detached HEAD caused.
+String runtimeWorktreeLabel(String? marker, {required bool isLinkedWorktree}) {
+  final label = marker?.trim() ?? '';
+  if (label.isNotEmpty) return label;
+  return isLinkedWorktree ? 'main' : 'primary';
+}
+
 /// `sanad-dev status` is strictly read-only.
 ///
 /// It performs discovery, reads the launcher lease, and prints the runtime
@@ -97,7 +108,9 @@ Future<void> handleRuntimeStatus({
   SanadDevStartupAttempt? startupAttempt;
   try {
     startupAttempt = await readLocatedSanadDevStartupAttempt(
-      runtimeDirectory: runtime.runtimeDirectory,
+      runtimeDirectory:
+          await legacyRuntimeRecordDirectory(runtime) ??
+          runtime.runtimeDirectory,
       workspaceHash: runtime.worktreeId.split('-').last,
     );
     if (startupAttempt != null) {
@@ -143,11 +156,15 @@ Future<void> handleRuntimeStatus({
   for (final client in runtimeClients) {
     final profile = client.launchProfile;
     final marker = profile?.define('SANAD_DEV_WORKTREE_NAME');
+    final worktreeLabel = runtimeWorktreeLabel(
+      marker,
+      isLinkedWorktree: runtime.isLinkedWorktree,
+    );
     final webOrigin = profile?.webOrigin;
     print(
       '  - device=${client.deviceId ?? 'unknown'} vm=${client.port} '
       'pid=${client.pid ?? '-'} source=${client.path} '
-      'worktree=${marker?.isNotEmpty == true ? marker : 'main'} '
+      'worktree=$worktreeLabel '
       'switch_capable=${profile?.define('SANAD_DEV_SWITCH_CAPABLE') == 'true'}'
       '${webOrigin == null ? '' : ' web_origin=$webOrigin'}',
     );

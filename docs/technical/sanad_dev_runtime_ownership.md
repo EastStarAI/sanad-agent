@@ -186,6 +186,42 @@ ambiguous, cross-owned, and source-attached clients are refused.
 `cleanup-orphans` is a different scope: it deletes only orphaned dev-area records
 and Homes, never a process, and never anything a live runtime still claims.
 
+### Checkout identity and the runtime id
+
+Every worktree has one runtime id. It names the diagnostics record below
+`~/.sanad/dev/runtimes/<id>` and nothing else: no port, Home, preferences
+namespace, Keychain scope, lease, or endpoint record is derived from it.
+
+- **Non-linked checkout** (the repository's own checkout, or an independent
+  clone): `primary-<hash>`, derived from the canonical workspace path alone. A
+  branch switch, a detach, or a release checkout cannot rename the namespace
+  mid-session, so a record written under one branch is still claimed under the
+  next.
+- **Linked worktree**: `<branch>-<hash>`, unchanged. Its id is also the name of
+  its Home (`~/.sanad/dev/homes/<id>`), and that path is the Keychain account
+  scope, the preferences namespace, and the local gateway credential location,
+  so a checkout alone must never move it.
+
+`<hash>` is the eight-hex workspace hash derived from the canonical path
+(`worktreeHashSuffix`). **The id must end with `-<hash>`**: Agent health,
+launcher leases, startup locators, and client launch profiles all read the
+workspace hash as the id's final segment, and two worktrees are only ever
+distinguished by that segment. A change to the id shape is a change to every
+ownership predicate, so it is pinned by a test.
+
+The id is a namespace, never identity. A runtime record that still carries a
+branch-derived name belongs to its worktree when its stored `workspace_hash`
+matches, or — for a record written before that field existed — when its
+directory name ends with the worktree's hash. That alias keeps a pre-change
+record attributed instead of appearing as `no matching worktree`, which is how
+its pids could otherwise be offered for deletion while the process still ran.
+`run` additionally adopts such a directory into `primary-<hash>` on its next
+non-dry launch: one same-filesystem rename, skipped when the canonical directory
+already exists, and silent on failure because the record is diagnostics. No
+observation command renames a record. `status` reports a managed Client of a
+non-linked checkout as `worktree=primary` rather than the old `main` fallback,
+which read like a branch fact.
+
 ## Standalone clones
 
 Git identifies both an original checkout and an independent clone as non-linked checkouts, so that fact alone cannot grant primary ownership. A non-linked checkout may use the normal primary Home and canonical endpoint while there is no contradictory active owner. If the canonical endpoint reports another workspace hash, or a foreign-source client already uses the same primary Home, `run` fails closed and asks for an explicit absolute `--home`.
@@ -785,7 +821,10 @@ rather than an orphan, and `cleanup-orphans --confirm` refuses it with
 
 A Home whose leases are still live is never reported as an orphan, and a runtime
 record for another branch of an existing worktree (same path hash) is a stale
-record rather than a second runtime. Windows prints `Remove-Item` instead of
+record rather than a second runtime. The same hash rule covers an id change: a
+record whose stored workspace hash, or whose directory-name suffix, matches a
+current worktree belongs to that worktree and is never reported as
+`no matching worktree`. Windows prints `Remove-Item` instead of
 `rm`. A Test Home slot is reported only for a worktree that still exists, or for
 a runtime that is still running; a deleted worktree's Test Home record appears
 once as an orphan.

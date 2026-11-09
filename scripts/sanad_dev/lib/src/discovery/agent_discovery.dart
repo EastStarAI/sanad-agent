@@ -117,7 +117,9 @@ Future<List<AgentInstance>> discoverAgentInstances({
 Future<String?> inferPostLaunchSanadHome(SanadDevRuntime runtime) async {
   try {
     final activeAttempt = await readLocatedSanadDevStartupAttempt(
-      runtimeDirectory: runtime.runtimeDirectory,
+      runtimeDirectory:
+          await legacyRuntimeRecordDirectory(runtime) ??
+          runtime.runtimeDirectory,
       workspaceHash: runtime.worktreeId.split('-').last,
     );
     final home = activeAttempt?.resolvedHome;
