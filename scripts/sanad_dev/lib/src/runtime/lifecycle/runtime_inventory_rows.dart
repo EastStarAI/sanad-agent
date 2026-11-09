@@ -330,7 +330,21 @@ Future<List<InventoryOrphan>> buildInventoryOrphans({
                   candidate.agentPort == record.recordedAgentPort),
         )
         .firstOrNull;
-    if (!knownIds.contains(record.worktreeId)) {
+    // A record whose eight-hex suffix is an existing worktree's path hash was
+    // written for that worktree, even when the directory still carries a
+    // branch-derived name from before the primary id became path-only. Without
+    // this, a rename made the previous record look unclaimed and offered the
+    // last pointer to a live process for deletion.
+    final owner = worktrees
+        .where(
+          (row) => runtimeRecordBelongsToWorktree(
+            record,
+            worktreeId: row.worktreeId,
+            worktreePath: row.path,
+          ),
+        )
+        .firstOrNull;
+    if (owner == null) {
       recordOrphans[record] = InventoryOrphan(
         kind: InventoryOrphanKind.runtimeRecord,
         target: record.directory,

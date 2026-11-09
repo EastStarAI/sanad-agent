@@ -33,11 +33,7 @@ class SanadDevRuntime {
 
   String get metadataPath => _join(runtimeDirectory, 'runtime.json');
   String get agentLogPath => _join(runtimeDirectory, 'agent.log');
-  String get worktreeDisplayName => workspaceRoot
-      .replaceAll('\\', '/')
-      .split('/')
-      .where((part) => part.isNotEmpty)
-      .last;
+  String get worktreeDisplayName => _pathLeaf(workspaceRoot);
 
   Map<String, dynamic> toJson({
     int? agentPid,
@@ -111,7 +107,11 @@ Future<SanadDevRuntime> discoverSanadDevRuntime({
       _canonicalPath(gitDirectory) != _canonicalPath(commonDirectory);
 
   final repositoryRoot = resolveRepositoryRoot(workspaceRoot);
-  final worktreeId = deriveWorktreeId(workspaceRoot, branch);
+  final worktreeId = deriveWorktreeId(
+    workspaceRoot,
+    branch,
+    isPrimaryCheckout: !isLinkedWorktree,
+  );
   final home = resolveUserHomeDirectory(env);
   final runtimeRoot = resolveSanadDevRuntimeRoot(env);
   final sanadHome = resolveSanadDevHome(
@@ -189,14 +189,26 @@ String resolveRepositoryRoot(String workspaceRoot) {
   );
 }
 
-String deriveWorktreeId(String workspaceRoot, String branch) {
-  final leaf = workspaceRoot
-      .replaceAll('\\', '/')
-      .split('/')
-      .where((part) => part.isNotEmpty)
-      .last;
-  final readable = sanitizeRuntimeId(branch == 'HEAD' ? leaf : branch);
+/// The runtime id of one worktree.
+///
+/// A linked worktree keeps a readable branch prefix because its id is also the
+/// name of its Home directory, and that path is the Keychain account scope, the
+/// preferences namespace, and the local gateway credential location. It must
+/// therefore never be renamed by a checkout alone.
+///
+/// A non-linked checkout is the repository's own checkout or an independent
+/// clone. Its Home, ports, preferences, and Keychain scope come from the path,
+/// never from the id, so its id is derived from the path only: detaching HEAD or
+/// switching branch cannot rename the record namespace mid-session.
+String deriveWorktreeId(
+  String workspaceRoot,
+  String branch, {
+  bool isPrimaryCheckout = false,
+}) {
   final suffix = worktreeHashSuffix(workspaceRoot);
+  if (isPrimaryCheckout) return 'primary-$suffix';
+  final leaf = _pathLeaf(workspaceRoot);
+  final readable = sanitizeRuntimeId(branch == 'HEAD' ? leaf : branch);
   return '$readable-$suffix';
 }
 
@@ -379,9 +391,12 @@ Future<void> writeRuntimeRecord(
 }
 
 Future<SanadDevRuntimeRecord?> readRuntimeRecord(
-  SanadDevRuntime runtime,
-) async {
-  final file = File(runtime.metadataPath);
+  SanadDevRuntime runtime, {
+  String? directory,
+}) async {
+  final file = File(
+    _join(directory ?? runtime.runtimeDirectory, 'runtime.json'),
+  );
   if (!await file.exists()) return null;
   try {
     final decoded = jsonDecode(await file.readAsString());
@@ -390,6 +405,42 @@ Future<SanadDevRuntimeRecord?> readRuntimeRecord(
     }
   } catch (_) {}
   return null;
+}
+
+/// A legacy runtime record directory for [runtime], or null when there is none.
+///
+/// A record written before the primary checkout id became path-only lives under
+/// a branch-derived name (`main-…`, `sanad-agent-…`) that still carries this
+/// worktree's eight-hex path hash. The canonical directory wins whenever it
+/// exists; otherwise this returns the hash-matching sibling, newest first so a
+/// renamed record beats an older one for the same path.
+///
+/// The value is a diagnostics locator, never ownership or liveness evidence: it
+/// only lets a read-only projection find a record the current naming rule would
+/// look for under another name.
+Future<String?> legacyRuntimeRecordDirectory(SanadDevRuntime runtime) async {
+  try {
+    final canonical = Directory(runtime.runtimeDirectory);
+    if (await canonical.exists()) return null;
+    final root = canonical.parent;
+    if (!await root.exists()) return null;
+    final hash = worktreeHashSuffix(runtime.workspaceRoot);
+    final matches = <({String path, DateTime modified})>[];
+    await for (final entity in root.list(followLinks: false)) {
+      if (entity is! Directory) continue;
+      if (!_pathLeaf(entity.path).endsWith('-$hash')) continue;
+      if (!await _recordDirectoryNamesWorktree(entity, hash)) continue;
+      matches.add((path: entity.path, modified: entity.statSync().modified));
+    }
+    if (matches.isEmpty) return null;
+    matches.sort((left, right) {
+      final byTime = right.modified.compareTo(left.modified);
+      return byTime != 0 ? byTime : left.path.compareTo(right.path);
+    });
+    return matches.first.path;
+  } on Object {
+    return null;
+  }
 }
 
 /// Current `HEAD` commit of [repositoryRoot], or an empty string when Git is
@@ -487,6 +538,26 @@ String _absolutePath(String path, String base) {
     return path;
   }
   return _join(base, path);
+}
+
+String _pathLeaf(String path) =>
+    path.replaceAll('\\', '/').split('/').where((part) => part.isNotEmpty).last;
+
+/// Whether one record directory names the worktree with [hash].
+///
+/// The locator is authoritative when it exists and parses; a directory whose
+/// locator names another workspace never belongs to this one. A missing or
+/// unreadable locator leaves the directory-name suffix as the only evidence the
+/// record can offer, and a diagnostics record is safe to read either way.
+Future<bool> _recordDirectoryNamesWorktree(Directory directory, String hash) async {
+  final locator = File(_join(directory.path, 'startup-attempt.json'));
+  try {
+    if (!await locator.exists()) return true;
+    final decoded = jsonDecode(await locator.readAsString());
+    return decoded is! Map || decoded['workspace_hash'] == hash;
+  } on Object {
+    return true;
+  }
 }
 
 String _canonicalPath(String path) => canonicalComparablePath(path);

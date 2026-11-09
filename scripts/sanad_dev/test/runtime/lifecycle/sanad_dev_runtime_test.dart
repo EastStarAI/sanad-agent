@@ -32,6 +32,101 @@ void main() {
     expect(sanitizeRuntimeId('---'), 'worktree');
   });
 
+  test('primary checkout ids derive from the path, never the branch', () {
+    final primary = deriveWorktreeId(
+      '/workspace/repo',
+      'main',
+      isPrimaryCheckout: true,
+    );
+    final detached = deriveWorktreeId(
+      '/workspace/repo',
+      'HEAD',
+      isPrimaryCheckout: true,
+    );
+    final release = deriveWorktreeId(
+      '/workspace/repo',
+      'release/9.0',
+      isPrimaryCheckout: true,
+    );
+    final otherCheckout = deriveWorktreeId(
+      '/workspace/other',
+      'main',
+      isPrimaryCheckout: true,
+    );
+
+    expect(primary, 'primary-${worktreeHashSuffix('/workspace/repo')}');
+    expect(detached, primary, reason: 'a detached HEAD is not a runtime event');
+    expect(release, primary, reason: 'a branch switch is not a runtime event');
+    expect(otherCheckout, isNot(primary));
+  });
+
+  test('every runtime id ends with its workspace hash', () {
+    // Sixteen call sites read the workspace hash with split('-').last, so the
+    // id shape must keep the eight-hex path hash as its final segment.
+    for (final root in const [
+      '/workspace/repo',
+      '/workspace/.agent/worktrees/task-a',
+    ]) {
+      for (final branch in const ['main', 'HEAD', 'feat/fix-ui']) {
+        for (final isPrimaryCheckout in const [true, false]) {
+          final id = deriveWorktreeId(
+            root,
+            branch,
+            isPrimaryCheckout: isPrimaryCheckout,
+          );
+          expect(id.split('-').last, worktreeHashSuffix(root));
+          expect(id, endsWith('-${worktreeHashSuffix(root)}'));
+        }
+      }
+    }
+  });
+
+  test('linked worktree ids keep their readable branch prefix', () {
+    expect(
+      deriveWorktreeId('/workspace/.agent/worktrees/task-a', 'feat/fix-ui'),
+      startsWith('feat-fix-ui-'),
+    );
+    expect(
+      deriveWorktreeId('/workspace/.agent/worktrees/task-a', 'HEAD'),
+      startsWith('task-a-'),
+    );
+    expect(
+      deriveWorktreeId(
+        '/workspace/.agent/worktrees/task-a',
+        'feat/fix-ui',
+        isPrimaryCheckout: true,
+      ),
+      startsWith('primary-'),
+    );
+  });
+
+  test('status reports a non-linked checkout as primary', () {
+    expect(
+      sanad_dev.runtimeWorktreeLabel('task-a', isLinkedWorktree: true),
+      'task-a',
+    );
+    expect(
+      sanad_dev.runtimeWorktreeLabel('main', isLinkedWorktree: true),
+      'main',
+    );
+    expect(
+      sanad_dev.runtimeWorktreeLabel(null, isLinkedWorktree: true),
+      'main',
+    );
+    expect(
+      sanad_dev.runtimeWorktreeLabel('  ', isLinkedWorktree: true),
+      'main',
+    );
+    expect(
+      sanad_dev.runtimeWorktreeLabel(null, isLinkedWorktree: false),
+      'primary',
+    );
+    expect(
+      sanad_dev.runtimeWorktreeLabel('', isLinkedWorktree: false),
+      'primary',
+    );
+  });
+
   test('linked worktrees receive one worktree-scoped Sanad Home', () {
     final userHome = _absoluteTestPath('users', 'developer');
     final home = resolveSanadDevHome(

@@ -257,6 +257,8 @@ testers instead of rebuilding worktree, port, and orphan state by hand.
 | Dev Home under `~/.sanad/dev/homes` with no matching worktree id | Reported as a `dev_home` orphan with `rm -rf <home>`; a Home whose lease is still live is never reported. |
 | Runtime record for a deleted worktree | Reported as a `runtime_record` orphan with `rm -rf <record>`; a runtime that is still live for it is reported as a runtime row instead of being hidden. |
 | Runtime record for another branch of an existing worktree | One runtime row for the worktree; the extra record is a stale record, never a second runtime. |
+| Primary checkout after a branch switch or a detached HEAD | The worktree id and every runtime row stay `primary-<hash>`; no second record namespace appears, and no record is orphaned by the checkout. |
+| Runtime record still named for a branch (`main-…`, `sanad-agent-…`) | Attributed to its worktree by workspace hash: `recorded_home` is populated, no `runtime_record` orphan is reported, and the directory is left unchanged because inventory is read-only. |
 | Runtime record for a live worktree whose lease launcher is dead | Reported as `dead launcher pid <pid>` with the record path and a `sanad-dev doctor --fix` note; no process is signaled. |
 | Stale `.local_gateway_endpoint.json` naming a dead PID | Reported as an `endpoint_record` orphan with `rm -f <home>/.local_gateway_endpoint.json`; a live one is never reported and its credential is never printed. |
 | Worktree whose Home is an absolute `~/.sanad-test` / `~/.sanad-test-2` / `~/.sanad-test-3` path | A Test Home slot with the recorded Agent port and `running`/`stopped` state; a deleted worktree's Test Home record appears once as an orphan and never as a slot. |
@@ -354,6 +356,7 @@ process.
 | Orphan target is a symbolic link, including one created after the dry run | Refused with `target is a symbolic link`; the link is never followed or deleted. |
 | A dev-area parent directory is replaced by a link to another tree between the plan and the delete | The deletion re-checks containment, refuses with `refusing to delete outside the sanad-dev dev area`, and the outside target survives. |
 | A live runtime or lease claims the same Home or worktree id | Refused with `live runtime (<agent port>)`; no pid is signalled. |
+| A legacy-named record whose trailing hash is a live worktree's path hash | Refused with `live runtime (worktree primary-<hash>)`; the record and its pids survive. |
 | A runtime or worktree appears between the dry run and `--confirm` | The confirmed run re-reads the projection first, so the new evidence is honoured and the target is refused. |
 | `cleanup-orphans --json` | Prints the stable plan document (`schema`, `generated_at`, `confirm`, `dev_area`, `user_home`, `primary_home`, `summary`, `targets`) or, with `--confirm`, the same document plus `results`. |
 | `cleanup-orphans --home <path>` | Usage error 64: the command targets the primary dev area and never a workspace-scoped Home. |

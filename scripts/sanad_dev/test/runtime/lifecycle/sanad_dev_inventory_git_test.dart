@@ -167,5 +167,31 @@ void main() {
       expect(primaryId, endsWith(runtime_context.worktreeHashSuffix(repoPath)));
       expect(linkedId, endsWith(runtime_context.worktreeHashSuffix(linkedPath)));
     });
+
+    test('keeps the primary id stable when HEAD detaches', () {
+      // Detaching HEAD mid-session used to rename the runtime namespace
+      // (`main-…` to `sanad-agent-…`) and leave the previous record looking
+      // unclaimed, which is how its pids could be deleted while still running.
+      final branchBefore = gitText(['rev-parse', '--abbrev-ref', 'HEAD']);
+      final before = runtime_context.deriveWorktreeId(
+        repoPath,
+        branchBefore,
+        isPrimaryCheckout: true,
+      );
+      addTearDown(() => gitOk(['checkout', 'main'], directory: repoPath));
+
+      gitOk(['checkout', '--detach'], directory: repoPath);
+      final detachedBranch = gitText(['rev-parse', '--abbrev-ref', 'HEAD']);
+      final after = runtime_context.deriveWorktreeId(
+        repoPath,
+        detachedBranch,
+        isPrimaryCheckout: true,
+      );
+
+      expect(detachedBranch, 'HEAD');
+      expect(after, before);
+      expect(before, startsWith('primary-'));
+      expect(before, endsWith(runtime_context.worktreeHashSuffix(repoPath)));
+    });
   });
 }

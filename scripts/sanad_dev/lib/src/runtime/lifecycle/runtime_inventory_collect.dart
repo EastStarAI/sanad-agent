@@ -155,7 +155,11 @@ Future<SanadDevInventory> collectSanadDevInventory({
   final callerIsLinked = callerEntry != null
       ? !equivalentPaths(callerEntry.path, mainCheckout)
       : !equivalentPaths(callerToplevel, mainCheckout);
-  final callerWorktreeId = deriveWorktreeId(callerToplevel, callerBranch);
+  final callerWorktreeId = deriveWorktreeId(
+    callerToplevel,
+    callerBranch,
+    isPrimaryCheckout: !callerIsLinked,
+  );
   // Built without allocating a port: the collector never binds a socket, so the
   // runtime carries zero ports and exists only to give discovery its credential
   // candidate set and workspace identity.
@@ -204,13 +208,14 @@ Future<SanadDevInventory> collectSanadDevInventory({
     clientProbeTimedOut = true;
   }
 
-  final recordsById = {
-    for (final record in records) record.worktreeId: record,
-  };
   final rows = await mapBounded(entries, inventoryGitConcurrency, (entry) async {
     final missing = !Directory(entry.path).existsSync();
     final isLinked = !equivalentPaths(entry.path, mainCheckout);
-    final worktreeId = deriveWorktreeId(entry.path, entry.branch ?? 'HEAD');
+    final worktreeId = deriveWorktreeId(
+      entry.path,
+      entry.branch ?? 'HEAD',
+      isPrimaryCheckout: !isLinked,
+    );
     var dirtyCount = 0;
     int? ahead;
     int? behind;
@@ -273,7 +278,11 @@ Future<SanadDevInventory> collectSanadDevInventory({
         userHome: userHome,
         worktreeId: worktreeId,
       ),
-      recordedHome: recordsById[worktreeId]?.recordedHome,
+      recordedHome: runtimeRecordForWorktree(
+        records,
+        worktreeId: worktreeId,
+        worktreePath: entry.path,
+      )?.recordedHome,
       lastCommitAt: lastCommitAt,
       lastCommitAgeSeconds: age != null && age < 0 ? 0 : age,
       upstream: tracking.upstream,
@@ -351,16 +360,22 @@ Future<SanadDevInventory> collectSanadDevInventory({
       ),
     );
   }
-  final knownIds = rows.map((row) => row.worktreeId).toSet();
-  final claimedHashes = {
-    for (final row in rows) worktreeHashSuffix(row.path),
-  };
+  InventoryWorktree? ownerOfWorktreeRecord(InventoryRuntimeRecord record) =>
+      rows
+          .where(
+            (row) => runtimeRecordBelongsToWorktree(
+              record,
+              worktreeId: row.worktreeId,
+              worktreePath: row.path,
+            ),
+          )
+          .firstOrNull;
   for (final record in records) {
-    if (knownIds.contains(record.worktreeId)) continue;
-    // A record for another branch of an existing worktree shares that
-    // worktree's path hash, so its live Agent already belongs to that worktree
-    // row; it is a stale record, not a second runtime.
-    if (claimedHashes.contains(record.workspaceHash)) continue;
+    // A record for another name of an existing worktree (a branch-derived name
+    // written before the primary id became path-only) shares that worktree's
+    // path hash, so its live Agent already belongs to that worktree row; it is a
+    // stale record, not a second runtime.
+    if (ownerOfWorktreeRecord(record) != null) continue;
     final runtime = await buildInventoryDetachedRuntime(
       record: record,
       primaryHome: primaryHome,
@@ -388,10 +403,11 @@ Future<SanadDevInventory> collectSanadDevInventory({
         (state?.leases.any(leaseIsAlive) ?? false);
     // A Test Home slot belongs to a worktree: a stale record of a deleted
     // worktree is reported once as an orphan, not as a slot.
-    if (!knownIds.contains(record.worktreeId) && !running) continue;
+    final owner = ownerOfWorktreeRecord(record);
+    if (owner == null && !running) continue;
     testHomes.add(
       InventoryTestHome(
-        worktreeId: record.worktreeId,
+        worktreeId: owner?.worktreeId ?? record.worktreeId,
         home: home,
         agentPort: record.recordedAgentPort,
         state: running ? InventorySlotState.running : InventorySlotState.stopped,

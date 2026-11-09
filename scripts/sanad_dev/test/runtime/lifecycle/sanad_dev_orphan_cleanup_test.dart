@@ -5,6 +5,8 @@ import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
 import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
+import 'package:sanad_dev/src/infrastructure/runtime_context.dart'
+    as runtime_context;
 
 /// Dry-run, confirm, and refusal coverage for `sanad-dev cleanup-orphans`.
 ///
@@ -173,6 +175,36 @@ void main() {
 
       expect(entry(plan, record.path).refusal,
           'recorded process pid 8765 is still running');
+    });
+
+    test('refuses a legacy-named record its live worktree claims by hash',
+        () async {
+      // A record written for this worktree before its id became path-only still
+      // ends with the worktree's path hash, so the live group claims it even
+      // though the canonical `primary-<hash>` directory does not exist yet.
+      final workspace = p.join(root.path, 'repo');
+      Directory(workspace).createSync(recursive: true);
+      final hash = runtime_context.worktreeHashSuffix(workspace);
+      final record = Directory(p.join(devArea, 'runtimes', 'sanad-agent-$hash'))
+        ..createSync();
+
+      final plan = await planFor(
+        [_orphan(sanad_dev.InventoryOrphanKind.runtimeRecord, record.path)],
+        runtimes: [
+          _runtime(
+            worktreeId: 'primary-$hash',
+            home: primaryHome,
+            runtimeClass: sanad_dev.InventoryRuntimeClass.managed,
+            agentPort: 58085,
+            worktreePath: workspace,
+          ),
+        ],
+      );
+
+      expect(
+        entry(plan, record.path).refusal,
+        'live runtime (worktree primary-$hash)',
+      );
     });
 
     test('an endpoint record naming a live pid is refused too', () async {
@@ -419,10 +451,11 @@ sanad_dev.InventoryRuntime _runtime({
   required String home,
   required sanad_dev.InventoryRuntimeClass runtimeClass,
   int? agentPort,
+  String? worktreePath,
 }) {
   return sanad_dev.InventoryRuntime(
     worktreeId: worktreeId,
-    worktreePath: null,
+    worktreePath: worktreePath,
     home: home,
     primary: false,
     runtimeClass: runtimeClass,

@@ -324,10 +324,19 @@ String? inventoryLiveRuntimeFor(
     case InventoryOrphanKind.endpointRecord:
       return matchHome(p.dirname(orphan.target));
     case InventoryOrphanKind.runtimeRecord:
-      final worktreeId = p.basename(orphan.target);
+      final name = p.basename(orphan.target);
       for (final runtime in inventory.runtimes) {
         if (!isLive(runtime)) continue;
-        if (runtime.worktreeId == worktreeId) {
+        if (runtime.worktreeId == name) {
+          return 'worktree ${runtime.worktreeId}';
+        }
+        // A record directory that still carries a branch-derived name ends with
+        // its worktree's path hash, so the live group claims it by hash even
+        // when the canonical `primary-<hash>` directory does not exist yet.
+        final worktreePath = runtime.worktreePath;
+        if (worktreePath != null &&
+            worktreePath.isNotEmpty &&
+            name.endsWith('-${worktreeHashSuffix(worktreePath)}')) {
           return 'worktree ${runtime.worktreeId}';
         }
       }

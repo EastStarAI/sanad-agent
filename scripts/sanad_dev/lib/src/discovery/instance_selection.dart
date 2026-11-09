@@ -297,7 +297,10 @@ Future<List<RuntimeLauncherRecord>> _explicitHomeLauncherRecords(
 Future<ClientInstance?> _recordedClientInstance(int port) async {
   try {
     final runtime = await _currentRuntime();
-    final record = await readRuntimeRecord(runtime);
+    final record = await readRuntimeRecord(
+      runtime,
+      directory: await legacyRuntimeRecordDirectory(runtime),
+    );
     if (record?.vmServicePort != port ||
         !await isProcessRunning(record?.clientPid)) {
       return null;
