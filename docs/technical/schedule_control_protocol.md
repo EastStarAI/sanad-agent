@@ -466,3 +466,34 @@ Rules these owners share:
 - The form reuses the new-conversation widgets (`ComposerWorkspaceChip`, `ComposerModelChip`, and the
   `ModelPickerDialog` that chip opens); a second picker implementation under `features/schedules/` is a
   guard failure.
+
+## 10. Scheduler Wake, Recovery, and Missed Occurrences
+
+§4–§9 own what a caller may ask for and what a Client renders. This section owns
+what the daemon does with a stored row across a restart and a late timer. It
+records behaviour that previously lived only in the product overview, which now
+links here.
+
+- **Advance before dispatch.** The next scheduled instant and the status are
+  persisted before the run event is emitted, so delivery is at-most-once and a
+  crash between the two cannot double-fire an occurrence.
+- **Startup re-arm with a missed-occurrence policy.** A missed recurring instant is
+  checked against a grace window of half the period, clamped to `[120s, 2h]`. Inside
+  grace the occurrence fires once immediately and advances to the next future
+  instant (`last_status = 'fired'`). Beyond grace it fires zero times, advances
+  without a burst, and records `last_status = 'skipped_missed'` with a logged
+  reason; `last_run_at` keeps the previous execution (or stays null when the
+  schedule never ran), so a listing never implies a run that was skipped.
+- **Interval cadence anchoring.** An `interval` recurrence anchors on its stored
+  slot grid — the slot that fired, or the most recent due slot after a restart —
+  never on timer lateness or on the restart instant, so the cadence survives both.
+- **Startup delivery.** An occurrence dispatched during startup recovery is held
+  until the gateway subscribes to the scheduler and then delivered once, so a fire
+  recorded as `fired` is never dropped.
+- **Immediate mutation liveness.** `cancel` removes the in-memory timer and deletes
+  the row immediately; `update` stops the old timer and arms a new one for the
+  recomputed instant.
+- **Time awareness.** The system prompt carries one date line per turn,
+  `Date: YYYY-MM-DD (zone: <zone>)`, resolved in the schedule timezone with no
+  clock time. The assembly rule is owned by
+  [Agent Runtime](agent_runtime.md) §1.

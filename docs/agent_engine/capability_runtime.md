@@ -40,6 +40,15 @@ may opt into restart replay; file mutation, shell execution, scheduling,
 delegation, and permissioned platform actions remain unsafe unless their exact
 contract proves otherwise.
 
+**Tool families.** The registered catalog covers workspace file operations,
+shell execution, web search and fetch, image inspection (`view_image`),
+long-term memory, interactive user questions, schedule management, and the
+three owner-only user-secret tools described below. Platform tools
+(`system_screenshot`, `system_mouse`, `system_keyboard`) register only when the
+device enables computer use, `host_capability_discovery` is offered only to a
+local-owner turn without a Direct host shell, and `delegate_task` is present in
+the tree but not registered while it remains paused.
+
 Workspace file operations are implemented by focused read/write/edit/search
 handlers. `file_edit` supports single find-and-replace (`old_string`/`new_string`)
 and atomic multi-chunk replacements (`edits`). Multi-chunk edits validate all chunks,
@@ -140,7 +149,8 @@ selective manifest chooses which complete packages are converted into
 compressed Dart data and compiled into the single Agent executable. On first
 run, or after the compiled bundle revision changes, the daemon reconciles those
 packages into `<SANAD_HOME>/skills/`. An unchanged start reads only the small
-managed-state revision and does not walk or hash skill directories.
+managed-state revision and does not walk or hash skill directories. The bundle
+currently carries `skill-creator`, `find-skills`, and `agent-browser`.
 
 The lifecycle manager records the origin hash it installed. It updates or
 removes only content that still matches that origin, preserves collisions and

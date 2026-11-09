@@ -36,6 +36,20 @@ or a Production URL grants no trust. Hosted services authenticate and authorize
 every client and daemon, isolate users, validate payloads, and apply operational
 limits server-side.
 
+### Account and device control
+
+The hosted account owns identity and inventory, never the work. **Settings →
+Sessions & Devices** lists the account's signed-in client sessions and its
+registered Agents with platform, status, and last-active time; a confirmed
+revoke propagates through the hosted system and disconnects the affected
+runtime, and revoking the current session completes the normal logout. Deleting
+the account from Profile requires explicit confirmation, removes the hosted
+identity and its credentials, and leaves Agent-local files, databases, and
+conversations untouched; the Client reports a confirmed deletion, a temporary
+service failure, and an unknown outcome differently, and never retries a
+destructive request on its own. The screens and their scope semantics are owned
+by [Settings Hub](../product/settings_hub.md).
+
 ## Public Authentication Surface
 
 Open-source clients use flow-specific Portal contracts:
