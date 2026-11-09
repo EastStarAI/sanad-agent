@@ -273,7 +273,8 @@ export function followDeadlineMsFor(task, defaultMs) {
   return Number.isInteger(fallback) && fallback > 0 ? fallback : DEFAULT_FOLLOW_DEADLINE_MS;
 }
 
-function firstText(...values) {
+/** The first non-empty string of a daemon-supplied field, or null. */
+export function firstText(...values) {
   for (const value of values) {
     if (typeof value === 'string' && value.trim()) return value.trim();
   }
@@ -331,6 +332,7 @@ export function interpretSessionSnapshot(payload) {
     requestId: null,
     intervention: null,
     retryAfterMs: null,
+    retryResumeAt: null,
     retry: null,
     updatedAt: null,
     executionState: null,
@@ -363,6 +365,11 @@ export function interpretSessionSnapshot(payload) {
   // The recovery owner's classification: a scheduled (or still budgeted) retry
   // is progress, a park with no scheduled resume is a decision for a human.
   const retry = autoRetryFacts(notice, executionState);
+  // The deadline the daemon itself stated. `retry_after_ms` is a countdown the
+  // reader must anchor to an observation; `resume_at` is an absolute promise,
+  // and it is what lets the worker journal a retry wait without guessing how
+  // long ago it read the notice.
+  const retryResumeAt = firstText(notice?.resume_at, notice?.resumeAt);
   // Every snapshot carries the durable completion evidence, so the outcome rule
   // reads the same numbers whether the turn ends on the first probe or later.
   const evidence = turnEvidence(payload);
@@ -389,6 +396,7 @@ export function interpretSessionSnapshot(payload) {
       requestId,
       intervention,
       retryAfterMs: retryAfter,
+      retryResumeAt,
       updatedAt,
       executionState,
       evidence,
@@ -407,6 +415,7 @@ export function interpretSessionSnapshot(payload) {
       status: 'retrying',
       cause,
       retryAfterMs: retryAfter,
+      retryResumeAt,
       updatedAt,
       executionState,
       evidence,

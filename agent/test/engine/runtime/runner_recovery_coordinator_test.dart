@@ -1,3 +1,8 @@
+import 'dart:io';
+
+import 'package:get_it/get_it.dart';
+import 'package:sanad_agent/cli/models/runtime_retry_state.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
@@ -12,6 +17,11 @@ import 'package:sanad_agent/engine/adapters/provider_history_projection_exceptio
 import 'package:sanad_agent/engine/runtime/runner_recovery_coordinator.dart';
 import 'package:sanad_agent/engine/runtime/turn_route_state.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
+import 'package:sanad_agent/evolution/db/persisted_runtime_state_repository.dart';
+import 'package:sanad_agent/evolution/session_manager.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/handlers/session_query_handler.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
 import 'package:test/fake.dart';
 import 'package:test/test.dart';
 
@@ -40,6 +50,28 @@ class _Host extends Fake implements RunnerRecoveryHost {
 class _RetryHost extends _Host {
   @override
   bool claimOwnedAutomaticRetry() => true;
+}
+
+/// A host whose session is a real persisted session, so the chain test can read
+/// the durable projection for the turn it just failed.
+class _ChainHost extends _RetryHost {
+  @override
+  final String sessionId;
+
+  _ChainHost(this.sessionId);
+}
+
+/// Minimal bridge: returns the event envelope unchanged so the chain test reads
+/// exactly the payload the local transport sends.
+class _EnvelopeBridge extends SanadProtocolBridge {
+  @override
+  Map<String, dynamic> buildAgentEventEnvelope(CanonicalEvent canonicalEvent) {
+    return {
+      'event': canonicalEvent.type,
+      'payload': canonicalEvent.payload,
+      'session_id': canonicalEvent.sessionId,
+    };
+  }
 }
 
 /// Task 110 port guard (Task 116): RunnerRecoveryCoordinator presents a
@@ -252,6 +284,163 @@ void main() {
         notice.retryBudget,
         isNull,
         reason: 'a failure that is never retried publishes no budget',
+      );
+    });
+
+    /// 2026-11-09: a provider 429 produced a live Client banner
+    /// (`retrying automatically in 30s (attempt 1 of 3)`) while
+    /// `sanad session show --json` reported `runtime_notice: null`. The chain
+    /// below is the defect in one flow: the fake provider response the
+    /// coordinator classifies, the durable row it writes, the history
+    /// projection a re-attached reader sees, and the classification both
+    /// `session show` and `session retry` derive from it. No network is used
+    /// and no retry is slept through: `retry-after: 0` keeps the wait at its
+    /// jitter floor.
+    test('a provider 429 reaches session show as a scheduled rate-limit '
+        'retry', () async {
+      final persisted = PersistedRuntimeStateRepository.fromState(state);
+      // The reported turn had no failover route it was allowed to take, so the
+      // daemon's only option was the scheduled retry on the same provider. That
+      // is what makes this the same-route path rather than an auto-failover.
+      final providers = ProviderInstanceRepository.fromDatabase(state.db);
+      final spare = providers.findById('provider-2');
+      expect(spare, isNotNull);
+      providers.update(spare!.copyWith(allowAutoFailover: false));
+
+      final tempHome = Directory.systemTemp.createTempSync('sanad_429_chain_');
+      setSanadHomeOverride(tempHome.path);
+      GetIt.I.registerSingleton<AgentStateDatabase>(state);
+      SessionManager.resetForTesting();
+      final sessions = SessionManager();
+      addTearDown(() {
+        SessionManager.resetForTesting();
+        if (GetIt.I.isRegistered<AgentStateDatabase>()) {
+          GetIt.I.unregister<AgentStateDatabase>();
+        }
+        setSanadHomeOverride(null);
+        tempHome.deleteSync(recursive: true);
+      });
+      final sessionId = sessions.createSession('gpt-4o').sessionId;
+
+      // The durable owner the daemon holds for the turn it is about to fail: a
+      // work item in the waiting state, so the projection is not read as an
+      // ended turn while the retry is scheduled.
+      persisted.executionState.enqueueWorkItem(
+        workItemId: 'wi-$sessionId',
+        sessionId: sessionId,
+        requestId: 'turn-1',
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-4o',
+        state: SessionWorkState.waiting,
+      );
+
+      /// The history projection `session show --json` reads for this session.
+      Map<String, dynamic> historyProjection() {
+        final envelope =
+            SessionQueryHandler(
+              sessionManager: sessions,
+              bridge: _EnvelopeBridge(),
+              persistedState: persisted,
+            ).buildHistoryEnvelope(
+              CanonicalEvent(
+                type: CanonicalEventTypes.getSessionHistory,
+                sessionId: sessionId,
+                payload: const {'request_id': 'history-tail'},
+              ),
+            );
+        return Map<String, dynamic>.from(envelope['payload'] as Map);
+      }
+
+      recovery.attachPersistedState(persisted);
+      final noticePayloads = <Map<String, dynamic>>[];
+      final persistedAtPublish = <Map<String, dynamic>>[];
+      // The projection a reader gets at the exact moment the daemon publishes
+      // the scheduled wait — the instant the live Client rendered
+      // `retrying automatically in 30s (attempt 1 of 3)` while `session show`
+      // reported `runtime_notice: null`.
+      Map<String, dynamic>? projectionAtWait;
+      recovery.attachNoticeSink((payload) {
+        noticePayloads.add(Map<String, dynamic>.from(payload));
+        // `_emit` mirrors the notice before it publishes, so the row read here
+        // is the durable state a reader sees at the same instant.
+        final row = persisted.findNotice(sessionId);
+        persistedAtPublish.add(<String, dynamic>{
+          'status': row?.status,
+          'reason': row?.reason,
+          'retry_attempt': row?.retryAttempt,
+          'retry_budget': row?.retryBudget,
+          'has_resume_at': row?.resumeAt != null,
+        });
+        if (payload['status'] == 'waiting' && projectionAtWait == null) {
+          projectionAtWait = historyProjection();
+        }
+      });
+
+      // The 429 OpenCodeGo returned for the reported turn: a capacity rejection
+      // the classifier reads as an upstream rate limit, whose automatic budget
+      // is 3.
+      await RunnerRecoveryCoordinator(_ChainHost(sessionId)).handleRuntimeFailure(
+        httpFailure(
+          429,
+          'Too many requests to the upstream provider. Rate limit reached.',
+        ),
+        providerInstanceId: 'provider-1',
+        modelId: 'gpt-4o',
+        attempt: 0,
+        streamStarted: false,
+        failedProviderInstanceIds: <String>{},
+      );
+
+      final waiting = noticePayloads.firstWhere(
+        (payload) => payload['status'] == 'waiting',
+      );
+      expect(waiting['reason'], 'upstream_rate_limit');
+      expect(waiting['retry_attempt'], 1);
+      expect(waiting['retry_budget'], 3);
+      expect(waiting['resume_at'], isNotNull);
+
+      final rowWhileWaiting =
+          persistedAtPublish[noticePayloads.indexOf(waiting)];
+      expect(rowWhileWaiting['status'], 'waiting');
+      expect(
+        rowWhileWaiting['retry_attempt'],
+        1,
+        reason: 'a restart must not lose the attempt the daemon published',
+      );
+      expect(rowWhileWaiting['retry_budget'], 3);
+      expect(rowWhileWaiting['has_resume_at'], isTrue);
+
+      // What `session show --json` answered while the daemon waited: the notice
+      // the live broadcast had, with the counters, and the classification both
+      // `session show` and `session retry` derive from it.
+      final atWait = projectionAtWait;
+      expect(atWait, isNotNull, reason: 'the projection is read at the wait');
+      final notice = Map<String, dynamic>.from(
+        atWait!['runtime_notice'] as Map,
+      );
+      expect(notice['status'], 'waiting');
+      expect(notice['reason'], 'upstream_rate_limit');
+      expect(notice['retry_attempt'], 1);
+      expect(notice['retry_budget'], 3);
+      expect(
+        (notice['actions'] as List),
+        containsAll(<String>['stop', 'retry', 'changeProvider']),
+      );
+
+      final retry = RuntimeRetryState.fromProjection(atWait);
+      expect(retry.executionState, 'waiting');
+      expect(retry.isAutoRetrying, isTrue);
+      expect(retry.retryLabel, 'retrying (1/3)');
+      expect(retry.reason, 'upstream_rate_limit');
+
+      // A reader that arrives after the retry started still sees a recovery in
+      // progress rather than a stopped turn.
+      final after = persisted.findNotice(sessionId);
+      expect(after, isNotNull);
+      expect(
+        RuntimeRetryState.fromProjection(historyProjection()).isAutoRetrying,
+        isTrue,
+        reason: 'a retry in flight is never reported as a stopped turn',
       );
     });
   });

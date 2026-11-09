@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -158,21 +159,8 @@ void main() {
   });
 
   group('lifecycle events reach the agent log', () {
-    Future<List<String>> drainLogged() async {
-      final logged = <String>[];
-      final previous = Logger.root.level;
-      Logger.root.level = Level.ALL;
-      final sub = Logger.root.onRecord
-          .where((record) => record.loggerName == 'SecretVaults')
-          .listen(
-            (record) => logged.add('${record.level.name} ${record.message}'),
-          );
-      SecretVaults.drainStartupEvents();
-      await Future<void>.delayed(Duration.zero);
-      await sub.cancel();
-      Logger.root.level = previous;
-      return logged;
-    }
+    Future<List<String>> drainLogged() =>
+        _captureVaultLog(SecretVaults.drainStartupEvents);
 
     test('a migration done without a log listener is replayed once', () async {
       await seedLegacy();
@@ -187,8 +175,31 @@ void main() {
       expect(await drainLogged(), isEmpty);
     });
 
+    test('recorded attempts are replayed as deduplicated history at INFO', () async {
+      // Two processes recorded the same failed verification; a start must show
+      // it once, as history, and never as the level that describes this start.
+      final event = jsonEncode({
+        'at': '2026-11-08T20:06:59Z',
+        'level': 'warning',
+        'message': 'Secret migration for providers: did not verify (StateError)',
+      });
+      await SanadHomeBootstrap.identity().writeSecretBytes(
+        'secret_vault_events.jsonl',
+        utf8.encode('$event\n$event\n'),
+      );
+
+      final logged = await drainLogged();
+
+      expect(logged, hasLength(1), reason: 'identical events collapse');
+      expect(logged.single, startsWith('INFO'));
+      expect(logged.single, contains('did not verify'));
+      expect(logged.single, contains('recorded 2026-11-08T20:06:59Z'));
+      expect(logged.single, contains('repeated 2 times'));
+      expect(await drainLogged(), isEmpty, reason: 'the file is cleared');
+    });
+
     test(
-      'a failed verification and an unavailable vault are replayed as warnings',
+      'a closed vault is current state, so it is never replayed as history',
       () async {
         await seedLegacy();
         vault.corruptWrites = true;
@@ -198,18 +209,22 @@ void main() {
           ..corruptWrites = false
           ..available = false;
         await open();
-        final logged = await drainLogged();
+         final logged = await drainLogged();
+         expect(
+           logged.where(
+             (line) =>
+                 line.startsWith('INFO') &&
+                 line.contains('Secret migration for providers: did not verify'),
+           ),
+           hasLength(1),
+           reason: 'a failed migration is history and is replayed once',
+         );
         expect(
-          logged.where(
-            (l) => l.startsWith('WARNING') && l.contains('did not verify'),
-          ),
-          isNotEmpty,
-        );
-        expect(
-          logged.where(
-            (l) => l.startsWith('WARNING') && l.contains('unavailable'),
-          ),
-          isNotEmpty,
+          logged.where((line) => line.contains('vault unavailable')),
+          isEmpty,
+          reason:
+              'the closed vault is reported by this start\'s own state line, '
+              'not by a recorded event',
         );
       },
     );
@@ -228,16 +243,29 @@ void main() {
         );
         expect(vaults.statusLabel, 'unavailable');
         expect(vaults.unavailableMessage, contains('no human'));
-        final logged = await drainLogged();
+
+        // Exactly one line describes this start, and it is the actionable
+        // WARNING an operator needs.
+        final state = await _captureVaultLog(vaults.logStartupState);
+        expect(state, hasLength(1));
+        expect(state.single, startsWith('WARNING'));
         expect(
-          logged.where(
-            (line) => line.contains(
-              AgentSecretStoreUnavailableReason.interactionForbidden,
-            ),
-          ),
-          isNotEmpty,
+          state.single,
+          contains(AgentSecretStoreUnavailableReason.interactionForbidden),
           reason: 'the daemon log must name the reason code',
         );
+        expect(state.single, contains('sanad vault authorize'));
+        expect(
+          await _captureVaultLog(vaults.logStartupState),
+          isEmpty,
+          reason: 'a start logs its state once, never twice',
+        );
+        expect(
+          await drainLogged(),
+          isEmpty,
+          reason: 'a closed vault is current state, not recorded history',
+        );
+
         // A closed vault still rejects writes instead of degrading to a file.
         expect(
           () => VaultSecretStore(vaults).write(
@@ -249,6 +277,180 @@ void main() {
       },
     );
   });
+
+  group('deferred open', () {
+    test('a vault opens without waiting for the operating-system store', () async {
+      final store = _NeverAnsweringStore();
+      final vaults = SecretVaults.beginOpen(store: store);
+
+      // The listener, the banner, and `/health` exist before the store answers.
+      expect(vaults.status, SecretVaultStatus.opening);
+      expect(vaults.statusLabel, 'opening');
+      expect(vaults.available, isFalse);
+      expect(vaults.isReady, isFalse);
+      await Future<void>.delayed(Duration.zero);
+      expect(store.reads, greaterThan(0), reason: 'the open did start');
+      expect(
+        await vaults.readyWithin(const Duration(milliseconds: 50)),
+        isFalse,
+        reason: 'a store that never answers must not become an unbounded wait',
+      );
+
+      // The one state line for a start that is still opening is INFO: nothing
+      // is known yet, so nothing may be reported as closed.
+      final state = await _captureVaultLog(vaults.logStartupState);
+      expect(state, hasLength(1));
+      expect(state.single, startsWith('INFO'));
+      expect(state.single, contains('still opening'));
+
+      // Settle the open so the test owns its whole lifetime.
+      store.refuse();
+      await vaults.ready;
+      expect(vaults.status, SecretVaultStatus.unavailable);
+    });
+
+    test('a secret written while the vault is opening fails as not ready', () async {
+      final store = _NeverAnsweringStore();
+      final vaults = SecretVaults.beginOpen(store: store);
+
+      await expectLater(
+        VaultSecretStore(vaults).write(
+          'inst-1',
+          SecureFileSecretStore.apiKeyRecord('inst-1', 'sk-opening-0001'),
+        ),
+        throwsA(
+          isA<AgentSecretStoreUnavailable>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            AgentSecretStoreUnavailableReason.vaultNotReady,
+          ),
+        ),
+      );
+
+      store.refuse();
+      await vaults.ready;
+    });
+
+    test('a vault that answers becomes available with its cached values', () async {
+      final store = _AnsweringStore();
+      final vaults = SecretVaults.beginOpen(store: store);
+      await vaults.ready;
+
+      expect(vaults.status, SecretVaultStatus.available);
+      expect(vaults.statusLabel, 'available');
+      expect(vaults.available, isTrue);
+      expect(await vaults.readyWithin(Duration.zero), isTrue);
+      expect(
+        store.readKeys,
+        contains(AgentSecretNamespaces.providerIndexKey),
+        reason: 'a settled open has read every namespace index',
+      );
+
+      final state = await _captureVaultLog(vaults.logStartupState);
+      expect(state, hasLength(1));
+      expect(state.single, startsWith('INFO'));
+      expect(state.single, contains('available'));
+    });
+
+    test('a store that refuses closes the vault without waiting', () async {
+      final vaults = SecretVaults.beginOpen(
+        store: _ReasonCodedUnavailableStore(),
+      );
+      await vaults.ready;
+
+      expect(vaults.status, SecretVaultStatus.unavailable);
+      expect(
+        vaults.unavailableReason,
+        AgentSecretStoreUnavailableReason.interactionForbidden,
+      );
+      expect(
+        vaults.unavailableStateMessage,
+        contains('sanad vault authorize'),
+        reason: 'the recovery route must not require Keychain Access',
+      );
+    });
+
+    test('open and beginOpen agree on one instance per Home', () async {
+      final first = SecretVaults.beginOpen(store: _AnsweringStore());
+      final second = await SecretVaults.open(store: _AnsweringStore());
+      expect(identical(first, second), isTrue);
+      expect(identical(SecretVaults.current, first), isTrue);
+    });
+  });
+}
+
+/// Collects every `SecretVaults` log line [action] produces.
+Future<List<String>> _captureVaultLog(FutureOr<void> Function() action) async {
+  final logged = <String>[];
+  final previous = Logger.root.level;
+  Logger.root.level = Level.ALL;
+  final sub = Logger.root.onRecord
+      .where((record) => record.loggerName == 'SecretVaults')
+      .listen((record) => logged.add('${record.level.name} ${record.message}'));
+  await action();
+  await Future<void>.delayed(Duration.zero);
+  await sub.cancel();
+  Logger.root.level = previous;
+  return logged;
+}
+
+/// A store whose reads never complete on their own, standing in for an
+/// operating-system credential store that is showing a dialog, waiting on a
+/// locked keyring, or blocked behind a competing lock holder.
+///
+/// [refuse] settles every pending read, so a test owns the open's whole lifetime
+/// instead of leaving asynchronous work behind.
+final class _NeverAnsweringStore implements AgentSecretStore {
+  static const _refusedError = AgentSecretStoreUnavailable(
+    'The operating-system credential store did not answer.',
+    reasonCode: AgentSecretStoreUnavailableReason.interactionForbidden,
+  );
+
+  final List<Completer<String?>> _pending = [];
+  bool _refused = false;
+
+  int get reads => _pending.length;
+
+  /// Refuses every pending and future read, so a test owns the open's whole
+  /// lifetime instead of leaving asynchronous work behind.
+  void refuse() {
+    _refused = true;
+    for (final completer in _pending) {
+      if (!completer.isCompleted) completer.completeError(_refusedError);
+    }
+  }
+
+  @override
+  Future<String?> read(String key) {
+    if (_refused) return Future<String?>.error(_refusedError);
+    final completer = Completer<String?>();
+    _pending.add(completer);
+    return completer.future;
+  }
+
+  @override
+  Future<void> write(String key, String value) => Completer<void>().future;
+
+  @override
+  Future<void> delete(String key) => Completer<void>().future;
+}
+
+/// A store that answers every read with "absent", so an open settles.
+final class _AnsweringStore implements AgentSecretStore {
+  final Map<String, String> values = {};
+  final List<String> readKeys = [];
+
+  @override
+  Future<String?> read(String key) async {
+    readKeys.add(key);
+    return values[key];
+  }
+
+  @override
+  Future<void> write(String key, String value) async => values[key] = value;
+
+  @override
+  Future<void> delete(String key) async => values.remove(key);
 }
 
 /// A store whose every read refuses the way macOS does when the item demands an

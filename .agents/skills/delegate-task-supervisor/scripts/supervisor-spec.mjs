@@ -12,7 +12,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, isAbsolute, resolve } from 'node:path';
 
-import { fail, getArgValue } from './supervisor-core.mjs';
+import { effectiveTaskArgs, fail, getArgValue } from './supervisor-core.mjs';
 import { canonicalWorkspace, identityFor } from './supervisor-registry.mjs';
 
 const SUPPORTED_IMPLEMENTERS = new Set(['opencode', 'agy', 'antigravity', 'sanad']);
@@ -306,7 +306,7 @@ function validateTask(item, existingIds = new Set()) {
     // The task's declared Home is injected once, after validation, so the
     // worker always attaches to the managed custom Home. Nothing else may
     // pass --home (duplicates fail closed during validation).
-    effectiveArgs: customHome != null ? [...item.args, '--home', resolve(customHome)] : item.args,
+    effectiveArgs: effectiveTaskArgs(item.args, customHome != null ? resolve(customHome) : null),
     resultPath,
     timelinePath,
     timelineFormat,

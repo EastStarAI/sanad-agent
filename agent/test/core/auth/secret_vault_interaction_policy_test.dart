@@ -182,9 +182,107 @@ void main() {
       expect(declaredAllowed.code, 'declared_interactive');
     });
 
-    test('the daemon entry decision always allows the prompt', () {
-      expect(SecretVaultPolicy.daemonEntryDecision.allowsPrompt, isTrue);
-      expect(SecretVaultPolicy.daemonEntryDecision.code, 'daemon_entry_point');
+    test('the daemon entry decision never allows the prompt', () {
+      expect(SecretVaultPolicy.daemonEntryDecision.allowsPrompt, isFalse);
+      expect(SecretVaultPolicy.daemonEntryDecision.code, 'daemon_background');
+    });
+  });
+
+  group('Pending-authorization notice', () {
+    late StringBuffer sink;
+
+    setUp(() {
+      sink = StringBuffer();
+      SecretVaultNotice.sink = sink;
+    });
+
+    tearDown(SecretVaultNotice.reset);
+
+    test('a daemon entry never announces a wait', () {
+      // The store consults this before every query, so a daemon query cannot
+      // print a notice no dialog backs.
+      SecretVaultPolicy.apply(
+        SecretVaultPolicy.daemonEntryDecision,
+        vaultSkipped: false,
+      );
+
+      expect(SecretVaultNotice.announcePendingAuthorization(), isFalse);
+      expect(sink.toString(), isEmpty);
+      expect(SecretVaultNotice.printed, isFalse);
+    });
+
+    test('every forbidding evidence prints nothing', () {
+      for (final evidence in const [
+        SecretVaultInteractionEvidence.machineOutputFlag,
+        SecretVaultInteractionEvidence.supervisedChild,
+        SecretVaultInteractionEvidence.noTerminal,
+        SecretVaultInteractionEvidence.declaredByEnvironment,
+        SecretVaultInteractionEvidence.daemonBackground,
+      ]) {
+        SecretVaultNotice.reset();
+        sink.clear();
+        SecretVaultPolicy.apply(
+          SecretVaultInteractionDecision(
+            SecretVaultInteraction.forbidden,
+            evidence,
+          ),
+          vaultSkipped: false,
+        );
+
+        expect(
+          SecretVaultNotice.announcePendingAuthorization(),
+          isFalse,
+          reason: evidence.name,
+        );
+        expect(sink.toString(), isEmpty, reason: evidence.name);
+      }
+    });
+
+    test('a refused query in a forbidding process prints nothing', () async {
+      SecretVaultPolicy.apply(
+        SecretVaultPolicy.daemonEntryDecision,
+        vaultSkipped: false,
+      );
+      final store = _RefusingStore();
+
+      await expectLater(
+        store.read('providers:index'),
+        throwsA(
+          isA<AgentSecretStoreUnavailable>().having(
+            (error) => error.reasonCode,
+            'reasonCode',
+            AgentSecretStoreUnavailableReason.interactionForbidden,
+          ),
+        ),
+      );
+      expect(
+        sink.toString(),
+        isEmpty,
+        reason:
+            'a background query is refused immediately; announcing a wait would '
+            'describe a dialog that never appears',
+      );
+      expect(SecretVaultNotice.printed, isFalse);
+    });
+
+    test('an interactive grant prints the notice exactly once', () {
+      SecretVaultPolicy.apply(
+        const SecretVaultInteractionDecision(
+          SecretVaultInteraction.allowed,
+          SecretVaultInteractionEvidence.interactiveTerminal,
+        ),
+        vaultSkipped: false,
+      );
+
+      expect(SecretVaultNotice.announcePendingAuthorization(), isTrue);
+      expect(SecretVaultNotice.announcePendingAuthorization(), isFalse);
+      expect(
+        sink.toString().trim().split('\n'),
+        hasLength(1),
+        reason: 'one notice per process, never one per query',
+      );
+      expect(sink.toString(), contains(agentVaultKeychainService));
+      expect(sink.toString(), isNot(contains('secret=')));
     });
   });
 
@@ -371,8 +469,7 @@ void main() {
     });
   });
 
-  group('Never-prompt authentication context', () {
-    test(
+  group('Never-prompt authentication context', () {    test(
       'builds an LAContext whose interactionNotAllowed reads back as set',
       () {
         expect(
@@ -394,4 +491,30 @@ void main() {
           : 'LocalAuthentication is a macOS framework.',
     );
   });
+}
+
+/// A store that applies the same two steps as the macOS backend before its first
+/// query: consult [SecretVaultNotice], then refuse an item that demands an
+/// interaction this process may not show.
+///
+/// It keeps the notice decision testable on every operating system without a
+/// real Keychain, DPAPI, or Secret Service call.
+final class _RefusingStore implements AgentSecretStore {
+  static const _error = AgentSecretStoreUnavailable(
+    'The Agent vault item demands an interactive authorization and this '
+    'process has no human to answer it.',
+    reasonCode: AgentSecretStoreUnavailableReason.interactionForbidden,
+  );
+
+  @override
+  Future<String?> read(String key) async {
+    SecretVaultNotice.announcePendingAuthorization();
+    throw _error;
+  }
+
+  @override
+  Future<void> write(String key, String value) async => throw _error;
+
+  @override
+  Future<void> delete(String key) async => throw _error;
 }

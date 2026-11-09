@@ -30,6 +30,8 @@ class RuntimeNoticeRepository {
     int? retryAfterMs,
     String? resumeAt,
     int? limitRpm,
+    int? retryAttempt,
+    int? retryBudget,
     List<String> actions = const [],
     DateTime? createdAt,
   }) {
@@ -39,8 +41,9 @@ class RuntimeNoticeRepository {
       INSERT INTO session_runtime_notices (
         session_id, request_id, run_id, status, reason, severity,
         title, message, provider_instance_id, provider_display_name,
-        retry_after_ms, resume_at, limit_rpm, actions, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        retry_after_ms, resume_at, limit_rpm, retry_attempt, retry_budget,
+        actions, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(session_id) DO UPDATE SET
         request_id = excluded.request_id,
         run_id = excluded.run_id,
@@ -54,6 +57,8 @@ class RuntimeNoticeRepository {
         retry_after_ms = excluded.retry_after_ms,
         resume_at = excluded.resume_at,
         limit_rpm = excluded.limit_rpm,
+        retry_attempt = excluded.retry_attempt,
+        retry_budget = excluded.retry_budget,
         actions = excluded.actions,
         updated_at = excluded.updated_at
       ''',
@@ -71,6 +76,8 @@ class RuntimeNoticeRepository {
         retryAfterMs,
         resumeAt,
         limitRpm,
+        retryAttempt,
+        retryBudget,
         jsonEncode(actions),
         createdAt?.toUtc().toIso8601String() ?? now,
         now,

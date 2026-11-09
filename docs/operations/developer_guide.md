@@ -358,6 +358,13 @@ install [--force]          Install FVM, pinned Flutter, and the user command.
 setup [--force]            Ensure install and resolve all package dependencies.
 run [all|agent|client]     Ensure setup, then launch all (default) or one component.
 status                    Show this worktree runtime and component status.
+inventory [--all] [--pr] [--json]
+                          Read-only view of every worktree, runtime, Client, Test
+                          Home and orphaned record, with disk, commit age, upstream,
+                          optional gh pull request, and a safe/keep removal verdict.
+cleanup-orphans [--confirm] [--json]
+                          Prune the dev-area orphans the inventory reports; dry run
+                          unless --confirm is passed.
 stop [all|agent|client]   Stop all components (default) or one component.
 doctor [--fix]            Diagnose ownership; remove only proven stale records.
 takeover                  Relaunch one complete manual pair under sanad-dev.
@@ -386,6 +393,13 @@ Common options:
   shutdown instead of preserving it for resume. Client-only stop rejects it.
 - `--config <path>` — select the client compile-time configuration; the default is `config/prod.json`, while `config/dev.json` is an explicit hosted-service integration profile.
 - `--dry-run` — resolve and print runtime settings without launching.
+- `--pr` — with `inventory`, also ask `gh` for each worktree pull request. Results
+  are bounded and cached under the gitignored `.sanad-dev/`; a missing or offline
+  `gh` reports a marker instead of failing the command.
+- `--confirm` — with `cleanup-orphans`, actually delete the listed dev-area
+  targets. Without it the command only lists what it would delete.
+- `--json` — print the stable machine-readable document for `inventory` or
+  `cleanup-orphans`.
 - `--fix` — with `doctor`, remove a stale/invalid launcher record only when the
   launcher, Agent endpoint, and matching clients are all absent.
 
@@ -394,6 +408,10 @@ Examples:
 ```bash
 sanad-dev run agent
 sanad-dev run client -d macos
+sanad-dev inventory
+sanad-dev inventory --all
+sanad-dev inventory --pr --json
+sanad-dev cleanup-orphans
 sanad-dev stop client -d macos
 sanad-dev stop agent
 sanad-dev stop all --force

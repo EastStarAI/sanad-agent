@@ -33,6 +33,21 @@ class InventoryWorktree {
     required this.worktreeId,
     required this.home,
     required this.recordedHome,
+    this.diskBytes,
+    this.diskScan = InventoryDiskScan.skipped,
+    this.lastCommitAt,
+    this.lastCommitAgeSeconds,
+    this.upstream,
+    this.upstreamState = InventoryUpstreamState.none,
+    this.upstreamAhead,
+    this.upstreamBehind,
+    this.pullRequest,
+    this.pullRequestSource,
+    this.pullRequestLookup = InventoryPullRequestLookup.notRequested,
+    this.removal = const InventoryWorktreeRemoval(
+      verdict: InventoryRemovalVerdict.keep,
+      reason: 'not evaluated',
+    ),
   });
 
   final String path;
@@ -64,7 +79,83 @@ class InventoryWorktree {
   /// Home recorded by this worktree's runtime record, when one exists.
   final String? recordedHome;
 
+  /// Measured size of the worktree directory, or null when it was skipped.
+  final int? diskBytes;
+
+  /// How completely [diskBytes] was measured.
+  final InventoryDiskScan diskScan;
+
+  /// Committer timestamp of `HEAD`; null when Git reported none.
+  final DateTime? lastCommitAt;
+
+  /// Age of [lastCommitAt] at projection time, in whole seconds.
+  final int? lastCommitAgeSeconds;
+
+  /// Configured upstream of this branch (`origin/feature`), when one exists.
+  final String? upstream;
+  final InventoryUpstreamState upstreamState;
+  final int? upstreamAhead;
+  final int? upstreamBehind;
+
+  /// Pull request reported by `gh` or restored from the bounded cache.
+  final InventoryPullRequest? pullRequest;
+
+  /// `gh` or `cache`; null when no pull request was reported.
+  final String? pullRequestSource;
+  final InventoryPullRequestLookup pullRequestLookup;
+
+  /// Whether this worktree may be removed without losing local evidence.
+  final InventoryWorktreeRemoval removal;
+
   String get shortHead => head.length <= 8 ? head : head.substring(0, 8);
+
+  /// Whether the removal verdict is `safe`.
+  bool get removalSafe => removal.verdict == InventoryRemovalVerdict.safe;
+
+  /// Applies the later health passes without disturbing the Git identity.
+  InventoryWorktree copyWith({
+    InventoryDiskUsage? disk,
+    InventoryPullRequestAnswer? pullRequest,
+    InventoryWorktreeRemoval? removal,
+  }) {
+    return InventoryWorktree(
+      path: path,
+      branch: branch,
+      head: head,
+      detached: detached,
+      locked: locked,
+      lockReason: lockReason,
+      prunable: prunable,
+      prunableReason: prunableReason,
+      missing: missing,
+      isLinked: isLinked,
+      primaryCheckout: primaryCheckout,
+      dirtyCount: dirtyCount,
+      ahead: ahead,
+      behind: behind,
+      worktreeId: worktreeId,
+      home: home,
+      recordedHome: recordedHome,
+      diskBytes: disk == null ? diskBytes : disk.bytes,
+      diskScan: disk == null ? diskScan : disk.scan,
+      lastCommitAt: lastCommitAt,
+      lastCommitAgeSeconds: lastCommitAgeSeconds,
+      upstream: upstream,
+      upstreamState: upstreamState,
+      upstreamAhead: upstreamAhead,
+      upstreamBehind: upstreamBehind,
+      pullRequest: pullRequest == null
+          ? this.pullRequest
+          : pullRequest.pullRequest,
+      pullRequestSource: pullRequest == null
+          ? pullRequestSource
+          : pullRequest.source,
+      pullRequestLookup: pullRequest == null
+          ? pullRequestLookup
+          : pullRequest.lookup,
+      removal: removal ?? this.removal,
+    );
+  }
 
   String get displayBranch => detached ? 'detached' : (branch ?? '-');
 
@@ -87,6 +178,18 @@ class InventoryWorktree {
     'worktree_id': worktreeId,
     'home': home,
     'recorded_home': recordedHome,
+    'disk_bytes': diskBytes,
+    'disk_scan': diskScan.name,
+    'last_commit_at': lastCommitAt?.toUtc().toIso8601String(),
+    'last_commit_age_seconds': lastCommitAgeSeconds,
+    'upstream': upstream,
+    'upstream_state': upstreamState.name,
+    'upstream_ahead': upstreamAhead,
+    'upstream_behind': upstreamBehind,
+    'pull_request': pullRequest?.toJson(),
+    'pull_request_source': pullRequestSource,
+    'pull_request_lookup': inventoryPullRequestLookupName(pullRequestLookup),
+    ...removal.toJson(),
   };
 }
 
@@ -287,6 +390,8 @@ class SanadDevInventory {
     required this.orphans,
     required this.agentProbeTimedOut,
     required this.clientProbeTimedOut,
+    this.pullRequestLookup = InventoryPullRequestLookup.notRequested,
+    this.pullRequestUnavailableReason,
   });
 
   final DateTime generatedAt;
@@ -306,8 +411,18 @@ class SanadDevInventory {
   /// Whether the bounded Client process scan was abandoned.
   final bool clientProbeTimedOut;
 
+  /// Aggregate outcome of the optional pull-request pass.
+  final InventoryPullRequestLookup pullRequestLookup;
+
+  /// Bounded reason the pull-request pass could not answer, when it could not.
+  final String? pullRequestUnavailableReason;
+
   Iterable<InventoryRuntime> get liveRuntimes =>
       runtimes.where((runtime) => runtime.runtimeClass != InventoryRuntimeClass.stopped);
+
+  /// Worktrees the projection reports as safe to remove.
+  Iterable<InventoryWorktree> get removableWorktrees =>
+      worktrees.where((worktree) => worktree.removalSafe);
 
   Map<String, Object?> toJson() => {
     'schema': sanadDevInventorySchemaVersion,
@@ -318,6 +433,8 @@ class SanadDevInventory {
     'caller_worktree_id': callerWorktreeId,
     'agent_probe_timed_out': agentProbeTimedOut,
     'client_probe_timed_out': clientProbeTimedOut,
+    'pull_request_lookup': inventoryPullRequestLookupName(pullRequestLookup),
+    'pull_request_unavailable_reason': pullRequestUnavailableReason,
     'summary': {
       'worktrees': worktrees.length,
       'runtimes': runtimes.length,
@@ -325,6 +442,8 @@ class SanadDevInventory {
       'clients': clients.length,
       'test_homes': testHomes.length,
       'orphans': orphans.length,
+      'removal_safe': removableWorktrees.length,
+      'removal_keep': worktrees.length - removableWorktrees.length,
     },
     'worktrees': [for (final worktree in worktrees) worktree.toJson()],
     'runtimes': [for (final runtime in runtimes) runtime.toJson()],
@@ -335,7 +454,11 @@ class SanadDevInventory {
 }
 
 /// Schema version of the `sanad-dev inventory --json` document.
-const sanadDevInventorySchemaVersion = 1;
+///
+/// Version 2 adds the worktree health columns (disk, commit age, upstream,
+/// optional pull request) and the removal verdict. Every version-1 key is
+/// unchanged, so an older consumer keeps working.
+const sanadDevInventorySchemaVersion = 2;
 
 /// One parsed `git worktree list --porcelain` block.
 class GitWorktreeEntry {

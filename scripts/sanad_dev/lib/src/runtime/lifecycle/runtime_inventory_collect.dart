@@ -46,8 +46,13 @@ Future<SanadDevInventory> collectSanadDevInventory({
   discoverClients,
   Duration probeTimeout = inventoryAgentProbeTimeout,
   DateTime Function()? clock,
+  bool pullRequests = false,
+  String? pullRequestCachePath,
+  SanadDevGhRunner gh = runSanadDevGh,
+  Duration diskPassBudget = inventoryDiskScanBudget,
 }) async {
   final env = environment ?? Platform.environment;
+  final generatedAt = (clock ?? DateTime.now)().toUtc();
   final userHome = resolveUserHomeDirectory(env);
   final primaryHome = resolveDefaultUserSanadHome(env);
   final runtimeRoot = resolveSanadDevRuntimeRoot(env);
@@ -209,6 +214,7 @@ Future<SanadDevInventory> collectSanadDevInventory({
     var dirtyCount = 0;
     int? ahead;
     int? behind;
+    var tracking = InventoryWorktreeTracking.none;
     if (!missing && !entry.bare) {
       final statusOutput = await readInventoryGitText(git, entry.path, [
         '--no-optional-locks',
@@ -221,13 +227,13 @@ Future<SanadDevInventory> collectSanadDevInventory({
             .where((line) => line.trim().isNotEmpty)
             .length;
       }
-      final tracking = await readInventoryGitText(git, entry.path, [
+      final trackingOutput = await readInventoryGitText(git, entry.path, [
         'rev-list',
         '--left-right',
         '--count',
         'origin/main...HEAD',
       ]);
-      final counts = tracking
+      final counts = trackingOutput
           ?.split(RegExp(r'\s+'))
           .where((value) => value.isNotEmpty)
           .toList(growable: false);
@@ -235,7 +241,17 @@ Future<SanadDevInventory> collectSanadDevInventory({
         behind = int.tryParse(counts[0]);
         ahead = int.tryParse(counts[1]);
       }
+      tracking = await readInventoryWorktreeTracking(
+        git,
+        entry.path,
+        branch: entry.branch,
+        detached: entry.detached,
+      );
     }
+    final lastCommitAt = tracking.lastCommitAt;
+    final age = lastCommitAt == null
+        ? null
+        : generatedAt.difference(lastCommitAt).inSeconds;
     return InventoryWorktree(
       path: entry.path,
       branch: entry.branch,
@@ -258,8 +274,57 @@ Future<SanadDevInventory> collectSanadDevInventory({
         worktreeId: worktreeId,
       ),
       recordedHome: recordsById[worktreeId]?.recordedHome,
+      lastCommitAt: lastCommitAt,
+      lastCommitAgeSeconds: age != null && age < 0 ? 0 : age,
+      upstream: tracking.upstream,
+      upstreamState: tracking.upstreamState,
+      upstreamAhead: tracking.upstreamAhead,
+      upstreamBehind: tracking.upstreamBehind,
     );
   });
+
+  // Sizing is a separate, sequential, globally bounded pass: one huge worktree
+  // must not consume the whole report's deadline, and an overrunning walk
+  // reports `skipped` instead of blocking. The primary checkout is measured
+  // last so the shared budget first serves the linked worktrees whose removal
+  // verdict depends on it.
+  final diskPass = Stopwatch()..start();
+  final diskOrder = [
+    ...rows.where((row) => !row.primaryCheckout),
+    ...rows.where((row) => row.primaryCheckout),
+  ];
+  final diskByPath = <String, InventoryDiskUsage>{
+    for (final row in diskOrder)
+      row.path: measureInventoryDiskUsage(
+        row.path,
+        pass: diskPass,
+        passBudget: diskPassBudget,
+      ),
+  };
+
+  // The pull-request column is opt-in: `inventory` writes nothing by default,
+  // and a missing, unauthenticated, offline, or hung `gh` is reported instead of
+  // failing the projection.
+  final pullRequestAnswers = pullRequests
+      ? await resolveInventoryPullRequests(
+          workingDirectory: callerToplevel,
+          branchHeads: {
+            for (final row in rows)
+              if (!row.detached && row.branch != null && row.branch!.isNotEmpty)
+                row.branch!: row.head,
+          },
+          cachePath:
+              pullRequestCachePath ??
+              p.join(
+                callerToplevel,
+                '.sanad-dev',
+                'inventory',
+                'pr-cache.json',
+              ),
+          clock: () => generatedAt,
+          gh: gh,
+        )
+      : const InventoryPullRequestLookupResult(answers: {});
 
   final inventoryClients = [
     for (final client in clients)
@@ -335,13 +400,68 @@ Future<SanadDevInventory> collectSanadDevInventory({
   }
   testHomes.sort((left, right) => left.worktreeId.compareTo(right.worktreeId));
 
+  // The verdict is the last pass because it combines Git evidence with the live
+  // runtime group and every Test Home slot of the same worktree.
+  final liveWorktreeIds = {
+    for (final runtime in runtimes)
+      if (runtime.runtimeClass != InventoryRuntimeClass.stopped)
+        runtime.worktreeId,
+  };
+  final testHomeWorktreeIds = {
+    for (final slot in testHomes) slot.worktreeId,
+  };
+  final finalRows = [
+    for (final row in rows)
+      () {
+        final answer = pullRequestAnswers.answerFor(row.branch);
+        final health = row.copyWith(
+          disk: diskByPath[row.path],
+          pullRequest: answer,
+        );
+        return health.copyWith(
+          removal: computeInventoryRemoval(
+            primaryCheckout: health.primaryCheckout,
+            missing: health.missing,
+            locked: health.locked,
+            detached: health.detached,
+            dirtyCount: health.dirtyCount,
+            ahead: health.ahead,
+            upstream: health.upstream,
+            upstreamState: health.upstreamState,
+            upstreamAhead: health.upstreamAhead,
+            liveRuntime: liveWorktreeIds.contains(health.worktreeId),
+            testHome: testHomeWorktreeIds.contains(health.worktreeId),
+            pullRequest: answer.pullRequest,
+          ),
+        );
+      }(),
+  ];
+
+  var pullRequestLookup = InventoryPullRequestLookup.notRequested;
+  if (pullRequests) {
+    final timedOut = finalRows.any(
+      (row) => row.pullRequestLookup == InventoryPullRequestLookup.timeout,
+    );
+    final answered = finalRows.any(
+      (row) => row.pullRequestLookup == InventoryPullRequestLookup.ok,
+    );
+    final failed = finalRows.any(
+      (row) => row.pullRequestLookup == InventoryPullRequestLookup.unavailable,
+    );
+    pullRequestLookup = timedOut
+        ? InventoryPullRequestLookup.timeout
+        : answered || !failed
+        ? InventoryPullRequestLookup.ok
+        : InventoryPullRequestLookup.unavailable;
+  }
+
   return SanadDevInventory(
-    generatedAt: (clock ?? DateTime.now)().toUtc(),
+    generatedAt: generatedAt,
     userHome: userHome,
     primaryHome: primaryHome,
     repositoryRoot: repositoryRoot,
     callerWorktreeId: callerWorktreeId,
-    worktrees: rows,
+    worktrees: finalRows,
     runtimes: runtimes,
     clients: inventoryClients,
     testHomes: testHomes,
@@ -357,6 +477,8 @@ Future<SanadDevInventory> collectSanadDevInventory({
     ),
     agentProbeTimedOut: agentProbeTimedOut,
     clientProbeTimedOut: clientProbeTimedOut,
+    pullRequestLookup: pullRequestLookup,
+    pullRequestUnavailableReason: pullRequestAnswers.unavailableReason,
   );
 }
 

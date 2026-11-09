@@ -52,8 +52,11 @@ export function createScheduler(ctx) {
   let monitorIntervalMs = 0;
   let monitorTimer = null;
   const monitorTick = () => {
+    // Signals first: a verdict computed before the latest write would declare a
+    // busy task silent (2026-11-08, run12). One pass, one manifest write.
+    ctx.sampleProgressSignals();
     for (const [id, state] of Object.entries(ctx.manifest.tasks)) {
-      if (state.status === 'queued' && !state.queueStall) ctx.flagQueueStall(id);
+      if (state.status === 'queued') ctx.flagQueueStall(id);
     }
     for (const id of Object.keys(ctx.manifest.tasks)) ctx.flagProgressStall(id);
     for (const id of Object.keys(ctx.manifest.tasks)) ctx.maybeAutoRetry(id);

@@ -535,6 +535,61 @@ void main() {
     );
 
     test(
+      'a scheduled retry keeps its attempt counters across a restart',
+      () {
+        final persisted = PersistedRuntimeStateRepository(state.db);
+        recovery.attachPersistedState(persisted);
+        recovery.reportFailure(
+          sessionId: 's-counter',
+          reason: RuntimeFailureReason.upstreamRateLimit,
+          requestId: 'req-counter',
+          providerInstanceId: readyInstance(
+            templateId: 'openai',
+            name: 'OpenCodeGo',
+          ),
+          retryAfter: const Duration(seconds: 30),
+          automaticRetryScheduled: true,
+          retryAttempt: 1,
+          retryBudget: 3,
+        );
+
+        final row = persisted.findNotice('s-counter');
+        expect(row, isNotNull);
+        expect(row!.status, 'waiting');
+        expect(
+          row.retryAttempt,
+          1,
+          reason:
+              'the durable row is what a restarted daemon reads back; without '
+              'the counters every observer loses `retrying (n/N)`',
+        );
+        expect(row.retryBudget, 3);
+        expect(row.toPayload()['retry_attempt'], 1);
+        expect(row.toPayload()['retry_budget'], 3);
+
+        // A restart: a fresh service over the same durable store.
+        final restarted = RuntimeRecoveryService(
+          repo,
+          ProviderRateLimiter(),
+          noticeSink: emitted.add,
+          autoFailoverEnabled: true,
+        );
+        restarted.attachPersistedState(persisted);
+        restarted.restoreActiveNotices();
+
+        final restored = restarted.activeNotice('s-counter');
+        expect(restored, isNotNull);
+        expect(restored!.status, RuntimeNoticeStatus.waiting);
+        expect(restored.retryAttempt, 1);
+        expect(restored.retryBudget, 3);
+        expect(restored.isAutomaticRetryPending, isTrue);
+        expect(restored.toPayload()['retry_attempt'], 1);
+        expect(restored.toPayload()['retry_budget'], 3);
+        restarted.clear('s-counter');
+      },
+    );
+
+    test(
       'future resume_at restores provider cooldown and past resume_at becomes immediately eligible',
       () {
         final persisted = PersistedRuntimeStateRepository(state.db);

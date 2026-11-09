@@ -505,8 +505,12 @@ int _schemaObjectCount(Database db) => db
     )
     .single['total'] as int;
 
+/// Legacy payloads keep the real format as a trailing double extension so that
+/// no final path component ends in `.sql`: the private Production deploy
+/// artifact check rejects such archive members
+/// (`test/guards/deploy_artifact_suffix_guard_test.dart` owns that rule).
 String _fixturePath(String fixture) =>
-    p.join(_fixtureDirectory, '$fixture.sql');
+    p.join(_fixtureDirectory, '$fixture.sql.txt');
 
 String _snapshotPath(String label) =>
     p.join(_fixtureDirectory, '$label.schema.txt');

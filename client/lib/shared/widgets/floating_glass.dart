@@ -1,7 +1,6 @@
 import 'dart:ui' show ImageFilter;
 
 import 'package:flutter/material.dart';
-import 'package:flutter_sficon/flutter_sficon.dart' as sf;
 
 class FloatingGlassView extends StatelessWidget {
   final Widget child;
@@ -30,7 +29,7 @@ class FloatingGlassView extends StatelessWidget {
 }
 
 class FloatingGlassButton extends StatelessWidget {
-  final IconData sfIcon;
+  final IconData icon;
   final GestureTapCallback? onTap;
   final Color? iconColor;
   final bool isActive;
@@ -40,7 +39,7 @@ class FloatingGlassButton extends StatelessWidget {
 
   const FloatingGlassButton({
     super.key,
-    required this.sfIcon,
+    required this.icon,
     this.onTap,
     this.iconColor,
     this.isActive = false,
@@ -74,10 +73,10 @@ class FloatingGlassButton extends StatelessWidget {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          sf.SFIcon(
-            sfIcon,
+          Icon(
+            icon,
             color: iconColor,
-            fontSize: 20,
+            size: 20,
           ),
           subWidget!,
         ],
@@ -86,10 +85,10 @@ class FloatingGlassButton extends StatelessWidget {
 
     return Opacity(
       opacity: onTap == null ? 0.1 : 1.0,
-      child: sf.SFIcon(
-        sfIcon,
+      child: Icon(
+        icon,
         color: iconColor,
-        fontSize: 20,
+        size: 20,
       ),
     );
   }

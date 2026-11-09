@@ -2,9 +2,9 @@
 //
 // A local task tails an artifact file and a remote relay task parses its streamed
 // stdout, but both must produce exactly the same journal records, so the record
-// handler is shared and this module owns both read paths. It is the only place a
-// task's session id is picked up, which is what lets `cancel`, `steer`, and
-// `retry` target the exact daemon session the worker created.
+// handler is shared and this module owns both read paths. Every event's session id
+// is handed to the worker's session owner, which is what lets `cancel`, `steer`,
+// `retry`, and `continue` target the exact daemon session the worker created.
 
 import {
   closeSync,
@@ -21,14 +21,6 @@ import { basename, dirname } from 'node:path';
 import { retryAfterMs } from '../supervisor-retry.mjs';
 
 export function createTimelineObserver(ctx) {
-  const recordSessionId = (task, sessionId) => {
-    if (!sessionId) return;
-    const state = ctx.manifest.tasks[task.id];
-    if (!state || state.sessionId === sessionId) return;
-    state.sessionId = sessionId;
-    ctx.persist();
-  };
-
   // One processed timeline record. Local tasks tail an artifact file and remote
   // relay tasks parse their streamed stdout, but both must produce exactly the
   // same journal transitions, so the handler is shared.
@@ -52,9 +44,10 @@ export function createTimelineObserver(ctx) {
 
       // The session id can arrive on any event, and usually after the launch
       // transition already reported `running`. Recording it here is what lets
-      // `cancel` stop the exact daemon session later; it persists only when the
-      // id actually changes, so per-token events cost nothing.
-      recordSessionId(task, sessionId);
+      // `cancel` stop, and a later `continue` resume, the exact daemon session;
+      // the session owner persists only when the id actually changes, so
+      // per-token events cost nothing.
+      ctx.recordTaskSession(task, sessionId);
 
       if (type === 'needs_input' || type === 'needs_permission') {
         if (lastSeenType === type && lastSeenRequestId === requestId) return;
@@ -141,24 +134,23 @@ export function createTimelineObserver(ctx) {
         });
       }
 
-      if (type === 'tool_use' || event.part?.type === 'tool' || event.tool_executions) {
-        const taskState = ctx.manifest.tasks[task.id];
-        if (taskState) {
-          const progressAt = event.timestamp || null;
-          if (!progressAt) return;
-          if (taskState.status === 'resuming') {
-            ctx.transition(task, 'running', {
-              cause: null,
-              stateSince: progressAt,
-              lastProgressAt: progressAt,
-            });
-          } else {
-            // Tool boundaries are meaningful progress and low-frequency.
-            // Assistant text can arrive per token, so it must never trigger
-            // persistent manifest writes here.
-            taskState.lastProgressAt = progressAt;
-            ctx.persist();
-          }
+      // Every record the task publishes is progress evidence, not only a tool
+      // boundary: a headless Sanad turn emits lifecycle records while it streams
+      // its case to stdout, and counting only `tool_use` made that turn look
+      // silent for its whole length (2026-11-08, run12). The value is kept in
+      // memory here and persisted by the monitor tick, so a token-level stream
+      // never rewrites the manifest once per line.
+      const taskState = ctx.manifest.tasks[task.id];
+      const progressAt = event.timestamp || null;
+      if (taskState && progressAt && ['running', 'resuming'].includes(taskState.status)) {
+        if (taskState.status === 'resuming') {
+          ctx.transition(task, 'running', {
+            cause: null,
+            stateSince: progressAt,
+            lastProgressAt: progressAt,
+          });
+        } else {
+          taskState.lastProgressAt = progressAt;
         }
       }
     };

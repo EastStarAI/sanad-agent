@@ -1,5 +1,8 @@
 import 'package:test/test.dart';
+import 'package:sanad_agent/core/agent_runtime_service.dart';
+import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
+import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:sanad_agent/evolution/models/session_state.dart';
 import 'package:sanad_agent/evolution/session_manager.dart';
@@ -57,6 +60,47 @@ class FakeLLMAdapter implements LLMAdapter {
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async => 4096;
+}
+
+/// Simulates the routing authority after a daemon restart: no turn has run in
+/// this process, so no live session signature exists and every route must be
+/// derived from the session's persisted provider instance and model.
+class _RestartedRuntime extends AgentRuntimeService {
+  _RestartedRuntime(super.config, super.instanceRepo);
+
+  final Map<String, FakeLLMAdapter> providerAdapters = {};
+  final FakeLLMAdapter defaultRouteAdapter = FakeLLMAdapter();
+  int defaultAdapterCalls = 0;
+  final List<({String? providerId, String? modelId})> resolvedSignatures = [];
+
+  @override
+  RouteSignature? sessionSignature(String sessionId) => null;
+
+  @override
+  RouteSignature resolveSignature({String? providerId, String? modelId}) {
+    resolvedSignatures.add((providerId: providerId, modelId: modelId));
+    return RouteSignature(
+      providerInstanceId: providerId!,
+      templateId: 'opencode-go',
+      protocol: 'openai',
+      normalizedBaseUrl: 'https://opencode.example/v1',
+      modelId: modelId!,
+      configRevision: 1,
+      credentialRevision: 1,
+    );
+  }
+
+  @override
+  LLMAdapter adapterFor(RouteSignature signature) => providerAdapters.putIfAbsent(
+    signature.providerInstanceId,
+    FakeLLMAdapter.new,
+  );
+
+  @override
+  LLMAdapter defaultAdapter() {
+    defaultAdapterCalls++;
+    return defaultRouteAdapter;
+  }
 }
 
 void main() {
@@ -214,8 +258,11 @@ void main() {
 
         titleService = TitleService(
           adapter: fakeAdapter,
-          sessionRouteResolver: (sessionId, modelOverride) =>
-              (adapter: routedAdapter, modelOverride: 'claude-sonnet-4.5'),
+          sessionRouteResolver: (sessionId, modelOverride) => (
+            adapter: routedAdapter,
+            modelOverride: 'claude-sonnet-4.5',
+            providerInstanceId: 'session-provider-instance',
+          ),
         );
 
         final title = await titleService.generateTitle(
@@ -246,7 +293,11 @@ void main() {
           adapter: fakeAdapter,
           sessionRouteResolver: (sessionId, modelOverride) {
             sessionResolverCalled = true;
-            return (adapter: fakeAdapter, modelOverride: 'wrong-model');
+            return (
+              adapter: fakeAdapter,
+              modelOverride: 'wrong-model',
+              providerInstanceId: 'wrong-provider-instance',
+            );
           },
         );
 
@@ -458,6 +509,144 @@ void main() {
         state.dispose();
         await getIt.reset();
       }
+    });
+  });
+
+  group('recovered session title routing', () {
+    late AgentStateDatabase state;
+    late SessionManager sessions;
+    late _RestartedRuntime runtime;
+
+    setUp(() async {
+      await getIt.reset();
+      SessionManager.resetForTesting();
+      state = AgentStateDatabase.inMemory();
+      getIt.registerSingleton<AgentStateDatabase>(state);
+      sessions = SessionManager();
+      getIt.registerSingleton<SessionManager>(sessions);
+      runtime = _RestartedRuntime(
+        Config(
+          environment: const {},
+          modelAwarePolicy: ModelAwareRuntimePolicy.defaults,
+        ),
+        ProviderInstanceRepository.fromDatabase(state.db),
+      );
+      getIt.registerSingleton<AgentRuntimeService>(runtime);
+    });
+
+    tearDown(() async {
+      SessionManager.resetForTesting();
+      state.dispose();
+      await getIt.reset();
+    });
+
+    void saveSession({
+      required String sessionId,
+      required String model,
+      String? providerId,
+      String title = 'New Chat',
+      SessionTitleStatus titleStatus = SessionTitleStatus.pending,
+    }) {
+      final now = DateTime.utc(2026, 11, 9);
+      sessions.db.saveSession(
+        SessionState(
+          sessionId: sessionId,
+          model: model,
+          providerId: providerId,
+          title: title,
+          titleStatus: titleStatus,
+          createdAt: now,
+          updatedAt: now,
+        ),
+      );
+      sessions.saveSessionHistory(sessionId, [
+        Message(role: MessageRole.user, content: 'Study the daemon restart'),
+        Message(role: MessageRole.assistant, content: 'The daemon resumed.'),
+      ]);
+    }
+
+    test(
+      'startup recovery routes the pending title through the session provider',
+      () async {
+        saveSession(
+          sessionId: 'recovered-opencode-go',
+          model: 'deepseek-v4.1-flash',
+          providerId: '6982859f-48cb-4025-9821-1326b7d332bf',
+        );
+        final titleService = TitleService();
+        runtime.providerAdapters['6982859f-48cb-4025-9821-1326b7d332bf'] =
+            FakeLLMAdapter()
+              ..responseToReturn = AgentResponse(
+                message: Message(
+                  role: MessageRole.assistant,
+                  content: 'Daemon Restart Study',
+                ),
+              );
+        runtime.defaultRouteAdapter.responseToReturn = AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: 'Wrong Provider Title',
+          ),
+        );
+
+        final recovered = await titleService.recoverPendingTitles();
+
+        expect(runtime.defaultAdapterCalls, 0);
+        expect(
+          runtime.resolvedSignatures,
+          [(providerId: '6982859f-48cb-4025-9821-1326b7d332bf', modelId: 'deepseek-v4.1-flash')],
+        );
+        final routed = runtime
+            .providerAdapters['6982859f-48cb-4025-9821-1326b7d332bf']!;
+        expect(routed.lastModelOverride, 'deepseek-v4.1-flash');
+        expect(
+          routed.lastOptions?.providerInstanceId,
+          '6982859f-48cb-4025-9821-1326b7d332bf',
+        );
+        expect(recovered, 1);
+        final session = sessions.getSession('recovered-opencode-go');
+        expect(session?.title, 'Daemon Restart Study');
+        expect(session?.titleStatus, SessionTitleStatus.finalized);
+      },
+    );
+
+    test(
+      'startup recovery skips a pending title when no session route resolves',
+      () async {
+        saveSession(
+          sessionId: 'recovered-without-provider',
+          model: 'deepseek-v4.1-flash',
+        );
+        final titleService = TitleService();
+
+        final recovered = await titleService.recoverPendingTitles();
+
+        expect(runtime.resolvedSignatures, isEmpty);
+        expect(runtime.defaultAdapterCalls, 0);
+        expect(runtime.defaultRouteAdapter.lastHistory, isNull);
+        expect(recovered, 0);
+        final session = sessions.getSession('recovered-without-provider');
+        expect(session?.title, 'New Chat');
+        expect(session?.titleStatus, SessionTitleStatus.pending);
+      },
+    );
+
+    test('startup recovery never regenerates a finalized title', () async {
+      saveSession(
+        sessionId: 'already-titled',
+        model: 'deepseek-v4.1-flash',
+        providerId: '6982859f-48cb-4025-9821-1326b7d332bf',
+        title: 'Daemon Restart Study',
+        titleStatus: SessionTitleStatus.finalized,
+      );
+      final titleService = TitleService();
+
+      final recovered = await titleService.recoverPendingTitles();
+
+      expect(recovered, 0);
+      expect(runtime.resolvedSignatures, isEmpty);
+      expect(runtime.defaultAdapterCalls, 0);
+      expect(sessions.getSession('already-titled')?.title, 'Daemon Restart Study');
     });
   });
 }

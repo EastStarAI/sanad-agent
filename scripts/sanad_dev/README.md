@@ -141,11 +141,31 @@ sanad-dev inspect [client] [options]
 ### 8. Ownership diagnostics and reconciliation
 
 ```bash
+sanad-dev inventory [--all] [--pr] [--json]
+sanad-dev cleanup-orphans [--confirm] [--json]
 sanad-dev doctor
 sanad-dev doctor --fix
 sanad-dev takeover
 sanad-dev cleanup-target-orphans
 ```
+
+`inventory` is the read-only projection across every worktree: Git identity, one
+bounded `git status` and tracking read per worktree, the deterministic Home, every
+live or leased runtime, every discovered Client, every Test Home slot, and every
+orphaned record with the exact command that would remove it. Each worktree row
+also carries bounded health evidence — disk size, last-commit age, upstream state,
+an optional `gh` pull-request answer, and a `safe`/`keep` removal verdict with its
+reason. Health evidence always degrades to a marker: a slow tree reports
+`disk=skipped`, and a missing, unauthenticated, or hung `gh` reports
+`unavailable`/`timeout`, so `inventory` works offline. `--pr` is the only opt-in
+write (a bounded cache under the gitignored `.sanad-dev/`); every other invocation
+writes nothing.
+
+`cleanup-orphans` is the separate pruning decision: it prints the same targets and
+deletes nothing unless `--confirm` is passed, it refuses anything outside
+`<primary home>/dev`, the primary Home's own data, a Test Home, a dev-area group
+directory, a symbolic link, or a live runtime, and it re-reads the projection
+immediately before deleting.
 
 `doctor` is read-only. Alongside the ownership class it reports the driver entry
 point, how many lease-owned Clients were started from `lib/driver_main.dart`, the

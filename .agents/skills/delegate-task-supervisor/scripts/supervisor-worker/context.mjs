@@ -32,7 +32,7 @@ import {
 import {
   DEFAULT_PROGRESS_STALL_MS,
   DEFAULT_QUEUED_STALL_MS,
-} from '../supervisor-views.mjs';
+} from '../supervisor-stalls.mjs';
 import { CANCEL_FORCE_KILL_MS } from '../supervisor-windows.mjs';
 import {
   fail,
@@ -40,6 +40,7 @@ import {
   publicTask,
   readJson,
   runPaths,
+  sessionPin,
   withRunPaths,
   writeJsonAtomic,
 } from '../supervisor-core.mjs';
@@ -175,10 +176,14 @@ export function createWorkerContext(options) {
     if (!state) return;
     const from = state.status;
     // Entering the queue stamps FIFO order and start time; entering a running
-    // state clears any stall flag from the previous queue episode.
+    // state clears any queue stall flag from the episode it just left.
     const queueFields = to === 'queued'
       ? { queuedAt: new Date().toISOString(), queuedSeq: ++ctx.queueSeq, queueStall: null }
       : (to === 'running' ? { queueStall: null } : {});
+    // A progress stall belongs to a live turn only. Leaving `running`/`resuming`
+    // — for a block, an intervention, or a terminal outcome — settles that
+    // episode, so a settled task never carries a stale PROGRESS_STALL.
+    const progressFields = ['running', 'resuming'].includes(to) ? {} : { progressStall: null };
     // Every block is its own retry episode: recovery through a retry must not
     // leave the next block with an exhausted budget, and the receipt time is a
     // fallback clock for a notice that carried no timestamp.
@@ -190,7 +195,11 @@ export function createWorkerContext(options) {
         retryExhaustedAt: null,
       }
       : {};
-    Object.assign(state, queueFields, retryFields, extra, { status: to });
+    Object.assign(state, queueFields, progressFields, retryFields, extra, { status: to });
+    // The pinned session is a projection of the task's own arguments, so
+    // `--new-session` clears it in the same transition that clears the live
+    // session id and no writer can leave the two disagreeing.
+    if (Array.isArray(task?.args)) state.pinnedSessionId = sessionPin(task.args).id;
     manifest.seq = ++ctx.seq;
     const event = {
       seq: ctx.seq,

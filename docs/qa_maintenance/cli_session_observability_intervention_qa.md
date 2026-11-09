@@ -15,7 +15,8 @@ description: "QA validation matrix for daemon-backed CLI session observability, 
 | Show session pending tool permission | `sanad session show <session-id>` | Authoritative status `needs_permission`, displays tool name, formatted tool input arguments, request ID, and the permission decision command syntax. | 0 |
 | Show session running | `sanad session show <session-id>` | Authoritative status `running`, displays `in_flight` execution snapshot including `type` and `run_id`. | 0 |
 | Show session executing a tool with no partial stream | `sanad session show <session-id>` | Authoritative status `running` from the durable `execution_state`, even though `in_flight` is absent: a tool executes without publishing a partial stream. Never `idle`. | 0 |
-| Show a session the daemon is retrying | `sanad session show <session-id> --json` | Status `retrying`; `execution_state` is `waiting`, `runtime_notice` carries `status`, `reason`, `retry_attempt`, `retry_budget`, and `retry` reports `pending: true` with `label: "retrying (1/1)"`. Text mode prints `Status: retrying`, `Execution: waiting`, and `Recovery: retrying (1/1) (timeout) in 2s — the daemon continues this turn automatically`. | 0 |
+| Show a session the daemon is retrying | `sanad session show <session-id> --json` | Status `retrying`; `execution_state` is `waiting`, `runtime_notice` carries `status`, `reason`, `retry_attempt`, `retry_budget`, and `retry` reports `pending: true` with `label: \"retrying (1/1)\"`. Text mode prints `Status: retrying`, `Execution: waiting`, and `Recovery: retrying (1/1) (timeout) in 2s — the daemon continues this turn automatically`. | 0 |
+| Show a session re-attached to a scheduled retry | `sanad session show <session-id> --json` for a turn whose live notice reached a socket that then dropped | The same recovery state as the live broadcast: the notice is projected from the durable row (`session_runtime_notices`), with `retry_attempt`/`retry_budget` and the widened recoverable `actions`. It is never `null` merely because no in-memory notice is hydrated yet (2026-11-09). | 0 |
 | Show a truly stopped session | `sanad session show <session-id> --json` | Status `blocked`; `retry` reports `pending: false`, `stopped: true`, `label: "needs_intervention"` — a non-retryable reason, an exhausted budget, or a cancelled resume. | 0 |
 | Show a session whose turn already ended | `sanad session show <session-id> --json` | Status `idle` and no `retry` object even when the projection still carries the notice of the turn that ended: a durable `idle` snapshot outranks a leftover notice, so it is never reported as `retrying` or `needs_intervention`. | 0 |
 | Show an unknown session id | `sanad session show does-not-exist` | `Error: Session does-not-exist was not found. Check the id with: sanad session list`; `--json` prints `{"session_id": "does-not-exist", "exit_code": 1, "error_code": "session_not_found"}`. Never `idle`. | 1 |
@@ -164,6 +165,9 @@ session is actually in a retryable recovery state.
 | Retry a blocked session | `sanad session retry <blocked-session-id>` | One `session.runtime_retry` dispatch; the daemon claims the suspended request, publishes `session.runtime_notice` with `status: resuming` and reason `manual_retry`, and the CLI prints `Retry accepted for session <id> (request <reqId>)`. | 0 |
 | Retry in JSON mode | `sanad session retry <id> --json` | Outputs `{"session_id": "<id>", "request_id": "<req-id>", "status": "retrying", "notice_request_id": "<turn-req-id>"}` only after the `resuming` transition. | 0 |
 | Retry a waiting session | `sanad session retry <waiting-session-id>` | A `waiting` notice is retryable: the manual retry shortens the remaining cooldown and the daemon resumes immediately. | 0 |
+| Retry a scheduled wait whose durable owner is still `resuming` | `sanad session retry <session-id>` where `execution_snapshot.state` is `resuming` and `runtime_notice.status` is `waiting` | Accepted: a scheduled rate-limit retry is written while its ownership row is still `resuming`, so the notice status decides, not the snapshot. The older `blocked`/`waiting`-only rule refused this as `not_blocked` (2026-11-09). | 0 |
+| Retry a restored wait that carries no counters | `sanad session retry <session-id>` where the `waiting` notice has no `retry_attempt`/`retry_budget` (a row written before the counters existed) | Accepted and dispatched: a stated wait is retryable without counters. Older daemons keep the `blocked`/`waiting` notice-status and execution-snapshot fallback. | 0 |
+| Retry a session that is already resuming | `sanad session retry <resuming-session-id>` where the notice status is `resuming` and no wait is scheduled | Refused before dispatch with `error_code: not_blocked`: the daemon already restarted the attempt, so a retry would be a no-op. | 3 |
 | Retry a session the daemon is already retrying | `sanad session retry <retrying-session-id>` | Accepted like `waiting`: the manual retry shortens the scheduled attempt instead of starting a second turn. | 0 |
 | Retry on another route | `sanad session retry <id> --provider <instance-id> --model <model-id>` | The payload carries `provider_instance_id`/`model_id`; the same suspended request resumes on that route with reason `manual_retry`. This is not the Change Provider action: that is `session.runtime_continue_with_provider` with reason `provider_changed`. | 0 |
 | Not blocked or waiting | `sanad session retry <idle-or-running-session-id>` | Refused **before** dispatch with `error_code: not_blocked`; nothing is sent, so a healthy session never gains a second turn. | 3 |
@@ -177,9 +181,13 @@ session is actually in a retryable recovery state.
 
 Automated coverage: `agent/test/cli/session_command_test.dart` (group `session retry`),
 `agent/test/cli/retry_acknowledgement_test.dart` (payload shape, acceptance, rejection and
-timeout over a scripted socket), and
+timeout over a scripted socket),
+`agent/test/interfaces/platforms/sanad_gateway/session_runtime_notice_projection_test.dart`
+(the durable projection and its derived classification),
 `agent/test/engine/runtime/runner_recovery_coordinator_test.dart` (the exhausted-budget
-note), all daemon-free.
+note and the fake-provider 429 → durable row → `session show` chain), and
+`agent/test/core/provider_runtime/runtime_recovery_service_test.dart` (counters surviving a
+restart), all daemon-free.
 
 ---
 

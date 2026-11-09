@@ -109,7 +109,20 @@ void setupDI() {
   final e2eTestMode = isSanadE2eTestMode();
   requireSanadE2eTestIsolation();
 
-  getIt.registerLazySingleton<AuthManager>(() => AuthManager());
+  // The daemon opens its vault without waiting for the operating-system store,
+  // so auth reads a bounded readiness gate and one store per process: the same
+  // backend the vault already owns, never a second Keychain/DPAPI/Secret Service
+  // instance and never a second authorization dialog.
+  getIt.registerLazySingleton<AuthManager>(
+    () => AuthManager(
+      secretStore: getIt<AgentSecretStore>(),
+      awaitVaultReady: () =>
+          SecretVaults.current?.readyWithin(
+            secretVaultStartupReadyDeadline,
+          ) ??
+          Future.value(true),
+    ),
+  );
   getIt.registerLazySingleton<DeviceCommandAdmission>(
     () => DeviceCommandAdmission(
       registeredDeviceId: () {
@@ -234,6 +247,10 @@ void setupDI() {
     () => ProviderCredentialResolver(
       getIt<EnvFileService>(),
       getIt<ProviderCredentialStore>(),
+      // The resolver is synchronous, so it reads the vault's readiness instead of
+      // waiting: a key that is unknown because the store has not answered is
+      // reported as `vault_not_ready`, never as a missing key.
+      vaultReadiness: () => SecretVaults.current,
     ),
   );
   getIt.registerLazySingleton<ProviderAuthSessionService>(

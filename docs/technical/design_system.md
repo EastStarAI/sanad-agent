@@ -35,6 +35,7 @@ description: "توثيق شامل للألوان، الخطوط، الهيكل �
 ### ب. الخطوط (Typography)
 * The Client interface uses the font the user selects in Settings, and Cairo is the default for a profile with no saved choice. Widget code never names a font family: the selected family is resolved once from the theme, or through `AppTypography` in `client/lib/core/theme/app_typography.dart` for styles built by hand.
 * Code, diffs, terminals, paths, commands, and raw JSON stay monospace through the single `AppTypography.mono` constant; machine-readable text never follows the user's app font.
+* No Apple-provided font may be bundled in the Client — interface text and icons use Flutter-authored font assets only (iOS-style glyphs come from `CupertinoIcons`), because an embedded system typeface fails App Store validation as `ITMS-91182` (enforced from 2027-10-01), and `client/test/guards/no_apple_font_bundle_guard_test.dart` fails on any dependency, lock entry, asset name, or build manifest that carries one.
 * Headline, body, and small control text keep their Material sizes and weights (11 to 13 px with `w500` or `w600` for list and button text); only the family follows the selection.
 * The former Georgia serif accent on New Task headlines is retired: those headlines are interface text and follow the selected font.
 

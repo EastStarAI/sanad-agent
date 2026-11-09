@@ -21,10 +21,18 @@ class SessionManager {
   static SessionManager? _instance;
   static const int _maxHistorySnapshots = 8;
 
+  /// Retained-text budget for the whole history snapshot cache.
+  ///
+  /// Eight ordinary sessions fit comfortably; a pathological history is evicted
+  /// rather than pinning the daemon's heap, because a miss re-reads state.db.
+  static const int _maxHistorySnapshotChars = 32 * 1024 * 1024;
+
   late final SessionDB _db;
   final Map<String, Map<String, dynamic>> _inFlightSnapshots = {};
+  final Map<String, _InFlightStream> _inFlightStreams = {};
   final LinkedHashMap<String, _SessionHistorySnapshot> _historySnapshots =
       LinkedHashMap<String, _SessionHistorySnapshot>();
+  int _historySnapshotChars = 0;
 
   SessionDB get db => _db;
 
@@ -35,15 +43,94 @@ class SessionManager {
   bool hasHistorySnapshot(String sessionId) =>
       _historySnapshots.containsKey(sessionId);
 
+  /// Approximate retained characters of every cached history snapshot.
+  @visibleForTesting
+  int get historySnapshotChars => _historySnapshotChars;
+
+  /// Inserts one history into the cache exactly as a read would, so the cache's
+  /// count and retained-text bounds are testable without a database round trip.
+  @visibleForTesting
+  void cacheHistoryForTesting(
+    String sessionId,
+    int historyRevision,
+    List<Message> messages,
+  ) => _cacheHistory(sessionId, historyRevision, messages);
+
   void saveInFlightSnapshot(String sessionId, Map<String, dynamic> snapshot) {
+    _inFlightStreams.remove(sessionId);
     _inFlightSnapshots[sessionId] = snapshot;
   }
 
+  /// Appends one streamed delta to the session's in-memory in-flight
+  /// projection, starting a new projection whenever the run, turn, model step,
+  /// or stream type changes.
+  ///
+  /// The projection keeps the whole partial answer so a reconnecting Client can
+  /// restore it, but the text lives in a growable buffer that is materialized
+  /// only when [getInFlightSnapshot] reads it. Rebuilding the accumulated
+  /// string on every delta would copy the entire prefix per token.
+  void appendInFlightDelta({
+    required String sessionId,
+    required String runId,
+    required String? turnId,
+    required String? modelStepId,
+    required String type,
+    required String delta,
+  }) {
+    final existing = _inFlightStreams[sessionId];
+    if (existing != null &&
+        existing.matches(
+          type: type,
+          runId: runId,
+          turnId: turnId,
+          modelStepId: modelStepId,
+        )) {
+      existing.append(delta);
+      return;
+    }
+    // A snapshot written whole by a caller is the seed for this stream only
+    // when it names the same run identity; otherwise it is superseded.
+    final seeded = _inFlightSnapshots.remove(sessionId);
+    final seedContent = seeded != null &&
+            seeded['type'] == type &&
+            seeded['run_id'] == runId &&
+            seeded['turn_id'] == turnId &&
+            seeded['model_step_id'] == modelStepId &&
+            seeded['content'] is String
+        ? seeded['content'] as String
+        : '';
+    _inFlightStreams[sessionId] = _InFlightStream(
+      sessionId: sessionId,
+      type: type,
+      runId: runId,
+      turnId: turnId,
+      modelStepId: modelStepId,
+      seed: seedContent,
+    )..append(delta);
+  }
+
   Map<String, dynamic>? getInFlightSnapshot(String sessionId) {
+    final stream = _inFlightStreams[sessionId];
+    if (stream != null) {
+      return stream.toSnapshot();
+    }
     return _inFlightSnapshots[sessionId];
   }
 
+  /// Whether the session has an in-memory in-flight projection, without
+  /// materializing its accumulated text.
+  bool hasInFlightSnapshot(String sessionId) =>
+      _inFlightStreams.containsKey(sessionId) ||
+      _inFlightSnapshots.containsKey(sessionId);
+
+  /// Run id of the session's in-memory in-flight projection, without
+  /// materializing its accumulated text.
+  String? inFlightRunId(String sessionId) =>
+      _inFlightStreams[sessionId]?.runId ??
+      _inFlightSnapshots[sessionId]?['run_id']?.toString();
+
   void clearInFlightSnapshot(String sessionId) {
+    _inFlightStreams.remove(sessionId);
     _inFlightSnapshots.remove(sessionId);
   }
 
@@ -405,14 +492,90 @@ class SessionManager {
     int historyRevision,
     List<Message> messages,
   ) {
-    _historySnapshots.remove(sessionId);
-    _historySnapshots[sessionId] = _SessionHistorySnapshot(
+    final previous = _historySnapshots.remove(sessionId);
+    if (previous != null) {
+      _historySnapshotChars -= previous.retainedChars;
+    }
+    final snapshot = _SessionHistorySnapshot(
       historyRevision: historyRevision,
       messages: List<Message>.unmodifiable(messages),
     );
-    while (_historySnapshots.length > _maxHistorySnapshots) {
-      _historySnapshots.remove(_historySnapshots.keys.first);
+    _historySnapshots[sessionId] = snapshot;
+    _historySnapshotChars += snapshot.retainedChars;
+    // The cache is bounded by retained text as well as by session count: one
+    // long session's history can be tens of megabytes, so a count-only bound
+    // would let eight of them pin hundreds of megabytes for the life of the
+    // daemon. Evicting a snapshot only costs a re-read from state.db.
+    while (_historySnapshots.length > _maxHistorySnapshots ||
+        (_historySnapshotChars > _maxHistorySnapshotChars &&
+            _historySnapshots.length > 1)) {
+      final evicted = _historySnapshots.remove(_historySnapshots.keys.first);
+      if (evicted == null) break;
+      _historySnapshotChars -= evicted.retainedChars;
     }
+  }
+}
+
+/// The in-memory in-flight projection of one streaming model step.
+///
+/// The accumulated text is kept in a growable buffer and materialized only when
+/// a reader asks for the snapshot, so appending a delta is amortized O(1)
+/// instead of a full copy of the answer so far.
+class _InFlightStream {
+  _InFlightStream({
+    required this.sessionId,
+    required this.type,
+    required this.runId,
+    required this.turnId,
+    required this.modelStepId,
+    required String seed,
+  }) : _buffer = StringBuffer(seed);
+
+  final String sessionId;
+  final String type;
+  final String runId;
+  final String? turnId;
+  final String? modelStepId;
+  final StringBuffer _buffer;
+  String? _materialized;
+  int _materializedLength = -1;
+  DateTime _updatedAt = DateTime.now();
+
+  bool matches({
+    required String type,
+    required String runId,
+    required String? turnId,
+    required String? modelStepId,
+  }) =>
+      this.type == type &&
+      this.runId == runId &&
+      this.turnId == turnId &&
+      this.modelStepId == modelStepId;
+
+  void append(String delta) {
+    if (delta.isEmpty) return;
+    _buffer.write(delta);
+    _updatedAt = DateTime.now();
+  }
+
+  Map<String, dynamic> toSnapshot() {
+    final length = _buffer.length;
+    if (_materialized == null || _materializedLength != length) {
+      _materialized = _buffer.toString();
+      _materializedLength = length;
+    }
+    final timestamp = _updatedAt.millisecondsSinceEpoch;
+    return {
+      'type': type,
+      'status': 'running',
+      'session_id': sessionId,
+      'run_id': runId,
+      'turn_id': ?turnId,
+      'model_step_id': modelStepId,
+      'content': _materialized!,
+      'timestamp': timestamp,
+      'updated_at': timestamp,
+    };
   }
 }
 
@@ -420,8 +583,23 @@ class _SessionHistorySnapshot {
   final int historyRevision;
   final List<Message> messages;
 
-  const _SessionHistorySnapshot({
+  /// Dominant retained size of this snapshot: the message text it pins.
+  ///
+  /// Tool results and answers are message content, so this is the term that
+  /// grows with a long session; tool-call arguments and metadata are small in
+  /// comparison and are deliberately not walked here.
+  final int retainedChars;
+
+  _SessionHistorySnapshot({
     required this.historyRevision,
     required this.messages,
-  });
+  }) : retainedChars = _retainedCharsOf(messages);
+
+  static int _retainedCharsOf(List<Message> messages) {
+    var total = 0;
+    for (final message in messages) {
+      total += message.content?.length ?? 0;
+    }
+    return total;
+  }
 }

@@ -559,6 +559,8 @@ Legacy compatibility table from the early draft persistence path. New durable re
 
 Stores one active runtime notice per session (the recovery banner state). Primary key is `session_id`.
 
+Every non-`cleared` row is projected into a session-history query, so the durable table — not only the live `session.runtime_notice` broadcast — is a recovery source for `session show`, `session retry`, the re-attached `sanad run` relay, and the delegate supervisor. A row is written while the notice is still in flight, so a scheduled `waiting` retry is visible to a reader that attached after the daemon restarted and before in-memory notices were hydrated.
+
 | Column | Type | Constraints | Description |
 |---|---|---|---|
 | `session_id` | `TEXT` | Primary Key | Owning session |
@@ -574,6 +576,8 @@ Stores one active runtime notice per session (the recovery banner state). Primar
 | `retry_after_ms` | `INTEGER` | | Milliseconds until auto-resume |
 | `resume_at` | `TEXT` | | ISO8601 resume timestamp |
 | `limit_rpm` | `INTEGER` | | Rate-limit value (requests/min) |
+| `retry_attempt` | `INTEGER` | | 1-based automatic-retry attempt the notice describes. Null for a row written before the counter existed, which reads as "unknown budget" |
+| `retry_budget` | `INTEGER` | | Automatic-retry budget for the notice's reason. With `retry_attempt` it keeps `retrying (n/N)` and the blocked-vs-retrying decision intact across a daemon restart |
 | `actions` | `TEXT` | Not-null, default `'[]'` | JSON array of UI action names |
 | `created_at` | `TEXT` | Not-null | ISO8601 |
 | `updated_at` | `TEXT` | Not-null | ISO8601 |
@@ -941,7 +945,9 @@ Task 139 extends all four snapshots in the same change: every one of them now pi
 
 Task 140 extends all four snapshots as well, by exactly one object each: `user_secret_metadata`, its five columns, and its primary-key index. Nothing else in any snapshot moved, because the module is applied after every pre-existing one and migrates no earlier table.
 
-Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql` files and contain synthetic placeholders only — no user data or secrets.
+Task 153 extends all four snapshots by the same two nullable columns: `session_runtime_notices.retry_attempt` and `session_runtime_notices.retry_budget`, appended after `updated_at` in the fresh `CREATE TABLE` and through `ALTER TABLE` on the legacy fixtures. Both are nullable so an existing row keeps its previous meaning (no counter, no known budget), and no backfill or rewrite of surviving rows is required.
+
+Committed snapshots live in `agent/test/evolution/fixtures/agent_state/*.schema.txt`; the legacy inputs are the sibling `*.sql.txt` files and contain synthetic placeholders only — no user data or secrets. The legacy payloads carry a trailing `.txt` so no final path component ends in `.sql`: the private Production deploy archives this repository and its host-side artifact check rejects archive members ending in `pem`, `key`, `p12`, `pfx`, `dump`, or `sql`. `agent/test/guards/deploy_artifact_suffix_guard_test.dart` enforces that naming rule over every tracked file, with only `client/release/shared/dsa_pub.pem` allowlisted because both clients embed it.
 
 What the snapshots enforce:
 

@@ -1899,6 +1899,44 @@ function taskMarker(results, id) {
   return join(results, id, 'started.marker');
 }
 
+// A task that writes to its own stdout while it works and never publishes a
+// structured timeline record: the exact shape of a headless `sanad run` turn,
+// which used to read as silent for its whole length (2026-11-08, run12).
+// `quietMs` delays the first line so a test can also produce a real silence.
+function writeStreamingFixture(root) {
+  const fixture = join(root, 'streaming_task.mjs');
+  writeFileSync(fixture, `
+    import {mkdirSync, writeFileSync} from 'node:fs';
+    import {dirname} from 'node:path';
+    const [runMs, quietMs, tickMs, resultPath] = process.argv.slice(2);
+    const started = Date.now();
+    const ticker = setInterval(() => {
+      if (Date.now() - started < Number(quietMs)) return;
+      process.stdout.write('streamed line after ' + (Date.now() - started) + 'ms\\n');
+    }, Number(tickMs));
+    setTimeout(() => {
+      clearInterval(ticker);
+      mkdirSync(dirname(resultPath), {recursive:true});
+      writeFileSync(resultPath, JSON.stringify({status:'completed', exitCode:0}));
+      process.exit(0);
+    }, Number(runMs));
+  `, 'utf8');
+  return fixture;
+}
+
+function streamingTask(fixture, workspace, results, id, { runMs, quietMs = 0, tickMs = 40, progressStallMs }) {
+  const out = join(results, id);
+  return {
+    id,
+    implementer: 'opencode',
+    workspace,
+    command: process.execPath,
+    args: [fixture, String(runMs), String(quietMs), String(tickMs), join(out, 'result.json')],
+    resultPath: join(out, 'result.json'),
+    progressStallMs,
+  };
+}
+
 function readJournal(runDir) {
   const path = join(runDir, 'events.jsonl');
   if (!existsSync(path)) return [];
@@ -2251,7 +2289,7 @@ test('set-concurrency raises live slots and lowering never kills running tasks',
   }
 });
 
-test('a task queued past the stall threshold journals one queued_stall visible in watch-once and status', async () => {
+test('a task waiting for a busy concurrency slot is reported, never journaled as a queue stall', async () => {
   const root = mkdtempSync(join(tmpdir(), 'delegate-queued-stall-test-'));
   const fixture = writePacedFixture(root);
   const { workspace, results } = queueFixture(root, 'stall');
@@ -2271,39 +2309,45 @@ test('a task queued past the stall threshold journals one queued_stall visible i
   ], env));
   assert.equal(started.queuedStallMs, 400);
 
-  const stallEvent = await waitForFileChange(runDir, () => (
-    readJournal(runDir).find((event) => event.to === 'queued_stall') ?? null
-  ), 15_000);
-  assert.equal(stallEvent.taskId, 'wait-1');
-  assert.equal(stallEvent.kind, 'queued_stall');
-  assert.equal(stallEvent.active, 1);
-  assert.equal(stallEvent.maxConcurrency, 1);
-  assert.equal(stallEvent.position, 1);
-  assert.equal(stallEvent.reason, 'awaiting_slot');
-  assert.ok(stallEvent.queuedForMs >= 400, `stall age ${stallEvent.queuedForMs}ms`);
+  // Wait for the queue to be past its own threshold while the only slot is
+  // busy: this is the exact shape that used to wake a coordinator (2026-11-08,
+  // run12: nine `queued_stall` notices for `awaiting_slot`).
+  await waitForCondition(() => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    const waiter = manifest.tasks['wait-1'];
+    const runner = manifest.tasks.runner;
+    if (runner?.status !== 'running' || waiter?.status !== 'queued') return null;
+    const queuedForMs = Date.now() - Date.parse(waiter.queuedAt);
+    return queuedForMs >= 900 ? manifest : null;
+  }, 15_000);
 
-  const watched = JSON.parse(runNode(WATCH_ONCE, [
-    '--run', runDir, '--since', String(stallEvent.seq - 1),
-  ], env));
-  assert.equal(watched.seq, stallEvent.seq);
-  assert.equal(watched.taskId, 'wait-1');
-  assert.equal(watched.to, 'queued_stall');
+  // Nothing is journaled: a busy slot is the queue working as designed.
+  assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 0);
 
+  // `status` still reports the wait honestly — reason, position, counts — so the
+  // information is not lost, only kept out of the actionable stream.
   const statusText = runNode(SUPERVISOR, ['status', '--run', runDir], env);
-  assert.match(statusText, /QUEUED_STALL/);
+  assert.doesNotMatch(statusText, /QUEUED_STALL/);
+  assert.match(statusText, /awaiting_slot: waiting for a concurrency slot \(1\/1 active\)/);
   assert.match(statusText, /stall-after=400ms/);
   const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
-  assert.equal(statusJson.tasks['wait-1'].queue.stalled, true);
-  assert.equal(statusJson.queue.queued[0].stalled, true);
+  assert.equal(statusJson.tasks['wait-1'].queue.reason, 'awaiting_slot');
+  assert.equal(statusJson.tasks['wait-1'].queue.stalled, false);
+  assert.equal(statusJson.queue.queued[0].stalled, false);
   assert.equal(statusJson.queuedStallMs, 400);
+
+  // The coordinator's stream stays silent while the queue is only waiting.
+  const watchOutput = execFileSync(process.execPath, [
+    SUPERVISOR, 'watch', '--run', runDir, '--cursor', join(root, 'cursor.json'),
+    '--once', '--timeout-sec', '2',
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.doesNotMatch(watchOutput, /queued_stall/);
 
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
   const finalManifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
   assert.equal(finalManifest.status, 'completed');
   assert.equal(finalManifest.tasks['wait-1'].status, 'completed');
   assert.equal(finalManifest.tasks['wait-1'].queueStall, null);
-  // One notice per queue episode, never a stream of duplicates.
-  assert.equal(readJournal(runDir).filter((event) => event.to === 'queued_stall').length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -2412,7 +2456,14 @@ function writeSanadMock(root) {
     const timeline = outDir + '/events.jsonl';
     const emit = (entry) => appendFileSync(timeline, JSON.stringify({timestamp: new Date().toISOString(), ...entry}) + '\\n');
 
-    const sessionId = process.env.MOCK_SESSION === '' ? null : (process.env.MOCK_SESSION || 'ses_mock_1');
+    // The session this attempt runs in. An explicit '--session' pin is honoured
+    // the way the real CLI honours it, MOCK_SESSION forces one fixed id,
+    // MOCK_SESSION_SEQ numbers the attempts, and MOCK_SESSION='' reports none.
+    const pinnedSession = readFlag('--session');
+    const defaultSession = process.env.MOCK_SESSION_SEQ === '1' ? 'ses_mock_' + (priorRuns + 1) : 'ses_mock_1';
+    const sessionId = process.env.MOCK_SESSION === ''
+      ? null
+      : (process.env.MOCK_SESSION || pinnedSession || defaultSession);
     emit({type: 'running', session_id: sessionId});
     emit({type: 'tool_use', part: {type: 'tool', tool: 'read', state: {status: 'completed', input: {filePath: 'a'}}}});
 
@@ -2488,6 +2539,9 @@ function writeSanadMock(root) {
         branch: process.env.MOCK_BRANCH || null,
         head_sha: process.env.MOCK_SHA || null,
         pr_url: process.env.MOCK_PR || null,
+        // A real 'sanad run --json' artifact carries the session it ran in; a
+        // fixture can report it only here, with no lifecycle event naming it.
+        ...(process.env.MOCK_RESULT_SESSION ? {session_id: process.env.MOCK_RESULT_SESSION} : {}),
         text: process.env.MOCK_TEXT || 'Mock summary line.',
       }));
       emit({type: 'completed'});
@@ -2739,6 +2793,104 @@ test('progress_stall is journaled once per stall and progress_resumed clears it'
     .map((event) => event.kind);
   assert.equal(stalledKinds[0], 'progress_stall');
   assert.equal(stalledKinds[1], 'progress_resumed');
+});
+
+test('a streaming task that publishes no timeline record is never reported as a progress stall', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-progress-signal-test-')));
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+  const fixture = writeStreamingFixture(root);
+  const { workspace, results } = queueFixture(root, 'streaming');
+  const specPath = writeSpec(root, [
+    streamingTask(fixture, workspace, results, 'streaming', { runMs: 2_000, progressStallMs: 300 }),
+  ]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  // Past several thresholds while the task streamed output the whole time: the
+  // old clock read `startedAt` here and woke a coordinator at exactly the limit.
+  const snapshot = await waitForCondition(() => {
+    const manifest = readJsonFile(join(runDir, 'manifest.json'));
+    const state = manifest.tasks.streaming;
+    if (state?.status !== 'running') return null;
+    const elapsedMs = Date.now() - Date.parse(state.startedAt);
+    return elapsedMs >= 900 ? manifest : null;
+  }, 15_000);
+  assert.ok(snapshot.tasks.streaming.lastProgressAt > snapshot.tasks.streaming.startedAt,
+    'stream output must advance the progress clock');
+  const statusJson = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json'], env));
+  assert.equal(statusJson.tasks.streaming.progress.stalled, false);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.to === 'completed'),
+    15_000,
+  );
+  // Not one false notice for the whole run.
+  assert.equal(readJournal(runDir).filter((event) => event.kind === 'progress_stall').length, 0);
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+test('a real silence is still reported once, cleared by progress_resumed, and never repeated while work continues', async () => {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-progress-resume-test-')));
+  const runDir = join(root, 'run');
+  const config = join(root, 'config');
+  mkdirSync(config, { recursive: true });
+  const env = { ...process.env, XDG_CONFIG_HOME: config };
+  const fixture = writeStreamingFixture(root);
+  const { workspace, results } = queueFixture(root, 'resume');
+  const specPath = writeSpec(root, [
+    // Silent past its 300 ms threshold, then streaming until it finishes.
+    streamingTask(fixture, workspace, results, 'late', { runMs: 2_400, quietMs: 1_000, progressStallMs: 300 }),
+  ]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+
+  const stall = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.kind === 'progress_stall') ?? null,
+    15_000,
+  );
+  assert.equal(stall.taskId, 'late');
+  assert.equal(stall.thresholdMs, 300);
+  assert.ok(stall.silentForMs >= 300, `silent for ${stall.silentForMs}ms`);
+  assert.ok(Number.isFinite(Date.parse(stall.lastProgressAt)),
+    'the notice names the clock the silence was measured from');
+
+  const resumed = await waitForCondition(
+    () => readJournal(runDir).find((event) => event.kind === 'progress_resumed') ?? null,
+    15_000,
+  );
+  assert.ok(resumed.silentForMs >= 300);
+
+  await waitForCondition(
+    () => readJournal(runDir).some((event) => event.to === 'completed'),
+    15_000,
+  );
+  const journal = readJournal(runDir);
+  // One stall for one silence: resuming work must never re-fire the notice.
+  assert.equal(journal.filter((event) => event.kind === 'progress_stall').length, 1);
+  assert.equal(journal.filter((event) => event.kind === 'progress_resumed').length, 1);
+  const manifest = readJsonFile(join(runDir, 'manifest.json'));
+  assert.equal(manifest.tasks.late.progressStall, null, 'a resumed task must not stay flagged');
+
+  // `watch` prints the actionable stall only. The resume notice and the routine
+  // transitions stay out of the coordinator's stream unless `--all` asks for them.
+  const watchArgs = ['watch', '--run', runDir, '--once', '--json', '--timeout-sec', '5'];
+  const actionable = execFileSync(process.execPath, [
+    SUPERVISOR, ...watchArgs, '--cursor', join(root, 'cursor-actionable.json'),
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+    .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(actionable.length > 0);
+  assert.ok(actionable.every((entry) => entry.actionable === true));
+  assert.deepEqual(actionable.map((entry) => entry.to), ['progress_stall', 'completed']);
+
+  const everything = execFileSync(process.execPath, [
+    SUPERVISOR, ...watchArgs, '--all', '--cursor', join(root, 'cursor-all.json'),
+  ], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] })
+    .trim().split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  assert.ok(everything.length > actionable.length, '--all must include the non-actionable records');
+  assert.ok(everything.some((entry) => entry.to === 'progress_resumed' && entry.actionable === false));
+
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
 
 test('a task left running by a dead supervisor is repaired to failed/worker_lost', async () => {
@@ -3034,6 +3186,191 @@ test('continue re-dispatches a finished task as a numbered attempt and refuses a
     try { process.kill(taskPid, 'SIGKILL'); } catch {}
   }
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
+});
+
+// The attempts the fixture actually spawned, with the arguments each one ran
+// with: the spawn argv is the authoritative evidence of which session an attempt
+// resumed.
+function mockRunInvocations(logPath) {
+  if (!existsSync(logPath)) return [];
+  return readFileSync(logPath, 'utf8').split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line)).filter((entry) => entry.kind === 'run');
+}
+
+function sessionPinOf(args) {
+  const index = args.indexOf('--session');
+  return index === -1 ? null : args[index + 1];
+}
+
+async function startPinnedTaskFixture(prefix, name, env) {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  const runDir = join(root, 'run');
+  writeBrief(root, 'brief.md', 'original brief');
+  const specPath = writeSpec(root, [sanadTask(root, name)]);
+  runNode(SUPERVISOR, ['start', '--spec', specPath, '--run-dir', runDir, '--max-concurrency', '1'], env);
+  const paths = {
+    root,
+    runDir,
+    manifest: join(runDir, 'manifest.json'),
+    tasks: join(runDir, 'tasks.json'),
+  };
+  await waitForCondition(() => (readJsonFile(paths.manifest).tasks[name].status === 'completed' ? true : null));
+  return paths;
+}
+
+// 2026-11-09: `continue --new-session` stripped the session pin, the attempt that
+// opened a fresh daemon session was never written back onto the task, and the
+// next plain `continue` opened yet another session — the conversation context the
+// operator expected to continue was gone.
+test('continue --new-session pins the session the new attempt opened', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-pin-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION_SEQ: '1' };
+  const paths = await startPinnedTaskFixture('delegate-continue-pin-test-', 'pin', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'pin').args;
+
+  // Attempt 1 started unpinned, so the session it opened is the task's session.
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_1');
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: also cover the pin.');
+  const continued = JSON.parse(runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'pin', '--brief-file', deltaBrief,
+    '--new-session', '--json', '--verify-sec', '5',
+  ], env));
+  assert.equal(continued.newSession, true);
+
+  const secondAttempt = await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.pin;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+  // The fresh session the new attempt opened is what the task now pins.
+  assert.equal(secondAttempt.sessionId, 'ses_mock_2');
+  assert.equal(secondAttempt.pinnedSessionId, 'ses_mock_2');
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_2');
+
+  // Every read surface names the pinned session instead of leaving it implicit.
+  const status = JSON.parse(runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--json'], env));
+  assert.equal(status.tasks.pin.pinnedSessionId, 'ses_mock_2');
+  const inspected = JSON.parse(runNode(SUPERVISOR, ['inspect', '--run', paths.runDir, '--task', 'pin'], env));
+  assert.equal(inspected.task.pinnedSessionId, 'ses_mock_2');
+  const verbose = runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--task', 'pin'], env);
+  assert.match(verbose, /Pinned Session:\s+ses_mock_2/);
+  assert.match(runNode(SUPERVISOR, ['status', '--run', paths.runDir, '--brief'], env), /session ses_mock_2/);
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('a plain continue after --new-session resumes the pinned session', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-resume-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION_SEQ: '1' };
+  const paths = await startPinnedTaskFixture('delegate-continue-resume-test-', 'resume', env);
+
+  const firstDelta = writeBrief(paths.root, 'delta-1.md', 'Delta: cover the pin.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'resume', '--brief-file', firstDelta,
+    '--new-session', '--json', '--verify-sec', '5',
+  ], env);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.resume;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  // No `--new-session` this time: the pinned session is the one to resume.
+  const secondDelta = writeBrief(paths.root, 'delta-2.md', 'Delta: verify the resumed session.');
+  const continued = JSON.parse(runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'resume', '--brief-file', secondDelta,
+    '--json', '--verify-sec', '5',
+  ], env));
+  assert.equal(continued.newSession, false);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.resume;
+    return task.attempt === 3 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 3);
+  // The two `--new-session`-less spawns: the first started unpinned, and the one
+  // that follows the fresh-session attempt resumes exactly the session it opened.
+  assert.equal(sessionPinOf(runs[0].argv), null);
+  assert.equal(sessionPinOf(runs[1].argv), null);
+  assert.equal(sessionPinOf(runs[2].argv), 'ses_mock_2');
+  assert.equal(runs[2].briefBody, 'Delta: verify the resumed session.');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('plain continue keeps the session a task already used', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-keep-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300' };
+  const paths = await startPinnedTaskFixture('delegate-continue-keep-test-', 'keep', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'keep').args;
+  assert.equal(sessionPinOf(taskArgs()), 'ses_mock_1');
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: keep the same conversation.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'keep', '--brief-file', deltaBrief,
+    '--json', '--verify-sec', '5',
+  ], env);
+  const secondAttempt = await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.keep;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 2);
+  // A task that was never re-scoped to a new session keeps the conversation its
+  // first attempt opened instead of silently starting a second one.
+  assert.equal(sessionPinOf(runs[1].argv), 'ses_mock_1');
+  assert.equal(secondAttempt.sessionId, 'ses_mock_1');
+  assert.equal(secondAttempt.pinnedSessionId, 'ses_mock_1');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('an attempt that never reports a session id pins nothing', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-unpinned-log-'))), 'mock.log');
+  const env = { ...process.env, MOCK_LOG: logPath, MOCK_RUN_MS: '300', MOCK_SESSION: '' };
+  const paths = await startPinnedTaskFixture('delegate-continue-unpinned-test-', 'unpinned', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'unpinned').args;
+  assert.equal(taskArgs().includes('--session'), false);
+  assert.equal(readJsonFile(paths.manifest).tasks.unpinned.pinnedSessionId, null);
+
+  const deltaBrief = writeBrief(paths.root, 'delta.md', 'Delta: nothing to resume.');
+  runNode(SUPERVISOR, [
+    'continue', '--run', paths.runDir, '--task', 'unpinned', '--brief-file', deltaBrief,
+    '--json', '--verify-sec', '5',
+  ], env);
+  await waitForCondition(() => {
+    const task = readJsonFile(paths.manifest).tasks.unpinned;
+    return task.attempt === 2 && task.status === 'completed' ? task : null;
+  });
+
+  const runs = mockRunInvocations(logPath);
+  assert.equal(runs.length, 2);
+  assert.equal(sessionPinOf(runs[1].argv), null);
+  assert.equal(sessionPinOf(taskArgs()), null);
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
+});
+
+test('a session id reported only by the attempt result is pinned too', async () => {
+  const logPath = join(realpathSync(mkdtempSync(join(tmpdir(), 'delegate-continue-result-pin-log-'))), 'mock.log');
+  const env = {
+    ...process.env,
+    MOCK_LOG: logPath,
+    MOCK_RUN_MS: '300',
+    MOCK_SESSION: '',
+    MOCK_RESULT_SESSION: 'ses_result_only',
+  };
+  const paths = await startPinnedTaskFixture('delegate-continue-result-pin-test-', 'resultpin', env);
+  const taskArgs = () => readJsonFile(paths.tasks).tasks.find((task) => task.id === 'resultpin').args;
+
+  // The lifecycle events named no session; the terminal artifact did.
+  assert.equal(sessionPinOf(taskArgs()), 'ses_result_only');
+  const task = readJsonFile(paths.manifest).tasks.resultpin;
+  assert.equal(task.sessionId, 'ses_result_only');
+  assert.equal(task.pinnedSessionId, 'ses_result_only');
+
+  runNode(SUPERVISOR, ['close', '--run', paths.runDir, '--wait'], env);
 });
 
 test('steer relays a mid-turn message through the CLI contract and journals only its digest', async () => {

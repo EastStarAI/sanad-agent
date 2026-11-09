@@ -363,7 +363,7 @@ class SessionStopCoordinator {
   }) {
     if (!getIt.isRegistered<SessionManager>()) return;
     final sessionManager = getIt<SessionManager>();
-    if (sessionManager.getInFlightSnapshot(sessionId) == null) return;
+    if (!sessionManager.hasInFlightSnapshot(sessionId)) return;
     final currentRun = _turnExecutor.getActiveRun(sessionId);
     if (currentRun != null && !identical(currentRun, activeRun)) {
       return;
