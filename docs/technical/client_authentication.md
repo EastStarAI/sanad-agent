@@ -53,8 +53,25 @@ and no vault: the pair lives only in `localStorage` under the Client's shared-pr
 prefix, which browsers scope to the profile directory plus the origin. A Web session
 therefore survives a page reload and a Flutter hot restart, and survives a full Client
 restart only when both the origin (stable Web port) and the Chrome profile are unchanged
-— which is why `sanad-dev` pins the port and supplies a Home-scoped `--user-data-dir`
-for Chrome Clients.
+— which is why `sanad-dev` serves every Web Client from a stable origin per Home and
+Client slot, records the port it served last, and supplies a Home-scoped
+`--user-data-dir` for Chrome Clients.
+
+A loopback Web origin can only authenticate against a Portal that registers it: the
+Portal accepts exactly one `SANAD_PORTAL_WEB_CLIENT_ORIGIN` and mirrors it in
+`SANAD_PORTAL_CORS_ORIGINS`, so a local deployment registers its own
+`http://localhost:<port>`, and the Backend mirrors it in `BACKEND_CORS_ORIGINS`.
+Every portal deployment also registers an exact Web `redirect_uri` for the
+`sanad_flutter_web` client.
+
+A hosted deployment satisfies neither half for a page served from this machine: its
+credentialed CORS allowlist contains only its own hosted origins, and its Web
+`redirect_uri` is the deployed app. A local Web Client therefore cannot sign in to,
+or even call, a hosted Portal. The decision is explicit: hosted Web sign-in belongs
+to the deployed Web app, local Web work with sign-in runs against the local Docker
+stack and its registered origin, and Production keeps an exact `redirect_uri`
+allowlist. A config-level redirect override is deliberately not offered: it would
+let any local page start a real hosted login.
 
 Web `postMessage` validates the exact Portal origin, popup source, message type,
 and payload. The Portal success page targets only the registered app origin;

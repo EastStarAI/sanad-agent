@@ -143,11 +143,13 @@ Future<void> handleRuntimeStatus({
   for (final client in runtimeClients) {
     final profile = client.launchProfile;
     final marker = profile?.define('SANAD_DEV_WORKTREE_NAME');
+    final webOrigin = profile?.webOrigin;
     print(
       '  - device=${client.deviceId ?? 'unknown'} vm=${client.port} '
       'pid=${client.pid ?? '-'} source=${client.path} '
       'worktree=${marker?.isNotEmpty == true ? marker : 'main'} '
-      'switch_capable=${profile?.define('SANAD_DEV_SWITCH_CAPABLE') == 'true'}',
+      'switch_capable=${profile?.define('SANAD_DEV_SWITCH_CAPABLE') == 'true'}'
+      '${webOrigin == null ? '' : ' web_origin=$webOrigin'}',
     );
   }
   print('Cross-owned clients: ${processState.crossOwnedClients.length}');

@@ -42,6 +42,7 @@ Future<bool> requestManagedComponentAction(
   String? clientInstanceSlot,
   int? clientPid,
   int? vmServicePort,
+  int? webPort,
   bool force = false,
   bool openClientTerminal = true,
   Duration timeout = sanadDevComponentControlTimeout,
@@ -64,6 +65,7 @@ Future<bool> requestManagedComponentAction(
     clientInstanceSlot: clientInstanceSlot,
     clientPid: clientPid,
     vmServicePort: vmServicePort,
+    webPort: webPort,
     force: force,
     openClientTerminal: openClientTerminal,
   );

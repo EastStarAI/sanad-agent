@@ -1,26 +1,5 @@
 part of '../../../sanad_dev_cli.dart';
 
-const sanadDevWebPortEnvironmentKey = 'SANAD_DEV_WEB_PORT';
-
-void applySanadDevWebPort(
-  List<String> arguments, {
-  required String device,
-  required Map<String, String> environment,
-}) {
-  arguments.removeWhere((argument) => argument.startsWith('--web-port='));
-  if (device != 'chrome') return;
-
-  final rawPort = environment[sanadDevWebPortEnvironmentKey]?.trim() ?? '';
-  if (rawPort.isEmpty) return;
-  final port = int.tryParse(rawPort);
-  if (port == null || port < 1 || port > 65535) {
-    throw FormatException(
-      '$sanadDevWebPortEnvironmentKey must be a valid TCP port: $rawPort',
-    );
-  }
-  arguments.add('--web-port=$port');
-}
-
 Future<ClientInstance?> _waitForManagedClientIdentity({
   required int vmServicePort,
   required String launcherId,
@@ -50,25 +29,6 @@ String _newRuntimeOwnershipToken() {
   final random = Random.secure();
   final bytes = List<int>.generate(24, (_) => random.nextInt(256));
   return base64Url.encode(bytes).replaceAll('=', '');
-}
-
-void _printRuntimeSummary(
-  SanadDevRuntime runtime, {
-  required bool driverMode,
-  required bool cloudEnabled,
-  int? agentPort,
-  int? vmServicePort,
-  String? sanadHomePath,
-}) {
-  print('Worktree: ${runtime.worktreeId}');
-  print('Branch: ${runtime.branch}');
-  print('Mode: ${driverMode ? 'interactive-driver' : 'interactive'}');
-  print('Cloud gateway: ${cloudEnabled ? 'enabled' : 'disabled'}');
-  print('Agent gateway: http://127.0.0.1:${agentPort ?? runtime.agentPort}');
-  print(
-    'Client VM service: http://127.0.0.1:${vmServicePort ?? runtime.vmServicePort}/',
-  );
-  print('Sanad home: ${sanadHomePath ?? runtime.sanadHome}');
 }
 
 Future<bool> _waitForAgent(
@@ -185,6 +145,17 @@ Future<void> handleRun({
       final requestedVmPort = startsClient
           ? await _nextAvailableVmServicePort(runtime.vmServicePort)
           : null;
+      // The launcher owns the browser origin of every slot it serves. Send the
+      // port this Home already serves the slot from instead of deriving it here:
+      // the override that chose it is a launcher-startup variable, so this
+      // terminal's environment can differ and re-deriving would silently move
+      // the Client to a second origin.
+      final requestedWebPort = startsClient && isSanadDevWebDevice(device)
+          ? (await readSanadDevWebOriginRecord(
+              sanadHome: ownership.record!.sanadHome,
+              clientInstanceSlot: clientInstanceSlot,
+            ))?.port
+          : null;
       final succeeded = await requestManagedComponentAction(
         ownership.record!,
         action: RuntimeComponentAction.start,
@@ -192,6 +163,7 @@ Future<void> handleRun({
         deviceId: startsClient ? device : null,
         clientInstanceSlot: startsClient ? clientInstanceSlot : null,
         vmServicePort: requestedVmPort,
+        webPort: requestedWebPort,
         openClientTerminal: target == SanadDevComponentTarget.all,
       );
       if (!succeeded) {
@@ -314,6 +286,35 @@ Future<void> handleRun({
     }
   }
 
+  // A Web Client's sign-in survives a restart only when its browser origin is
+  // stable, so the origin is decided before any process exists: the explicit
+  // override, the origin this Home and slot last served, then the first free
+  // port the Portal in use accepts. flutter_tools would otherwise pick a random
+  // port, which is a fresh origin with no stored session. A Web Client is
+  // legitimate in every environment, so this reports guidance and never refuses
+  // merely because the Portal is hosted.
+  int? webPort;
+  if (startsClient && isSanadDevWebDevice(device)) {
+    final webLaunch = await prepareSanadDevWebOriginLaunch(
+      configFile: configFile,
+      cloudEndpoints: cloudEndpoints,
+      sanadHome: runtime.sanadHome,
+      processEnvironment: Platform.environment,
+      clientInstanceSlot: clientInstanceSlot,
+    );
+    if (webLaunch.port == null) {
+      await recordStartup(
+        stage: SanadDevStartupStage.cleanup,
+        outcome: SanadDevStartupOutcome.failed,
+        exitStatus: 1,
+        failureReason: 'client web origin is unavailable',
+      );
+      exitCode = 1;
+      return;
+    }
+    webPort = webLaunch.port;
+  }
+
   await cleanupStaleComponentJournals(runtime.sanadHome);
 
   final preferencesPrefix = resolveSanadDevPreferencesPrefix(
@@ -396,11 +397,7 @@ Future<void> handleRun({
     if (driverMode) '--print-dtd',
     if (driverMode) ...['-t', 'lib/driver_main.dart'],
   ];
-  applySanadDevWebPort(
-    flutterArguments,
-    device: device,
-    environment: Platform.environment,
-  );
+  applySanadDevWebPort(flutterArguments, device: device, port: webPort);
   await applySanadDevWebBrowserProfile(
     flutterArguments,
     device: device,
