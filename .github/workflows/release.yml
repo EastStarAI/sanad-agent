@@ -178,10 +178,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: whisper.cpp/build
-          # `v3` because the libraries are now linked with an `$ORIGIN` install
-          # rpath; see `.github/workflows/ci.yml` for why a restored tree must
-          # not be reused under the old key.
-          key: whisper-build-v3-${{ matrix.runner }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+          # `v4` because the libraries are linked with an `$ORIGIN` install rpath
+          # and ggml is configured `GGML_NATIVE=OFF`; see `.github/workflows/ci.yml`
+          # for why a tree restored under an older key must not be reused.
+          key: whisper-build-v4-${{ matrix.runner }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
       - name: Require the runner CPU the matrix label claims
         if: matrix.platform == 'macos'
         shell: bash
@@ -256,6 +256,20 @@ jobs:
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
+      - name: Install the disassembler the instruction-set guard needs
+        if: matrix.platform == 'linux'
+        shell: bash
+        # `--verify` disassembles the staged libraries and fails on any
+        # instruction above the declared baseline. Installing the disassembler
+        # when it is absent keeps the gate from skipping on the lane that
+        # actually ships the payload.
+        run: |
+          set -euo pipefail
+          if ! command -v objdump >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils
+          fi
+          objdump --version | head -1
       # Audit D9: the packaged Agent must carry the native dictation runtime
       # beside its executable. It is built in the same matrix entry as the
       # executable, so one platform's payload cannot silently receive another
@@ -269,6 +283,9 @@ jobs:
         env:
           WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
           EXPECTED: ${{ matrix.platform }}-${{ matrix.architecture }}
+          # This lane ships the payload, so a guard that cannot run is a defect
+          # rather than a skip.
+          SANAD_STT_REQUIRE_NATIVE: '1'
         run: |
           set -euo pipefail
           ${{ env.DART }} run tool/ensure_native_stt.dart --expect-target "$EXPECTED"

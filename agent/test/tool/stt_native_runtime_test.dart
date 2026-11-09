@@ -824,4 +824,231 @@ void main() {
       }
     });
   });
+
+  group('instruction sets', () {
+    // The listings below are real disassembly, not hand-written mnemonics. Each
+    // was produced by compiling one probe twice with the host clang —
+    // `-march=armv8.6-a+sve2+i8mm+bf16` (the shape a `GGML_NATIVE=ON` build on a
+    // newer runner takes) and `-march=armv8.2-a+dotprod+fp16` (the shipped
+    // baseline) — and keeping the compiler's own output. The instruction column
+    // is what `objdump` writes on the CI runners, which is the column the guard
+    // reads.
+    const nativeArm64Listing =
+        '       0:      \tfmla.4s\tv0, v2, v1\n'
+        '       4:      \tmovi.2d\tv1, #0000000000000000\n'
+        '       8:      \tsmmla\n'
+        '       c:      \tfcvtzs.4s\tv0, v0\n'
+        '      10:      \tmov.s\tv1[1], v0[0]\n'
+        '      14:      \tstr\td1, [x0]\n'
+        '      18:      \twhilelt\tp0.s, wzr, w2\n'
+        '      1c:      \tld1w\t{ z0.s }, p0/z, [x1]\n'
+        '      20:      \tfadd\tz0.s, p0/m, z0.s, z0.s\n'
+        '      24:      \tst1w\t{ z0.s }, p0, [x1]\n'
+        '      28:      \tret\n';
+    const portableArm64Listing =
+        '       0:      \tfmla.4s\tv0, v2, v1\n'
+        '       4:      \tmovi.2d\tv1, #0000000000000000\n'
+        '       8:      \tsdot.4s\tv1, v3, v4\n'
+        '       c:      \tfcvtzs.4s\tv0, v0\n'
+        '      10:      \tmov.s\tv1[1], v0[0]\n'
+        '      14:      \tstr\td1, [x0]\n'
+        '      18:      \tret\n';
+    // GNU objdump's ELF shape: offset, raw bytes, instruction. The guard must
+    // read the same instruction column here as in the listings above.
+    const gnuArm64SveShapes =
+        'libggml-cpu.so.0:     file format elf64-littleaarch64\n'
+        '\n'
+        '0000000000001234 <ggml_cpu_init>:\n'
+        '    1234:\ta9bf7bfd \tstp\tx29, x30, [sp, #-16]!\n'
+        '    1238:\t910003fd \tmov\tx29, sp\n'
+        '    12c4:\t2518e3e0 \tptrue\tp0.b\n'
+        '    12c8:\ta4404c20 \tld1w\t{ z0.s }, p0/z, [x1]\n'
+        '    12cc:\t65800000 \tfadd\tz0.s, p0/m, z0.s, z0.s\n';
+    const gnuArm64Bf16 =
+        '    2000:\t6e40ec00 \tbfdot\tv0.4s, v1.8h, v2.8h\n'
+        '    2004:\t6e40ec10 \tbfmmla\tv0.4s, v1.8h, v2.8h\n'
+        '    2008:\t1e634000 \tbfcvt\tv0.4s, v0.2d\n';
+    const gnuX64Avx512 =
+        'libggml-cpu.so.0:     file format elf64-x86-64\n'
+        '\n'
+        '0000000000002000 <ggml_cpu_init>:\n'
+        '    2000:\t62 f1 7c 48 10 04 0f \tvmovups\t(%rdi,%r9), %zmm0\n'
+        '    2007:\t62 f1 7c 48 28 cb   \tvpmadd52huq\t%zmm3, %zmm0, %zmm1\n';
+    const gnuX64Avx2 =
+        '    2000:\tc5 fc 10 04 0f       \tvmovups\t(%rdi,%r9), %ymm0\n'
+        '    2005:\tc4 e2 75 a8 cb       \tvfmadd213ps\t%ymm3, %ymm1, %ymm0\n'
+        '    200a:\tc4 e2 79 13 c1       \tvcvtph2ps\t%xmm1, %ymm0\n';
+
+    test('the arm64 guard rejects the listing a native build produces', () {
+      final match = firstForbiddenAarch64Instruction(nativeArm64Listing);
+
+      expect(match, isNotNull, reason: 'smmla needs i8mm');
+      expect(match!.family, 'i8mm');
+      expect(match.mnemonic, 'smmla');
+    });
+
+    test('the arm64 guard accepts the listing the portable baseline produces',
+        () {
+      // `sdot` is the dotprod the shipped baseline includes; forbidding it would
+      // reject the runtime this repository builds on purpose.
+      expect(firstForbiddenAarch64Instruction(portableArm64Listing), isNull);
+    });
+
+    test('the arm64 guard reads SVE operand shapes, not only SVE mnemonics', () {
+      // A mnemonic list alone misses SVE: `fadd`/`ld1w` carry it as a z/p
+      // operand, which is exactly how the faulting kernel is shaped.
+      for (final line in [
+        '    12cc:\t65800000 \tfadd\tz0.s, p0/m, z0.s, z0.s\n',
+        '    12c8:\ta4404c20 \tld1w\t{ z0.s }, p0/z, [x1]\n',
+        '    12c4:\t2518e3e0 \tptrue\tp0.b\n',
+        '    12d0:\t2538cfe1 \twhilelt\tp1.s, wzr, w2\n',
+      ]) {
+        final listing = '    1234:\ta9bf7bfd \tstp\tx29, x30, [sp, #-16]!\n'
+            '$line';
+        expect(
+          firstForbiddenAarch64Instruction(listing),
+          isNotNull,
+          reason: 'must reject $line',
+        );
+      }
+      expect(firstForbiddenAarch64Instruction(gnuArm64SveShapes), isNotNull);
+    });
+
+    test('the arm64 guard rejects every BF16 instruction', () {
+      expect(firstForbiddenAarch64Instruction(gnuArm64Bf16)?.family, 'bf16');
+      for (final mnemonic in ['bfdot', 'bfmmla', 'bfcvt', 'bfcvtn2']) {
+        expect(
+          firstForbiddenAarch64Instruction('    0:\t0 \t$mnemonic\tv0.4s\n'),
+          isNotNull,
+          reason: '$mnemonic needs BF16',
+        );
+      }
+    });
+
+    test('the x64 guard rejects AVX-512 and accepts AVX2', () {
+      final match = firstForbiddenX64Instruction(gnuX64Avx512);
+
+      expect(match, isNotNull);
+      expect(match!.family, 'avx512');
+      expect(match.mnemonic, 'vmovups');
+      expect(firstForbiddenX64Instruction(gnuX64Avx2), isNull);
+    });
+
+    test('a symbol name that looks like an instruction is ignored', () {
+      // Mangled names can contain `z0`/`k1` by accident; they carry no tab and
+      // are not instructions. Reading only the instruction column is what keeps
+      // the guard from failing a portable build.
+      const listing = '0000000000001234 <_ZN4ggml15z0_kernelEii>:\n'
+          '    1234:\ta9bf7bfd \tstp\tx29, x30, [sp, #-16]!\n';
+
+      expect(firstForbiddenAarch64Instruction(listing), isNull);
+    });
+
+    test('a portable listing reports ok and names each shipped library',
+        () async {
+      final directory = Directory.systemTemp.createTempSync('stt-isa-ok-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      for (final name in SttNativeTarget.linuxArm64.requiredLibraries) {
+        File('${directory.path}/$name').writeAsStringSync('');
+      }
+
+      final check = await checkInstructionSets(
+        target: SttNativeTarget.linuxArm64,
+        directory: directory.path,
+        requireDisassembler: true,
+        disassembler: (_) async => portableArm64Listing,
+      );
+
+      expect(check.skipped, isFalse);
+      expect(check.ok, isTrue);
+      expect(
+        check.evidence,
+        unorderedEquals([
+          for (final name in SttNativeTarget.linuxArm64.requiredLibraries)
+            'native_stt_isa_$name=ok',
+        ]),
+      );
+    });
+
+    test('a CPU-specific listing fails the gate and points at the file',
+        () async {
+      final directory = Directory.systemTemp.createTempSync('stt-isa-bad-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      for (final name in SttNativeTarget.linuxArm64.requiredLibraries) {
+        File('${directory.path}/$name').writeAsStringSync('');
+      }
+
+      final check = await checkInstructionSets(
+        target: SttNativeTarget.linuxArm64,
+        directory: directory.path,
+        requireDisassembler: true,
+        disassembler: (path) async =>
+            path.endsWith('libggml-cpu.so.0') ? nativeArm64Listing : portableArm64Listing,
+      );
+
+      expect(check.ok, isFalse);
+      expect(check.forbidden['libggml-cpu.so.0'], 'i8mm:smmla');
+      expect(
+        check.evidence,
+        contains('native_stt_isa_libggml-cpu.so.0=forbidden:smmla'),
+      );
+      expect(
+        check.evidence,
+        contains('native_stt_isa_libggml.so.0=ok'),
+        reason: 'one offending library must not condemn the portable ones',
+      );
+    });
+
+    test('a missing disassembler is a stated skip, never a silent pass',
+        () async {
+      final directory = Directory.systemTemp.createTempSync('stt-isa-none-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+      for (final name in SttNativeTarget.linuxArm64.requiredLibraries) {
+        File('${directory.path}/$name').writeAsStringSync('');
+      }
+      Future<String> unavailable(String path) async =>
+          throw const SttDisassemblyUnavailable('objdump');
+
+      final skipped = await checkInstructionSets(
+        target: SttNativeTarget.linuxArm64,
+        directory: directory.path,
+        disassembler: unavailable,
+      );
+      expect(skipped.skipped, isTrue);
+      expect(skipped.ok, isTrue);
+
+      // The proof lanes (CI sets SANAD_STT_REQUIRE_NATIVE=1) turn the same
+      // condition into a failure: a guard that skips in CI is not a guard.
+      final required = await checkInstructionSets(
+        target: SttNativeTarget.linuxArm64,
+        directory: directory.path,
+        requireDisassembler: true,
+        disassembler: unavailable,
+      );
+      expect(required.skipped, isFalse);
+      expect(required.ok, isFalse);
+      expect(required.problems, contains('isa_guard_unavailable:objdump'));
+    });
+
+    test('a target the disassembler cannot cover is skipped, not guessed',
+        () async {
+      // macOS and Windows payloads are pinned by the builder contract; claiming
+      // a disassembly result there would be worse than stating the skip.
+      final check = await checkInstructionSets(
+        target: target,
+        directory: nativeRoot.path,
+        requireDisassembler: true,
+        disassembler: (_) async => nativeArm64Listing,
+      );
+
+      expect(check.skipped, isTrue);
+      expect(check.evidence, isEmpty);
+    });
+  });
 }

@@ -136,6 +136,119 @@ void main() {
     );
   });
 
+  test('every POSIX build is portable instead of tuned to the build host', () {
+    // `GGML_NATIVE=ON` is ggml's default and compiles `-march=native`, so the
+    // shipped libraries require exactly the build runner's CPU. v1.0.22 shipped
+    // that and trapped with SIGILL on an older arm64 host. The flag is the
+    // contract; the configure line is where it has to reach ggml.
+    final script = File('tool/build_whispercpp.sh').readAsStringSync();
+    expect(script, contains('ggml_native=OFF'));
+    expect(
+      script,
+      contains(r'-DGGML_NATIVE="$ggml_native"'),
+      reason: 'both configure branches must pass the portable baseline',
+    );
+    expect(
+      r'-DGGML_NATIVE="$ggml_native"'.allMatches(script).length,
+      2,
+      reason: 'the macOS and Linux branches both configure ggml',
+    );
+    // Linux arm64 is pinned to an explicit floor instead of inheriting whatever
+    // the runner's compiler defaults to: Armv8.2-A with the dot-product and
+    // half-precision arithmetic the release host proves.
+    expect(script, contains('armv8.2-a+dotprod+fp16'));
+    expect(script, contains('-DGGML_CPU_ARM_ARCH='));
+    // A restored tree that recorded the native baseline must be discarded, or
+    // the Makefile generator reuses libraries compiled for the build runner.
+    expect(script, contains(r'GGML_NATIVE:BOOL=$ggml_native'));
+    expect(
+      script.lastIndexOf(r'GGML_NATIVE:BOOL=$ggml_native'),
+      lessThan(script.lastIndexOf('cmake -B build')),
+      reason: 'the portable-baseline guard must run before cmake configures',
+    );
+  });
+
+  test('the Linux arm64 lane resolves the documented portable floor', () {
+    // `uname` decides which branch the script builds, so a fake one executes the
+    // Linux arm64 path on any host: the value below is what the release lane
+    // configures, and it is the widest floor the release host proves.
+    if (windows || bash != true) {
+      markTestSkipped('bash is required to exercise the POSIX builder script');
+      return;
+    }
+    final shim = Directory.systemTemp.createTempSync('uname-shim-');
+    addTearDown(() {
+      if (shim.existsSync()) shim.deleteSync(recursive: true);
+    });
+    for (final entry in [
+      (
+        system: 'Linux',
+        machine: 'aarch64',
+        arch: 'arm64',
+        floor: 'armv8.2-a+dotprod+fp16',
+      ),
+      (system: 'Linux', machine: 'x86_64', arch: 'x64', floor: ''),
+      (system: 'Darwin', machine: 'arm64', arch: 'arm64', floor: ''),
+    ]) {
+      File('${shim.path}/uname').writeAsStringSync(
+        '#!/bin/sh\n'
+        'case "\$1" in\n'
+        '  -m) echo "${entry.machine}" ;;\n'
+        '  *) echo "${entry.system}" ;;\n'
+        'esac\n',
+      );
+      Process.runSync('chmod', ['+x', '${shim.path}/uname']);
+      final result = Process.runSync(
+        'bash',
+        [
+          'tool/build_whispercpp.sh',
+          Directory.current.path,
+          'native/.plan-only',
+          entry.arch,
+        ],
+        environment: {
+          'SANAD_BUILD_PLAN_ONLY': '1',
+          'PATH': '${shim.path}:${Platform.environment['PATH']}',
+        },
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stderr}');
+      final plan = <String, String>{
+        for (final line in LineSplitter().convert(result.stdout as String))
+          if (line.contains('='))
+            line.substring(0, line.indexOf('=')):
+                line.substring(line.indexOf('=') + 1),
+      };
+      expect(
+        plan['build_plan_ggml_native'],
+        'OFF',
+        reason: '${entry.system}/${entry.machine} must not be native',
+      );
+      expect(
+        plan['build_plan_ggml_arm_arch'],
+        entry.floor,
+        reason: '${entry.system}/${entry.machine} arm64 floor',
+      );
+    }
+  });
+
+  test('the whisper build cache is invalidated for the portable baseline', () {
+    // The libraries are reused byte-for-byte from a restored `build/` tree, so a
+    // key that does not change ships the old `-march=native` bytes again.
+    for (final path in [
+      '../.github/workflows/ci.yml',
+      '../.github/workflows/release.yml',
+    ]) {
+      final workflow = File(path).readAsStringSync();
+      expect(workflow, contains('whisper-build-v4-'), reason: path);
+      expect(
+        workflow,
+        isNot(contains('whisper-build-v3-')),
+        reason: '$path must not restore a tree built with -march=native',
+      );
+    }
+  });
+
   test('the Windows vector carries the tag-style architecture', () {
     final arguments = sttWindowsBuilderArguments(
       target: SttNativeTarget.windowsX64,
@@ -174,6 +287,28 @@ void main() {
       guard,
       lessThan(configure),
       reason: 'the stale-cache guard must run before cmake configures',
+    );
+  });
+
+  test('the Windows x64 build is portable instead of host-tuned', () {
+    // ggml defaults to `GGML_NATIVE=ON`, which lets MSVC pick the host's
+    // instruction set: the same class of defect v1.0.22 shipped on arm64. MSVC
+    // has no portable ggml mode on ARM at all (ggml rejects `GGML_NATIVE=OFF`
+    // there), so only the x64 slice can be — and is — produced portable.
+    final script = File('tool/build_whispercpp.ps1').readAsStringSync();
+    expect(
+      script,
+      contains(r"$ggmlNative = if ($Arch -eq 'x64') { 'OFF' } else { 'ON' }"),
+      reason: 'x64 must configure GGML_NATIVE=OFF',
+    );
+    expect(script, contains(r'-DGGML_NATIVE=$ggmlNative'));
+    // A restored tree built with the native baseline is discarded like one
+    // configured for another platform: the generators compare timestamps only.
+    expect(script, contains('GGML_NATIVE:BOOL'));
+    expect(
+      script.indexOf(r'GGML_NATIVE:BOOL'),
+      lessThan(script.indexOf(r'cmake -B build')),
+      reason: 'the portable-baseline guard must run before cmake configures',
     );
   });
 

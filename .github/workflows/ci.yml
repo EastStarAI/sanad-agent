@@ -360,11 +360,14 @@ jobs:
         uses: actions/cache@v4
         with:
           path: whisper.cpp/build
-          # `v3` because the libraries are now linked with an `$ORIGIN` install
-          # rpath: the Makefile generator compares timestamps only, so a tree
-          # restored under the old key would be reused with its absolute build
-          # rpath and would ship a runtime that cannot find its own siblings.
-          key: whisper-build-v3-${{ matrix.os }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+          # `v4` because two build contracts changed: the libraries are linked
+          # with an `$ORIGIN` install rpath (`v3`), and ggml is now configured
+          # `GGML_NATIVE=OFF` instead of `-march=native`, so the shipped runtime
+          # no longer requires whatever CPU this runner happens to be. The
+          # Makefile generator compares timestamps only, so a tree restored
+          # under the old key would be reused unchanged and would ship
+          # CPU-specific instructions again.
+          key: whisper-build-v4-${{ matrix.os }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
       - name: Require the runner CPU the matrix label claims
         if: runner.os == 'macOS'
         shell: bash
@@ -409,6 +412,22 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           fvm dart run tool/ensure_native_stt.dart
+      # `--verify` disassembles the staged libraries and fails on any instruction
+      # above the declared baseline, so it needs a disassembler. Image runners
+      # ship one with the C toolchain this job already uses; installing it when
+      # absent keeps the guard from silently skipping (`SANAD_STT_REQUIRE_NATIVE`
+      # would turn that skip into a failure, but a clear install is better than a
+      # red lane whose cause is packaging).
+      - name: Install the disassembler the instruction-set guard needs
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! command -v objdump >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq binutils
+          fi
+          objdump --version | head -1
       - name: Verify the installed runtime and its manifest entry
         if: runner.os != 'Windows'
         working-directory: agent
@@ -453,6 +472,19 @@ jobs:
           if ($archives.Count -ne 1) {
             throw "Expected exactly one staged runtime archive."
           }
+      # The staged folder is published so the arm64 payload can be exercised on
+      # hardware that is older than the runner that built it — the one proof CI
+      # cannot make, and exactly the gap that let v1.0.22 ship: `ldd` and the load
+      # smoke both pass on the runner's own CPU. Linux only, because these are the
+      # two slices that run on rented x64/arm64 hardware a user may not match.
+      - name: Upload the staged Linux runtime
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-stt-runtime-linux-${{ matrix.os == 'ubuntu-24.04-arm' && 'arm64' || 'x64' }}
+          path: dist-native/native/linux-${{ matrix.os == 'ubuntu-24.04-arm' && 'arm64' || 'x64' }}
+          retention-days: 3
+          if-no-files-found: error
       # The archive above is what a released Agent installs. This loads the
       # engine out of that staged payload, so a layout the loader cannot read
       # fails here instead of in the field. The linux-arm64 lane links the

@@ -455,6 +455,298 @@ List<String> _unresolvedLibraries(String output) {
   return names;
 }
 
+/// One instruction family a portable build must never contain.
+///
+/// The patterns describe **operand shapes**, not only mnemonics, because the
+/// families that trap do not need an exotic mnemonic to reach a binary: SVE and
+/// SVE2 appear as `z` vector or `p` predicate operands on ordinary instructions
+/// (`fadd z0.s, p0/m, z0.s, z0.s`, `ld1w { z0.s }, p0/z, [x1]`), so a mnemonic
+/// list alone would miss the very instruction that faulted.
+class SttForbiddenInstruction {
+  const SttForbiddenInstruction(this.family, this.pattern);
+
+  /// Family reported beside the mnemonic (`sve`, `i8mm`, `bf16`, `avx512`).
+  /// SVE2 is reported as `sve`: both extensions are excluded by the same rule,
+  /// and a payload that needs either is equally non-portable.
+  final String family;
+
+  /// Shape only this family can produce.
+  final RegExp pattern;
+}
+
+/// One detected instruction that the declared baseline cannot execute.
+class SttForbiddenMatch {
+  const SttForbiddenMatch(this.family, this.mnemonic);
+
+  final String family;
+  final String mnemonic;
+
+  /// Evidence value printed by `--verify`.
+  String get evidenceValue => 'forbidden:$mnemonic';
+
+  /// Detail a failure message shows.
+  String get detail => '$family:$mnemonic';
+}
+
+/// Above the arm64 portfolio baseline (`armv8.2-a+dotprod+fp16`).
+///
+/// `sdot`/`udot` are deliberately absent: they *are* the dotprod baseline, and
+/// forbidding them would reject the portable build this repository ships.
+final List<SttForbiddenInstruction> _aarch64Forbidden = [
+  SttForbiddenInstruction(
+    'sve',
+    // The predicate-producing and predicate-consuming instructions, including
+    // the SVE2.1 scalar branches that carry no z/p operand at all.
+    RegExp(
+      r'\b(?:ptrue|whilelt|whilelo|whilele|whilels|wrffr|setffr|rdffr|ctermeq|ctermne)\b',
+    ),
+  ),
+  // SVE/SVE2 scalable vector registers z0-z31 with their element shape.
+  SttForbiddenInstruction('sve', RegExp(r'\bz(?:3[01]|[12][0-9]|[0-9])\b')),
+  // SVE predicate registers p0-p15, governing or zeroing form.
+  SttForbiddenInstruction(
+    'sve',
+    RegExp(r'\bp(?:1[0-5]|[0-9])(?:/[zm])?\b'),
+  ),
+  // I8MM 8-bit matrix multiply-accumulate and its mixed-sign dot products.
+  SttForbiddenInstruction(
+    'i8mm',
+    RegExp(r'\b(?:smmla|ummla|usmmla|usdot|sudot)\b'),
+  ),
+  // BFloat16 arithmetic and conversion.
+  SttForbiddenInstruction(
+    'bf16',
+    RegExp(r'\bbf(?:mmla|dot|cvt(?:n2?|l)?)\b'),
+  ),
+];
+
+/// Above the x64 baseline ggml's non-native default enables (AVX2 + FMA + F16C).
+///
+/// AVX-512 is off in that configuration, and its registers are unmistakable in
+/// a disassembly: `%zmm*` for 512-bit vectors and `%k*` for the opmask
+/// registers, with `{z}` zeroing and `{1toN}` broadcast decorators on top.
+final List<SttForbiddenInstruction> _x64Forbidden = [
+  SttForbiddenInstruction('avx512', RegExp(r'%zmm(?:3[01]|[12][0-9]|[0-9])\b')),
+  SttForbiddenInstruction('avx512', RegExp(r'%k[0-7]\b')),
+  SttForbiddenInstruction('avx512', RegExp(r'\{z\}')),
+  SttForbiddenInstruction('avx512', RegExp(r'\{1to(?:[248]|16|32)\}')),
+];
+
+/// The raw-byte column `objdump` prints between the offset and the instruction
+/// (`62 f1 7c 48 10 04 0f `). It is hex pairs separated by spaces, which no
+/// mnemonic column is.
+final RegExp _rawBytesColumn = RegExp(r'^[0-9a-f]{2}(?: [0-9a-f]{2})+ ?$');
+
+/// The instruction text of one `objdump -d` line, or null for a line that is
+/// not an instruction.
+///
+/// `objdump` writes `offset<TAB>[raw bytes<TAB>]instruction`, and it separates
+/// the mnemonic from its operands with a tab too — so the instruction is
+/// everything after the offset and the optional byte column, not the last
+/// field. Dropping only the offset and the bytes keeps the mnemonic, and a
+/// symbol header (`0000 <name>:`) carries no tab at all, which is what keeps a
+/// mangled name that happens to contain `z0` or `k1` from being read as an
+/// instruction.
+String? _disassembledInstruction(String line) {
+  final parts = line.split('\t');
+  if (parts.length < 2) return null;
+  final keep = parts.length >= 3 && _rawBytesColumn.hasMatch(parts[1])
+      ? parts.sublist(2)
+      : parts.sublist(1);
+  final text = keep.join('\t').trim();
+  return text.isEmpty ? null : text;
+}
+
+String _mnemonicOf(String instruction) =>
+    instruction.split(RegExp(r'[\s,]')).first.trim();
+
+SttForbiddenMatch? _firstForbidden(
+  String disassembly,
+  List<SttForbiddenInstruction> rules,
+) {
+  for (final line in const LineSplitter().convert(disassembly)) {
+    final instruction = _disassembledInstruction(line);
+    if (instruction == null) continue;
+    for (final rule in rules) {
+      if (rule.pattern.hasMatch(instruction)) {
+        return SttForbiddenMatch(rule.family, _mnemonicOf(instruction));
+      }
+    }
+  }
+  return null;
+}
+
+/// First arm64 instruction in [disassembly] that `armv8.2-a+dotprod+fp16`
+/// cannot execute, or null when the listing is inside that baseline.
+SttForbiddenMatch? firstForbiddenAarch64Instruction(String disassembly) =>
+    _firstForbidden(disassembly, _aarch64Forbidden);
+
+/// First x64 instruction in [disassembly] above the AVX2/FMA/F16C baseline, or
+/// null when the listing contains no AVX-512.
+SttForbiddenMatch? firstForbiddenX64Instruction(String disassembly) =>
+    _firstForbidden(disassembly, _x64Forbidden);
+
+/// First instruction [cpu]'s declared baseline cannot execute.
+SttForbiddenMatch? firstForbiddenInstruction(
+  SttNativeCpu cpu,
+  String disassembly,
+) =>
+    switch (cpu) {
+      SttNativeCpu.arm64 => firstForbiddenAarch64Instruction(disassembly),
+      SttNativeCpu.x64 => firstForbiddenX64Instruction(disassembly),
+    };
+
+/// What the disassembler says one staged runtime requires from the CPU.
+class SttInstructionSetCheck {
+  const SttInstructionSetCheck({
+    required this.target,
+    required this.forbidden,
+    required this.evidence,
+    this.problems = const [],
+    this.skipped = false,
+  });
+
+  final SttNativeTarget target;
+
+  /// Manifest name → `family:mnemonic` for every library above the baseline.
+  final Map<String, String> forbidden;
+
+  /// One `native_stt_isa_<name>=…` line per probed library, for the CI log.
+  final List<String> evidence;
+
+  /// Conditions that make the check itself impossible (a required but absent
+  /// disassembler, an unreadable binary).
+  final List<String> problems;
+
+  /// True when this host cannot answer: not Linux, or no `objdump` to ask.
+  final bool skipped;
+
+  bool get ok => forbidden.isEmpty && problems.isEmpty;
+}
+
+/// Thrown when this host cannot disassemble anything at all.
+///
+/// Separating "no tool" from "this binary failed to disassemble" keeps a guard
+/// that could not run (a skip, stated) apart from a guard that ran and failed
+/// (a defect).
+class SttDisassemblyUnavailable implements Exception {
+  const SttDisassemblyUnavailable(this.reason);
+
+  /// `host` when this machine is not Linux, `objdump` when the tool is absent.
+  final String reason;
+
+  @override
+  String toString() => 'SttDisassemblyUnavailable($reason)';
+}
+
+/// Returns the disassembly of one library file, or throws
+/// [SttDisassemblyUnavailable] when this host cannot answer.
+typedef SttDisassembler = Future<String> Function(String path);
+
+/// Disassembles [path] with the host `objdump`.
+///
+/// Linux is the only platform this repository may assume a disassembler on:
+/// macOS ships none, and Windows ships none that reads an arm64 ELF. That is
+/// why the gate is Linux-only rather than dishonest about the other targets,
+/// whose payloads are pinned by the builder contract instead.
+Future<String> _objdumpDisassembly(String path) async {
+  if (!Platform.isLinux) {
+    throw const SttDisassemblyUnavailable('host');
+  }
+  try {
+    final probe = await Process.run('objdump', ['--version']);
+    if (probe.exitCode != 0) {
+      throw const SttDisassemblyUnavailable('objdump');
+    }
+    final result = await Process.run('objdump', ['-d', path]);
+    if (result.exitCode != 0) {
+      throw FormatException('objdump exited ${result.exitCode} for $path');
+    }
+    return '${result.stdout}';
+  } on ProcessException {
+    throw const SttDisassemblyUnavailable('objdump');
+  }
+}
+
+/// Disassembles every shipped library and reports instructions above the
+/// baseline the target declares.
+///
+/// A hash, an architecture header and `ldd` all pass on a `-march=native` build
+/// that dies with `SIGILL` on any older CPU: v1.0.22 shipped exactly that, and
+/// the fault (`ggml_cpu_init+0x238`, `ILL_ILLOPC`) was in a kernel that the
+/// runner's own CPU could execute. Only the instructions themselves answer this
+/// question, so the payload is disassembled instead of trusted.
+///
+/// [disassembler] is the host tool, injectable so the rules can be exercised
+/// with a fixture listing on a host that cannot build the target. A missing
+/// disassembler is [SttInstructionSetCheck.skipped] — unless the calling lane
+/// declares itself the proof lane ([requireDisassembler]), in which case it is
+/// a hard problem: a guard that silently skips in CI is not a guard.
+Future<SttInstructionSetCheck> checkInstructionSets({
+  required SttNativeTarget target,
+  required String directory,
+  bool requireDisassembler = false,
+  SttDisassembler disassembler = _objdumpDisassembly,
+}) async {
+  if (target.os != SttNativeOs.linux) {
+    return SttInstructionSetCheck(
+      target: target,
+      forbidden: const {},
+      evidence: const [],
+      skipped: true,
+    );
+  }
+
+  final evidence = <String>[];
+  final forbidden = <String, String>{};
+  final problems = <String>[];
+  try {
+    for (final name in target.requiredLibraries) {
+      final file = File('$directory/$name');
+      if (!file.existsSync()) {
+        evidence.add('native_stt_isa_$name=missing');
+        continue;
+      }
+      final String listing;
+      try {
+        listing = await disassembler(file.absolute.path);
+      } on FormatException {
+        problems.add('isa_disassembly_failed:$name');
+        evidence.add('native_stt_isa_$name=unreadable');
+        continue;
+      }
+      final match = firstForbiddenInstruction(target.cpu, listing);
+      if (match == null) {
+        evidence.add('native_stt_isa_$name=ok');
+      } else {
+        forbidden[name] = match.detail;
+        evidence.add('native_stt_isa_$name=${match.evidenceValue}');
+      }
+    }
+  } on SttDisassemblyUnavailable {
+    if (requireDisassembler) {
+      return SttInstructionSetCheck(
+        target: target,
+        forbidden: Map.unmodifiable(forbidden),
+        evidence: List.unmodifiable(evidence),
+        problems: const ['isa_guard_unavailable:objdump'],
+      );
+    }
+    return SttInstructionSetCheck(
+      target: target,
+      forbidden: Map.unmodifiable(forbidden),
+      evidence: List.unmodifiable(evidence),
+      skipped: true,
+    );
+  }
+  return SttInstructionSetCheck(
+    target: target,
+    forbidden: Map.unmodifiable(forbidden),
+    evidence: List.unmodifiable(evidence),
+    problems: List.unmodifiable(problems),
+  );
+}
+
 /// One staged runtime directory ready to ship beside a packaged Agent.
 class SttRuntimeStage {
   const SttRuntimeStage({
