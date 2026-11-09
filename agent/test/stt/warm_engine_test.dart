@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_engine.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_model_store.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_settings.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:test/test.dart';
 
@@ -92,7 +93,7 @@ void main() {
       final stt = service();
       expect(stt.settings.keepsModelWarm, isTrue);
       expect(stt.settings.modelIdleMinutes, 5);
-      expect(stt.settings.useGpu, isTrue);
+      expect(stt.settings.useGpu, defaultSttUseGpu());
     });
 
     test('an immediate unload frees the engine at the end of a session', () async {
