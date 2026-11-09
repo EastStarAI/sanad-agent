@@ -465,7 +465,7 @@ Future<SanadDevInventory> collectSanadDevInventory({
     runtimes: runtimes,
     clients: inventoryClients,
     testHomes: testHomes,
-    orphans: buildInventoryOrphans(
+    orphans: await buildInventoryOrphans(
       userHome: userHome,
       devHomes: devHomes,
       records: records,

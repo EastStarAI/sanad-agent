@@ -72,6 +72,119 @@ void main() {
     });
   });
 
+  group('crash-loop breaker', () {
+    test(
+      'a child that fails every ~5.3 s trips the breaker at five failures',
+      () {
+        // The old policy allowed five failures inside a 15-second window. A
+        // child that dies in 5.3 s can never place five failures in that
+        // window — the incident ran 28 failures in 150 s — so the breaker was
+        // unreachable. The count must decide, not the spacing.
+        var now = DateTime.utc(2026, 11, 9, 17, 30, 5);
+        final guard = SupervisorCrashLoopGuard(clock: () => now);
+        final oldPolicy = RestartFailureWindow(
+          maxFailures: 5,
+          window: const Duration(seconds: 15),
+          now: () => now,
+        );
+        const spacing = Duration(milliseconds: 5300);
+
+        for (var failure = 1; failure <= 4; failure++) {
+          now = now.add(spacing);
+          final decision = guard.recordExit(exitCode: 1, lifetime: spacing);
+          expect(decision.respawn, isTrue, reason: 'failure $failure');
+          expect(decision.consecutiveFailures, failure);
+          // Proof that the previous policy would have kept restarting forever.
+          expect(oldPolicy.recordFailure(), isTrue);
+        }
+
+        now = now.add(spacing);
+        final tripped = guard.recordExit(exitCode: 1, lifetime: spacing);
+        expect(tripped.respawn, isFalse);
+        expect(tripped.consecutiveFailures, 5);
+        // The flapping density stays below the limit in the same run, which is
+        // exactly why the two policies disagree here.
+        expect(guard.recentFailures.recentFailures, lessThan(5));
+      },
+    );
+
+    test('a clean restart or a long-lived child clears the count', () {
+      final guard = SupervisorCrashLoopGuard();
+
+      for (var failure = 1; failure <= 4; failure++) {
+        expect(
+          guard
+              .recordExit(exitCode: 1, lifetime: const Duration(seconds: 2))
+              .respawn,
+          isTrue,
+        );
+      }
+      expect(guard.consecutiveFailures, 4);
+
+      // A `/restart` exits 0 and is not a failure at all.
+      final controlled = guard.recordExit(
+        exitCode: 0,
+        lifetime: const Duration(seconds: 1),
+      );
+      expect(controlled.respawn, isTrue);
+      expect(guard.consecutiveFailures, 0);
+
+      // A child that ran long enough to count as a real run starts over: the
+      // crash that ends it is the first failure of a new run, not the fifth.
+      for (var failure = 1; failure <= 4; failure++) {
+        guard.recordExit(exitCode: 1, lifetime: const Duration(seconds: 2));
+      }
+      final longLived = guard.recordExit(
+        exitCode: 1,
+        lifetime: supervisorLongLivedChildThreshold,
+      );
+      expect(longLived.respawn, isTrue);
+      expect(longLived.consecutiveFailures, 1);
+    });
+
+    test('the respawn delay grows to a cap and stays there', () {
+      final guard = SupervisorCrashLoopGuard();
+      final delays = <Duration>[];
+      for (var failure = 1; failure <= 6; failure++) {
+        final decision = guard.recordExit(
+          exitCode: 1,
+          lifetime: const Duration(seconds: 1),
+        );
+        delays.add(decision.delay);
+      }
+      expect(delays, [
+        const Duration(milliseconds: 500),
+        const Duration(seconds: 1),
+        const Duration(seconds: 2),
+        const Duration(seconds: 5),
+        const Duration(seconds: 10),
+        const Duration(seconds: 10),
+      ]);
+    });
+
+    test('four failures are tolerated and the fifth ends the supervisor', () {
+      final guard = SupervisorCrashLoopGuard();
+      for (
+        var failure = 1;
+        failure < supervisorMaxConsecutiveFailures;
+        failure++
+      ) {
+        expect(
+          guard
+              .recordExit(exitCode: 1, lifetime: const Duration(seconds: 1))
+              .respawn,
+          isTrue,
+        );
+      }
+      expect(
+        guard
+            .recordExit(exitCode: 1, lifetime: const Duration(seconds: 1))
+            .respawn,
+        isFalse,
+      );
+    });
+  });
+
   group('supervised child exit', () {
     test('a signal keeps its signal status instead of a clean exit', () {
       // The supervisor is the process `launchd` and `sanad-dev` watch, so it
@@ -116,6 +229,32 @@ void main() {
       expect(
         decideSupervisedChildExit(exitCode: 1, shuttingDown: false),
         SupervisedChildExit.restart,
+      );
+    });
+  });
+
+  group('launcher-bound supervision', () {
+    test('a managed launcher pipe ends the supervisor', () {
+      expect(
+        endsOnLauncherPipeClose(managedLauncher: true, hasTerminal: false),
+        isTrue,
+      );
+    });
+
+    test('an interactive or unmanaged run is never ended by stdin', () {
+      // A human terminal, or a manual `fvm dart run … daemon`, must keep
+      // today's behaviour: closing stdin is not an instruction to exit.
+      expect(
+        endsOnLauncherPipeClose(managedLauncher: true, hasTerminal: true),
+        isFalse,
+      );
+      expect(
+        endsOnLauncherPipeClose(managedLauncher: false, hasTerminal: false),
+        isFalse,
+      );
+      expect(
+        endsOnLauncherPipeClose(managedLauncher: false, hasTerminal: true),
+        isFalse,
       );
     });
   });

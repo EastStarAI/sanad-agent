@@ -31,9 +31,10 @@ void main() {
       if (root.existsSync()) root.deleteSync(recursive: true);
     });
 
-    sanad_dev.SanadDevOrphanCleanupPlan planFor(
+    Future<sanad_dev.SanadDevOrphanCleanupPlan> planFor(
       List<sanad_dev.InventoryOrphan> orphans, {
       List<sanad_dev.InventoryRuntime> runtimes = const [],
+      Future<bool> Function(int? pid) processRunning = _noLiveProcess,
     }) {
       return sanad_dev.buildSanadDevOrphanCleanupPlan(
         _inventory(
@@ -43,6 +44,7 @@ void main() {
           runtimes: runtimes,
         ),
         now: DateTime.utc(2026, 11, 9, 12),
+        processRunning: processRunning,
       );
     }
 
@@ -52,12 +54,12 @@ void main() {
     ) => plan.entries.singleWhere((entry) => entry.target == target);
 
     test('deletes a dev-area Home and runtime record it can prove orphaned',
-        () {
+        ()  async {
       final staleHome = Directory(p.join(devArea, 'homes', 'stale-11111111'))
         ..createSync();
       final staleRecord = Directory(p.join(devArea, 'runtimes', 'gone-22222222'))
         ..createSync();
-      final plan = planFor([
+      final plan = await planFor([
         _orphan(sanad_dev.InventoryOrphanKind.devHome, staleHome.path),
         _orphan(sanad_dev.InventoryOrphanKind.runtimeRecord, staleRecord.path),
       ]);
@@ -73,7 +75,7 @@ void main() {
       });
     });
 
-    test('refuses the primary Home, a Test Home, and anything outside', () {
+    test('refuses the primary Home, a Test Home, and anything outside', ()  async {
       final primaryEndpoint = File(
         p.join(primaryHome, '.local_gateway_endpoint.json'),
       )..writeAsStringSync('{}');
@@ -84,7 +86,7 @@ void main() {
       final record = Directory(p.join(devArea, 'runtimes', 'gone-33333333'))
         ..createSync();
 
-      final plan = planFor([
+      final plan = await planFor([
         _orphan(sanad_dev.InventoryOrphanKind.endpointRecord, primaryEndpoint.path),
         _orphan(
           sanad_dev.InventoryOrphanKind.endpointRecord,
@@ -107,8 +109,8 @@ void main() {
       expect(plan.refused, hasLength(3));
     });
 
-    test('refuses the dev area itself and its group directories', () {
-      final plan = planFor([
+    test('refuses the dev area itself and its group directories', ()  async {
+      final plan = await planFor([
         _orphan(sanad_dev.InventoryOrphanKind.devHome, devArea),
         _orphan(
           sanad_dev.InventoryOrphanKind.runtimeRecord,
@@ -124,23 +126,23 @@ void main() {
     });
 
     test('refuses a symbolic link even when it resolves inside the dev area',
-        () {
+        ()  async {
       if (Platform.isWindows) return;
       final real = Directory(p.join(devArea, 'homes', 'real-44444444'))
         ..createSync();
       final link = Link(p.join(devArea, 'homes', 'link-55555555'))
         ..createSync(real.path);
-      final plan = planFor([
+      final plan = await planFor([
         _orphan(sanad_dev.InventoryOrphanKind.devHome, link.path),
       ]);
 
       expect(entry(plan, link.path).refusal, 'target is a symbolic link');
     });
 
-    test('refuses a target a live runtime still owns', () {
+    test('refuses a target a live runtime still owns', ()  async {
       final home = Directory(p.join(devArea, 'homes', 'live-66666666'))
         ..createSync();
-      final plan = planFor(
+      final plan = await planFor(
         [_orphan(sanad_dev.InventoryOrphanKind.devHome, home.path)],
         runtimes: [
           _runtime(
@@ -153,6 +155,57 @@ void main() {
       );
 
       expect(entry(plan, home.path).refusal, 'live runtime (agent port 58092)');
+    });
+
+    test('refuses a record whose recorded process is still running', () async {
+      // A record is evidence: it is the last on-disk pointer to a live process,
+      // so deleting it removes the only cheap way to find that process.
+      final record = Directory(p.join(devArea, 'runtimes', 'live-88888888'))
+        ..createSync();
+      File(p.join(record.path, 'runtime.json')).writeAsStringSync(
+        '{"agent_pid": 4321, "client_pid": 8765}',
+      );
+
+      final plan = await planFor(
+        [_orphan(sanad_dev.InventoryOrphanKind.runtimeRecord, record.path)],
+        processRunning: (pid) async => pid == 8765,
+      );
+
+      expect(entry(plan, record.path).refusal,
+          'recorded process pid 8765 is still running');
+    });
+
+    test('an endpoint record naming a live pid is refused too', () async {
+      final home = Directory(p.join(devArea, 'homes', 'stale-99999999'))
+        ..createSync();
+      final endpointFile = File(
+        p.join(home.path, '.local_gateway_endpoint.json'),
+      )..writeAsStringSync('{"schema": 1, "pid": 4321}');
+
+      final plan = await planFor(
+        [
+          _orphan(
+            sanad_dev.InventoryOrphanKind.endpointRecord,
+            endpointFile.path,
+          ),
+        ],
+        processRunning: (pid) async => pid == 4321,
+      );
+
+      expect(entry(plan, endpointFile.path).refusal,
+          'recorded process pid 4321 is still running');
+    });
+
+    test('an unreadable record names no process and stays deletable', () async {
+      final record = Directory(p.join(devArea, 'runtimes', 'broken-12121212'))
+        ..createSync();
+      File(p.join(record.path, 'runtime.json')).writeAsStringSync('{not json');
+
+      final plan = await planFor(
+        [_orphan(sanad_dev.InventoryOrphanKind.runtimeRecord, record.path)],
+      );
+
+      expect(entry(plan, record.path).deletable, isTrue);
     });
 
     test('refuses a deletion whose parent now escapes the dev area', () async {
@@ -344,6 +397,9 @@ void main() {
     });
   });
 }
+
+/// Synthetic projections name no running process.
+Future<bool> _noLiveProcess(int? pid) async => false;
 
 sanad_dev.InventoryOrphan _orphan(
   sanad_dev.InventoryOrphanKind kind,

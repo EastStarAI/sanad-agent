@@ -77,6 +77,70 @@ List<ClientInstance> clientsForAgentPort(
   return matches;
 }
 
+/// Names the predicate that excluded every discovered Client.
+///
+/// `selectClientInstance` used to print one generic "no clients" line for a
+/// manual runtime, a foreign Agent, and an incomplete launch profile. During one
+/// incident that was the whole diagnosis: the Client existed, attached to a
+/// daemon carrying another launcher identity, and the command said nothing.
+/// Every branch below names the evidence it has instead of the absence it saw.
+String? clientSelectionFailureReason(
+  RuntimeProcessState state, {
+  required int agentPort,
+}) {
+  if (state.agentAmbiguous) {
+    return 'more than one Agent matches this worktree, so none can own a Client';
+  }
+  final agent = state.agent;
+  final blocked = state.blockedClients;
+  if (agent == null) {
+    if (blocked.isEmpty) return 'no Agent answers on port $agentPort';
+    return 'the Client on VM port ${blocked.first.port} '
+        '${_clientBlockReason(blocked.first, agent: null)}';
+  }
+  if (agent.launcherId == null || agent.runtimeNonce == null) {
+    return 'the Agent on port ${agent.port} reports no managed launcher '
+        'identity, so it cannot own a Client';
+  }
+  if (blocked.isNotEmpty) {
+    return 'the Client on VM port ${blocked.first.port} '
+        '${_clientBlockReason(blocked.first, agent: agent)}';
+  }
+  // Silence here was the whole diagnosis for a Client that never attached: a
+  // managed Agent was answering, no Client was owned, and the command printed
+  // no reason at all. Only an actually-owned Client removes the reason.
+  if (state.ownedClients.isNotEmpty) return null;
+  return 'the Agent on port ${agent.port} is managed, but no launched Client '
+      'reports this worktree\'s launcher identity';
+}
+
+/// Why one Client is not part of the selected Agent's ownership.
+String _clientBlockReason(
+  ClientInstance client, {
+  required AgentInstance? agent,
+}) {
+  final profile = client.launchProfile;
+  if (profile == null) return 'has no readable launch profile';
+  final launcherId = profile.define('SANAD_DEV_LAUNCHER_ID');
+  final runtimeNonce = profile.define('SANAD_DEV_RUNTIME_NONCE');
+  if (launcherId == null || runtimeNonce == null) {
+    return 'has an incomplete launch profile (no launcher id or runtime nonce)';
+  }
+  if (agent == null) {
+    return 'was launched by launcher $launcherId, which no live Agent answers '
+        'for';
+  }
+  if (launcherId != agent.launcherId) {
+    return 'was launched by launcher $launcherId, but the Agent on port '
+        '${agent.port} answers as ${agent.launcherId}';
+  }
+  if (runtimeNonce != agent.runtimeNonce) {
+    return 'was launched with runtime nonce $runtimeNonce, but the Agent on '
+        'port ${agent.port} answers as ${agent.runtimeNonce}';
+  }
+  return 'is not owned by the live sanad-dev launcher';
+}
+
 Future<ClientInstance?> selectClientInstance(
   int? portOverride, {
   String? sanadHomePath,
@@ -140,7 +204,14 @@ Future<ClientInstance?> selectClientInstance(
 
   if (matchingInstances.isEmpty) {
     print(
-      'Error: No running client instances found for the current worktree (${runtime.worktreeId}).',
+      'Error: No owned running client instances found for the current worktree (${runtime.worktreeId}).',
+    );
+    final reason = clientSelectionFailureReason(
+      state,
+      agentPort: runtime.agentPort,
+    );
+    print(
+      'Reason: ${reason ?? 'no Client reports this worktree launcher identity'}.',
     );
     final ownerHint = explicitHomeOwnerHint(
       explicitHome: sanadHomePath,
@@ -323,6 +394,18 @@ Future<AgentInstance?> selectAgentInstance(
     stderr.writeln(
       'Error: No running agent instances found for the current worktree (${runtime.worktreeId}).',
     );
+    // An absent Agent and a Home held by another process look identical from
+    // the port scan alone. The owner record separates them, so it is named
+    // before the list of unrelated instances.
+    final homes = <String>{
+      runtime.sanadHome,
+      for (final inst in instances)
+        if (inst.sanadHome != null) inst.sanadHome!,
+    };
+    for (final home in homes) {
+      final holder = await describeHomeHolder(home);
+      if (holder != null) stderr.writeln('$home: $holder');
+    }
     stderr.writeln('Active instances in other worktrees:');
     for (final inst in instances) {
       stderr.writeln(

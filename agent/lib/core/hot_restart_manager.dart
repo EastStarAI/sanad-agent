@@ -2,7 +2,10 @@ import 'dart:async';
 import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
+import 'package:sanad_agent/core/sanad_home/supervisor_launcher_lease.dart';
+import 'package:sanad_agent/core/supervisor_lifecycle_log.dart';
 import 'package:sanad_agent/core/termination_cleanup.dart';
 
 const _localGatewayCredentialHeader = 'x-sanad-local-token';
@@ -10,6 +13,44 @@ const _localGatewayCredentialHeader = 'x-sanad-local-token';
 /// The exit status a supervised daemon uses to ask its supervisor for a
 /// permanent stop instead of a restart.
 const int supervisedPermanentShutdownExitCode = 123;
+
+/// Consecutive child failures that end the supervisor.
+///
+/// Counting consecutive failures is the point: the previous policy measured
+/// failures inside a 15-second window, but a child that dies in ~5.3 s can place
+/// at most three failures in any such window, so the breaker could never trip
+/// while the supervisor restarted forever. A count cannot be dodged by spacing.
+const int supervisorMaxConsecutiveFailures = 5;
+
+/// Delay before a respawn, indexed by the consecutive failure count and capped
+/// at the last entry: 0.5 → 1 → 2 → 5 → 10 s.
+///
+/// The default policy ends the supervisor on the fifth consecutive failure, so it
+/// respawns four times; the tenth-second entry is the ceiling for a configured
+/// limit above the default.
+const List<Duration> supervisorRespawnBackoff = <Duration>[
+  Duration(milliseconds: 500),
+  Duration(seconds: 1),
+  Duration(seconds: 2),
+  Duration(seconds: 5),
+  Duration(seconds: 10),
+];
+
+/// Child lifetime that proves a run was not a crash loop.
+const Duration supervisorLongLivedChildThreshold = Duration(seconds: 60);
+
+/// Whether a closed stdin pipe must end the supervisor.
+///
+/// A managed launcher hands its supervisor a pipe instead of a terminal, so
+/// end-of-file on that pipe is the launcher's death. Without it the supervisor
+/// outlives its owner: it keeps respawning children against a Home it cannot
+/// own, and wins the Home lock on the next managed restart. An interactive or
+/// unmanaged run must never be shut down this way, which is why the launcher
+/// identity and the terminal state are both required.
+bool endsOnLauncherPipeClose({
+  required bool managedLauncher,
+  required bool hasTerminal,
+}) => managedLauncher && !hasTerminal;
 
 /// What a supervisor does after the supervised daemon exits.
 enum SupervisedChildExit {
@@ -139,12 +180,91 @@ class RestartFailureWindow {
   int get recentFailures => _failures.length;
 }
 
+/// Why a supervised child exit happened, and whether the supervisor continues.
+class SupervisorRestartDecision {
+  const SupervisorRestartDecision({
+    required this.respawn,
+    required this.consecutiveFailures,
+    required this.delay,
+  });
+
+  final bool respawn;
+  final int consecutiveFailures;
+  final Duration delay;
+}
+
+/// Consecutive-failure accounting for the in-process Agent supervisor.
+///
+/// The breaker has to be reachable for the shape that actually happens: a child
+/// that cannot acquire the Home dies in about five seconds, so the supervisor
+/// must count the failures rather than measure their spacing. A child that exits
+/// cleanly, or that ran long enough to be a real run, clears the count so a
+/// healthy runtime never accumulates its way to an exit.
+class SupervisorCrashLoopGuard {
+  SupervisorCrashLoopGuard({
+    this.maxConsecutiveFailures = supervisorMaxConsecutiveFailures,
+    List<Duration> backoff = supervisorRespawnBackoff,
+    this.longLivedThreshold = supervisorLongLivedChildThreshold,
+    Duration flappingWindow = const Duration(seconds: 15),
+    DateTime Function()? clock,
+  }) : backoff = List<Duration>.unmodifiable(
+         backoff.isEmpty ? const [Duration(milliseconds: 500)] : backoff,
+       ),
+       recentFailures = RestartFailureWindow(
+         maxFailures: maxConsecutiveFailures,
+         window: flappingWindow,
+         now: clock,
+       );
+
+  final int maxConsecutiveFailures;
+  final List<Duration> backoff;
+  final Duration longLivedThreshold;
+
+  /// Flapping density, reported beside the consecutive count.
+  ///
+  /// It stays diagnostic: the exit decision is the consecutive count, because a
+  /// wall-clock window is exactly what made the old breaker unreachable.
+  final RestartFailureWindow recentFailures;
+
+  int _consecutiveFailures = 0;
+
+  int get consecutiveFailures => _consecutiveFailures;
+
+  /// Delay before the next respawn, capped at the last configured entry.
+  Duration get respawnDelay {
+    final index = (_consecutiveFailures - 1).clamp(0, backoff.length - 1);
+    return backoff[index];
+  }
+
+  /// Records one child exit and answers whether the supervisor may respawn.
+  SupervisorRestartDecision recordExit({
+    required int exitCode,
+    required Duration lifetime,
+  }) {
+    if (exitCode == 0 || lifetime >= longLivedThreshold) {
+      // A controlled restart or a long-lived run is not a crash loop.
+      _consecutiveFailures = 0;
+      if (exitCode == 0) {
+        return SupervisorRestartDecision(
+          respawn: true,
+          consecutiveFailures: 0,
+          delay: backoff.first,
+        );
+      }
+    }
+    _consecutiveFailures++;
+    recentFailures.recordFailure();
+    return SupervisorRestartDecision(
+      respawn: _consecutiveFailures < maxConsecutiveFailures,
+      consecutiveFailures: _consecutiveFailures,
+      delay: respawnDelay,
+    );
+  }
+}
+
 /// A built-in, cross-platform self-forking development manager that supervises
 /// child process exits and supports manual hot restarts.
 class HotRestartManager {
-  static const int _maxFailuresPerWindow = 5;
-  static const Duration _failureWindow = Duration(seconds: 15);
-
   /// Start the hot restart supervisor wrapping the specified arguments.
   static Future<void> run(List<String> originalArgs) async {
     print('=== 🚀 Sanad Agent Hot Restart Manager Active ===');
@@ -153,13 +273,27 @@ class HotRestartManager {
       'Type "r" and press enter (or just "r" if terminal permits) to trigger a manual Hot Restart.\n',
     );
 
+    // A managed launcher injects its identity; a deliberate manual
+    // `fvm dart run … daemon` does not, and keeps the unmanaged behaviour.
+    final managedLauncher =
+        (Platform.environment['SANAD_DEV_LAUNCHER_ID']?.trim() ?? '')
+            .isNotEmpty;
+    final lifecycle = _openLifecycleLog();
+
+    void recordLifecycle(
+      SupervisorLifecycleEvent event, {
+      int? attempt,
+      String detail = '',
+    }) {
+      lifecycle?.record(event, pid: pid, attempt: attempt, detail: detail);
+    }
+
     Process? childProcess;
     var manualRestartInProgress = false;
     var shuttingDown = false;
-    final failureWindow = RestartFailureWindow(
-      maxFailures: _maxFailuresPerWindow,
-      window: _failureWindow,
-    );
+    DateTime? childStartedAt;
+    var spawnedChildren = 0;
+    final guard = SupervisorCrashLoopGuard();
 
     Future<void> startChild() async {
       if (childProcess != null) {
@@ -197,10 +331,27 @@ class HotRestartManager {
       }
 
       childProcess = spawned;
+      childStartedAt = DateTime.now();
+      spawnedChildren++;
+      // `start` is the supervisor taking ownership once. A later spawn is a
+      // respawn (logged with its attempt) or a requested restart, and repeating
+      // `start` for each of them would invent transitions that never happened.
+      if (spawnedChildren == 1) {
+        recordLifecycle(
+          SupervisorLifecycleEvent.start,
+          detail: managedLauncher
+              ? 'managed child pid ${spawned.pid}'
+              : 'unmanaged',
+        );
+      }
 
       // Listen for exit code to restart automatically if the process exits on its own (e.g. /restart POST)
       spawned.exitCode.then((exitCode) async {
         if (childProcess != spawned) return;
+        final startedAt = childStartedAt;
+        final lifetime = startedAt == null
+            ? Duration.zero
+            : DateTime.now().difference(startedAt);
         // A shutdown in progress owns the exit: restarting here would orphan a
         // fresh daemon behind a supervisor that is already leaving.
         final decision = decideSupervisedChildExit(
@@ -212,22 +363,53 @@ class HotRestartManager {
           print(
             '\n[HotRestartManager] Child requested permanent shutdown. Exiting...',
           );
+          recordLifecycle(SupervisorLifecycleEvent.childStop);
           exit(0);
         }
-        if (exitCode != 0) {
-          final shouldRestart = failureWindow.recordFailure();
-          if (!shouldRestart) {
-            print(
-              '\n=== ⛔ Child process failed more than $_maxFailuresPerWindow times within ${_failureWindow.inSeconds} seconds. Stopping supervisor. ===',
-            );
-            exit(exitCode);
-          }
+        // A supervisor must never spawn a daemon for a launcher that is gone:
+        // the leased Home belongs to whoever holds it, and a respawn racing a
+        // new launcher is how a foreign supervisor ends up owning the runtime.
+        final verdict = await verifySupervisorLauncher();
+        if (verdict.isDenied) {
+          print(
+            '\n=== ⛔ Supervisor stopping instead of respawning: '
+            '${verdict.reason} ===',
+          );
+          recordLifecycle(
+            SupervisorLifecycleEvent.leaseMismatchExit,
+            detail: verdict.reason,
+          );
+          exit(1);
         }
+        final restart = guard.recordExit(
+          exitCode: exitCode,
+          lifetime: lifetime,
+        );
+        if (!restart.respawn) {
+          final reason =
+              'child exited with code $exitCode and failed '
+              '${restart.consecutiveFailures} times in a row.';
+          print('\n=== ⛔ $reason Stopping supervisor. ===');
+          recordLifecycle(
+            SupervisorLifecycleEvent.breakerExit,
+            attempt: restart.consecutiveFailures,
+            detail: reason,
+          );
+          exit(exitCode);
+        }
+        final delay = restart.delay;
         print(
           '\n=== ⚠️ Child process exited with code $exitCode. Supervisor auto-restarting... ===',
         );
+        recordLifecycle(
+          SupervisorLifecycleEvent.respawn,
+          attempt: restart.consecutiveFailures,
+          detail:
+              'child exit code $exitCode after '
+              '${lifetime.inMilliseconds}ms, waiting ${delay.inMilliseconds}ms',
+        );
         childProcess = null;
-        await Future.delayed(const Duration(milliseconds: 500));
+        await Future.delayed(delay);
         await startChild();
       });
     }
@@ -271,38 +453,18 @@ class HotRestartManager {
       }
     }
 
-    // Read from stdin to trigger restart manually
-    final isDaemon =
-        originalArgs.contains('daemon') || originalArgs.contains('start');
-    if (isDaemon) {
-      try {
-        if (stdin.hasTerminal) {
-          try {
-            stdin.lineMode = false;
-            stdin.echoMode = false;
-          } catch (e) {
-            // Keep going even if raw mode couldn't be set (e.g., on Windows Terminal/CMD)
-          }
-        }
-        stdin.listen((List<int> bytes) async {
-          for (final byte in bytes) {
-            final char = String.fromCharCode(byte).toLowerCase();
-            if (char == 'r') {
-              await requestManualRestart();
-            }
-          }
-        });
-      } catch (e) {
-        print(
-          '[HotRestartManager] Warning: Stdin listener could not be initialized: $e',
-        );
-      }
-    }
-
-    Future<void> shutdown(ProcessSignal signal) async {
+    Future<void> shutdown([ProcessSignal? signal]) async {
       if (shuttingDown) return;
       shuttingDown = true;
       print('\n[HotRestartManager] Shutting down cleanly...');
+      recordLifecycle(
+        signal == null
+            ? SupervisorLifecycleEvent.launcherExit
+            : SupervisorLifecycleEvent.shutdown,
+        detail: signal == null
+            ? 'the launcher stdin pipe closed'
+            : 'signal ${signal.toString()}',
+      );
       // Restore the terminal before exit: raw mode was enabled for the 'r'
       // key listener, and without this the host terminal stays corrupted
       // (Backspace prints ^H) after Ctrl+C, especially on Windows.
@@ -326,14 +488,68 @@ class HotRestartManager {
       // A supervisor that exits 0 after a signal looks like a requested clean
       // stop: `launchd` keeps `KeepAlive { SuccessfulExit = false }`, so the
       // service would stay down after a stray SIGTERM. Report the signal the
-      // way a signal death would (143 for SIGTERM, 130 for SIGINT).
-      exit(signalExitCode(signal));
+      // way a signal death would (143 for SIGTERM, 130 for SIGINT). A closed
+      // launcher pipe is not a signal: nothing supervises that exit status, and
+      // the supervisor did exactly what its launcher's death asked.
+      exit(signal == null ? 0 : signalExitCode(signal));
+    }
+
+    // Read from stdin to trigger restart manually
+    final isDaemon =
+        originalArgs.contains('daemon') || originalArgs.contains('start');
+    if (isDaemon) {
+      try {
+        if (stdin.hasTerminal) {
+          try {
+            stdin.lineMode = false;
+            stdin.echoMode = false;
+          } catch (e) {
+            // Keep going even if raw mode couldn't be set (e.g., on Windows Terminal/CMD)
+          }
+        }
+        stdin.listen(
+          (List<int> bytes) async {
+            for (final byte in bytes) {
+              final char = String.fromCharCode(byte).toLowerCase();
+              if (char == 'r') {
+                await requestManualRestart();
+              }
+            }
+          },
+          // A launcher-owned supervisor reads the launcher's pipe. Its end (EOF)
+          // is the launcher's death: without this, the supervisor outlives its
+          // owner, respawns children against a Home it cannot own, and steals
+          // the lock on the next managed restart. Manual and interactive runs
+          // have no launcher identity, so their behaviour is unchanged.
+          onDone:
+              endsOnLauncherPipeClose(
+                managedLauncher: managedLauncher,
+                hasTerminal: stdin.hasTerminal,
+              )
+              ? () => unawaited(shutdown())
+              : null,
+        );
+      } catch (e) {
+        print(
+          '[HotRestartManager] Warning: Stdin listener could not be initialized: $e',
+        );
+      }
     }
 
     // Clean shutdown of child on terminal or supervisor termination.
-    ProcessSignal.sigint.watch().listen(shutdown);
+    ProcessSignal.sigint.watch().listen((signal) => shutdown(signal));
     if (!Platform.isWindows) {
-      ProcessSignal.sigterm.watch().listen(shutdown);
+      ProcessSignal.sigterm.watch().listen((signal) => shutdown(signal));
+    }
+  }
+
+  /// Opens the bounded lifecycle log, or null when the Home is unknown.
+  static SupervisorLifecycleLog? _openLifecycleLog() {
+    try {
+      return SupervisorLifecycleLog(home: getSanadHome());
+    } on Object {
+      // The supervisor must start even when no Home can be resolved.
+      return null;
     }
   }
 }
