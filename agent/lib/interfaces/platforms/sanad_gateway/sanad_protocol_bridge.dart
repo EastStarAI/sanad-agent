@@ -155,6 +155,7 @@ class SanadProtocolBridge {
             ? getIt<CompactionBoundaryRepository>()
             : null,
         bridge: this,
+        broadcastFamilyEvent: _publishFamilyEvent,
       );
 
   WorkspaceCommandHandler get _workspaceHandler =>
@@ -219,6 +220,16 @@ class SanadProtocolBridge {
     __remoteCliHandler = handler;
   }
 
+  /// Publishes one session-independent canonical [event] to every Sanad client
+  /// on every transport. Command handlers receive this seam instead of
+  /// resolving the gateway themselves, so a family-wide announcement has one
+  /// owner and a command's own `emitEnvelope` stays requester-scoped.
+  void _publishFamilyEvent(CanonicalEvent event) {
+    if (getIt.isRegistered<GatewayManager>()) {
+      getIt<GatewayManager>().publishFamilyEvent(event);
+    }
+  }
+
   SecretCommandHandler get _secretHandler =>
       __secretHandler ??= SecretCommandHandler(
         catalog: getIt.isRegistered<UserSecretCatalog>()
@@ -232,11 +243,7 @@ class SanadProtocolBridge {
                       ),
               ),
         bridge: this,
-        broadcastFamilyEvent: (event) {
-          if (getIt.isRegistered<GatewayManager>()) {
-            getIt<GatewayManager>().publishFamilyEvent(event);
-          }
-        },
+        broadcastFamilyEvent: _publishFamilyEvent,
       );
 
   void setSecretCommandHandlerForTesting(SecretCommandHandler? handler) {
@@ -254,11 +261,7 @@ class SanadProtocolBridge {
             ? getIt<Config>().scheduleTimezone
             : 'local',
         bridge: this,
-        broadcastFamilyEvent: (event) {
-          if (getIt.isRegistered<GatewayManager>()) {
-            getIt<GatewayManager>().publishFamilyEvent(event);
-          }
-        },
+        broadcastFamilyEvent: _publishFamilyEvent,
       );
 
   ScheduleQueryHandler get _scheduleQueryHandler =>

@@ -276,6 +276,18 @@ requires transport-derived device-owner authority, and a Client-created schedule
     `schedule.runs`. It is never written to model history and nothing disables the schedule.
 
 
+#### B.5. Session Deletion
+- **Command: `delete_session`** (Client or CLI → Agent)
+  - Deletes the session row and its attachment files, then emits two events.
+  - Response Event (requester only, `delivery.scope = origin`): `session_deleted` with
+    `request_id` and `session_id`, so the requester can correlate its own command.
+  - Family broadcast (`delivery.scope = platform_family`, `sanad_client`): `session_deleted` with
+    `session_id` only. A deletion is not a per-requester detail: a session removed by the `sanad` CLI or by
+    another device must disappear from every connected Client without a restart or a manual refresh.
+  - The announcement carries no request identity, so it cannot release another client's in-flight send,
+    and applying both copies is idempotent for the requesting Client.
+
+
 #### C. Reverse Tool Result
 - **Event: `tool_result` (Client → Backend)**
   - Dispatches execution output of client-side tools back to the backend.

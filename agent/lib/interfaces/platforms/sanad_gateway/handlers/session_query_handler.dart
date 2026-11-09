@@ -40,6 +40,7 @@ import 'session_history/session_history_projector.dart';
 class SessionQueryHandler {
   final SessionManager _sessionManager;
   final SanadProtocolBridge _bridge;
+  final void Function(CanonicalEvent event)? _broadcastFamilyEvent;
   final SessionRunOrchestrator? _orchestrator;
   final RuntimeRecoveryService? _runtimeRecovery;
   final PersistedRuntimeStateRepository? _persistedState;
@@ -54,6 +55,7 @@ class SessionQueryHandler {
   SessionQueryHandler({
     required SessionManager sessionManager,
     required SanadProtocolBridge bridge,
+    void Function(CanonicalEvent event)? broadcastFamilyEvent,
     SessionRunOrchestrator? orchestrator,
     RuntimeRecoveryService? runtimeRecovery,
     PersistedRuntimeStateRepository? persistedState,
@@ -65,6 +67,7 @@ class SessionQueryHandler {
     CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
+       _broadcastFamilyEvent = broadcastFamilyEvent,
        _orchestrator = orchestrator,
        _runtimeRecovery = runtimeRecovery,
        _persistedState = persistedState,
@@ -580,6 +583,13 @@ class SessionQueryHandler {
     return _sessionUpdatedEnvelope(sessionId, requestId: requestId);
   }
 
+  /// Deletes a session and announces the deletion to the client family.
+  ///
+  /// A deletion is not a detail of the requesting transport: a session removed
+  /// by the CLI, by another device, or by any other client must disappear from
+  /// every connected client, so the family announcement is published beside
+  /// the requester's own correlated acknowledgement instead of relying on
+  /// origin delivery.
   Map<String, dynamic>? buildDeleteSessionEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final requestId = event.payload['request_id'] as String?;
@@ -589,6 +599,13 @@ class SessionQueryHandler {
     }
 
     _sessionManager.deleteSession(sessionId);
+    _broadcastFamilyEvent?.call(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionDeleted,
+        sessionId: sessionId,
+        payload: {'session_id': sessionId},
+      ),
+    );
 
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
