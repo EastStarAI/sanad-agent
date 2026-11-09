@@ -189,9 +189,11 @@ class RuntimeRecoveryService {
 
         final effectiveActions = actionsList;
 
-        // A restored notice carries no retry counters: the persisted row does
-        // not store them, and the restored resume timer is itself the proof that
-        // another attempt is scheduled.
+        // A restored notice keeps the attempt counters it was persisted with, so
+        // a turn recovered after a restart still reports `retrying (n/N)` and
+        // every observer keeps the budget that decides blocked vs retrying. A
+        // row written before the counters existed restores null, which is
+        // "unknown budget" and the previous behaviour.
         final restoredNotice = RuntimeNotice(
           sessionId: sessionId,
           requestId: notice.requestId,
@@ -205,6 +207,8 @@ class RuntimeRecoveryService {
           providerDisplayName: notice.providerDisplayName,
           resumeAt: resumeAt,
           limit: notice.limitRpm,
+          retryAttempt: notice.retryAttempt,
+          retryBudget: notice.retryBudget,
           actions: effectiveActions,
           createdAt:
               DateTime.tryParse(notice.createdAt) ?? DateTime.now().toUtc(),
@@ -726,6 +730,8 @@ class RuntimeRecoveryService {
         retryAfterMs: notice.retryAfterMs,
         resumeAt: notice.resumeAt?.toUtc().toIso8601String(),
         limitRpm: notice.limit,
+        retryAttempt: notice.retryAttempt,
+        retryBudget: notice.retryBudget,
         actions: notice.actions.map((a) => a.name).toList(),
         createdAt: notice.createdAt,
       );

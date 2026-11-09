@@ -235,6 +235,8 @@ class PersistedRuntimeStateRepository {
     int? retryAfterMs,
     String? resumeAt,
     int? limitRpm,
+    int? retryAttempt,
+    int? retryBudget,
     List<String> actions = const [],
     DateTime? createdAt,
   }) => _notices.upsertNotice(
@@ -251,6 +253,8 @@ class PersistedRuntimeStateRepository {
     retryAfterMs: retryAfterMs,
     resumeAt: resumeAt,
     limitRpm: limitRpm,
+    retryAttempt: retryAttempt,
+    retryBudget: retryBudget,
     actions: actions,
     createdAt: createdAt,
   );
@@ -758,6 +762,16 @@ class PersistedRuntimeNotice {
   final int? retryAfterMs;
   final String? resumeAt;
   final int? limitRpm;
+
+  /// 1-based automatic-retry attempt the notice describes, when the daemon
+  /// scheduled one. Null for a row written before the counter existed.
+  final int? retryAttempt;
+
+  /// Automatic-retry budget for the notice's reason, when the daemon scheduled
+  /// an attempt. Together with [retryAttempt] it is what keeps a restarted
+  /// daemon's `retrying (n/N)` intact instead of degrading to bare `retrying`.
+  final int? retryBudget;
+
   final List<String> actions;
   final String createdAt;
   final String updatedAt;
@@ -776,6 +790,8 @@ class PersistedRuntimeNotice {
     this.retryAfterMs,
     this.resumeAt,
     this.limitRpm,
+    this.retryAttempt,
+    this.retryBudget,
     this.actions = const [],
     required this.createdAt,
     required this.updatedAt,
@@ -796,6 +812,8 @@ class PersistedRuntimeNotice {
       retryAfterMs: row['retry_after_ms'] as int?,
       resumeAt: row['resume_at'] as String?,
       limitRpm: row['limit_rpm'] as int?,
+      retryAttempt: row['retry_attempt'] as int?,
+      retryBudget: row['retry_budget'] as int?,
       actions: _decodeJsonList(row['actions'] as String? ?? '[]'),
       createdAt:
           row['created_at'] as String? ??
@@ -808,12 +826,18 @@ class PersistedRuntimeNotice {
 
   /// Converts this persisted notice into a transport-safe payload matching
   /// `RuntimeNotice.toPayload()`.
+  ///
+  /// The vocabulary is the live notice's, not the row's: a recovery notice
+  /// persists a `RuntimeFailureReason` name (`upstreamRateLimit`), while the
+  /// wire value every reader classifies on is its snake_case form
+  /// (`upstream_rate_limit`). Emitting the row's spelling here made the durable
+  /// projection disagree with the broadcast that produced it.
   Map<String, dynamic> toPayload() => {
     'session_id': sessionId,
     if (requestId != null) 'request_id': requestId,
     if (runId != null) 'run_id': runId,
     'status': status,
-    'reason': reason,
+    'reason': _wireValue(reason),
     'severity': severity,
     'title': title,
     'message': message,
@@ -823,8 +847,27 @@ class PersistedRuntimeNotice {
     if (retryAfterMs != null) 'retry_after_ms': retryAfterMs,
     if (resumeAt != null) 'resume_at': resumeAt,
     if (limitRpm != null) 'limit': {'requests_per_minute': limitRpm},
+    if (retryAttempt != null) 'retry_attempt': retryAttempt,
+    if (retryBudget != null) 'retry_budget': retryBudget,
     'actions': actions,
   };
+}
+
+/// The wire spelling of a persisted status/reason token.
+///
+/// Recovery notices persist enum names (`upstreamRateLimit`) and compaction
+/// warnings persist an already snake_case `wireValue`, so this is idempotent for
+/// the latter and the live notice's vocabulary for the former.
+String _wireValue(String token) {
+  final out = StringBuffer();
+  for (var i = 0; i < token.length; i++) {
+    final ch = token[i];
+    if (ch.toUpperCase() == ch && ch.toLowerCase() != ch && i > 0) {
+      out.write('_');
+    }
+    out.write(ch.toLowerCase());
+  }
+  return out.toString();
 }
 
 Map<String, dynamic> _decodeJsonMap(String raw) {

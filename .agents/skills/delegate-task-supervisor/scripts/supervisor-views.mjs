@@ -161,7 +161,13 @@ function resolveSessionDetails(task, manifest) {
   const rawStatus = terminalStates.has(task.status)
     ? task.status
     : (result?.status || task.status);
-  const cause = result?.cause || task.cause || (rawStatus === 'timeout' ? 'timeout' : null);
+  // The daemon's own reason is the cause when nothing classified the failure:
+  // a retry that never produced an artifact used to report an unnamed cause
+  // instead of the `upstream_rate_limit` the daemon stated (2026-11-09). It is
+  // surfaced verbatim, so a reader can match it to the notice it came from.
+  const cause = result?.cause || task.cause || task.daemonRetryReason
+    || result?.daemonRetryReason
+    || (rawStatus === 'timeout' ? 'timeout' : null);
   let stateSince = result?.state_since || result?.stateSince || null;
   if (!stateSince && task.status === rawStatus) stateSince = task.stateSince || null;
   if (!stateSince && terminalStates.has(rawStatus)) {
@@ -391,12 +397,15 @@ function briefTaskLine(manifest, task) {
   if (retry.exhausted) parts.push('RETRY_EXHAUSTED');
   if (retry.launchAttempts > 0) parts.push(`launch-retries ${retry.launchAttempts}`);
   // The daemon's own retry counters. While one is pending the task is live, so
-  // the line names the attempt the runtime is running instead of leaving a bare
-  // `retrying` status that a reader has to interpret.
+  // the line names the attempt the runtime is running and the cause it stated,
+  // instead of leaving a bare `retrying` status a reader has to interpret.
   if (task.daemonRetry) {
-    parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}`);
+    const reason = task.daemonRetryReason ? ` ${task.daemonRetryReason}` : '';
+    parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}${reason}`);
   } else if (task.status === 'retrying') {
-    parts.push('daemon-retry');
+    parts.push(task.daemonRetryReason
+      ? `daemon-retry ${task.daemonRetryReason}`
+      : 'daemon-retry');
   }
   const result = taskResultForView(task);
   if (TERMINAL_STATUSES.has(task.status) || result) {

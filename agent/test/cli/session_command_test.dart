@@ -2350,6 +2350,8 @@ void main() {
         String sessionId = 'sess-blocked',
         String? noticeStatus = 'blocked',
         String snapshotState = 'blocked',
+        int? retryAttempt,
+        int? retryBudget,
       }) {
         client.historyToReturn = {
           'payload': {
@@ -2372,6 +2374,8 @@ void main() {
                 'title': 'Request timed out',
                 'message': 'The request to OpenCode Go took too long to '
                     'complete.',
+                'retry_attempt': ?retryAttempt,
+                'retry_budget': ?retryBudget,
               },
             'messages': [],
           },
@@ -2455,6 +2459,66 @@ void main() {
         expect(
           stdoutBuf.toString(),
           contains('Retry accepted for session sess-blocked'),
+        );
+      });
+
+      test(
+        'accepts a scheduled wait whose durable owner is still resuming',
+        () async {
+          // 2026-11-09: the daemon held a `waiting` rate-limit notice while the
+          // ownership row it had written was still `resuming`, and the command
+          // refused both — "is not blocked or waiting" — for a turn the daemon
+          // was in fact going to resume.
+          useRecoverySession(
+            noticeStatus: 'waiting',
+            snapshotState: 'resuming',
+            retryAttempt: 1,
+            retryBudget: 3,
+          );
+          final runner = buildRunner();
+          final exitCode = await runner.run([
+            'session',
+            'retry',
+            'sess-blocked',
+            '--json',
+          ]);
+
+          expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+          expect(client.retryCallCount, equals(1));
+          final decoded =
+              jsonDecode(stdoutBuf.toString().trim()) as Map<String, dynamic>;
+          expect(decoded['status'], equals('retrying'));
+        },
+      );
+
+      test('accepts a scheduled wait recovered without attempt counters',
+          () async {
+        useRecoverySession(noticeStatus: 'waiting', snapshotState: 'resuming');
+        final runner = buildRunner();
+        final exitCode = await runner.run(['session', 'retry', 'sess-blocked']);
+
+        expect(exitCode, equals(SessionRetryCommand.exitAccepted));
+        expect(client.retryCallCount, equals(1));
+      });
+
+      test('refuses a turn that is already resuming', () async {
+        useRecoverySession(
+          noticeStatus: 'resuming',
+          snapshotState: 'resuming',
+        );
+        final runner = buildRunner();
+        final exitCode = await runner.run([
+          'session',
+          'retry',
+          'sess-blocked',
+          '--json',
+        ]);
+
+        expect(exitCode, equals(SessionRetryCommand.exitNotBlocked));
+        expect(
+          client.retryCallCount,
+          isZero,
+          reason: 'an attempt is already in flight, so a retry is a no-op',
         );
       });
 

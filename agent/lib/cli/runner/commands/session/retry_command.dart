@@ -4,6 +4,7 @@ import 'dart:convert' hide json;
 import 'package:uuid/uuid.dart';
 
 import '../../../client/local_gateway_cli_client.dart';
+import '../../../models/runtime_retry_state.dart';
 import 'session_subcommand_base.dart';
 
 /// Non-interactive runtime recovery retry (`sanad session retry`).
@@ -206,13 +207,30 @@ class SessionRetryCommand extends SessionSubcommandBase {
 
   /// Whether the projection proves the session is waiting for a recovery.
   ///
-  /// The daemon's own recovery notice is authoritative: `blocked` waits for an
-  /// explicit Retry/Change Provider/Stop, and `waiting` waits on a resume timer
-  /// a manual retry may shorten. The durable execution snapshot is the second
-  /// signal, because restored blocked work can be projected before its notice is
-  /// rehydrated. Anything else — idle, queued, running, resuming, stopping — is
-  /// not a retry target, and this command sends nothing for it.
+  /// The daemon's own recovery state is authoritative, and [RuntimeRetryState]
+  /// is the one classifier `session show` already reads, so the command never
+  /// invents a second rule:
+  ///
+  /// * a `waiting` notice waits on a resume timer a manual retry may shorten,
+  ///   whatever durable state the daemon published next to it — a scheduled
+  ///   rate-limit retry is written while its ownership row is still `resuming`,
+  ///   which is the shape that was refused as "not blocked or waiting"
+  ///   (2026-11-09);
+  /// * a retryable failure with budget left is already being retried;
+  /// * a parked turn waits for an explicit Retry/Change Provider/Stop.
+  ///
+  /// A `resuming` notice on its own is not a retry target: the daemon has
+  /// already restarted the attempt. Older daemons publish neither notice
+  /// counters nor a classification, so the raw notice status and durable
+  /// snapshot remain the fallback evidence they always were.
   static bool _isRetryable(Map<String, dynamic> projection) {
+    final retry = RuntimeRetryState.fromProjection(projection);
+    final schedulesWait =
+        retry.noticeStatus == 'waiting' ||
+        (retry.noticeStatus == null && retry.executionState == 'waiting');
+    if (schedulesWait || retry.hasRetryBudgetLeft || retry.isTrulyBlocked) {
+      return true;
+    }
     final notice = projection['runtime_notice'];
     final noticeStatus = notice is Map ? notice['status']?.toString() : null;
     if (noticeStatus == 'blocked' || noticeStatus == 'waiting') return true;

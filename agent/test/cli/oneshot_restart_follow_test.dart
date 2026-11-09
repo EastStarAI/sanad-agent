@@ -920,6 +920,144 @@ void main() {
     });
 
     test(
+      'a re-attached turn with a scheduled rate-limit retry journals retrying',
+      () async {
+        final mockSocket1 = MockWebSocket();
+        final mockSocket2 = MockWebSocket();
+
+        final client1 = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+          token: 'test-token',
+          autoReconnect: false,
+          connector: (uri, {headers, timeout}) async => mockSocket1,
+        );
+        await client1.connect();
+
+        final client2 = LocalGatewayCliClient(
+          gatewayUri: Uri.parse('ws://127.0.0.1:58085/gateway'),
+          token: 'test-token',
+          autoReconnect: false,
+          connector: (uri, {headers, timeout}) async => mockSocket2,
+        );
+
+        final events = <RunLifecycleEvent>[];
+        final runner = SanadCommandRunner(
+          stdoutSink: stdoutBuffer,
+          stderrSink: stderrBuffer,
+          client: client1,
+          clientFactory: ({sanadHomeOverride, urlOverride}) async {
+            await client2.connect();
+            return client2;
+          },
+          eventSink: events.add,
+          stdinReader: () async => null,
+        );
+
+        final runFuture = runner.run([
+          'run',
+          'Survive a rate-limited provider after a restart',
+          '--session',
+          'sess-reattached-retry',
+          '--reconnect-timeout',
+          '5',
+          '--execution-root',
+          Directory.current.path,
+        ]);
+
+        final sentRaw = await mockSocket1.nextSentMessage();
+        expect(
+          (jsonDecode(sentRaw) as Map<String, dynamic>)['command'],
+          'think',
+        );
+        mockSocket1.simulateClose();
+
+        final historyRaw = await mockSocket2.nextSentMessage();
+        final historyEnv = jsonDecode(historyRaw) as Map<String, dynamic>;
+
+        // The daemon holds a scheduled rate-limit retry for this turn. Only the
+        // durable projection says so: the live notice went to the socket that
+        // died with the previous transport.
+        mockSocket2.emitFromServer(
+          jsonEncode({
+            'type': 'device_response',
+            'request_id': historyEnv['request_id'],
+            'payload': {
+              'session_id': 'sess-reattached-retry',
+              'execution_snapshot': {
+                'session_id': 'sess-reattached-retry',
+                'state': 'waiting',
+                'request_id': null,
+                'revision': 3,
+                'updated_at': DateTime.now().toUtc().toIso8601String(),
+              },
+              'runtime_notice': {
+                'session_id': 'sess-reattached-retry',
+                'status': 'waiting',
+                'reason': 'upstream_rate_limit',
+                'severity': 'warning',
+                'title': 'OpenCodeGo Rate limit reached',
+                'message':
+                    'Too many requests to OpenCodeGo. Wait or switch '
+                    'provider. Retrying automatically in 30s '
+                    '(attempt 1 of 3).',
+                'retry_attempt': 1,
+                'retry_budget': 3,
+                'retry_after_ms': 30000,
+                'resume_at': DateTime.now()
+                    .toUtc()
+                    .add(const Duration(seconds: 30))
+                    .toIso8601String(),
+                'actions': ['stop', 'retry', 'changeProvider'],
+              },
+            },
+          }),
+        );
+
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+
+        // The retried attempt finishes normally, so the run exits 0 rather than
+        // reading a scheduled wait as a failed turn.
+        mockSocket2.emitFromServer(
+          jsonEncode({
+            'type': 'device_event',
+            'session_id': 'sess-reattached-retry',
+            'event': {
+              'type': 'turn_complete',
+              'session_id': 'sess-reattached-retry',
+              'payload': {'text': 'Retried request completed.'},
+            },
+          }),
+        );
+
+        final exitCode = await runFuture;
+        expect(exitCode, 0);
+        expect(stdoutBuffer.toString(), contains('Retried request completed.'));
+        expect(
+          stderrBuffer.toString(),
+          contains('retrying (1/3)'),
+          reason: 'a re-attached scheduled retry is progress a reader can see',
+        );
+        expect(stderrBuffer.toString(), isNot(contains('Error:')));
+
+        final retryEvent = events.firstWhere((e) => e.type == 'retrying');
+        expect(retryEvent.data['status'], 'retrying');
+        expect(retryEvent.data['retry_attempt'], 1);
+        expect(retryEvent.data['retry_budget'], 3);
+        expect(retryEvent.data['code'], 'upstream_rate_limit');
+        expect(
+          retryEvent.data['cause'],
+          'rate_limit',
+          reason: 'the retry policy reads the supervisor cause vocabulary',
+        );
+        expect(
+          events.where((e) => e.type == 'retrying'),
+          hasLength(1),
+          reason: 'one lifecycle record per re-attached turn, not one per poll',
+        );
+      },
+    );
+
+    test(
       'turn lost after restart exits 1 with cause turn_lost',
       () async {
         final mockSocket1 = MockWebSocket();
