@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:dbus/dbus.dart';
 
 import 'agent_secret_store_contract.dart';
+import 'secret_store_kind.dart';
 
 abstract interface class LinuxSecretServiceClient {
   Future<String?> read(Map<String, String> attributes);
@@ -17,17 +18,34 @@ abstract interface class LinuxSecretServiceClient {
 class LinuxSecretServiceAgentSecretStore implements AgentSecretStore {
   LinuxSecretServiceAgentSecretStore({
     required this.scope,
+    this.kind = SecretStoreKind.app,
     LinuxSecretServiceClient? client,
   }) : _client = client ?? DBusLinuxSecretServiceClient();
 
   final String scope;
+
+  /// The namespace these items belong to.
+  ///
+  /// A non-production kind adds a `runtime` attribute, which is how one Home
+  /// can hold two runtimes' items without either filter matching the other's:
+  /// production items predate that attribute and therefore never match a
+  /// development filter.
+  final SecretStoreKind kind;
+
   final LinuxSecretServiceClient _client;
 
   Map<String, String> _attributes(String key) => {
     'application': 'sanad-agent',
     'home': scope,
     'entry': key,
+    'runtime': ?kind.secretServiceRuntime,
   };
+
+  /// The human-readable item label. It names the namespace so a keyring UI shows
+  /// which runtime owns an entry, and it never carries a value.
+  String get _label => kind.isApp
+      ? 'Sanad Agent credential'
+      : 'Sanad Agent credential (${kind.wireName})';
 
   @override
   Future<String?> read(String key) =>
@@ -38,7 +56,7 @@ class LinuxSecretServiceAgentSecretStore implements AgentSecretStore {
     'write',
     () => _client.write(
       attributes: _attributes(key),
-      label: 'Sanad Agent credential',
+      label: _label,
       value: value,
     ),
   );

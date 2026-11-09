@@ -58,6 +58,8 @@ void main() {
     await writeHomeFile('.local_token.lock', 'lock');
     await writeHomeFile('provider_secrets.json', '{"key":"secret"}');
     await writeHomeFile('agent_credentials.json', '{"token":"secret"}');
+    await writeHomeFile('agent_credentials.dev.json', '{"token":"secret"}');
+    await writeHomeFile('agent_credentials.dev.lock', 'lock');
     await writeHomeFile('logs/agent.log', 'noise');
     await writeHomeFile('dev/runtime-launcher-58092.json', '{}');
     await writeHomeFile('sessions/one.json', '{}');
@@ -99,6 +101,9 @@ void main() {
         'mcp_secrets.json',
         'auth.json',
         'agent_credentials.json',
+        'agent_credentials.dev.json',
+        'agent_credentials.dev.lock',
+        'agent_credentials.test.json',
         'agent_credential_backend.json',
         'logs/agent.log',
         'dev/runtime-launcher-58092.json',

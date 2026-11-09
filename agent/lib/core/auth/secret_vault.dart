@@ -9,7 +9,6 @@ import 'package:uuid/uuid.dart';
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
 import '../sanad_home/test_runtime_isolation.dart';
-import 'agent_secret_namespaces.dart';
 import 'agent_secret_store.dart';
 
 export 'secret_vault_policy.dart';
@@ -96,7 +95,7 @@ class SecretVaultNamespace {
 /// the vault always wins over a legacy value. An older Agent on the same Home
 /// no longer finds these secrets after a successful migration.
 class SecretVaults implements SecretVaultReadiness {
-  SecretVaults._(this.store, this._home)
+  SecretVaults._(this.store, this._home, this.kind)
     : providers = SecretVaultNamespace._(
         AgentSecretNamespaces.providerPrefix,
         AgentSecretNamespaces.providerIndexKey,
@@ -186,6 +185,18 @@ class SecretVaults implements SecretVaultReadiness {
   }
 
   final AgentSecretStore store;
+
+  /// The secret namespace this vault's store addresses.
+  ///
+  /// A production runtime keeps [SecretStoreKind.app]; a linked-worktree runtime
+  /// declares [SecretStoreKind.dev], and a test runtime resolves
+  /// [SecretStoreKind.test]. The namespace never changes which Home is read —
+  /// the account still carries the Home hash — it only decides which service,
+  /// attribute, or file name this Home's items live under.
+  final SecretStoreKind kind;
+
+  /// The non-secret item label diagnostics and `/health` report.
+  String get secretStoreService => kind.service;
   final SanadHomeBootstrap _home;
   final SecretVaultNamespace providers;
   final SecretVaultNamespace mcp;
@@ -244,17 +255,23 @@ class SecretVaults implements SecretVaultReadiness {
     _stateReported = true;
     switch (_status) {
       case SecretVaultStatus.available:
-        _logger.info('Agent vault available.');
+        _logger.info('Agent vault available$_namespaceSuffix.');
       case SecretVaultStatus.opening:
         _logger.info(
-          'Agent vault is still opening; provider keys, MCP secrets, user '
-          'secrets and the Device Credential become readable when the '
-          'operating-system credential store answers.',
+          'Agent vault is still opening$_namespaceSuffix; provider keys, MCP '
+          'secrets, user secrets and the Device Credential become readable when '
+          'the operating-system credential store answers.',
         );
       case SecretVaultStatus.unavailable:
         _logger.warning(unavailableStateMessage);
     }
   }
+
+  /// Names the situation only when it is not the production namespace, so a
+  /// production start logs exactly what it always did.
+  String get _namespaceSuffix => kind.isApp
+      ? ''
+      : ' (${kind.wireName} namespace $secretStoreService)';
 
   /// The one actionable line a closed vault produces.
   ///
@@ -269,7 +286,7 @@ class SecretVaults implements SecretVaultReadiness {
     final recovery = Platform.isMacOS
         ? 'Recovery: run `sanad vault authorize` in a terminal and approve the '
               'one-time macOS Keychain authorization for '
-              '$agentVaultKeychainService; if no dialog appears, open Keychain '
+              '$secretStoreService; if no dialog appears, open Keychain '
               'Access, select those items under the login keychain, and add the '
               'Agent binary to Access Control.'
         : 'Recovery: run `sanad vault authorize` in a session where the '
@@ -314,8 +331,11 @@ class SecretVaults implements SecretVaultReadiness {
   /// Opening clears `SecretVaultPolicy.vaultSkipped`, because a process with an
   /// open vault does have credential access even when its entry point deferred
   /// the open — `run` is the command that does so.
-  static Future<SecretVaults> open({AgentSecretStore? store}) async {
-    final vaults = beginOpen(store: store);
+  static Future<SecretVaults> open({
+    AgentSecretStore? store,
+    SecretStoreKind? kind,
+  }) async {
+    final vaults = beginOpen(store: store, kind: kind);
     await vaults.ready;
     return vaults;
   }
@@ -329,16 +349,20 @@ class SecretVaults implements SecretVaultReadiness {
   /// [AgentSecretStoreUnavailableReason.vaultNotReady] instead of reporting a
   /// value as absent. A process that already opened the vault gets that
   /// instance back unchanged.
-  static SecretVaults beginOpen({AgentSecretStore? store}) {
+  static SecretVaults beginOpen({
+    AgentSecretStore? store,
+    SecretStoreKind? kind,
+  }) {
     _rejectUnisolatedTestOpen();
     SecretVaultPolicy.markVaultOpened();
     final key = _canonical(getSanadHome());
     final existing = _opened[key];
     if (existing != null) return existing;
-    final backend = _createBackend(store);
+    final backend = _createBackend(store, kind);
     final vaults = SecretVaults._(
       backend.store ?? const _UnavailableSecretStore(),
       SanadHomeBootstrap.identity(),
+      backend.kind,
     );
     if (backend.store == null) {
       vaults._status = SecretVaultStatus.unavailable;
@@ -354,13 +378,34 @@ class SecretVaults implements SecretVaultReadiness {
   }
 
   /// Creates this process's backend, or the failure that replaced it.
-  static ({AgentSecretStore? store, AgentSecretStoreUnavailable? failure})
-  _createBackend(AgentSecretStore? provided) {
-    if (provided != null) return (store: provided, failure: null);
+  ///
+  /// The resolved namespace travels with the store so `/health`, the state line
+  /// and the recovery text name the namespace this process really addresses.
+  /// An injected store (a test fake) reports [kind] or the production namespace.
+  static ({
+    AgentSecretStore? store,
+    AgentSecretStoreUnavailable? failure,
+    SecretStoreKind kind,
+  })
+  _createBackend(AgentSecretStore? provided, SecretStoreKind? kind) {
+    if (provided != null) {
+      return (
+        store: provided,
+        failure: null,
+        kind: kind ?? SecretStoreKind.app,
+      );
+    }
+    final resolved =
+        kind ??
+        resolveSecretStoreKind(isTestRuntime: isSecretStoreTestRuntime()).kind;
     try {
-      return (store: createAgentSecretStore(), failure: null);
+      return (
+        store: createAgentSecretStore(kind: resolved),
+        failure: null,
+        kind: resolved,
+      );
     } on AgentSecretStoreUnavailable catch (error) {
-      return (store: null, failure: error);
+      return (store: null, failure: error, kind: resolved);
     }
   }
 
@@ -383,13 +428,17 @@ class SecretVaults implements SecretVaultReadiness {
   /// Opens an instance that is not registered for this process (another
   /// process's view in tests), and waits for it. Also clears
   /// `SecretVaultPolicy.vaultSkipped`, for the same reason as [open].
-  static Future<SecretVaults> openDetached({AgentSecretStore? store}) async {
+  static Future<SecretVaults> openDetached({
+    AgentSecretStore? store,
+    SecretStoreKind? kind,
+  }) async {
     _rejectUnisolatedTestOpen();
     SecretVaultPolicy.markVaultOpened();
-    final backend = _createBackend(store);
+    final backend = _createBackend(store, kind);
     final vaults = SecretVaults._(
       backend.store ?? const _UnavailableSecretStore(),
       SanadHomeBootstrap.identity(),
+      backend.kind,
     );
     vaults._status = backend.store == null
         ? SecretVaultStatus.unavailable

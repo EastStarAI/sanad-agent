@@ -5,6 +5,7 @@ import '../sanad_home/sanad_home_bootstrap.dart';
 import '../sanad_home/sanad_home_boundary.dart';
 import 'agent_secret_store_contract.dart';
 import 'linux_secret_service.dart';
+import 'secret_store_kind.dart';
 
 enum LinuxAgentSecretBackend {
   secretService('linux_secret_service'),
@@ -27,11 +28,22 @@ enum LinuxAgentSecretBackend {
 /// This backend provides filesystem ownership protection, not encryption. The
 /// complete record is replaced atomically while an inter-process lock is held.
 final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
-  LinuxOwnerFileAgentSecretStore({SanadHomeBootstrap? boundary})
-    : _boundary = boundary ?? SanadHomeBootstrap.identity();
+  LinuxOwnerFileAgentSecretStore({
+    this.kind = SecretStoreKind.app,
+    SanadHomeBootstrap? boundary,
+  }) : _boundary = boundary ?? SanadHomeBootstrap.identity();
 
+  /// The production file names. A non-production kind appends its own segment
+  /// ([SecretStoreKind.credentialDataFileName]) so two runtimes on one Home never
+  /// share a plaintext file.
   static const dataFileName = 'agent_credentials.json';
   static const lockFileName = 'agent_credentials.lock';
+
+  /// The namespace this owner-only file holds.
+  final SecretStoreKind kind;
+
+  String get _dataFileName => kind.credentialDataFileName;
+  String get _lockFileName => kind.credentialLockFileName;
 
   final SanadHomeBootstrap _boundary;
 
@@ -39,7 +51,7 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
   Future<String?> read(String key) => _guard(
     'read',
     () => _boundary.runWithFileLock(
-      lockFileName,
+      _lockFileName,
       () async => _readAllUnlocked()[key],
     ),
   );
@@ -47,7 +59,7 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
   @override
   Future<void> write(String key, String value) => _guard(
     'write',
-    () => _boundary.runWithFileLock(lockFileName, () async {
+    () => _boundary.runWithFileLock(_lockFileName, () async {
       final records = _readAllUnlocked()..[key] = value;
       await _writeAllUnlocked(records);
       if (_readAllUnlocked()[key] != value) {
@@ -61,11 +73,11 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
   @override
   Future<void> delete(String key) => _guard(
     'delete',
-    () => _boundary.runWithFileLock(lockFileName, () async {
+    () => _boundary.runWithFileLock(_lockFileName, () async {
       final records = _readAllUnlocked();
       if (records.remove(key) == null) return;
       if (records.isEmpty) {
-        await _boundary.deleteFile(dataFileName);
+        await _boundary.deleteFile(_dataFileName);
       } else {
         await _writeAllUnlocked(records);
       }
@@ -80,16 +92,16 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
   Future<Map<String, String>> readAll() => _guard(
     'read',
     () => _boundary.runWithFileLock(
-      lockFileName,
+      _lockFileName,
       () async => Map<String, String>.unmodifiable(_readAllUnlocked()),
     ),
   );
 
   Future<void> deleteAll() => _guard(
     'delete',
-    () => _boundary.runWithFileLock(lockFileName, () async {
-      await _boundary.deleteFile(dataFileName);
-      if (_boundary.fileExists(dataFileName)) {
+    () => _boundary.runWithFileLock(_lockFileName, () async {
+      await _boundary.deleteFile(_dataFileName);
+      if (_boundary.fileExists(_dataFileName)) {
         throw const AgentSecretStoreUnavailable(
           'Linux owner-file credential deletion verification failed.',
         );
@@ -98,9 +110,9 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
   );
 
   Map<String, String> _readAllUnlocked() {
-    if (!_boundary.fileExists(dataFileName)) return <String, String>{};
+    if (!_boundary.fileExists(_dataFileName)) return <String, String>{};
     final decoded = jsonDecode(
-      utf8.decode(_boundary.readSecretBytes(dataFileName)),
+      utf8.decode(_boundary.readSecretBytes(_dataFileName)),
     );
     if (decoded is! Map<String, dynamic> || decoded['version'] != 1) {
       throw const AgentSecretStoreUnavailable(
@@ -119,7 +131,7 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
 
   Future<void> _writeAllUnlocked(Map<String, String> records) =>
       _boundary.writeSecretBytes(
-        dataFileName,
+        _dataFileName,
         utf8.encode(jsonEncode({'version': 1, 'entries': records})),
       );
 
@@ -152,12 +164,14 @@ final class LinuxOwnerFileAgentSecretStore implements AgentSecretStore {
 final class LinuxAutoAgentSecretStore implements AgentSecretStore {
   LinuxAutoAgentSecretStore({
     required this.scope,
+    this.kind = SecretStoreKind.app,
     LinuxSecretServiceAgentSecretStore? secretService,
     LinuxOwnerFileAgentSecretStore? ownerFile,
     SanadHomeBootstrap? boundary,
   }) : _secretService =
-           secretService ?? LinuxSecretServiceAgentSecretStore(scope: scope),
-       _ownerFile = ownerFile ?? LinuxOwnerFileAgentSecretStore(),
+           secretService ??
+           LinuxSecretServiceAgentSecretStore(scope: scope, kind: kind),
+       _ownerFile = ownerFile ?? LinuxOwnerFileAgentSecretStore(kind: kind),
        _boundary = boundary ?? SanadHomeBootstrap.identity();
 
   static const metadataFileName = 'agent_credential_backend.json';
@@ -165,6 +179,10 @@ final class LinuxAutoAgentSecretStore implements AgentSecretStore {
   static const _probePrefix = '__sanad_capability_probe__';
 
   final String scope;
+
+  /// The namespace both candidate backends address.
+  final SecretStoreKind kind;
+
   final LinuxSecretServiceAgentSecretStore _secretService;
   final LinuxOwnerFileAgentSecretStore _ownerFile;
   final SanadHomeBootstrap _boundary;

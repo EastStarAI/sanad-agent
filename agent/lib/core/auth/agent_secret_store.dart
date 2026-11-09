@@ -5,42 +5,131 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
 import 'package:ffi/ffi.dart';
+import 'package:logging/logging.dart';
 
 import '../constants.dart';
 import '../sanad_home/sanad_home_bootstrap.dart';
 import '../sanad_home/test_runtime_isolation.dart';
+import 'agent_secret_namespaces.dart';
 import 'agent_secret_store_contract.dart';
 import 'linux_auto_secret_store.dart';
+import 'secret_store_kind.dart';
 import 'secret_vault_policy.dart';
 
+export 'agent_secret_namespaces.dart';
 export 'agent_secret_store_contract.dart';
 export 'linux_auto_secret_store.dart';
 export 'linux_secret_service.dart';
+export 'secret_store_kind.dart';
 export 'secret_vault_policy.dart';
+
+final _logger = Logger('AgentSecretStore');
+final Set<String> _emittedWarnings = <String>{};
+
+void _warnOnce(String message) {
+  if (!_emittedWarnings.add(message)) return;
+  _logger.warning(message);
+}
 
 /// Whether this process must keep secrets out of the OS credential vault.
 ///
 /// Deterministic E2E processes (`SANAD_E2E_TEST_MODE=true`, the switch the
 /// subprocess and daemon E2E suites already set) and the Dart test runtime use
 /// the owner-only file store inside the selected Home, so no test reads or
-/// writes the real Keychain, DPAPI or Secret Service.
-bool usesTestAgentSecretStore() => isDartTestRuntime() || isSanadE2eTestMode();
+/// writes the real Keychain, DPAPI or Secret Service. Delegates to the single
+/// definition in `secret_store_kind.dart`, so the backend and the namespace can
+/// never disagree about which processes are tests.
+bool usesTestAgentSecretStore() => isSecretStoreTestRuntime();
 
-AgentSecretStore createAgentSecretStore() {
-  if (usesTestAgentSecretStore()) {
+/// The one line a locally compiled binary adds to the log.
+///
+/// A `dart compile exe` build is ad-hoc signed, so macOS records a new code
+/// identity on every build and a Keychain authorization granted to one build
+/// never covers the next. The warning is informational: a one-off build is
+/// legitimate, it simply cannot hold a durable OS-vault grant.
+const compiledSourceArtifactWarning =
+    'This Agent is a locally compiled binary: its macOS code identity changes '
+    'on every build, so an operating-system Keychain authorization never '
+    'survives a rebuild. Use the JIT runtime (`sanad-dev run`) when the '
+    'credential vault must stay authorized.';
+
+/// Creates this process's credential store for the resolved secret namespace.
+///
+/// Namespace and backend are two separate decisions:
+/// * the namespace comes from explicit evidence only
+///   ([resolveSecretStoreKind]), so a Home that already holds production items
+///   is never moved because of how the binary was built;
+/// * the backend comes from the test seam plus
+///   [secretStoreEnvironmentVariable] (`file` or `os`), which is a
+///   development/test override and is refused where it would break a guarantee
+///   (plaintext for the production namespace, the real vault inside a test).
+AgentSecretStore createAgentSecretStore({
+  SecretStoreKind? kind,
+  Map<String, String>? environment,
+  String? resolvedExecutable,
+  bool? isTestRuntime,
+  void Function(String message)? warn,
+}) {
+  final source = environment ?? Platform.environment;
+  final sink = warn ?? _warnOnce;
+  final resolution = kind == null
+      ? resolveSecretStoreKind(
+          environment: source,
+          resolvedExecutable: resolvedExecutable,
+          isTestRuntime: isTestRuntime,
+          warn: sink,
+        )
+      : SecretStoreKindResolution(
+          kind,
+          SecretStoreKindEvidence.declaredByEnvironment,
+        );
+  final namespace = resolution.kind;
+  final testRuntime = isSecretStoreTestRuntime(override: isTestRuntime);
+  final override = readSecretStoreBackendOverride(source);
+  if (override == SecretStoreBackendOverride.file && namespace.isApp) {
+    throw const AgentSecretStoreUnavailable(
+      'SANAD_SECRET_STORE=file is refused for the production secret namespace: '
+      'that Home keeps its secrets in the operating-system vault, and a '
+      'development override must not downgrade them to a plaintext file. Run a '
+      'linked-worktree runtime to use the file backend.',
+      reasonCode: AgentSecretStoreUnavailableReason.fileStoreRefusedForApp,
+    );
+  }
+  if (override == SecretStoreBackendOverride.os && testRuntime) {
+    throw const AgentSecretStoreUnavailable(
+      'SANAD_SECRET_STORE=os is refused in a test runtime: tests and E2E '
+      'subprocesses never reach the real Keychain, DPAPI or Secret Service. '
+      'Remove the override to use the owner-only file store inside the selected '
+      'Home.',
+      reasonCode: AgentSecretStoreUnavailableReason.osStoreRefusedForTest,
+    );
+  }
+  if (override == SecretStoreBackendOverride.file || testRuntime) {
     requireSanadE2eTestIsolation();
     rejectUnisolatedTestHomeAccess(
       'open the Agent secret store',
       path: getSanadHome(),
     );
-    return LinuxOwnerFileAgentSecretStore();
+    return LinuxOwnerFileAgentSecretStore(kind: namespace);
+  }
+  if (resolution.compiledSourceArtifact) {
+    sink(compiledSourceArtifactWarning);
   }
   final scope = sha256
       .convert(utf8.encode(SanadHomeBootstrap.identity().canonicalRoot()))
       .toString();
-  if (Platform.isMacOS) return MacOsKeychainAgentSecretStore(scope: scope);
-  if (Platform.isLinux) return LinuxAutoAgentSecretStore(scope: scope);
-  if (Platform.isWindows) return WindowsDpapiAgentSecretStore(scope: scope);
+  if (Platform.isMacOS) {
+    return MacOsKeychainAgentSecretStore(
+      scope: scope,
+      service: namespace.service,
+    );
+  }
+  if (Platform.isLinux) {
+    return LinuxAutoAgentSecretStore(scope: scope, kind: namespace);
+  }
+  if (Platform.isWindows) {
+    return WindowsDpapiAgentSecretStore(scope: scope, kind: namespace);
+  }
   throw const AgentSecretStoreUnavailable(
     'This operating system has no supported Sanad credential vault.',
     reasonCode: AgentSecretStoreUnavailableReason.noStore,
@@ -50,9 +139,11 @@ AgentSecretStore createAgentSecretStore() {
 class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   MacOsKeychainAgentSecretStore({
     required this.scope,
+    String? service,
     DynamicLibrary? securityLibrary,
     DynamicLibrary? coreFoundationLibrary,
-  }) : _security =
+  }) : service = service ?? agentVaultKeychainService,
+       _security =
            securityLibrary ??
            DynamicLibrary.open(
              '/System/Library/Frameworks/Security.framework/Security',
@@ -63,7 +154,14 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
              '/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation',
            );
 
-  static const _service = agentVaultKeychainService;
+  /// The Keychain service this store addresses.
+  ///
+  /// `app` passes [agentVaultKeychainService] unchanged, so every item an earlier
+  /// release created stays in the namespace that still reads it; a `dev` or
+  /// `test` runtime passes its own service and therefore never queries — and can
+  /// never be refused by — a production item's access control.
+  final String service;
+
   static const _itemNotFound = -25300;
 
   /// Security-framework statuses that mean "the item exists, but reading it
@@ -137,7 +235,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   @override
   Future<String?> read(String key) async {
     _prepareInteraction();
-    final cfService = _createString(_service);
+    final cfService = _createString(service);
     final cfAccount = _createString(_account(key));
     final query = _createDictionary({
       _kSecClass: _kSecClassGenericPassword,
@@ -151,7 +249,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
     try {
       final status = _secItemCopyMatching(query, result);
       if (status == _itemNotFound) return null;
-      if (status != 0) throw _failure('read', status);
+      if (status != 0) throw _failure('read', status, key: key);
       final dataRef = result.value;
       if (dataRef == nullptr) return null;
       try {
@@ -172,7 +270,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   @override
   Future<void> write(String key, String value) async {
     _prepareInteraction();
-    final cfService = _createString(_service);
+    final cfService = _createString(service);
     final cfAccount = _createString(_account(key));
     final secretBytes = Uint8List.fromList(utf8.encode(value));
     final cfData = _createData(secretBytes);
@@ -188,7 +286,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
         final updateStatus = _secItemUpdate(query, updateAttrs);
         if (updateStatus == 0) return;
         if (updateStatus != _itemNotFound) {
-          throw _failure('write (update)', updateStatus);
+          throw _failure('write (update)', updateStatus, key: key);
         }
       } finally {
         _cfRelease(updateAttrs);
@@ -203,7 +301,9 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       });
       try {
         final addStatus = _secItemAdd(addDict, nullptr);
-        if (addStatus != 0) throw _failure('write (add)', addStatus);
+        if (addStatus != 0) {
+          throw _failure('write (add)', addStatus, key: key);
+        }
       } finally {
         _cfRelease(addDict);
       }
@@ -218,7 +318,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   @override
   Future<void> delete(String key) async {
     _prepareInteraction();
-    final cfService = _createString(_service);
+    final cfService = _createString(service);
     final cfAccount = _createString(_account(key));
     final query = _createDictionary({
       _kSecClass: _kSecClassGenericPassword,
@@ -229,7 +329,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
     try {
       final status = _secItemDelete(query);
       if (status == _itemNotFound) return;
-      if (status != 0) throw _failure('delete', status);
+      if (status != 0) throw _failure('delete', status, key: key);
     } finally {
       _cfRelease(query);
       _cfRelease(cfAccount);
@@ -237,15 +337,25 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
     }
   }
 
-  AgentSecretStoreUnavailable _failure(String operation, int status) =>
+  AgentSecretStoreUnavailable _failure(
+    String operation,
+    int status, {
+    String? key,
+  }) =>
       classifyStatus(
         status,
         interactionAllowed: SecretVaultPolicy.interactionAllowed,
+        item: _shareableKeyLabel(key),
       ) ??
       AgentSecretStoreUnavailable(
         'macOS Keychain $operation failed ($status).',
         reasonCode: AgentSecretStoreUnavailableReason.backendError,
       );
+
+  /// The key name a refusal may carry, or `null` when naming it would expose
+  /// something private. See [AgentSecretNamespaces.isShareableKeyLabel].
+  static String? _shareableKeyLabel(String? key) =>
+      key != null && AgentSecretNamespaces.isShareableKeyLabel(key) ? key : null;
 
   /// Maps a Security-framework status to a closed Agent vault, or `null` when
   /// the status is not about authorization.
@@ -256,25 +366,34 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   /// `errSecInteractionRequired` (`-25315`) mean "an interactive authorization
   /// was demanded", `errSecAuthFailed` (`-25293`) means the item's access
   /// control rejected this binary, and `errSecUserCanceled` (`-128`) means
-  /// somebody dismissed the prompt. No message carries a secret value.
+  /// somebody dismissed the prompt. No message carries a secret value; when
+  /// `item` is supplied it is a non-secret key name (§ owner index or auth
+  /// entry) that tells the operator which item needs a decision.
   static AgentSecretStoreUnavailable? classifyStatus(
     int status, {
     required bool interactionAllowed,
+    String? item,
   }) {
+    String withItem(String message) =>
+        item == null ? message : '$message Item: $item.';
     if (status == _userCanceled) {
-      return const AgentSecretStoreUnavailable(
-        'The macOS Keychain authorization was dismissed before it was approved, '
-        'so the Agent vault stays closed. Run the command again from a terminal '
-        'and approve the prompt.',
+      return AgentSecretStoreUnavailable(
+        withItem(
+          'The macOS Keychain authorization was dismissed before it was '
+          'approved, so the Agent vault stays closed. Run the command again from '
+          'a terminal and approve the prompt.',
+        ),
         reasonCode: AgentSecretStoreUnavailableReason.authorizationCanceled,
       );
     }
     if (status == _authFailed) {
-      return const AgentSecretStoreUnavailable(
-        'macOS Keychain rejected the authorization for the Agent vault item '
-        '(errSecAuthFailed): its access control does not accept the binary this '
-        'runtime runs as. Add that binary in Keychain Access > Access Control, '
-        'or run the Agent build that created the item.',
+      return AgentSecretStoreUnavailable(
+        withItem(
+          'macOS Keychain rejected the authorization for the Agent vault item '
+          '(errSecAuthFailed): its access control does not accept the binary '
+          'this runtime runs as. Add that binary in Keychain Access > Access '
+          'Control, or run the Agent build that created the item.',
+        ),
         reasonCode: AgentSecretStoreUnavailableReason.authorizationDenied,
       );
     }
@@ -282,20 +401,24 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       return null;
     }
     if (!interactionAllowed) {
-      return const AgentSecretStoreUnavailable(
-        'The Agent vault item demands an interactive macOS Keychain '
-        'authorization, and this process has no human to answer it '
-        '(errSecInteractionNotAllowed), so the vault stays closed. Run the '
-        'command interactively, or approve the binary in Keychain Access > '
-        'Access Control.',
+      return AgentSecretStoreUnavailable(
+        withItem(
+          'The Agent vault item demands an interactive macOS Keychain '
+          'authorization, and this process has no human to answer it '
+          '(errSecInteractionNotAllowed), so the vault stays closed. Run the '
+          'command interactively, or approve the binary in Keychain Access > '
+          'Access Control.',
+        ),
         reasonCode: AgentSecretStoreUnavailableReason.interactionForbidden,
       );
     }
-    return const AgentSecretStoreUnavailable(
-      'macOS asked for an interactive Keychain authorization that this process '
-      'could not present (errSecInteractionRequired), so the Agent vault stays '
-      'closed. Unlock the session, or approve the binary in Keychain Access > '
-      'Access Control.',
+    return AgentSecretStoreUnavailable(
+      withItem(
+        'macOS asked for an interactive Keychain authorization that this process '
+        'could not present (errSecInteractionRequired), so the Agent vault stays '
+        'closed. Unlock the session, or approve the binary in Keychain Access > '
+        'Access Control.',
+      ),
       reasonCode: AgentSecretStoreUnavailableReason.interactionRequired,
     );
   }
@@ -319,7 +442,7 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
       // The notice belongs to a process that may actually show the dialog. A
       // process that forbids interaction never announces a wait, because its
       // query returns immediately instead of showing one.
-      SecretVaultNotice.announcePendingAuthorization(item: _service);
+      SecretVaultNotice.announcePendingAuthorization(item: service);
       return;
     }
     if (_interactionPrepared) return;
@@ -572,17 +695,28 @@ final class _DataBlob extends Struct {
 }
 
 class WindowsDpapiAgentSecretStore implements AgentSecretStore {
-  WindowsDpapiAgentSecretStore({required this.scope, DynamicLibrary? library})
-    : _providedLibrary = library;
+  WindowsDpapiAgentSecretStore({
+    required this.scope,
+    this.kind = SecretStoreKind.app,
+    DynamicLibrary? library,
+  }) : _providedLibrary = library;
 
   static const _uiForbidden = 0x1;
   final String scope;
+
+  /// The namespace this store writes into; it changes only the file name
+  /// prefix, never the hashed part, so a production file written by an earlier
+  /// release stays exactly where that release looks for it.
+  final SecretStoreKind kind;
+
   final DynamicLibrary? _providedLibrary;
   late final DynamicLibrary _crypt32 =
       _providedLibrary ?? DynamicLibrary.open('crypt32.dll');
 
-  String _fileName(String key) =>
-      'agent_vault_${sha256.convert(utf8.encode('$scope:$key'))}.bin';
+  String _fileName(String key) {
+    final digest = sha256.convert(utf8.encode('$scope:$key'));
+    return '${kind.vaultFileNamePrefix}$digest.bin';
+  }
 
   @override
   Future<String?> read(String key) => _guard('read', () async {

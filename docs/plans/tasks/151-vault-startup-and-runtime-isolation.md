@@ -17,7 +17,8 @@ same alarming block on every start and the daemon serves nothing until it return
 The fix is split so each half is reviewable on its own:
 
 - **PR-1 (this record, shipped):** no start waits on, or prompts for, the vault.
-- **PR-2 (open):** a dev/test runtime stops reading the app's items at all.
+- **PR-2 (this record, awaiting review):** a dev/test runtime stops reading the
+  app's items at all.
 
 Source: the keychain study of 2026-11-09 (behaviour, file:line evidence, and the
 option ranking). Owner decisions recorded below are binding.
@@ -127,36 +128,68 @@ option ranking). Owner decisions recorded below are binding.
   a gateway command leaves no `secret_vault*` artifact and that `models list` opens
   the vault without printing the approval notice in a process with no terminal.
 
-## PR-2 — runtime-kind vault isolation (open)
+## PR-2 — runtime-kind vault isolation (implemented, awaiting review)
 
-Nothing in this section is implemented yet.
+Design revised on 2026-11-10 after the migration study. The namespace is chosen by
+explicit evidence only: a "compiled binary versus `dart`" signal and any other
+inference were rejected, because a source run of the primary checkout holds the
+same production items a packaged Agent does.
 
-### T4 — `SecretStoreKind` and one-time re-entry
+### T4 — `SecretStoreKind`
 
-- `SecretStoreKind { app, dev, test }`, resolved from explicit evidence only:
-  `SANAD_RUNTIME_KIND` set by `sanad-dev`, a compiled binary versus `dart`/`dartvm`,
-  and the existing `usesTestAgentSecretStore()` for `test`.
-- Service naming becomes `agentVaultService(kind)`: `app` keeps
-  `ai.eaststar.sanad.agent` for compatibility, `dev` gets
-  `ai.eaststar.sanad.agent.dev`, `test` gets `ai.eaststar.sanad.agent.test` (which
-  keeps using the owner-only file backend by default).
-- The per-Home account (`sha256(canonicalRoot)`) is unchanged; isolation is by
-  service, so two runtimes can never read each other's items even on one Home.
-- `SANAD_SECRET_STORE=file|os` becomes an explicit dev/test-only override. It is
-  refused for `kind=app` unless a caller forces it and acknowledges
-  plaintext-at-rest.
-- No copy command (owner decision 3): a development runtime re-enters its provider
-  keys once.
+- `SecretStoreKind { app, dev, test }` carries the whole namespace: `service`,
+  `secretServiceRuntime`, `vaultFileNamePrefix`, `credentialDataFileName`,
+  `credentialLockFileName`. `app` keeps `ai.eaststar.sanad.agent` byte-identical;
+  `dev` and `test` append `.dev` and `.test`.
+- `resolveSecretStoreKind` reads `SANAD_RUNTIME_KIND` (set by `sanad-dev` for a
+  linked worktree only), then the test runtime
+  (`isSecretStoreTestRuntime()`), then `app`. An unrecognized declaration keeps
+  `app` and emits one WARNING (`declared_unknown_runtime_kind`), because moving a
+  Home on a typo would hide the items it already holds.
+- The Home-derived account (`sha256(canonicalRoot):key`) is unchanged. On Linux
+  the production filter carries no `runtime` attribute, so a pre-existing item
+  still matches while a `dev`/`test` filter can never match it. On Windows the
+  hashed file name is unchanged and only the prefix differs for non-app kinds.
+- No migration and no copy command (owner decision 3): a development runtime
+  re-enters its provider keys once, and `sanad vault authorize` remains the
+  recovery route for an unreadable production item.
 
-### T6 — Isolation evidence
+### T6 — Override and refusal contract
 
-- A fake store that records `(service, account)` proves a dev runtime never queries
-  the app service.
-- Same-Home stability and cross-Home separation of the scope hash.
-- `SANAD_SECRET_STORE=file` refusal for `kind=app`.
-- An E2E assertion that a source daemon leaves no app-service artifact.
+- `SANAD_SECRET_STORE=file|os` is a development/test override. `file` is refused
+  for `app` (`file_store_refused_for_app`), `os` is refused inside a test runtime
+  (`os_store_refused_for_test`), and an unrecognized value fails closed
+  (`invalid_store_selection`).
+- `/health` publishes `secret_store_kind` and `secret_store_service`; both name a
+  namespace, never a value.
+- `AuthManager` and `DeviceAuthorizationClient` alias their entry keys to
+  `AgentSecretNamespaces`, so one definition serves the readers, the owner-file
+  namespace, and the refusal diagnostic.
+
+### Verification (PR-2)
+
+- `agent/test/core/auth/secret_store_kind_test.dart`: kind identity (`app` stays
+  byte-identical), resolution order, a malformed declaration, compiled-artifact
+  detection, and override parsing.
+- `agent/test/core/auth/agent_secret_store_namespace_test.dart`: both refusals, an
+  invalid selection, dev/test file names, cross-namespace isolation on one Home,
+  and a vault that reports its kind and service.
+- `scripts/sanad_dev/test/runtime/lifecycle/sanad_dev_runtime_test.dart`: a linked
+  worktree declares `dev`; the primary checkout declares nothing.
+- `scripts/sanad_dev/test/infrastructure/sanad_dev_runtime_home_fixture_test.dart`:
+  the dev/test credential files never enter a Home fixture.
 
 ## Follow-ups recorded here
+
+- **`sanad doctor` namespace reporting:** `/health` now carries
+  `secret_store_kind` and `secret_store_service`, but `doctor` does not print
+  them yet. It should, so an operator can see which namespace a runtime addresses
+  without reading `/health` directly.
+- **`sanad-dev vault authorize` forwarder:** a worktree runtime must be able to
+  reach the explicit grant for its own Home without hand-typing `--home`.
+- **E2E namespace evidence:** a source daemon on a worktree Home must be proven
+  to leave no `ai.eaststar.sanad.agent` artifact and no production credential
+  file, using the `/health` fields above.
 
 - **Client "Grant access"** (from T3): needs a prompt-allowed helper process and
   its own threat model. Until then the Client shows the vault state and points at

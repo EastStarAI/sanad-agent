@@ -158,6 +158,12 @@ const fixtureExcludedPaths = <String>[
   'mcp_secrets.json',
   'auth.json',
   'agent_credentials.json',
+  // A worktree or test runtime on this Home keeps its own namespace files
+  // beside the production one, so a fixture must never capture either.
+  'agent_credentials.dev.json',
+  'agent_credentials.dev.lock',
+  'agent_credentials.test.json',
+  'agent_credentials.test.lock',
   'agent_credential_backend.json',
 ];
 

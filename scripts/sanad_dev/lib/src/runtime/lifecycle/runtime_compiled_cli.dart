@@ -79,6 +79,12 @@ Future<void> handleCompiledCliCommand(
       component,
       artifact.executablePath,
       forwarded,
+      // A cached artifact is still this worktree's runtime, so it must address
+      // the same namespace the JIT daemon does; the primary checkout declares
+      // nothing and keeps the production namespace.
+      environment: sanadDevSecretNamespaceEnvironment(
+        isLinkedWorktree: runtime.isLinkedWorktree,
+      ),
     );
   } else {
     // Injected runners are in-process seams and take no lock.
@@ -105,10 +111,17 @@ Future<int> runCompiledCliArtifactUnderCacheLock(
   CompiledCliComponent component,
   String executable,
   List<String> arguments, {
+  Map<String, String>? environment,
   Future<Process> Function(String executable, List<String> arguments)?
   startProcess,
 }) async {
-  final start = startProcess ?? _startCompiledCliArtifact;
+  final start =
+      startProcess ??
+      (String executable, List<String> arguments) => _startCompiledCliArtifact(
+        executable,
+        arguments,
+        environment: environment,
+      );
   final started = await cache.withReadLock<Process>(
     component,
     () => start(executable, arguments),
@@ -120,10 +133,12 @@ void _assignProcessExitCode(int code) => exitCode = code;
 
 Future<Process> _startCompiledCliArtifact(
   String executable,
-  List<String> arguments,
-) => Process.start(
+  List<String> arguments, {
+  Map<String, String>? environment,
+}) => Process.start(
   executable,
   arguments,
+  environment: environment,
   mode: ProcessStartMode.inheritStdio,
 );
 

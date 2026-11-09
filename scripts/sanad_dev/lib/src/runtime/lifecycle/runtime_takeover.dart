@@ -199,6 +199,9 @@ Future<bool> _restoreManualRuntime({
           )
           ..remove('SANAD_DEV_LAUNCHER_ID')
           ..remove('SANAD_DEV_RUNTIME_NONCE')
+          ..addAll(sanadDevSecretNamespaceEnvironment(
+            isLinkedWorktree: runtime.isLinkedWorktree,
+          ))
           ..['ENABLE_LOCAL_GATEWAY'] = 'true'
           ..['LOCAL_GATEWAY_PORT'] = '$agentPort'
           ..['ENABLE_GATEWAY'] = cloudEnabled ? 'true' : 'false';

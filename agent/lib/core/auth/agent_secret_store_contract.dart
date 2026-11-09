@@ -32,6 +32,20 @@ abstract final class AgentSecretStoreUnavailableReason {
   /// deliberately never opened the vault.
   static const plaintextFallbackBlocked = 'plaintext_fallback_blocked';
 
+  /// `SANAD_SECRET_STORE=file` was requested for the production namespace. The
+  /// owner-only file backend is a development and test aid, and the production
+  /// Home's items are encrypted by the operating system, so the request is
+  /// refused rather than quietly downgrading them to plaintext.
+  static const fileStoreRefusedForApp = 'file_store_refused_for_app';
+
+  /// `SANAD_SECRET_STORE=os` was requested inside the Dart test runtime or a
+  /// deterministic E2E process, which must never reach the real credential
+  /// store.
+  static const osStoreRefusedForTest = 'os_store_refused_for_test';
+
+  /// `SANAD_SECRET_STORE` carried a value that is neither `file` nor `os`.
+  static const invalidStoreSelection = 'invalid_store_selection';
+
   /// The vault is still opening: the operating-system store has not answered
   /// yet, so a missing value is unknown rather than absent.
   static const vaultNotReady = 'vault_not_ready';

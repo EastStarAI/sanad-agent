@@ -172,6 +172,19 @@ void main() {
     expect(environment['PATH'], '/bin');
   });
 
+  test('a linked worktree declares the development secret namespace', () {
+    // A worktree Home holds no packaged item, so its runtime may take the dev
+    // namespace there without moving or copying anything.
+    expect(sanadDevSecretNamespaceEnvironment(isLinkedWorktree: true), {
+      'SANAD_RUNTIME_KIND': 'dev',
+    });
+  });
+
+  test('the primary checkout declares no secret namespace', () {
+    // Its Home already holds the production items and the Device Credential.
+    expect(sanadDevSecretNamespaceEnvironment(isLinkedWorktree: false), isEmpty);
+  });
+
   test(
     'unified home environment injects deterministic Windows system PATH',
     () {

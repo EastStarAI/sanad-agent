@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/capabilities/mcp/mcp_secret_store.dart';
-import 'package:sanad_agent/core/auth/agent_secret_namespaces.dart';
 import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/constants.dart';
