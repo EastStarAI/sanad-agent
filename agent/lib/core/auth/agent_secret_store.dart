@@ -303,9 +303,6 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   /// Whether this process already applied its Keychain interaction policy.
   bool _interactionPrepared = false;
 
-  /// Whether the pending-authorization notice was already printed.
-  bool _announcedPendingAuthorization = false;
-
   /// The never-prompt authentication context, once one was needed.
   _NeverPromptAuthenticationContext? _context;
 
@@ -319,7 +316,10 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
   /// comes.
   void _prepareInteraction() {
     if (SecretVaultPolicy.interactionAllowed) {
-      _announcePendingAuthorization();
+      // The notice belongs to a process that may actually show the dialog. A
+      // process that forbids interaction never announces a wait, because its
+      // query returns immediately instead of showing one.
+      SecretVaultNotice.announcePendingAuthorization(item: _service);
       return;
     }
     if (_interactionPrepared) return;
@@ -334,21 +334,6 @@ class MacOsKeychainAgentSecretStore implements AgentSecretStore {
     } catch (_) {
       // A macOS that no longer exports the legacy switch still suppresses the
       // data-protection path through the per-query context below.
-    }
-  }
-
-  /// Prints the one stderr line that explains a pending authorization dialog.
-  ///
-  /// It is written before the first Keychain query of an interactive process so
-  /// a person knows why the command stopped, and it never contains a secret.
-  void _announcePendingAuthorization() {
-    if (_announcedPendingAuthorization) return;
-    _announcedPendingAuthorization = true;
-    try {
-      stderr.writeln(keychainApprovalWaitNotice(_service));
-    } on Object {
-      // A detached or closed stderr must not fail the Keychain query; trust the
-      // authorization dialog itself to explain the wait.
     }
   }
 

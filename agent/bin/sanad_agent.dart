@@ -66,14 +66,22 @@ void main(List<String> arguments) async {
   // never write a secret to a plaintext fallback. `run` is one of them: it
   // selects its runtime first, a gateway run reads no secret, and the
   // in-process runtime opens the vault itself when it needs a provider key
-  // (which also clears the skip flag).
-  final vaultRequired = SanadCommandRunner.requiresSecretVault(arguments);
+  // (which also clears the skip flag). `vault` is another: the one interactive
+  // grant opens the vault itself, after it has validated its arguments, so
+  // asking for help never starts a dialog.
+  //
+  // A daemon dispatch opens nothing at all. The daemon owns its own open, it
+  // performs it without waiting, and it never starts an OS authorization
+  // dialog; opening the vault here would query the vault in a process whose
+  // only job is to hand the daemon its Home.
+  final dispatchesToDaemon = SanadCommandRunner.dispatchesToDaemon(arguments);
+  final vaultRequired = SanadCommandRunner.entryOpensSecretVault(arguments);
   // A process may only start a Keychain dialog when a person is present to
-  // answer it. The daemon keeps the prompt by design; a CLI is classified from
-  // explicit evidence (machine-output flags, a supervised child, a closed pipe,
-  // or a spawner's declaration) instead of guessing.
+  // answer it. A CLI is classified from explicit evidence (machine-output flags,
+  // a supervised child, a closed pipe, or a spawner's declaration) instead of
+  // guessing; a daemon entry point never prompts at all.
   SecretVaultPolicy.apply(
-    SanadCommandRunner.dispatchesToDaemon(arguments)
+    dispatchesToDaemon
         ? SecretVaultPolicy.daemonEntryDecision
         : detectSecretVaultInteraction(arguments),
     vaultSkipped: !vaultRequired,

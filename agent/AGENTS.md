@@ -101,6 +101,7 @@ This contract applies to `agent/`.
 - Source worktrees consume global Sanad configuration and must not create a competing repository-local `.env`.
 - Do not create hidden scratch or temporary directories inside the repository.
 - Missing provider configuration must not prevent daemon startup; fail lazily when an LLM operation actually requires a provider.
+- No Agent start performs an unbounded operating-system credential-vault call, and no daemon starts an OS authorization dialog. A daemon opens its vault without waiting (`SecretVaults.beginOpen()`), reports `opening|available|unavailable`, and degrades a credential it has not read yet as `vault_not_ready` rather than absent; a prompt comes only from the explicit `sanad vault authorize` grant.
 - Local/offline provider configurations remain valid and must not require an OpenAI-style key.
 - Sensitive payloads,tokens,provider secrets,pending steer text,recovered draft text,command payloads,event/final-answer content,custom Client names,and raw Client-instance identity must not enter logs;transport diagnostics are lifecycle/type/count metadata only.
 - Platform failures and asynchronous command failures must be contained so one transport cannot terminate the daemon or other interfaces.

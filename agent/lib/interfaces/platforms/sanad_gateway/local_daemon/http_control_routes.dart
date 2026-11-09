@@ -145,7 +145,9 @@ class LocalDaemonHttpControlRoutes {
         // The Agent vault is the OS credential vault. A closed vault means
         // provider keys, MCP secrets, user secrets and the Device Credential
         // cannot be read, so this reports it as a non-secret status instead of
-        // leaving it inside one log line.
+        // leaving it inside one log line. `opening` is its own answer: the daemon
+        // starts the vault without waiting for the OS store, so "not answered
+        // yet" must not read as "closed".
         'secret_vault': vault?.statusLabel ?? 'unavailable',
         'secret_vault_reason': vault?.unavailableReason,
         'cloud_registered': _isCloudRegistered(),

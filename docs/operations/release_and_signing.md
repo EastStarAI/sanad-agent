@@ -232,6 +232,18 @@ standalone executable is signed anywhere else.
   authorized once.
 - Commands that never open the vault never reach this prompt; the prompt can only
   appear on an actual secret read or write.
+- A daemon never reaches it either. `SecretVaultPolicy.daemonEntryDecision` is
+  `forbidden` (`daemon_background`), so a daemon either opens its vault without a
+  dialog or reports it closed; the one interactive path is `sanad vault authorize`,
+  which a person runs in a terminal and which prints no value. A daemon also starts
+  its vault without waiting for the store (`SecretVaults.beginOpen()`), so an
+  authorization requirement cannot delay its listener or `/health`.
+- A source checkout still reads the same `ai.eaststar.sanad.agent` service and the
+  same per-Home account as the packaged Agent, so the two identities compete for
+  one item. Separating them by runtime kind is the follow-up tracked in
+  `docs/plans/tasks/151-vault-startup-and-runtime-isolation.md`; until it lands, a
+  development runtime is expected to report `authorization_denied` instead of
+  prompting.
 
 ### Installer and runtime verification
 

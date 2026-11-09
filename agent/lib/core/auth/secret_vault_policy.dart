@@ -17,15 +17,61 @@ const agentVaultKeychainService = 'ai.eaststar.sanad.agent';
 String keychainApprovalWaitNotice([String item = agentVaultKeychainService]) =>
     'Waiting for macOS Keychain approval for $item…';
 
+/// Owns the one notice that explains a pending operating-system authorization
+/// dialog.
+///
+/// The notice is printed only by a process that may show the dialog
+/// ([SecretVaultPolicy.interactionAllowed]) and only once per process. A
+/// process that forbids interaction never prints it, because no dialog can
+/// appear and its read returns immediately with a reason-coded failure; a
+/// background query therefore never announces a wait that is not happening.
+///
+/// The sink is injectable, so a test asserts presence and absence without a
+/// real operating-system vault and without a terminal.
+abstract final class SecretVaultNotice {
+  /// The sink the notice is written to; `stderr` until a caller replaces it.
+  static StringSink? sink = stderr;
+  static bool _printed = false;
+
+  /// Whether this process already announced a pending authorization.
+  static bool get printed => _printed;
+
+  /// Prints the notice once, and only when this process may start the dialog.
+  ///
+  /// Returns whether it printed, so a caller can assert the decision instead of
+  /// observing a side effect.
+  static bool announcePendingAuthorization({
+    String item = agentVaultKeychainService,
+  }) {
+    if (_printed) return false;
+    if (!SecretVaultPolicy.interactionAllowed) return false;
+    _printed = true;
+    try {
+      sink?.writeln(keychainApprovalWaitNotice(item));
+    } on Object {
+      // A detached or closed sink must not fail the vault query; the
+      // authorization dialog itself explains the wait.
+    }
+    return true;
+  }
+
+  /// Restores the process default; a Dart test uses it between cases.
+  static void reset() {
+    _printed = false;
+    sink = stderr;
+  }
+}
+
 /// How far this process may go to unlock the operating-system credential vault.
 ///
 /// The Agent vault is the macOS Keychain, Windows DPAPI or Linux Secret
 /// Service. Reading an item whose access control does not accept the calling
 /// binary makes macOS raise an authorization dialog; the reading thread blocks
-/// inside the security framework until somebody answers it. A daemon or an
-/// interactive command has such a person. A command driven by the Client, a
-/// scheduler, a delegate relay or a closed pipe does not, so it must never start
-/// that dialog: it either succeeds without the vault or fails closed with a
+/// inside the security framework until somebody answers it. Only an explicit
+/// interactive grant (`sanad vault authorize`) and an interactive CLI command
+/// have such a person. A daemon, a command driven by the Client, a scheduler, a
+/// delegate relay or a closed pipe does not, so it must never start that
+/// dialog: it either succeeds without the vault or fails closed with a
 /// diagnostic.
 enum SecretVaultInteraction {
   /// A person can answer an OS authorization dialog for this process.
@@ -52,10 +98,9 @@ enum SecretVaultInteractionEvidence {
   /// inherited from a launchd/app-owned parent with no prompt owner.
   supervisedChild,
 
-  /// The daemon itself, which keeps the normal prompt: it is a long-lived
-  /// process an operator starts, and its one-time authorization dialog is the
-  /// intended way to grant access to the vault it migrates.
-  daemonEntryPoint,
+  /// A daemon entry point: the process runs behind the desktop app, a service
+  /// manager, or a pipe, so no person is guaranteed to be in front of it.
+  daemonBackground,
 
   /// `SANAD_SECRET_VAULT_INTERACTION=forbid`: the spawner declared it.
   declaredByEnvironment,
@@ -75,7 +120,7 @@ String secretVaultEvidenceCode(SecretVaultInteractionEvidence evidence) =>
         'interactive_terminal',
       SecretVaultInteractionEvidence.machineOutputFlag => 'machine_output',
       SecretVaultInteractionEvidence.supervisedChild => 'supervised_child',
-      SecretVaultInteractionEvidence.daemonEntryPoint => 'daemon_entry_point',
+      SecretVaultInteractionEvidence.daemonBackground => 'daemon_background',
       SecretVaultInteractionEvidence.declaredByEnvironment =>
         'declared_non_interactive',
       SecretVaultInteractionEvidence.declaredInteractiveByEnvironment =>
@@ -112,14 +157,16 @@ abstract final class SecretVaultPolicy {
 
   /// The decision the daemon applies at every entry point.
   ///
-  /// The daemon is not a machine-driven probe: an operator starts it (from the
-  /// desktop app, a launchd service, or a terminal), its one-time authorization
-  /// dialog is the intended UX for the vault it migrates, and a closed vault is
-  /// reported through its log and `/health`. It therefore keeps the prompt and
-  /// does not inherit the CLI's stdio-shaped detection.
+  /// A daemon never starts an operating-system authorization dialog. It runs
+  /// behind the desktop app, a service manager, or a pipe, so nobody is
+  /// guaranteed to be in front of it, and a dialog it cannot show blocks the
+  /// reading thread before the listener, the banner, or `/health` exists.
+  /// Access is granted only by an explicit user action (`sanad vault authorize`,
+  /// the one interactive grant path), so a daemon whose vault stays closed
+  /// reports it through one state line and `/health` instead of prompting.
   static const daemonEntryDecision = SecretVaultInteractionDecision(
-    SecretVaultInteraction.allowed,
-    SecretVaultInteractionEvidence.daemonEntryPoint,
+    SecretVaultInteraction.forbidden,
+    SecretVaultInteractionEvidence.daemonBackground,
   );
 
   static SecretVaultInteraction _interaction = SecretVaultInteraction.allowed;
