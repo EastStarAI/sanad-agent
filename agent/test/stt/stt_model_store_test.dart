@@ -13,25 +13,47 @@ void main() {
   late SttModelStore store;
   late HttpServer server;
 
+  /// Bytes this server serves, keyed by request path.
+  final served = <String, List<int>>{};
+
+  String urlFor(List<int> payload) {
+    final path = '/${sha256.convert(payload)}.onnx';
+    served[path] = payload;
+    return 'http://${server.address.address}:${server.port}$path';
+  }
+
   setUp(() async {
     home = Directory.systemTemp.createTempSync('stt-store-');
-    store = SttModelStore(sanadHome: home.path);
+    served.clear();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      final payload = served[request.uri.path];
+      if (payload == null) {
+        request.response.statusCode = HttpStatus.notFound;
+      } else {
+        request.response.add(payload);
+      }
+      await request.response.close();
+    });
+    // The shared VAD is the one artifact a catalog entry does not carry, so the
+    // store is handed a loopback descriptor with the production asset's name: a
+    // unit test must never fetch the live third-party release URL.
+    final vadPayload = utf8.encode('fake silero vad');
+    store = SttModelStore(
+      sanadHome: home.path,
+      sharedVadAsset: SttModelFile(
+        name: kSileroVadFile.name,
+        url: urlFor(vadPayload),
+        sizeBytes: vadPayload.length,
+        sha256: sha256.convert(vadPayload).toString(),
+      ),
+    );
   });
 
   tearDown(() async {
     await server.close(force: true);
     if (home.existsSync()) home.deleteSync(recursive: true);
   });
-
-  Future<String> urlFor(List<int> payload) async {
-    final path = '/${sha256.convert(payload)}.onnx';
-    server.listen((request) async {
-      request.response.add(payload);
-      await request.response.close();
-    });
-    return 'http://${server.address.address}:${server.port}$path';
-  }
 
   SttCatalogEntry entryFor(List<int> payload, {String? sha, String url = ''}) {
     return SttCatalogEntry(
@@ -114,7 +136,7 @@ void main() {
 
     test('install downloads, verifies and atomically activates', () async {
       final payload = utf8.encode('server payload');
-      final entry = entryFor(payload, url: await urlFor(payload));
+      final entry = entryFor(payload, url: urlFor(payload));
       final progress = <int>[];
 
       await store.install(
@@ -132,7 +154,7 @@ void main() {
 
     test('install reports one cumulative total across artifacts', () async {
       final payload = utf8.encode('cumulative payload');
-      final entry = entryFor(payload, url: await urlFor(payload));
+      final entry = entryFor(payload, url: urlFor(payload));
       final pairs = <String>[];
 
       await store.install(
@@ -158,7 +180,7 @@ void main() {
       final payload = utf8.encode('payload');
       final entry = entryFor(
         payload,
-        url: await urlFor(payload),
+        url: urlFor(payload),
         sha: '0' * 64,
       );
 
@@ -180,7 +202,7 @@ void main() {
 
     test('cancelling a download leaves nothing behind', () async {
       final payload = utf8.encode('cancel me');
-      final entry = entryFor(payload, url: await urlFor(payload));
+      final entry = entryFor(payload, url: urlFor(payload));
 
       await expectLater(
         store.install(entry, isCancelled: () => true),

@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart' show sherpaEngineAvailable;
 import 'package:test/test.dart';
 
 import '../../tool/stt_native_runtime.dart';
@@ -357,13 +358,14 @@ void main() {
       File('${runtime.path}/libggml.0.dylib.bak').writeAsBytesSync([4, 5, 6]);
 
       // The sherpa libraries come from the engine's own resolution, so the test
-      // hands staging a source directory exactly as the tool does.
+      // hands staging a source directory exactly as the tool does. A build
+      // without the engine links a stand-in, stages no engine subtree, and must
+      // not be asked for one here.
       final sherpaSource = Directory('${nativeRoot.parent.path}'
           '/stt-sherpa-source-${DateTime.now().microsecondsSinceEpoch}');
-      final sherpaHashes = writeFakeSherpaRuntime(
-        directory: sherpaSource,
-        target: target,
-      );
+      final sherpaHashes = sherpaEngineAvailable
+          ? writeFakeSherpaRuntime(directory: sherpaSource, target: target)
+          : <String, String>{};
       final hashes = {...whisperHashes, ...sherpaHashes};
 
       final verification = await verifySttRuntime(

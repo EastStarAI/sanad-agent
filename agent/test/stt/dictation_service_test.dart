@@ -4,11 +4,27 @@ import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_catalog.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:sanad_agent/infrastructure/stt/whispercpp_bindings.dart';
 import 'package:test/test.dart';
 
 void main() {
   late Directory home;
+
+  /// The engines this build was compiled with. The service answers from the
+  /// same object, so every expectation below holds on the sherpa build and on
+  /// the whisper-only build: a literal id or count encodes only one of them.
+  const availability = SttEngineAvailability.build();
+
+  /// The rows this build offers: usable here, and not hidden from the surface.
+  List<SttCatalogEntry> visibleUsableEntries() =>
+      usableSttEntries(availability).where((entry) => !entry.hidden).toList();
+
+  /// A visible entry that is not the resolved default, so honoring a selection
+  /// is observable on both builds.
+  String alternativeUsableId() => visibleUsableEntries()
+      .firstWhere((entry) => entry.id != defaultUsableSttEntry(availability)?.id)
+      .id;
 
   setUp(() {
     home = Directory.systemTemp.createTempSync('dictation-service-');
@@ -66,33 +82,38 @@ stt:
   group('dictation selection', () {
     test('the catalog default is selected initially', () {
       final subject = service();
-      expect(subject.selectedModelId, defaultSttEntry.id);
+      // The default *for this build*: a whisper-only build never starts on a
+      // model whose engine it does not have.
+      expect(subject.selectedModelId, defaultUsableSttEntry(availability)!.id);
       expect(subject.selectedEntry, isNotNull);
     });
 
     test('a persisted selection survives a new service instance', () async {
       final first = service();
+      final persisted = alternativeUsableId();
       // Write a selection the way the socket handler does.
       await Directory(first.store.modelsRoot).create(recursive: true);
       await File(
         '${first.store.modelsRoot}/selection.json',
-      ).writeAsString(jsonEncode({'model_id': 'whisper-base-int8'}));
+      ).writeAsString(jsonEncode({'model_id': persisted}));
 
-      expect(service().selectedModelId, 'whisper-base-int8');
+      expect(service().selectedModelId, persisted);
     });
 
     test('explicit config beats the persisted selection', () async {
       final subject = service();
+      final configured = visibleUsableEntries().first.id;
+      final persisted = alternativeUsableId();
       await Directory(subject.store.modelsRoot).create(recursive: true);
       await File(
         '${subject.store.modelsRoot}/selection.json',
-      ).writeAsString(jsonEncode({'model_id': 'whisper-base-int8'}));
+      ).writeAsString(jsonEncode({'model_id': persisted}));
       writeConfig('''
 stt:
-  model_id: egy-whisper-turbo-int8
+  model_id: $configured
 ''');
 
-      expect(service().selectedModelId, 'egy-whisper-turbo-int8');
+      expect(service().selectedModelId, configured);
     });
 
     test('a corrupt selection falls back to the default', () async {
@@ -101,7 +122,7 @@ stt:
       await File(
         '${subject.store.modelsRoot}/selection.json',
       ).writeAsString('{not json');
-      expect(service().selectedModelId, defaultSttEntry.id);
+      expect(service().selectedModelId, defaultUsableSttEntry(availability)!.id);
     });
 
     test('model_path override wins over everything', () {
@@ -153,15 +174,20 @@ stt:
     });
 
     test('the settings projection reports the installed model and size', () {
+      // A batch entry: streaming is a sherpa feature, so a build without it
+      // publishes batch rows only and this row must still be there.
+      final selectedEntry = visibleUsableEntries().firstWhere(
+        (entry) => entry.mode == SttModelMode.batchVad,
+      );
       writeConfig('''
 stt:
-  model_id: whisper-base-int8
+  model_id: ${selectedEntry.id}
 ''');
       final snapshot = service().settingsSnapshot();
-      expect(snapshot['selected_model_id'], 'whisper-base-int8');
+      expect(snapshot['selected_model_id'], selectedEntry.id);
       final models = (snapshot['models'] as List).cast<Map<String, dynamic>>();
       final selected = models.firstWhere(
-        (model) => model['id'] == 'whisper-base-int8',
+        (model) => model['id'] == selectedEntry.id,
       );
       expect(selected['size_bytes'], greaterThan(0));
       expect(selected['installed'], isFalse);
@@ -171,9 +197,10 @@ stt:
 
     test('selecting a model from settings uses the one selection owner', () async {
       final subject = service();
-      await subject.selectModel('whisper-base-int8');
-      expect(subject.selectedModelId, 'whisper-base-int8');
-      expect(service().selectedModelId, 'whisper-base-int8');
+      final chosen = alternativeUsableId();
+      await subject.selectModel(chosen);
+      expect(subject.selectedModelId, chosen);
+      expect(service().selectedModelId, chosen);
       await expectLater(
         subject.selectModel('nope'),
         throwsA(
@@ -210,7 +237,8 @@ stt:
       final payload = service().statusPayload();
       expect(payload['supported'], isTrue);
       final models = payload['models'] as List<Object?>;
-      final visible = kSttCatalog.where((entry) => !entry.hidden).toList();
+      final usable = usableSttEntries(availability);
+      final visible = visibleUsableEntries();
       expect(models, hasLength(visible.length));
       for (final model in models.cast<Map<String, Object?>>()) {
         expect(model['installed'], isFalse);
@@ -222,10 +250,10 @@ stt:
           .cast<Map<String, Object?>>()
           .map((model) => model['id'])
           .toSet();
-      for (final entry in kSttCatalog.where((entry) => entry.hidden)) {
+      for (final entry in usable.where((entry) => entry.hidden)) {
         expect(ids, isNot(contains(entry.id)));
       }
-      expect(payload['selected'], defaultSttEntry.id);
+      expect(payload['selected'], defaultUsableSttEntry(availability)!.id);
     });
 
     test('installation of an unknown model fails with model_unknown', () async {

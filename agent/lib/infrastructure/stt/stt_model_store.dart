@@ -72,18 +72,31 @@ class SttModelStatus {
 typedef SttProgressCallback = void Function(String id, int received, int total);
 
 class SttModelStore {
-  SttModelStore({required this.sanadHome, HttpClient Function()? httpClient})
-    : _httpClient = httpClient ?? HttpClient.new;
+  SttModelStore({
+    required this.sanadHome,
+    HttpClient Function()? httpClient,
+    SttModelFile sharedVadAsset = kSileroVadFile,
+  }) : _httpClient = httpClient ?? HttpClient.new,
+       _sharedVadAsset = sharedVadAsset;
 
   final String sanadHome;
   final HttpClient Function() _httpClient;
+
+  /// The shared VAD descriptor an install downloads.
+  ///
+  /// Production is always [kSileroVadFile], whose URL is a third-party release
+  /// host. The descriptor is injectable because it is the one artifact a
+  /// catalog entry does not carry: without this seam a unit test of [install]
+  /// would fetch a live remote file. Nothing else about the asset is
+  /// configurable — the path stays `<sharedDir>/<name>`.
+  final SttModelFile _sharedVadAsset;
 
   static const String _partialSuffix = '.partial';
 
   String get modelsRoot => '$sanadHome/models/stt';
   String get sharedDir => '$modelsRoot/_shared';
   String modelDir(String id) => '$modelsRoot/$id';
-  String get vadPath => '$sharedDir/${kSileroVadFile.name}';
+  String get vadPath => '$sharedDir/${_sharedVadAsset.name}';
 
   /// The persisted per-device model choice, beside the models it names.
   String get selectionPath => '$modelsRoot/selection.json';
@@ -162,11 +175,11 @@ class SttModelStore {
     final needsVad =
         entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
     var total = entry.files.fold<int>(0, (sum, file) => sum + file.sizeBytes);
-    if (needsVad) total += kSileroVadFile.sizeBytes;
+    if (needsVad) total += _sharedVadAsset.sizeBytes;
     var offset = 0;
     if (needsVad) {
       await _downloadFile(
-        kSileroVadFile,
+        _sharedVadAsset,
         vadPath,
         id: entry.id,
         onProgress: onProgress,
@@ -174,7 +187,7 @@ class SttModelStore {
         offsetBase: offset,
         grandTotal: total,
       );
-      offset += kSileroVadFile.sizeBytes;
+      offset += _sharedVadAsset.sizeBytes;
     }
     for (final file in entry.files) {
       await _downloadFile(

@@ -50,6 +50,19 @@ void main() {
       expect(settings.useGpu, defaultSttUseGpu());
     });
 
+    test('an absent use_gpu follows the Intel carve-out on Intel macOS', () {
+      // The resolver is host-bound, so the Intel branch is only provable here by
+      // naming the host: the same absent config must produce both answers.
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.macosX64).useGpu,
+        isFalse,
+      );
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.macosArm64).useGpu,
+        isTrue,
+      );
+    });
+
     test('an explicit use_gpu wins in both directions', () {
       writeConfig('''
 stt:
@@ -83,8 +96,9 @@ stt:
       expect(settings.language, 'ar');
       expect(settings.threads, 4);
       expect(settings.modelPath, isNull);
-      // Metal on by default on macOS arm64; the model stays warm for 5 minutes.
-      expect(settings.useGpu, isTrue);
+      // Metal on by default except on Intel macOS, where the x64 baseline has
+      // no GPU backend: the assertion follows the host resolver.
+      expect(settings.useGpu, defaultSttUseGpu());
       expect(settings.modelIdleMinutes, 5);
       expect(settings.keepsModelWarm, isTrue);
     });
