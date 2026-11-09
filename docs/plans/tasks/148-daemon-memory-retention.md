@@ -63,7 +63,7 @@ transport-scoped closure is released with its transport.
 - [x] `docs/qa_maintenance/agent_daemon_memory_qa.md` owns the regression matrix and the failing-test evidence.
 - [x] Durable laws recorded in `agent/lib/evolution/AGENTS.md` and `agent/lib/interfaces/runtime/AGENTS.md`.
 - [x] `docs/llms.txt` indexes both pages.
-- [ ] Pull request opened against `main`; merge remains an owner decision.
+- [x] Pull request [#369](https://github.com/EastStarAI/sanad-agent/pull/369) opened against `main`; merge remains an owner decision.
 
 ## Acceptance criteria
 - [x] Given a provider that streams an answer in many deltas, when the turn commits, then the committed content equals
@@ -80,7 +80,7 @@ transport-scoped closure is released with its transport.
 - [x] Analyzer clean; focused and affected suites green.
 - [x] Owning contracts and design documentation updated in the same change.
 - [x] No runtime started, stopped, or signalled; the primary Home was never touched.
-- [ ] Pull request open with the mandatory `type/*` and `comp/*` labels; CI green.
+- [x] Pull request open with `type/performance` and `comp/agent`; Public CI green on every required check.
 
 ## Implementation record
 
