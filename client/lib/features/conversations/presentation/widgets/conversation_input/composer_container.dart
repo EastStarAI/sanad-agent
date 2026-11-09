@@ -26,6 +26,9 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/conversations/presentation/widgets/multiline_submission_shortcuts.dart';
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_mic_button.dart';
 
 import '../sidebar/sidebar_composition.dart';
 import 'composer_attachment_rail.dart';
@@ -34,6 +37,7 @@ import 'composer_model_chip.dart';
 import 'composer_permission_mode_chip.dart';
 import 'composer_send_stop_button.dart';
 import 'composer_workspace_warning.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_composer_backdrop.dart';
 
 /// The composer card: input field, attachment rail, and the bottom action row.
 class ComposerContainer extends StatelessWidget {
@@ -138,6 +142,13 @@ class ComposerContainer extends StatelessWidget {
                     const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false): () {
                       context.read<ComposerSlashCommandsCubit>().clear();
                     },
+                  // Escape also abandons a pending "send after dictation" wait.
+                  // The slash menu owns Escape when it is open, hence the guard.
+                  if (slashState.visibleEntries.isEmpty &&
+                      (maybeDictationCubit(context)?.state.awaitingSend ?? false))
+                    const SingleActivator(LogicalKeyboardKey.escape, includeRepeats: false): () {
+                      readDictationCubit(context)?.cancelPendingSend();
+                    },
                   const SingleActivator(LogicalKeyboardKey.enter, meta: true, includeRepeats: false): () {
                     onSendAttempt(intent: MessageDeliveryIntent.queue);
                   },
@@ -199,7 +210,10 @@ class ComposerContainer extends StatelessWidget {
       key: const Key('composer_focus_surface'),
       behavior: HitTestBehavior.opaque,
       onTap: chatFocusNode.requestFocus,
-      child: composerCard,
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: composerCard,
+      ),
     );
     return focusSurface;
   }
@@ -242,6 +256,28 @@ class ComposerContainer extends StatelessWidget {
   }
 
   Widget _buildBottomRow(BuildContext context) {
+    final dictationCubit = maybeDictationCubit(context);
+    if (dictationCubit == null) {
+      return _buildBottomRowContent(context, dictationActive: false);
+    }
+    // The row is the only place the live meter lives, and every selector in it
+    // steps aside while the user speaks, so the swap must follow the session.
+    return BlocBuilder<DictationCubit, DictationState>(
+      bloc: dictationCubit,
+      buildWhen: (previous, current) =>
+          previous.status != current.status ||
+          previous.isActive != current.isActive,
+      builder: (context, state) => _buildBottomRowContent(
+        context,
+        dictationActive: state.status == DictationStatus.listening,
+      ),
+    );
+  }
+
+  Widget _buildBottomRowContent(
+    BuildContext context, {
+    required bool dictationActive,
+  }) {
     final hasPendingRequest = inputSlice.pendingSuspendedRequest != null;
 
     // The picker is the only route to provider setup, so it stays available
@@ -285,10 +321,30 @@ class ComposerContainer extends StatelessWidget {
           onSendAttempt: onSendAttempt,
           onStop: onStop,
           dimTextColor: dimTextColor,
-          sessionId: sessionId,
         );
       },
     );
+
+    // Dictation is optional surface-wise: when the app shell has not provided a
+    // cubit (some composer tests, embedded composers), the mic simply does not
+    // render. When it is provided, visibility follows the agent, never the
+    // capability — the capability only styles the inactive state.
+    DictationCubit? dictationCubit;
+    try {
+      dictationCubit = context.read<DictationCubit>();
+    } on Object {
+      dictationCubit = null;
+    }
+    final dictationMicButton = dictationCubit != null &&
+            agentSlice.activeAgent != null
+        ? DictationMicButton(
+            chatController: chatController,
+            device: agentSlice.activeAgent,
+            scopeKey: sessionId,
+            focusNode: chatFocusNode,
+            dimTextColor: dimTextColor,
+          )
+        : null;
 
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
@@ -317,11 +373,14 @@ class ComposerContainer extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
-              if (ComposerPermissionGate.shouldShow(
-                hasPendingRequest: hasPendingRequest,
-                capabilities: capabilities,
-                inputSlice: inputSlice,
-              )) ...[
+              // The permission picker steps aside while dictation is active: the
+              // row shows the live meter instead, and the value is unchanged.
+              if (!dictationActive &&
+                  ComposerPermissionGate.shouldShow(
+                    hasPendingRequest: hasPendingRequest,
+                    capabilities: capabilities,
+                    inputSlice: inputSlice,
+                  )) ...[
                 ComposerPermissionModeChip(
                   permissionMode: inputSlice.permissionMode,
                   isLoadingPermissionMode: inputSlice.isLoadingPermissionMode,
@@ -334,7 +393,17 @@ class ComposerContainer extends StatelessWidget {
               ],
             ],
           ),
-          if (SidebarBreakpoints.isCompact(context))
+          // While listening, the model and thinking selectors give the row to the
+          // meter, which fills the space they had. Nothing about their state
+          // changes, so they return exactly as they were when the session ends.
+          if (dictationActive)
+            const Expanded(
+              child: Padding(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                child: DictationComposerBackdrop(),
+              ),
+            )
+          else if (SidebarBreakpoints.isCompact(context))
             Expanded(
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -354,6 +423,8 @@ class ComposerContainer extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(width: 4),
+                  if (dictationMicButton != null) dictationMicButton,
+                  if (dictationMicButton != null) const SizedBox(width: 4),
                   sendStopButton,
                 ],
               ),
@@ -370,9 +441,20 @@ class ComposerContainer extends StatelessWidget {
                   thinkingModeChip,
                   const SizedBox(width: 8),
                 ],
+                if (dictationMicButton != null) ...[
+                  dictationMicButton,
+                  const SizedBox(width: 8),
+                ],
                 sendStopButton,
               ],
             ),
+          // In the active layout the meter took the flexible slot, so the two
+          // controls that stay visible are pinned to the trailing edge here.
+          if (dictationActive) ...[
+            if (dictationMicButton != null) dictationMicButton,
+            if (dictationMicButton != null) const SizedBox(width: 8),
+            sendStopButton,
+          ],
         ],
       ),
     );

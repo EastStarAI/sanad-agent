@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:logging/logging.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import 'package:uuid/uuid.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/server_sanad_gateway_platform.dart';
 
@@ -119,14 +120,30 @@ class LocalWebSocketTransportChannel extends VoiceTransportChannel {
 }
 
 /// Cloud Socket.IO implementation of [VoiceTransportChannel].
+///
+/// One instance serves exactly one voice session: it carries the session and
+/// request identity on every outbound frame and drops relayed traffic that
+/// belongs to another session, so a daemon serving two sessions can never
+/// cross-wire audio, transcript, or interruption state.
 class CloudSocketIoTransportChannel extends VoiceTransportChannel {
   final _logger = Logger('CloudSocketIoTransportChannel');
   final String deviceId;
+
+  /// One voice session identity (`session_id`), minted by the Client.
+  final String sessionId;
+
+  /// Origin correlation identity; the contract makes it equal to [sessionId].
+  final String requestId;
+
   late final io.Socket _socket;
   final _audioController = StreamController<List<int>>.broadcast();
   final _controlController = StreamController<String>.broadcast();
 
-  CloudSocketIoTransportChannel(this.deviceId) {
+  CloudSocketIoTransportChannel({
+    required this.deviceId,
+    required this.sessionId,
+    required this.requestId,
+  }) {
     final gatewayPlatform = getIt<ServerSanadGatewayPlatform>();
     final socket = gatewayPlatform.socket;
     if (socket == null) {
@@ -140,32 +157,32 @@ class CloudSocketIoTransportChannel extends VoiceTransportChannel {
     _socket.on('voice_control_relay', _onControlEvent);
   }
 
+  /// True only for a frame carrying this exact session/request identity.
+  ///
+  /// A frame without identity is foreign by definition: there is no account-wide
+  /// or per-device fallback, because the only thing that fallback can do is
+  /// deliver another client's speech into this session.
+  bool _isOwnIdentity(Map data) {
+    final frameSession = data['session_id'];
+    final frameRequest = data['request_id'];
+    return frameSession == sessionId && frameRequest == requestId;
+  }
+
   void _onAudioChunk(dynamic data) {
-    if (data is Map) {
-      final audioData = data['data'];
-      if (audioData is List<int>) {
-        _audioController.add(audioData);
-      } else if (audioData is List) {
-        _audioController.add(List<int>.from(audioData));
-      } else if (audioData is String) {
-        // Base64 fallback if needed
-        _audioController.add(base64Decode(audioData));
-      }
-    } else if (data is List<int>) {
-      _audioController.add(data);
-    } else if (data is List) {
-      _audioController.add(List<int>.from(data));
+    if (data is! Map || !_isOwnIdentity(data)) return;
+    final audioData = data['data'];
+    if (audioData is List<int>) {
+      _audioController.add(audioData);
+    } else if (audioData is List) {
+      _audioController.add(List<int>.from(audioData));
     }
   }
 
   void _onControlEvent(dynamic data) {
-    if (data is Map) {
-      final eventName = data['event'] as String?;
-      if (eventName != null) {
-        _controlController.add(eventName);
-      }
-    } else if (data is String) {
-      _controlController.add(data);
+    if (data is! Map || !_isOwnIdentity(data)) return;
+    final eventName = data['event'] as String?;
+    if (eventName != null) {
+      _controlController.add(eventName);
     }
   }
 
@@ -181,8 +198,12 @@ class CloudSocketIoTransportChannel extends VoiceTransportChannel {
       _logger.warning('Cannot send output audio: Socket.IO is disconnected');
       return;
     }
+    // Identity is mandatory: without it the Gateway can only broadcast, and a
+    // broadcast of synthesized speech reaches every Client in the account.
     _socket.emit('device_voice_audio_chunk', {
       'device_id': deviceId,
+      'session_id': sessionId,
+      'request_id': requestId,
       'data': pcmChunk,
     });
   }
@@ -195,17 +216,22 @@ class CloudSocketIoTransportChannel extends VoiceTransportChannel {
     }
     _socket.emit('device_event', {
       'device_id': deviceId,
-      'type': 'event',
+      'type': 'device_event',
       'event': eventName,
+      'event_id': const Uuid().v4(),
+      'session_id': sessionId,
+      'delivery': {'scope': 'origin', 'request_id': requestId},
       'payload': payload,
     });
   }
 
   @override
   Future<void> close() async {
+    // Detach only this session's listeners: the socket is shared with commands,
+    // relay media, and presence, and is never disposed here.
     _socket.off('voice_audio_chunk_relay', _onAudioChunk);
     _socket.off('voice_control_relay', _onControlEvent);
-    await _audioController.close();
-    await _controlController.close();
+    if (!_audioController.isClosed) await _audioController.close();
+    if (!_controlController.isClosed) await _controlController.close();
   }
 }

@@ -1,0 +1,11 @@
+name: sanad_stt_sherpa
+description: "Stand-in for the sherpa-onnx dictation engine on builds without Flutter."
+version: 1.0.0
+publish_to: none
+
+# This package carries the same name and public library as
+# `packages/stt_sherpa`, and no dependencies at all, so a lane that installs the
+# standalone Dart SDK can resolve it. The Agent selects it with
+# `tool/pubspec_overrides.no_sherpa.yaml`.
+environment:
+  sdk: '>=3.10.0 <4.0.0'

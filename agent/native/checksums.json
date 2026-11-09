@@ -1,0 +1,32 @@
+{
+  "_comment": "Checksums of the prebuilt whisper.cpp shim per platform. The binaries themselves are NOT tracked (see .gitignore); tool/ensure_native_stt.dart uses this file to verify an installed runtime, a download, or a staged release build. The artifact key is the shared platform tag from agent/lib/infrastructure/stt/stt_native_platform.dart and is also the name of the directory under agent/native/.",
+  "_provenance": "Each artifact declares what its recorded hashes can prove. `_status: locally-built` means the values came from one local build and no producing workflow exists yet. `_status: unpinned` means no per-file hash is recorded, so only the presence, machine-architecture, and macOS-deployment-target checks apply; it is never a silent pass because --verify reports the pin state. A missing artifact key is a hard verification failure, and a download requires a pinned `_archive` hash.",
+  "whisper_cpp_version": "1.9.5",
+  "artifacts": {
+    "macos-arm64": {
+      "_status": "locally-built",
+      "libsanad_whisper.dylib": "0131e2dc5d02ad0db0d4e5e4b816153580a88e55cf9fa2b9f9a58fd22568c088",
+      "libwhisper.1.dylib": "bfaf31f52b0827df7b7ca08796d93d621141bdd6e5ad457b535a832f3ad5b020",
+      "libggml.0.dylib": "4570854c075cdfe0ed58fd208ed3d457868943f6eefe667ac9e8259fe908dab8",
+      "libggml-base.0.dylib": "a7a148da6404dac456dd2da28c37e231b098ddd63cf7c4b1119decd5a8bfc113",
+      "libggml-cpu.0.dylib": "3608d334b978c0cb744f464093a281bb8d558c6ec99418b552a02cd587df1025",
+      "libggml-blas.0.dylib": "2f9724c041157cc8eff0d3a57dc4580e7cbf6dc62ba16b07fc794eab2b982e8a",
+      "libggml-metal.0.dylib": "80f8532030d9f01a60d9454913818fae9b93246876f1fdf0029dbedcd07322af"
+    },
+    "macos-x64": {
+      "_status": "unpinned"
+    },
+    "windows-x64": {
+      "_status": "unpinned"
+    },
+    "windows-arm64": {
+      "_status": "unpinned"
+    },
+    "linux-x64": {
+      "_status": "unpinned"
+    },
+    "linux-arm64": {
+      "_status": "unpinned"
+    }
+  }
+}

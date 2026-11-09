@@ -6,6 +6,7 @@ import 'dart:developer' as developer;
 import 'dart:convert';
 
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/driver/dictation_driver_extensions.dart';
 import 'package:sanad_client/driver/inspect_ui_extension.dart';
 import 'package:sanad_client/driver/interaction_extensions.dart';
 import 'package:sanad_client/features/auth/infrastructure/auth_service.dart';
@@ -51,6 +52,12 @@ void main() {
   // Enable integration testing with the Flutter Driver extension.
   enableFlutterDriverExtension(enableTextEntryEmulation: false);
 
+  // Install the dictation capture seam before the app builds its providers: a
+  // cubit captures its capture instance, so a later swap could never reach it.
+  // Production `main.dart` never calls this, so the real microphone stays the
+  // default for every real user.
+  installDriverDictationCapture();
+
   // Register development service extensions in documented order:
   // 1. ext.sanad_client.auth_url
   // 2. ext.sanad_client.inspect_ui
@@ -59,6 +66,7 @@ void main() {
   // 5. ext.sanad_client.tap
   // 6. ext.sanad_client.reveal
   // 7. ext.sanad_client.hover
+  // 8. the dictation capture/probe/control group
   registerAuthUrlExtension();
   registerInspectUiExtension();
   registerEnterTextExtension();
@@ -66,6 +74,7 @@ void main() {
   registerTapExtension();
   registerRevealExtension();
   registerHoverExtension();
+  registerDictationDriverExtensions();
 
   app.main();
 }

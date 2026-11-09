@@ -10,6 +10,7 @@ import 'package:sanad_client/features/schedules/domain/models/schedule_run_failu
 import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubit.dart';
 import 'package:sanad_client/features/schedules/presentation/schedule_device_scope.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 /// The device-scoped schedules cubit of the surrounding device chrome
 /// (Task 139 C1).
@@ -113,33 +114,22 @@ class _SchedulesChromeScopeState extends State<SchedulesChromeScope> {
     if (!mounted) return;
     final l10n = AppLocalizations.of(context);
     if (l10n == null) return;
-    final messenger = ScaffoldMessenger.maybeOf(context);
-    if (messenger == null) return;
     final name = notice.scheduleName?.trim();
-    messenger
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          key: const Key('schedule_failure_notice'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                l10n.scheduleFailureNotice(
-                  name != null && name.isNotEmpty ? name : l10n.scheduleDerivedLabel(notice.scheduleId),
-                ),
-              ),
-              if (notice.suggestPause)
-                Text(
-                  l10n.scheduleFailureSuggestion,
-                  key: const Key('schedule_failure_notice_suggestion'),
-                  style: const TextStyle(fontSize: 12),
-                ),
-            ],
-          ),
-        ),
-      );
+    final text = StringBuffer(
+      l10n.scheduleFailureNotice(
+        name != null && name.isNotEmpty ? name : l10n.scheduleDerivedLabel(notice.scheduleId),
+      ),
+    );
+    if (notice.suggestPause) {
+      text
+        ..write('\n')
+        ..write(l10n.scheduleFailureSuggestion);
+    }
+    ToastUtils.showError(
+      context,
+      text.toString(),
+      key: const Key('schedule_failure_notice'),
+    );
   }
 
   @override

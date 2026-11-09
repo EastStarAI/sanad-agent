@@ -7,6 +7,7 @@ import 'package:sanad_client/features/schedules/presentation/bloc/schedules_cubi
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_failure_text.dart';
 import 'package:sanad_client/features/schedules/presentation/widgets/schedule_format.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 /// The shared schedule actions of every surface (Task 139 C2).
 ///
@@ -87,14 +88,11 @@ class ScheduleActions {
     if (failure == null) return;
     final l10n = AppLocalizations.of(context)!;
     final text = scheduleFailureText(l10n, failure.code) ?? l10n.scheduleActionFailed;
-    ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
-      ..showSnackBar(
-        SnackBar(
-          key: const Key('schedule_action_failure_notice'),
-          content: Text(text),
-        ),
-      );
+    ToastUtils.showError(
+      context,
+      text,
+      key: const Key('schedule_action_failure_notice'),
+    );
   }
 
   static Future<ScheduleActionOutcome> _run(

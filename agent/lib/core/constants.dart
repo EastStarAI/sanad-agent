@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/core/sanad_home/installed_home_record.dart';
 
 String? _sanadHomeOverride;
 String? _sanadStateHomeOverride;
@@ -65,25 +66,52 @@ bool hasExplicitSanadStateIsolation() {
 }
 
 /// Returns the path to the Sanad home directory.
-/// Priority:
-/// 1. Manual override via setSanadHomeOverride()
-/// 2. SANAD_HOME environment variable (used directly)
-/// 3. Default user home + /.sanad/
+///
+/// [resolveSanadHomePath] owns the order: an explicit selection (`--home`),
+/// then `SANAD_HOME`, then the Home that recorded this executable's
+/// installation, and finally the OS user's `$HOME/.sanad`.
 String getSanadHome() {
-  if (_sanadHomeOverride != null) {
-    return _sanadHomeOverride!;
-  }
-
-  final String? envHome = Platform.environment['SANAD_HOME'];
-  if (envHome != null && envHome.isNotEmpty) {
-    return envHome;
-  }
-
-  final home = defaultSanadHome();
+  final home = resolveSanadHomePath(
+    override: _sanadHomeOverride,
+    environmentHome: Platform.environment['SANAD_HOME'],
+    installedHome: InstalledHomeRecord.current(),
+    defaultHome: defaultSanadHome(),
+  );
   if (home == null) {
     throw Exception("Could not determine home directory.");
   }
   return home;
+}
+
+/// Resolves the active Home from its ordered sources.
+///
+/// * [override] is the Home this process selected itself (`--home`).
+/// * [environmentHome] is an inherited `SANAD_HOME`.
+/// * [installedHome] is the Home whose install record sits beside this
+///   executable ([InstalledHomeRecord]).
+/// * [defaultHome] is the OS user's `$HOME/.sanad`.
+///
+/// An operator's explicit selection always wins: it is the only source that can
+/// address a Home this machine does not otherwise describe. The install record
+/// answers before the account default, because an installed Agent belongs to the
+/// Home that installed it, and a dedicated service account has `$HOME` equal to
+/// that Home: the default would name a second, empty Home and every service
+/// command would misreport a healthy unit. A blank value selects nothing.
+String? resolveSanadHomePath({
+  required String? override,
+  required String? environmentHome,
+  required String? installedHome,
+  required String? defaultHome,
+}) {
+  for (final candidate in <String?>[
+    override,
+    environmentHome,
+    installedHome,
+    defaultHome,
+  ]) {
+    if (candidate != null && candidate.trim().isNotEmpty) return candidate;
+  }
+  return null;
 }
 
 /// The default Sanad Home of the OS user (`$HOME/.sanad`, or

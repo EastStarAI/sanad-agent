@@ -6,6 +6,7 @@ import 'package:sanad_client/features/schedules/domain/models/schedule.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_error.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
 import 'package:sanad_client/features/schedules/presentation/screens/schedules_screen.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 import '../../helpers/pump_app.dart';
 import 'schedules_test_harness.dart';
@@ -236,12 +237,14 @@ void main() {
       );
       await pumpList(tester);
       final l10n = await l10nFor('en');
+      final toasts = <String>[];
+      ToastUtils.debugOnShowError = toasts.add;
+      addTearDown(() => ToastUtils.debugOnShowError = null);
 
       await tester.tap(find.byKey(const Key('schedule_run_now_btn_task_1')));
       await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('schedule_action_failure_notice')), findsOneWidget);
-      expect(find.text(l10n.scheduleErrorOrphaned), findsOneWidget);
+      expect(toasts, contains(l10n.scheduleErrorOrphaned));
     });
   });
 

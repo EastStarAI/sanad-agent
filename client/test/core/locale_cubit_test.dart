@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -13,9 +14,49 @@ void main() {
   });
 
   group('locale', () {
-    test('unsupported stored locale silently falls back to en', () async {
+    test('an explicit choice wins over the system language', () {
+      expect(
+        LocaleCubit.resolveInitial(
+          systemLocale: const Locale('en'),
+          savedCode: 'ar',
+        ).languageCode,
+        'ar',
+      );
+    });
+
+    test('with no saved choice the system language is used', () {
+      expect(
+        LocaleCubit.resolveInitial(
+          systemLocale: const Locale('ar', 'EG'),
+          savedCode: null,
+        ).languageCode,
+        'ar',
+      );
+    });
+
+    test('an unsupported system language falls back to en', () {
+      expect(
+        LocaleCubit.resolveInitial(
+          systemLocale: const Locale('de'),
+          savedCode: null,
+        ).languageCode,
+        'en',
+      );
+    });
+
+    test('an unknown saved value defers to the system language', () {
+      expect(
+        LocaleCubit.resolveInitial(
+          systemLocale: const Locale('ar'),
+          savedCode: 'fr',
+        ).languageCode,
+        'ar',
+      );
+    });
+
+    test('the stored-path resolver returns a supported locale', () async {
       final locale = await LocaleCubit.getSavedLocale();
-      expect(locale.languageCode, 'en');
+      expect(kSupportedLocales, contains(locale));
     });
 
     test('supported locales contain en and ar', () {

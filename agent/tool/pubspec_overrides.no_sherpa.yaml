@@ -1,0 +1,14 @@
+# Lane overlay: build the Agent without the sherpa-onnx engine.
+#
+# `sherpa_onnx` declares `environment: flutter`, and the Linux arm64 Agent is
+# built with the standalone Dart SDK because Flutter publishes no Linux arm64
+# host SDK. A lane that cannot run Flutter copies this file to
+# `agent/pubspec_overrides.yaml` before `pub get`, which swaps the engine for a
+# stand-in with the same package name and public library.
+#
+# The result is a complete, honest build: the Agent compiles, local dictation
+# runs on the whisper.cpp runtime (batch-only), and readiness reports the
+# streaming/VAD engine as unavailable. Do not add anything else here.
+dependency_overrides:
+  sanad_stt_sherpa:
+    path: packages/stt_sherpa_stub

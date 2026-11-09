@@ -363,6 +363,13 @@ Future<void> handleRun({
         ..['SANAD_DEV_RUNTIME_NONCE'] = runtimeNonce
         ..['SANAD_DEV_WORKSPACE_HASH'] = runtime.worktreeId.split('-').last
         ..addAll(cloudEndpoints?.toAgentEnvironment() ?? const {});
+  // Flutter's documented handoff keeps the authenticated DDS URI. The file is
+  // prepared owner-only and removed before launch so discovery never accepts a
+  // stale recording; a failure here only keeps the existing fallback.
+  final vmServiceOutFile = await prepareVmServiceOutFile(
+    sanadHome: runtime.sanadHome,
+    vmServicePort: runtime.vmServicePort,
+  );
   final flutterArguments = <String>[
     'flutter',
     'run',
@@ -384,6 +391,8 @@ Future<void> handleRun({
       '--dart-define=SANAD_DEV_WORKTREE_BRANCH=${runtime.branch}',
     '--host-vmservice-port=${runtime.vmServicePort}',
     '--disable-service-auth-codes',
+    if (vmServiceOutFile != null)
+      '--vmservice-out-file=$vmServiceOutFile',
     if (driverMode) '--print-dtd',
     if (driverMode) ...['-t', 'lib/driver_main.dart'],
   ];
@@ -391,6 +400,12 @@ Future<void> handleRun({
     flutterArguments,
     device: device,
     environment: Platform.environment,
+  );
+  await applySanadDevWebBrowserProfile(
+    flutterArguments,
+    device: device,
+    sanadHome: runtime.sanadHome,
+    clientInstanceSlot: clientInstanceSlot,
   );
   final clientEnvironment = buildUnifiedSanadHomeEnvironment(
     Platform.environment,
@@ -447,6 +462,12 @@ Future<void> handleRun({
     watchStartupSignal(ProcessSignal.sigterm);
     watchStartupSignal(ProcessSignal.sighup);
   }
+
+  // The whisper runtime is not tracked in git (per-platform build products), so
+  // a fresh clone has none. Prepare it **in the background** so the daemon and
+  // client start immediately; dictation becomes available as soon as the build
+  // finishes (the library is only opened when a session starts), no restart.
+  if (startsAgent) unawaited(prepareNativeDictation(agentDirectory));
 
   try {
     final agentStart = startsAgent
@@ -678,3 +699,4 @@ Future<void> handleRun({
   final clientExitCode = await controller.run();
   if (clientExitCode != 0) exitCode = clientExitCode;
 }
+

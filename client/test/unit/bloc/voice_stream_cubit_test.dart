@@ -15,6 +15,12 @@ class FakeVoiceStreamService extends Fake implements VoiceStreamService {
   bool startRecordingCalled = false;
   bool stopRecordingCalled = false;
   bool stopPlaybackCalled = false;
+  final playedChunks = <List<int>>[];
+
+  @override
+  void playAudioChunk(List<int> pcmChunk) {
+    playedChunks.add(pcmChunk);
+  }
 
   @override
   Future<bool> hasPermission() async => true;
@@ -111,6 +117,81 @@ void main() {
     expect(sentCommands[0]['data']['data'], equals(quietChunk1));
     expect(sentCommands[1]['data']['data'], equals(quietChunk2));
     expect(sentCommands[2]['data']['data'], equals(loudChunk));
+  });
+
+  test('relayed audio without identity is never played', () async {
+    final agent = DeviceConfig(id: 'test-agent-id', name: 'Test Agent', isOnline: true);
+    await cubit.startVoiceSession(agent: agent, sessionId: 'own-session');
+
+    cloudSocket.debugEmitEvent({
+      'type': 'voice_audio_chunk_relay',
+      'data': makePcmChunk(sampleValue: 900, count: 20),
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(voiceService.playedChunks, isEmpty);
+  });
+
+  test('relayed audio from another session is never played', () async {
+    final agent = DeviceConfig(id: 'test-agent-id', name: 'Test Agent', isOnline: true);
+    await cubit.startVoiceSession(agent: agent, sessionId: 'own-session');
+
+    cloudSocket.debugEmitEvent({
+      'type': 'voice_audio_chunk_relay',
+      'session_id': 'other-session',
+      'request_id': 'other-session',
+      'data': makePcmChunk(sampleValue: 900, count: 20),
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(voiceService.playedChunks, isEmpty);
+  });
+
+  test('relayed audio with a mismatched request id is never played', () async {
+    final agent = DeviceConfig(id: 'test-agent-id', name: 'Test Agent', isOnline: true);
+    await cubit.startVoiceSession(agent: agent, sessionId: 'own-session');
+
+    cloudSocket.debugEmitEvent({
+      'type': 'voice_audio_chunk_relay',
+      'session_id': 'own-session',
+      'request_id': 'a-different-request',
+      'data': makePcmChunk(sampleValue: 900, count: 20),
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(voiceService.playedChunks, isEmpty);
+  });
+
+  test('relayed audio with a foreign device id is never played', () async {
+    final agent = DeviceConfig(id: 'test-agent-id', name: 'Test Agent', isOnline: true);
+    await cubit.startVoiceSession(agent: agent, sessionId: 'own-session');
+
+    cloudSocket.debugEmitEvent({
+      'type': 'voice_audio_chunk_relay',
+      'device_id': 'someone-else',
+      'session_id': 'own-session',
+      'request_id': 'own-session',
+      'data': makePcmChunk(sampleValue: 900, count: 20),
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(voiceService.playedChunks, isEmpty);
+  });
+
+  test('relayed audio from this exact session is played', () async {
+    final agent = DeviceConfig(id: 'test-agent-id', name: 'Test Agent', isOnline: true);
+    await cubit.startVoiceSession(agent: agent, sessionId: 'own-session');
+    final chunk = makePcmChunk(sampleValue: 900, count: 20);
+
+    cloudSocket.debugEmitEvent({
+      'type': 'voice_audio_chunk_relay',
+      'session_id': 'own-session',
+      'request_id': 'own-session',
+      'data': chunk,
+    });
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+
+    expect(voiceService.playedChunks, [chunk]);
   });
 
   test('sends quiet chunks during hangover period and then stops sending when hangover expires', () async {

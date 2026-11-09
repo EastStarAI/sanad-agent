@@ -248,6 +248,17 @@ current; it recovers by itself when the device answers again. All of this is
 identical over a local and a cloud connection, and every string is localized in
 English and Arabic.
 
+## Local dictation
+
+Press the mic in the composer and speak: the text lands where the caret was,
+recognized locally by the agent on the same Mac. Audio never leaves the machine
+and recognition runs inside the agent daemon, not in the app. Four models are
+offered with the memory each one costs — an Egyptian model at ~1.2 GB of RAM as
+the default, a lighter Egyptian build at ~0.95 GB, a fast low-accuracy build at
+~0.76 GB, and an English streaming model at ~0.2 GB that writes text while you
+speak. Nothing stays loaded between sessions. Available on macOS arm64 in v1.
+See [Local Dictation](../technical/local_dictation.md).
+
 ## Experimental voice
 
 Sanad includes an experimental realtime voice path using Gemini Realtime,

@@ -24,6 +24,10 @@ dependencies:
   mcp_client: ^2.0.0
   uuid: ^4.5.1
   ffi: ^2.1.2
+  # Swappable dictation engine: `packages/stt_sherpa` (real) or
+  # `packages/stt_sherpa_stub` (no-Flutter lanes, selected by a pubspec override).
+  sanad_stt_sherpa:
+    path: packages/stt_sherpa
   intl: ^0.20.0
   image: ^4.9.1
   sanad_release_contract:

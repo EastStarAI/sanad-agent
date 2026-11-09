@@ -1,6 +1,5 @@
 import 'dart:ui';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -18,18 +17,33 @@ class LocaleCubit extends Cubit<Locale> {
     emit(locale);
   }
 
-  /// Loads the persisted locale, falling back to the first supported locale.
-  /// An unknown stored value silently resets to the fallback.
+  /// Resolves the UI locale: the saved choice wins, then the system language,
+  /// then the first supported locale.
+  ///
+  /// Following the system matters for the small hints the app shows (tooltips
+  /// included): a user running macOS in Arabic should not get English hints
+  /// before ever opening the language menu.
   static Future<Locale> getSavedLocale() async {
     final prefs = await SharedPreferences.getInstance();
-    final code = prefs.getString(_localeKey);
-    if (code != null) {
-      for (final locale in kSupportedLocales) {
-        if (locale.languageCode == code) {
-          return locale;
-        }
-      }
+    return resolveInitial(
+      systemLocale: PlatformDispatcher.instance.locale,
+      savedCode: prefs.getString(_localeKey),
+    );
+  }
+
+  /// Pure form of [getSavedLocale], so the fallback order is testable.
+  static Locale resolveInitial({
+    required Locale systemLocale,
+    required String? savedCode,
+  }) {
+    return _match(savedCode) ?? _match(systemLocale.languageCode) ?? kSupportedLocales.first;
+  }
+
+  static Locale? _match(String? code) {
+    if (code == null) return null;
+    for (final locale in kSupportedLocales) {
+      if (locale.languageCode == code) return locale;
     }
-    return kSupportedLocales.first;
+    return null;
   }
 }

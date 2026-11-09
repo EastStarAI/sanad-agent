@@ -81,7 +81,7 @@ validate_changed_lines() {
         [[ "$content" =~ ^[[:space:]]+\"version\":\ \"[0-9]+\.[0-9]+\.[0-9]+\",$ ]] ||
           [[ "$content" =~ ^[[:space:]]+\"build_number\":\ [1-9][0-9]*,$ ]] ||
           [[ "$content" =~ ^[[:space:]]+\"tag\":\ \"v[0-9]+\.[0-9]+\.[0-9]+\",$ ]] ||
-          [[ "$content" =~ ^[[:space:]]+\"filename\":\ \"sanad-(agent|client)-[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.-]+\",?$ ]] ;;
+          [[ "$content" =~ ^[[:space:]]+\"filename\":\ \"sanad-(agent|client|agent-runtime)-[0-9]+\.[0-9]+\.[0-9]+-[a-z0-9.-]+\",?$ ]] ;;
       *)
         echo "Internal validator error for $path" >&2
         return 1 ;;

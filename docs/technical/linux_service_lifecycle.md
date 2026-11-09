@@ -77,6 +77,39 @@ behind, and its message names the account, the unreachable path, and the remedy.
 otherwise) keeps installing: the probe is a guard, and the activation health
 transaction still has to prove the service is running.
 
+### Resolving the unit's Home from the CLI
+
+A service command resolves the Home the unit runs with, not the invoking
+account's default. `agent/lib/core/constants.dart` owns one order: an explicit
+`--home`, then an inherited `SANAD_HOME`, then the Home whose install record
+(`<home>/service.json`, written by `service install`) sits beside a
+`<home>/bin/sanad` executable, and finally the OS user's `$HOME/.sanad`.
+
+The record decides before the default because the two are not interchangeable
+for a system unit: the dedicated `sanad-agent` account's passwd Home *is*
+`/var/lib/sanad-agent`, so `$HOME/.sanad` names a second, empty Home. Reading
+`service status` there found no ownership metadata and reported `Failed` /
+`Service exists without Sanad ownership metadata` for a healthy unit while
+creating that empty second Home, and `service restart` reported the service as
+not installed. The probe
+(`agent/lib/core/sanad_home/installed_home_record.dart`) is metadata-only: it
+stats the record, refuses a symlink, reads no `.env` or credential, and creates
+nothing. A source run, a copy outside a Home, and a Home that carries no record
+keep the account default.
+
+`install.sh` places the artifact in the Home it selected and `service install`
+records `service.json` in that same Home, so the two agree by construction.
+macOS and Windows installers always use the account's default `$HOME/.sanad` for
+both the artifact and the service definition, so the record-less fallback already
+names the Home the definition uses; an install on those platforms that was given
+a non-default `SANAD_HOME` still needs that variable (or `--home`) to be addressed
+later.
+
+A privileged action is not part of that resolution. When the dedicated account
+asks for a restart it cannot perform, `LinuxServiceManager._runPrivileged` still
+surfaces the underlying `sudo` failure text; a Sanad-owned message naming the
+administrator command remains open.
+
 ### Explicit account override (`--run-as-user`)
 
 An operator who needs the system unit to run as an existing account names it:

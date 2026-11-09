@@ -1,0 +1,15 @@
+name: sanad_stt_sherpa
+description: "sherpa-onnx dictation engine for the Sanad Agent (streaming + VAD)."
+version: 1.0.0
+publish_to: none
+
+# sherpa_onnx declares `environment: flutter`, so this package resolves only in
+# a Flutter-managed Dart SDK. Lanes that build the Agent with the standalone
+# Dart SDK override this dependency with `packages/stt_sherpa_stub`, which
+# exposes the same library and reports the engine unavailable.
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+
+dependencies:
+  logging: ^1.3.0
+  sherpa_onnx: ^2.0.1

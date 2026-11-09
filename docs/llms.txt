@@ -42,6 +42,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [AGENTS](./client/lib/features/conversations/domain/AGENTS.md): Rules governing ./client/lib/features/conversations/domain.
 - [AGENTS](./client/lib/features/conversations/presentation/AGENTS.md): Rules governing ./client/lib/features/conversations/presentation.
 - [AGENTS](./client/lib/features/devices/AGENTS.md): Rules governing ./client/lib/features/devices.
+- [AGENTS](./client/lib/features/dictation/AGENTS.md): Rules governing ./client/lib/features/dictation.
 - [AGENTS](./client/lib/features/home/AGENTS.md): Rules governing ./client/lib/features/home.
 - [AGENTS](./client/lib/features/mcp/AGENTS.md): Rules governing ./client/lib/features/mcp.
 - [AGENTS](./client/lib/features/provider_setup/AGENTS.md): Rules governing ./client/lib/features/provider_setup.
@@ -191,6 +192,9 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Linux Agent Service Lifecycle](docs/technical/linux_service_lifecycle.md): Capability-selected user/system systemd and OpenRC registration, one dedicated-account rule for every root install including sudo, the explicit `--run-as-user` override, the service account's reachable Home and executability preflight, credentialed health polling, typed status, ownership, conflict migration, and transactional rollback.
 - [Local Gateway and Sanad Home Protection](docs/technical/user_data_protection_and_minimization.md): Authentication, origin enforcement, filesystem ownership, secure startup, and runtime isolation for local Sanad data.
 - [Experimental Realtime Voice](docs/technical/voice_streaming.md): Current experimental Gemini Realtime voice path, transports, audio format, interruption behavior, and release boundaries.
+- [Local Dictation](docs/technical/local_dictation.md): In-process speech-to-text dictation — ownership boundary, WebSocket event contract, batch versus streaming, model catalog and lifecycle, and the macOS arm64 platform gate.
+- [Dictation Transport Protocol](docs/technical/dictation_transport_protocol.md): Authoritative wire contract for dictation on both channels — session/request/route/seq identity, hosted relay envelopes, binary PCM framing, origin-only delivery, admission, limits, TTL and cleanup, capability schema, and legacy voice origin correlation.
+- [Native Dictation Runtime Platforms](docs/technical/native_stt_runtime_platforms.md): Platform tag, directory layout, verification rules, install-failure policy, retry path, and release staging for the in-process whisper.cpp dictation runtime, including macOS Intel (x64).
 - [Web Search Runtime](docs/technical/web_search_runtime.md): Daemon-owned search providers, DuckDuckGo redirect normalization, fallback behavior, and SSRF filtering.
 - [Remote Workspace Folder Mutation Protocol](docs/technical/workspace_folder_mutation_protocol.md): Managed-root remote workspace create, constrained browse, and confirmation-gated folder mutations.
 - [Workspace Identity, Rename, and Change Path Protocol](docs/technical/workspace_identity_protocol.md): Stable workspace UUID, availability projection, rename, path repair, and client routing contract.
@@ -215,6 +219,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Secrets Screen Plan](docs/plans/tasks/140-client-secrets-screen.md): Settings → Privacy & Security secrets list, add, write-only replace, and delete, the non-secret metadata table, the value-free protocol, and the relay, logging, and redaction guarantees.
 - [Remote Change Path Plan](docs/plans/tasks/143-remote-workspace-change-path.md): Client-only remote Change Path through the Task 123 confined browser, the in-root notice and named-target confirmation, the `path_not_allowed` copy, and the in-flight relocation rule.
 - [Mobile New-Account Onboarding Task](docs/plans/tasks/152-mobile-new-account-onboarding.md): Task 152 record: the shared shell chrome and sidebar scope, onboarding routing only from the live top route, the post-create install page, the ungated model picker, the clamped provider gate, and the deferred picker-header overflow.
+- [Dedicated Service Account Installed-Home Task](docs/plans/tasks/156-dedicated-account-installed-home.md): Issue 353 root cause in Home selection, the ordered `--home` → `SANAD_HOME` → install-record → `$HOME/.sanad` resolver, the metadata-only record probe, and the dedicated-account Linux status/restart gates.
 - [Provider Composer Catalog Freshness QA](docs/qa_maintenance/provider_composer_catalog_freshness.md): Snapshot-generation authority, stale-response/clear-device races, composer label refresh and approval-gated live acceptance.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 

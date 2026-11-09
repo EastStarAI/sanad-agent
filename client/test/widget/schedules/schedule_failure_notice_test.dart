@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/schedules/domain/models/schedule_run_failure_notice.dart';
 import 'package:sanad_client/features/schedules/presentation/schedules_chrome_scope.dart';
+import 'package:sanad_client/utils/toast_utils.dart';
 
 import '../../helpers/fake_device_repository.dart';
 import '../../helpers/fake_socket.dart';
@@ -18,8 +19,11 @@ void main() {
   late FakeSchedulesClient client;
   late FakeDeviceRepository deviceRepository;
   late TestDeviceCubit deviceCubit;
+  late List<String> toasts;
 
   setUp(() async {
+    toasts = <String>[];
+    ToastUtils.debugOnShowError = toasts.add;
     environment = SchedulesTestEnvironment();
     client = environment.client;
     await environment.install();
@@ -34,6 +38,7 @@ void main() {
   });
 
   tearDown(() async {
+    ToastUtils.debugOnShowError = null;
     await deviceCubit.close();
     await environment.dispose();
   });
@@ -64,9 +69,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('schedule_failure_notice')), findsOneWidget);
-    expect(find.text(l10n.scheduleFailureNotice('Morning brief')), findsOneWidget);
-    expect(find.byKey(const Key('schedule_failure_notice_suggestion')), findsNothing);
+    expect(find.byKey(const Key('schedule_failure_notice')), findsNothing);
+    expect(toasts, [l10n.scheduleFailureNotice('Morning brief')]);
+    expect(toasts.single, isNot(contains(l10n.scheduleFailureSuggestion)));
   });
 
   testWidgets('the pause suggestion appears only when the Agent suggests pausing', (tester) async {
@@ -84,8 +89,8 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('schedule_failure_notice_suggestion')), findsOneWidget);
-    expect(find.text(l10n.scheduleFailureSuggestion), findsOneWidget);
+    expect(toasts, hasLength(1));
+    expect(toasts.single, contains(l10n.scheduleFailureSuggestion));
   });
 
   testWidgets('a notice without a stored name falls back to the schedule identity', (tester) async {
@@ -97,7 +102,9 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.text(l10n.scheduleFailureNotice(l10n.scheduleDerivedLabel('task_9'))), findsOneWidget);
+    expect(toasts, [
+      l10n.scheduleFailureNotice(l10n.scheduleDerivedLabel('task_9')),
+    ]);
   });
 
   testWidgets('the chrome reads the list once for the active device', (tester) async {

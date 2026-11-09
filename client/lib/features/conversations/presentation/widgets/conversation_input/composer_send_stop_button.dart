@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/core/presentation/widgets/stop_action_button.dart';
 import 'package:sanad_client/features/conversations/domain/models/message_delivery_intent.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
@@ -10,6 +11,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/convers
 import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import 'composer_helpers.dart';
 
@@ -22,7 +24,6 @@ class ComposerSendStopButton extends StatelessWidget {
   final void Function({MessageDeliveryIntent intent}) onSendAttempt;
   final VoidCallback? onStop;
   final Color dimTextColor;
-  final String? sessionId;
 
   const ComposerSendStopButton({
     required this.agentSlice,
@@ -32,8 +33,35 @@ class ComposerSendStopButton extends StatelessWidget {
     required this.onSendAttempt,
     required this.onStop,
     required this.dimTextColor,
-    this.sessionId,
   });
+
+  /// Sends the draft, but never an empty one.
+  ///
+  /// While dictation is running the button is enabled on purpose — the user may
+  /// want to finish speaking and send in one press. The session is stopped and
+  /// the button waits for the transcript before dispatching; a session that
+  /// recognised nothing (or failed, or timed out) sends nothing at all instead
+  /// of an empty message.
+  Future<void> _send(
+    BuildContext context, {
+    required bool isDictating,
+  }) async {
+    final dictation = readDictationCubit(context);
+    if (isDictating && dictation != null) {
+      final settled = await dictation.sendWhenSettled();
+      if (!context.mounted) return;
+      if (!settled) return;
+      // The transcript is inserted from a state listener, so give that frame a
+      // chance to land before reading the controller.
+      await WidgetsBinding.instance.endOfFrame;
+      if (!context.mounted) return;
+      if (chatController.exportPlainText().trim().isEmpty) return;
+      onSendAttempt(intent: MessageDeliveryIntent.auto);
+      return;
+    }
+    if (chatController.exportPlainText().trim().isEmpty) return;
+    onSendAttempt(intent: MessageDeliveryIntent.auto);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -48,9 +76,13 @@ class ComposerSendStopButton extends StatelessWidget {
       (attachment) => attachment.status == DraftAttachmentStatus.ready,
     );
     final hasContent = !isEmpty || attachments.isNotEmpty;
+    final dictation = maybeDictationCubit(context);
+    final dictating = dictation?.state.isActive ?? false;
+    final awaitingTranscript = dictation?.state.awaitingSend ?? false;
     final canSend =
+        !awaitingTranscript &&
         agentSlice.isOnline &&
-        hasContent &&
+        (hasContent || dictating) &&
         attachmentsReady &&
         hasWorkspace &&
         inputSlice.pendingSuspendedRequest == null;
@@ -67,36 +99,45 @@ class ComposerSendStopButton extends StatelessWidget {
         executionSnapshot?.hasActiveWork != true;
 
     if (showStopButton) {
+      // One design, one owner: the stop that ends a reply is the same widget the
+      // dictation button becomes while listening.
+      return StopActionButton(
+        buttonKey: const Key('stop_message_btn'),
+        tooltip: isStopping ? 'Stopping response' : 'Stop response',
+        onPressed: isStopping ? null : onStop,
+        busy: isStopping,
+        progressIndicatorKey: const Key('stop_message_progress_indicator'),
+      );
+    }
+
+    if (awaitingTranscript) {
+      // The transcript is being decoded. A spinner that also stops: pressing it
+      // abandons the automatic send while keeping whatever text arrives.
       return SizedBox(
         width: 32,
         height: 32,
-        child: IconButton(
-          key: const Key('stop_message_btn'),
-          tooltip: isStopping ? 'Stopping response' : 'Stop response',
-          onPressed: isStopping ? null : onStop,
-          style: IconButton.styleFrom(
-            backgroundColor: Theme.of(context).colorScheme.error.withValues(alpha: 0.1),
-            side: BorderSide(
-              color: Theme.of(context).colorScheme.error.withValues(alpha: 0.2),
-            ),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-            padding: EdgeInsets.zero,
-          ),
-          icon: isStopping
-              ? SizedBox(
-                  key: const Key('stop_message_progress_indicator'),
+        child: Tooltip(
+          message: AppLocalizations.of(context)?.dictationAwaitingTranscriptTooltip ??
+              'Press to stop',
+          child: Material(
+            color: Theme.of(context).colorScheme.onSurface,
+            borderRadius: BorderRadius.circular(8),
+            child: InkWell(
+              key: const Key('send_message_waiting_dictation'),
+              borderRadius: BorderRadius.circular(8),
+              onTap: () => readDictationCubit(context)?.cancelPendingSend(),
+              child: const Center(
+                child: SizedBox(
                   width: 16,
                   height: 16,
                   child: AppProgressIndicator(
                     strokeWidth: 2,
-                    color: Theme.of(context).colorScheme.error,
+                    color: Colors.black,
                   ),
-                )
-              : Icon(
-                  Icons.stop_circle_outlined,
-                  size: 16,
-                  color: Theme.of(context).colorScheme.error,
                 ),
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -145,10 +186,9 @@ class ComposerSendStopButton extends StatelessWidget {
                 } else {
                   final activeAgent = agentSlice.activeAgent;
                   if (activeAgent != null) {
-                    await voiceCubit.startVoiceSession(
-                      agent: activeAgent,
-                      sessionId: sessionId ?? 'default',
-                    );
+                    // No session id from here: the cubit mints the one identity
+                    // the whole voice session is claimed and routed by.
+                    await voiceCubit.startVoiceSession(agent: activeAgent);
                   }
                 }
               },
@@ -178,7 +218,9 @@ class ComposerSendStopButton extends StatelessWidget {
         tooltip: executionSnapshot?.isExecuting == true
             ? 'Press Enter to steer • Ctrl/Cmd+Enter to queue'
             : 'Send message',
-        onPressed: canSend ? () => onSendAttempt(intent: MessageDeliveryIntent.auto) : null,
+        onPressed: canSend
+            ? () => _send(context, isDictating: dictating)
+            : null,
         style: IconButton.styleFrom(
           backgroundColor: canSend ? Theme.of(context).colorScheme.onSurface : dimTextColor.withValues(alpha: 0.1),
           disabledBackgroundColor: dimTextColor.withValues(alpha: 0.1),
