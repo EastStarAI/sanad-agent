@@ -219,6 +219,28 @@ jobs:
           echo "Agent shard $SHARD/$TOTAL_SHARDS ran $(../scripts/ci/test_event_counts.sh "$RUNNER_TEMP/agent-tests.jsonl")."
           exit "$status"
 
+  # The delegate supervisor is Node code, so no Dart lane can execute it. Before
+  # this job existed, every supervisor fix was verified by hand exactly once and
+  # a regression could not fail a pull request (2026-11-09: three supervisor
+  # fixes had merged while a live run still executed older code). The suite holds
+  # one named scenario per past incident; see
+  # `docs/operations/continuous_integration.md`.
+  supervisor-skill:
+    name: Supervisor skill tests
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Report the Node runtime
+        run: node --version
+      - name: Test the delegate supervisor
+        working-directory: .agents/skills/delegate-task-supervisor
+        run: |
+          set -o pipefail
+          node --test test/*_test.mjs
+
   cli-automation:
     name: CLI automation (${{ matrix.os }})
     needs: classify
@@ -642,7 +664,7 @@ jobs:
   all-required:
     name: All required checks pass
     if: always()
-    needs: [classify, history, agent-checks, agent-tests, cli-automation, client-analyze, client-tests, client-web, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
+    needs: [classify, history, agent-checks, agent-tests, supervisor-skill, cli-automation, client-analyze, client-tests, client-web, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
     runs-on: ubuntu-24.04
     steps:
       - env:
@@ -650,6 +672,7 @@ jobs:
           HISTORY: ${{ needs.history.result }}
           AGENT_CHECKS: ${{ needs.agent-checks.result }}
           AGENT_TESTS: ${{ needs.agent-tests.result }}
+          SUPERVISOR_SKILL: ${{ needs.supervisor-skill.result }}
           CLI_AUTOMATION: ${{ needs.cli-automation.result }}
           CLIENT_ANALYZE: ${{ needs.client-analyze.result }}
           CLIENT_TESTS: ${{ needs.client-tests.result }}
@@ -662,7 +685,7 @@ jobs:
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$CLI_AUTOMATION" \
+          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$SUPERVISOR_SKILL" "$CLI_AUTOMATION" \
             "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" \
             "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
             [[ "$result" == success || "$result" == skipped ]]

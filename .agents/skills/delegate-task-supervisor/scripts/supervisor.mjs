@@ -24,6 +24,7 @@ import {
   DEFAULT_FOLLOW_LOST_POLLS,
   DEFAULT_FOLLOW_POLL_MS,
   DEFAULT_FOLLOW_PROBE_TIMEOUT_MS,
+  DEFAULT_FOLLOW_UNREADABLE_GRACE_MS,
   followPolicy,
 } from './supervisor-follow.mjs';
 
@@ -40,6 +41,7 @@ import {
   writeJsonAtomic,
 } from './supervisor-core.mjs';
 import { identityCommand } from './supervisor-registry.mjs';
+import { codeIdentity } from './supervisor-provenance.mjs';
 import { validateSpec } from './supervisor-spec.mjs';
 import {
   CANCEL_FORCE_KILL_MS,
@@ -88,7 +90,7 @@ import { createRequestHandler } from './supervisor-worker/requests.mjs';
 const HELP = `delegate-task-supervisor
 
 Usage:
-  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--follow-poll-ms <n>] [--follow-deadline-ms <n>] [--follow-lost-polls <n>] [--cancel-force-kill-ms <n>] [--close-when-idle]
+  supervisor.mjs start --spec <tasks.json> --run-dir <absolute-dir> [--max-concurrency <n>] [--queued-stall-ms <n>] [--progress-stall-sec <n>] [--verify-sec <n>] [--auto-retry] [--auto-retry-grace-ms <n>] [--auto-retry-backoff-ms <n>] [--auto-retry-max-attempts <n>] [--follow-poll-ms <n>] [--follow-deadline-ms <n>] [--follow-lost-polls <n>] [--follow-unreadable-grace-ms <n>] [--cancel-force-kill-ms <n>] [--close-when-idle]
   supervisor.mjs add --run <dir> --spec <tasks.json> [--json]
   supervisor.mjs enqueue --run <dir> (--task <id> | --tasks <id1,id2> | --spec <tasks.json>) [--verify-sec <n>] [--json]
   supervisor.mjs cancel --run <dir> --task <id> [--json]
@@ -98,7 +100,7 @@ Usage:
   supervisor.mjs set-concurrency --run <dir> --max <n> [--json]
   supervisor.mjs close --run <dir> [--abort-queued] [--wait] [--json]
   supervisor.mjs status (--run <dir> [--run <dir> ...]) [--brief] [--json] [--task <id>]
-  supervisor.mjs watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--timeout-sec <n>] [--all] [--json]
+  supervisor.mjs watch --run <dir> [--run <dir> ...] --cursor <file> [--once] [--linger-sec <n>] [--timeout-sec <n>] [--all] [--json]
   supervisor.mjs inspect --run <dir> --task <id>
   supervisor.mjs timeline --run <dir> --task <id> [--follow]
   supervisor.mjs logs --run <dir> --task <id> [--stream stdout|stderr|both] [--tail <n>] [--follow]
@@ -119,7 +121,10 @@ last handled sequence per run in --cursor, replays everything an orchestrator
 missed, and prints exactly one line per actionable event (terminal states,
 blocked/intervention, and stall notices). Plain progress is never a wake-up.
 --once prints the current batch and exits, which suits an orchestrator that is
-re-invoked when the watcher exits.
+re-invoked when the watcher exits. Add --linger-sec <n> to keep consuming for n
+seconds after that first batch instead: every alert that arrives in the window is
+printed without waiting for a re-invocation, and --timeout-sec re-arms per batch
+so it still means "no new actionable event for n seconds".
 
 \`steer\` relays a mid-turn message to a running task's daemon session without
 stopping it; \`continue\` re-dispatches a finished task as a numbered new attempt
@@ -146,8 +151,15 @@ worker produces (needs_input, needs_permission, blocked, waiting, resuming,
 completed, failed), so the automatic retry policy applies to a followed task
 too. The follow window is the task's own --timeout, or --follow-deadline-ms
 (default ${DEFAULT_FOLLOW_DEADLINE_MS}ms). After --follow-lost-polls (default
-${DEFAULT_FOLLOW_LOST_POLLS}) consecutive unreadable session reads the task ends
-\`follow_lost\` instead of blocking forever. Every attention state still wakes a
+${DEFAULT_FOLLOW_LOST_POLLS}) consecutive unreadable session reads, and only once
+the restart window of --follow-unreadable-grace-ms (default
+${DEFAULT_FOLLOW_UNREADABLE_GRACE_MS}ms) has also elapsed, the task ends
+\`follow_lost\` instead of blocking forever. A read the CLI answers with
+\`session_not_found\` is definitive and ends the follow at the poll floor; an
+unreachable daemon is a restart, so the same follow survives it and the poll
+resumes the same session. A degraded follow is journalled once as
+\`follow_unreadable\` (not a wake-up) and stays \`following\` while it waits.
+Every attention state still wakes a
 watcher; \`following\` itself is progress, never a wake-up. A followed turn is
 \`completed\` only when its durable messages hold a final assistant reply; an
 idle session without one ends \`failed\` with cause \`turn_interrupted\`.
@@ -256,9 +268,14 @@ async function startCommand(options) {
     pollMs: integerOption(options, 'follow-poll-ms', DEFAULT_FOLLOW_POLL_MS, '--follow-poll-ms', 1),
     deadlineMs: integerOption(options, 'follow-deadline-ms', DEFAULT_FOLLOW_DEADLINE_MS, '--follow-deadline-ms', 1),
     lostAfterPolls: integerOption(options, 'follow-lost-polls', DEFAULT_FOLLOW_LOST_POLLS, '--follow-lost-polls', 1),
+    unreadableGraceMs: integerOption(options, 'follow-unreadable-grace-ms', DEFAULT_FOLLOW_UNREADABLE_GRACE_MS, '--follow-unreadable-grace-ms', 1),
     probeTimeoutMs: integerOption(options, 'follow-probe-timeout-ms', DEFAULT_FOLLOW_PROBE_TIMEOUT_MS, '--follow-probe-timeout-ms', 1),
   });
   const startedAt = new Date().toISOString();
+  // The code this run will execute for its whole life, recorded once so `status`
+  // can say whether it is still the code on origin/main instead of leaving
+  // "merged" to be read as "running" (2026-11-09, run13).
+  const code = codeIdentity();
   // The grace window between the cancelling SIGTERM and the forced SIGKILL. It
   // is reported by the handshake and passed to the worker, so a compressed value
   // in a test or a diagnosis is the same value everywhere.
@@ -273,6 +290,7 @@ async function startCommand(options) {
     seq: 0,
     startedAt,
     finishedAt: null,
+    code,
     maxConcurrency,
     active: 0,
     queuedStallMs,
@@ -299,6 +317,7 @@ async function startCommand(options) {
         runDir,
         supervisorPid: running.supervisorPid,
         cursor: 0,
+        code,
         maxConcurrency,
         queuedStallMs,
         progressStallMs,
@@ -342,6 +361,7 @@ async function startCommand(options) {
     runDir,
     supervisorPid: child.pid,
     cursor: 0,
+    code,
     maxConcurrency,
     queuedStallMs,
     progressStallMs,
