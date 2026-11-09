@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 /// Represents 2D screen coordinates and size of a rendered widget.
 class UiBounds {
   final int x;
@@ -138,6 +140,9 @@ class UiElement {
 ///
 /// - `no_observable_change`: the action was dispatched and the bounded window
 ///   elapsed without an observable change.
+/// - `obscured`: the target's hit test does not include it, so the pointer event
+///   was deliberately not dispatched; something painted above the target would
+///   have received it instead.
 /// - `none`: no evidence channel exists or produced a verdict at all — the
 ///   action failed before observation, verification was disabled, or the step
 ///   makes no post-condition claim.
@@ -150,6 +155,7 @@ enum UiVerification {
   text('text'),
   tree('tree'),
   noObservableChange('no_observable_change'),
+  obscured('obscured'),
   none('none'),
   typeCensus('type_census');
 
@@ -182,6 +188,93 @@ const Set<UiVerification> _provingChannels = {
   UiVerification.text,
   UiVerification.tree,
 };
+
+/// Prefix every extension `sanad-dev ui ext` may call.
+///
+/// The VM Service also exposes engine and framework controls (`ext.flutter.*`),
+/// so the driver accepts only the Sanad Client's own development extensions
+/// instead of becoming a general-purpose RPC proxy.
+const String sanadClientExtensionPrefix = 'ext.sanad_client.';
+
+/// Longest hold a `tap` may request, in milliseconds.
+///
+/// The Client enforces the same bound; rejecting it here fails before a
+/// connection is opened. The two values are one wire contract: a long press is
+/// a press the caller asked for, not a duration the driver invents.
+const int maxTapHoldMs = 5000;
+
+/// Dwell a hover keeps the pointer over its target when the caller asks for none.
+const int hoverDefaultMs = 2000;
+
+/// Longest hover dwell a caller may request, in milliseconds.
+///
+/// The Client validates the same bound and keeps its own automatic exit at that
+/// bound plus a grace, so a driver process that dies mid-hover can never leave a
+/// hover-expanded affordance open in a running Client.
+const int maxHoverMs = 5000;
+
+/// Validated `ext --args` payload or the reason it was rejected.
+typedef ExtensionArguments = ({Map<String, String>? arguments, String? error});
+
+/// Validates an `ext --name` value against the allowlisted prefix.
+String? validateSanadExtensionName(String? name) {
+  final trimmed = name?.trim();
+  if (trimmed == null || trimmed.isEmpty) {
+    return 'ext requires --name ${sanadClientExtensionPrefix}<extension>.';
+  }
+  if (!trimmed.startsWith(sanadClientExtensionPrefix) ||
+      trimmed.length == sanadClientExtensionPrefix.length) {
+    return 'Only $sanadClientExtensionPrefix extensions may be called; '
+        '"$trimmed" is not one of them.';
+  }
+  final remainder = trimmed.substring(sanadClientExtensionPrefix.length);
+  if (!RegExp(r'^[A-Za-z0-9_]+$').hasMatch(remainder)) {
+    return 'Extension names must be ${sanadClientExtensionPrefix}<name> '
+        'using letters, digits, and underscores.';
+  }
+  return null;
+}
+
+/// Parses `ext --args` into the flat string map a Client extension reads.
+///
+/// Nested objects and arrays are rejected rather than re-encoded: the Client
+/// extensions read flat parameters, and a silent JSON round trip would hide a
+/// caller mistake behind an extension-specific error.
+ExtensionArguments parseExtensionArguments(String? raw) {
+  if (raw == null || raw.trim().isEmpty) {
+    return (arguments: const {}, error: null);
+  }
+  Object? decoded;
+  try {
+    decoded = jsonDecode(raw);
+  } on FormatException {
+    return (arguments: null, error: 'ext --args must be a JSON object.');
+  }
+  if (decoded is! Map) {
+    return (arguments: null, error: 'ext --args must be a JSON object.');
+  }
+  final arguments = <String, String>{};
+  for (final entry in decoded.entries) {
+    final key = entry.key;
+    if (key is! String || key.isEmpty) {
+      return (arguments: null, error: 'ext --args keys must be non-empty strings.');
+    }
+    final value = entry.value;
+    if (value == null) continue;
+    if (value is String) {
+      arguments[key] = value;
+    } else if (value is num || value is bool) {
+      arguments[key] = value.toString();
+    } else {
+      return (
+        arguments: null,
+        error:
+            'ext --args value for "$key" must be a string, number, or boolean.',
+      );
+    }
+  }
+  return (arguments: arguments, error: null);
+}
 
 /// The result of an executed UI action.
 class DriverActionResult {
@@ -264,6 +357,14 @@ class BatchStep {
   final String? out;
   final int? timeoutSeconds;
   final int? delayMs;
+
+  /// Press duration in milliseconds for a `tap` step; a long press is the same
+  /// pointer sequence held longer.
+  final int? holdMs;
+
+  /// Dwell in milliseconds for a `hover` step: how long the synthetic pointer
+  /// stays over the target before its matching exit.
+  final int? hoverMs;
   final int? sleepMs;
 
   /// Post-condition keys for a `tap` step.
@@ -300,6 +401,8 @@ class BatchStep {
     this.out,
     this.timeoutSeconds,
     this.delayMs,
+    this.holdMs,
+    this.hoverMs,
     this.sleepMs,
     this.expect,
     this.expectAbsent,
@@ -331,6 +434,8 @@ class BatchStep {
       timeoutSeconds:
           json['timeout_seconds'] as int? ?? json['timeout'] as int?,
       delayMs: json['delay_ms'] as int? ?? json['delay'] as int?,
+      holdMs: json['hold_ms'] as int?,
+      hoverMs: json['hover_ms'] as int?,
       sleepMs:
           json['sleep_ms'] as int? ??
           json['sleep'] as int? ??
@@ -363,6 +468,8 @@ class BatchStep {
     if (out != null) 'out': out,
     if (timeoutSeconds != null) 'timeout_seconds': timeoutSeconds,
     if (delayMs != null) 'delay_ms': delayMs,
+    if (holdMs != null) 'hold_ms': holdMs,
+    if (hoverMs != null) 'hover_ms': hoverMs,
     if (sleepMs != null) 'sleep_ms': sleepMs,
     if (expect != null) 'expect': expect,
     if (expectAbsent != null) 'expect_absent': expectAbsent,

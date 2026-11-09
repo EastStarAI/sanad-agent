@@ -16,6 +16,9 @@ const int uiDriverDefaultVerifyMs = 2000;
 /// Default sleep applied by a batch `sleep` step without an explicit value.
 const int uiDriverDefaultSleepMs = 1000;
 
+/// Default dwell of a hover action that names no explicit duration, in ms.
+const int uiDriverDefaultHoverMs = 2000;
+
 /// Default wall-clock cap for a batch recipe that cannot be read.
 const int uiDriverBatchDefaultWallSeconds = 300;
 
@@ -65,6 +68,8 @@ const Set<String> _uiDriverValueFlags = {
   '--coords',
   '--timeout',
   '--delay',
+  '--hold-ms',
+  '--ms',
   '--verify-timeout',
   '--expect',
   '--expect-key',
@@ -76,6 +81,8 @@ const Set<String> _uiDriverValueFlags = {
   '-f',
   '--json-steps',
   '--report-file',
+  '--name',
+  '--args',
   '--out',
   '-o',
   '--filter',
@@ -139,12 +146,20 @@ class UiDriverBatchStepBudget {
     required this.action,
     this.timeoutSeconds,
     this.delayMs,
+    this.holdMs,
+    this.hoverMs,
     this.sleepMs,
   });
 
   final String action;
   final int? timeoutSeconds;
   final int? delayMs;
+
+  /// Press duration a `tap` step holds before releasing, in milliseconds.
+  final int? holdMs;
+
+  /// Dwell a `hover` step keeps the synthetic pointer over its target, in ms.
+  final int? hoverMs;
   final int? sleepMs;
 
   bool get _verifies =>
@@ -152,6 +167,7 @@ class UiDriverBatchStepBudget {
       action == 'enter_text' ||
       action == 'entertext' ||
       action == 'type';
+  bool get _hovers => action == 'hover';
   bool get _sleeps => action == 'sleep' || action == 'delay';
 }
 
@@ -232,6 +248,8 @@ UiDriverRunPlan planUiDriverRun(
   final explicitSeconds = int.tryParse(
     _uiDriverOptionValue(driverArgs, '--timeout') ?? '',
   );
+  final actionSeconds = explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
+  final verifies = uiDriverVerifyingCommands.contains(command);
   final Duration wallTimeout;
   if (wallTimeoutSeconds != null && wallTimeoutSeconds > 0) {
     wallTimeout = Duration(seconds: wallTimeoutSeconds);
@@ -246,21 +264,35 @@ UiDriverRunPlan planUiDriverRun(
     wallTimeout = budget == null
         ? const Duration(seconds: uiDriverBatchDefaultWallSeconds)
         : Duration(seconds: budget + uiDriverChildGraceSeconds);
+  } else if (command == 'hover') {
+    // A hover spends its dwell holding the synthetic pointer and observing the
+    // tree, so that time belongs to the action rather than to a post-delay.
+    final dwellMs = int.tryParse(
+      _uiDriverOptionValue(driverArgs, '--ms') ?? '',
+    );
+    wallTimeout = Duration(
+      seconds: actionSeconds + uiDriverChildGraceSeconds,
+      milliseconds: dwellMs ?? uiDriverDefaultHoverMs,
+    );
   } else {
-    final actionSeconds =
-        explicitSeconds ?? uiDriverDefaultActionTimeoutSeconds;
-    final verifies = uiDriverVerifyingCommands.contains(command);
     final delayMs = int.tryParse(
       _uiDriverOptionValue(driverArgs, '--delay') ?? '',
     );
     final verifyMs = int.tryParse(
       _uiDriverOptionValue(driverArgs, '--verify-timeout') ?? '',
     );
+    // A long press holds the same pointer sequence longer, so the wall clock
+    // that covers the action has to grow with it or the launcher would kill a
+    // tap the action deadline itself still allows.
+    final holdMs = int.tryParse(
+      _uiDriverOptionValue(driverArgs, '--hold-ms') ?? '',
+    );
     wallTimeout = Duration(
       seconds: actionSeconds + uiDriverChildGraceSeconds,
       milliseconds:
           (delayMs ?? (verifies ? uiDriverDefaultDelayMs : 0)) +
-          (verifyMs ?? (verifies ? uiDriverDefaultVerifyMs : 0)),
+          (verifyMs ?? (verifies ? uiDriverDefaultVerifyMs : 0)) +
+          (holdMs ?? 0),
     );
   }
 
@@ -303,9 +335,12 @@ int uiDriverBatchBudgetSeconds(
       continue;
     }
     total += stepTimeout;
-    if (step._verifies) {
+    if (step._hovers) {
+      total += ((step.hoverMs ?? uiDriverDefaultHoverMs) / 1000).ceil();
+    } else if (step._verifies) {
       total += ((step.delayMs ?? uiDriverDefaultDelayMs) / 1000).ceil();
       total += ((stepVerifyWindowMs(stepTimeout)) / 1000).ceil();
+      total += ((step.holdMs ?? 0) / 1000).ceil();
     }
   }
   return total == 0 ? 0 : total;
@@ -360,6 +395,8 @@ List<UiDriverBatchStepBudget>? readUiDriverBatchSteps(List<String> driverArgs) {
             timeoutSeconds:
                 map['timeout_seconds'] as int? ?? map['timeout'] as int?,
             delayMs: map['delay_ms'] as int? ?? map['delay'] as int?,
+            holdMs: map['hold_ms'] as int?,
+            hoverMs: map['hover_ms'] as int?,
             sleepMs:
                 map['sleep_ms'] as int? ??
                 map['sleep'] as int? ??
