@@ -102,12 +102,10 @@ and [Capability Runtime](../agent_engine/capability_runtime.md).
 
 ## Tools, MCP, and skills
 
-Sanad ships a built-in tool catalog that covers the workspace, the shell, the
-web, images, memory, questions, scheduling, and user secrets; the owning page
-lists each family and the guarantees behind it. MCP servers can be configured
-for the user or for one workspace, and compatible third-party marketing, video,
-data, or development tools connect through MCP instead of being hard-coded into
-Sanad.
+Sanad ships a built-in tool catalog; the owning page documents each tool family
+and the guarantees behind it. MCP servers can be configured for the user or for
+one workspace, and compatible third-party marketing, video, data, or development
+tools connect through MCP instead of being hard-coded into Sanad.
 
 Product skills ship inside the Agent executable and are reconciled into your
 Sanad Home on each start without overwriting skills you changed or deleted.
@@ -163,10 +161,10 @@ app, the audio travels through the Sanad relay to the Agent that transcribes it,
 so that channel is hosted rather than local.
 
 Dictation runs on the desktop platforms where the Agent runs, and some platforms
-or older CPUs cannot run local recognition; a device that cannot dictate reports
-why, and the model sheet offers the local speech models to download for Arabic or
-English. Nothing stays loaded between sessions, and dictation is a stable,
-text-only feature — separate from the experimental realtime voice call below.
+or older CPUs cannot run local recognition; a device that cannot dictate says
+why. You choose and download a local speech model for Arabic or English, and
+dictation is a stable, text-only feature, separate from the experimental
+realtime voice call below.
 
 See [Local Dictation](../technical/local_dictation.md),
 [Dictation Transport Protocol](../technical/dictation_transport_protocol.md), and
@@ -204,33 +202,19 @@ See [Sanad CLI Architecture](../technical/sanad_cli_architecture.md),
 
 ## Experimental realtime voice
 
-Sanad also contains an experimental realtime voice call — Gemini Realtime over a
-local or hosted transport, with PCM capture and playback, transcript events, and
-barge-in — hidden by default and outside the stable feature set. It is a separate
-path from the dictation described above.
+Sanad also contains an experimental realtime voice call, hidden by default and
+outside the stable feature set. It is a separate path from the dictation above.
 
-See [Experimental Realtime Voice](../technical/voice_streaming.md) for its current
-boundaries.
+See [Experimental Realtime Voice](../technical/voice_streaming.md).
 
 ## Designed for contributors and coding agents
 
-Sanad keeps its development knowledge close to the code. Layered `AGENTS.md`
-Runtime Contracts define durable ownership boundaries and local rules for the
-repository, Dart agent, Flutter client, and focused subdirectories, and a curated
-[`docs/llms.txt`](../llms.txt) index makes the owning product, architecture,
-operations, and QA pages discoverable to both people and coding agents.
-
-The `sanad-dev` launcher runs a matched agent/client pair with isolated worktree
-ports, Sanad Home, client preferences, runtime metadata, and logs, and lets you
-inspect both processes, stream their logs, restart the agent under its supervisor,
-and hot reload or hot restart the client without losing the worktree boundary.
-
-Sanad can also develop the same source checkout its active daemon runs: a restart
-requested from the active tool turn waits for the restart result, and recovery
-reclaims that turn with the rebuilt tool catalog, so a turn can fix a failed tool
-or add temporary instrumentation without starting another session. Isolated
-worktrees remain the safer boundary for parallel, broad, or bootstrap-sensitive
-changes.
+Sanad keeps its development knowledge close to the code: layered `AGENTS.md`
+Runtime Contracts define durable ownership boundaries and local rules, and a
+curated [`docs/llms.txt`](../llms.txt) index makes the owning product,
+architecture, operations, and QA pages discoverable to people and coding agents.
+`sanad-dev` runs a matched agent/client pair per Git worktree with isolated ports,
+Sanad Home, preferences, and logs.
 
 See the [Developer Guide](../operations/developer_guide.md) for the complete
 contributor workflow.
