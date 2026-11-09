@@ -56,6 +56,11 @@ runs the CPU baseline: the Metal library is not built, not required, and not
 verified, so a packaged Intel Agent has no GPU dependency. `use_gpu` remains
 accepted on Intel; whisper.cpp simply has no GPU backend to bind.
 
+`defaultSttUseGpu()` is the single owner of that default, and it answers from the
+running ABI (`defaultSttUseGpuFor`, so the carve-out is testable from any host).
+An absent `use_gpu` — whether the whole `config.yaml` is missing or only the key
+is — resolves through it; a literal constructor default must never decide it.
+
 ### The engine subtree
 
 The sherpa-onnx libraries live in a `sherpa/` subdirectory of the same tag

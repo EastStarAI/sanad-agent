@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
 import 'package:test/test.dart';
 
 /// Behavioural tests for the POSIX installer's native-runtime step.
@@ -464,7 +465,51 @@ void main() {
         sandbox.dispose();
       }
     });
+
+    test('an Intel macOS host reaches the runtime step for its own tag', () {
+      // The installer resolves its target from `uname`, and refuses before any
+      // runtime work when the manifest does not publish that pair. The sandbox
+      // therefore answers `uname` with an explicit Intel macOS host, which is
+      // the only way to prove that branch from an Apple Silicon machine.
+      final sandbox = _Sandbox.create(
+        libraries: {'libsanad_whisper.dylib': 'fake-whisper'},
+        target: SttNativeTarget.macosX64,
+      );
+      try {
+        final result = sandbox.run();
+        final stderr = result.stderr as String;
+
+        expect(result.exitCode, 0, reason: stderr);
+        expect(
+          stderr,
+          isNot(contains('No official Sanad Agent build is published')),
+          reason: 'the fixture publishes the host target',
+        );
+        expect(sandbox.runtimeDir.path, endsWith('native/macos-x64'));
+        expect(
+          File('${sandbox.runtimeDir.path}/libsanad_whisper.dylib').existsSync(),
+          isTrue,
+          reason: 'the Intel host installs the runtime published for it',
+        );
+        expect(sandbox.runtimeFailureMarker.existsSync(), isFalse);
+      } finally {
+        sandbox.dispose();
+      }
+    });
   });
+}
+
+/// The platform/architecture pair `install.sh` resolves from `uname`.
+///
+/// The fixture manifest must publish exactly this pair, or the installer stops
+/// with "no official build is published" before it reaches the runtime step —
+/// which is what made this file pass on Apple Silicon and fail on Intel.
+SttNativeTarget _hostTarget() {
+  final target = SttNativeTarget.tryCurrent();
+  if (target == null) {
+    throw StateError('the installer harness needs an ABI it can name');
+  }
+  return target;
 }
 
 class _Sandbox {
@@ -489,11 +534,14 @@ class _Sandbox {
     bool noPreviousRuntime = false,
     bool runtimeShaMismatch = false,
     bool runtimeDownloadFails = false,
+    SttNativeTarget? target,
   }) {
+    final host = target ?? _hostTarget();
+    final tag = host.tag;
     final root = Directory.systemTemp.createTempSync('installer-runtime-');
     final home = Directory('${root.path}/home')..createSync(recursive: true);
     final bin = Directory('${home.path}/bin')..createSync(recursive: true);
-    final runtimeDir = Directory('${bin.path}/native/macos-arm64');
+    final runtimeDir = Directory('${bin.path}/native/$tag');
     if (!noPreviousRuntime) {
       runtimeDir.createSync(recursive: true);
       File('${runtimeDir.path}/OLD-MARKER')
@@ -502,11 +550,10 @@ class _Sandbox {
 
     final previousAgent = _agentScript();
     final installedAgent = _agentScript(failServiceInstall: failServiceInstall);
-    final target = File('${bin.path}/sanad')
-      ..writeAsStringSync(previousAgent);
-    Process.runSync('chmod', ['755', target.path]);
+    final binary = File('${bin.path}/sanad')..writeAsStringSync(previousAgent);
+    Process.runSync('chmod', ['755', binary.path]);
 
-    final stage = Directory('${root.path}/stage/native/macos-arm64')
+    final stage = Directory('${root.path}/stage/native/$tag')
       ..createSync(recursive: true);
     for (final entry in libraries.entries) {
       // A key may carry a relative path (the engine's `sherpa/` subtree keeps
@@ -530,11 +577,11 @@ class _Sandbox {
       throw StateError('tar failed: ${tar.stderr}');
     }
 
-    final agentArtifact = File('${root.path}/sanad-agent-1.0.20-macos-arm64')
+    final agentArtifact = File('${root.path}/sanad-agent-1.0.20-$tag')
       ..writeAsStringSync('$installedAgent# release artifact\n');
     Process.runSync('chmod', ['755', agentArtifact.path]);
 
-    final runtimeName = 'sanad-agent-runtime-1.0.20-macos-arm64.tar.gz';
+    final runtimeName = 'sanad-agent-runtime-1.0.20-$tag.tar.gz';
     final runtimeUrl = runtimeDownloadFails
         ? '${root.uri}missing/runtime.tar.gz'
         : archive.uri.toString();
@@ -546,10 +593,10 @@ class _Sandbox {
       'artifacts': [
         {
           'component': 'agent',
-          'platform': 'macos',
-          'architecture': 'arm64',
+          'platform': host.osName,
+          'architecture': host.cpuName,
           'format': 'executable',
-          'filename': 'sanad-agent-1.0.20-macos-arm64',
+          'filename': 'sanad-agent-1.0.20-$tag',
           'public': true,
           'signature_type': 'developer-id+notarization+github-attestation',
           'url': agentArtifact.uri.toString(),
@@ -559,8 +606,8 @@ class _Sandbox {
         if (declareRuntime)
           {
             'component': 'agent-runtime',
-            'platform': 'macos',
-            'architecture': 'arm64',
+            'platform': host.osName,
+            'architecture': host.cpuName,
             'format': 'tar.gz',
             'filename': runtimeName,
             'public': true,
@@ -578,16 +625,27 @@ class _Sandbox {
 
     final shims = Directory('${root.path}/shims')..createSync(recursive: true);
     File('${shims.path}/codesign').writeAsStringSync('#!/bin/sh\nexit 0\n');
+    // `install.sh` resolves its platform and architecture from `uname`, so that
+    // is where an explicit target has to enter: the shim answers for [host] and
+    // hands every other question to the real tool.
+    File('${shims.path}/uname').writeAsStringSync(
+      '#!/bin/sh\n'
+      'case "\$1" in\n'
+      '  -s) echo "${host.osName == 'macos' ? 'Darwin' : 'Linux'}" ;;\n'
+      '  -m) echo "${host.cpuName == 'x64' ? 'x86_64' : 'arm64'}" ;;\n'
+      '  *) exec /usr/bin/uname "\$@" ;;\n'
+      'esac\n',
+    );
     final mv = StringBuffer('#!/bin/sh\n')
       ..writeln('last=""')
       ..writeln('for arg in "\$@"; do last="\$arg"; done');
     if (failFinalMove) {
       mv
         ..writeln('case "\$last" in')
-        ..writeln('  */bin/native/macos-arm64)')
+        ..writeln('  */bin/native/$tag)')
         ..writeln('    case "\$1" in')
         ..writeln(
-          '      */runtime/native/macos-arm64) '
+          '      */runtime/native/$tag) '
           'echo "forced final move failure" >&2; exit 1 ;;',
         )
         ..writeln('    esac')
@@ -598,7 +656,7 @@ class _Sandbox {
       mv
         ..writeln('case "\$1" in')
         ..writeln(
-          '  */bin/native/macos-arm64.rollback) '
+          '  */bin/native/$tag.rollback) '
           'echo "forced runtime restore failure" >&2; exit 1 ;;',
         )
         ..writeln('esac');
@@ -612,14 +670,14 @@ class _Sandbox {
       rm
         ..writeln('case "\$last" in')
         ..writeln(
-          '  */bin/native/macos-arm64) '
+          '  */bin/native/$tag) '
           'echo "forced runtime removal failure" >&2; exit 1 ;;',
         )
         ..writeln('esac');
     }
     rm.writeln('exec /bin/rm "\$@"');
     File('${shims.path}/rm').writeAsStringSync(rm.toString());
-    for (final name in ['codesign', 'mv', 'rm']) {
+    for (final name in ['codesign', 'mv', 'rm', 'uname']) {
       Process.runSync('chmod', ['755', '${shims.path}/$name']);
     }
 
@@ -627,7 +685,7 @@ class _Sandbox {
       root: root,
       home: home,
       runtimeDir: runtimeDir,
-      targetFile: target,
+      targetFile: binary,
       previousAgent: previousAgent,
       manifestPath: manifestPath,
       shims: shims,

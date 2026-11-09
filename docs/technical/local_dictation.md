@@ -139,6 +139,16 @@ on. Measured peaks: daemon idle 46 MB, listening ~1.2 GB with the q8 entry,
 directory or a single `.bin` ggml file) and requires no download or checksum;
 `stt.model_id` pins an entry, including hidden ones.
 
+### The shared VAD asset
+
+A sherpa entry needs the Silero VAD, which is not part of any entry: it is
+downloaded once into `<Sanad Home>/models/stt/_shared/` from the pinned
+`kSileroVadFile` in the catalog. That descriptor is the store's one injectable
+input (`SttModelStore(sharedVadAsset: …)`, defaulting to the catalog entry), so
+a unit test of `install` can serve the asset from its own loopback server
+instead of depending on a live third-party release host. Nothing else about the
+asset is configurable, and the on-disk path stays `<sharedDir>/<name>`.
+
 ## Platform gate
 
 The gate is the native target table, not a hard-coded OS list:

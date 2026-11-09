@@ -125,9 +125,15 @@ void main() {
   group('catalog rows', () {
     test('every row carries a name, a locale map, and closed-set facts', () {
       installRuntime();
-      final rows = (service().statusPayload()['models'] as List)
+      final subject = service();
+      final rows = (subject.statusPayload()['models'] as List)
           .cast<Map<String, dynamic>>();
-      final visible = kSttCatalog.where((entry) => !entry.hidden).toList();
+      // The rows are the catalog this build can run, not the whole catalog: a
+      // whisper-only build drops the sherpa entries, so the expectation asks the
+      // same availability object the service answers from.
+      final visible = usableSttEntries(
+        subject.availability,
+      ).where((entry) => !entry.hidden).toList();
 
       expect(rows, hasLength(visible.length));
       for (final row in rows) {

@@ -158,14 +158,25 @@ class SttSettings {
   /// Unknown keys are ignored so a newer config never breaks an older daemon.
   /// Wrong types fail loudly with the offending key, because silently running
   /// with the wrong language or thread count is worse than refusing to start.
-  static SttSettings load({required String sanadHome}) {
+  ///
+  /// [abi] names the host whose default an absent `use_gpu` follows. Production
+  /// omits it and reads the running ABI; tests name it so the Intel macOS
+  /// carve-out is provable from any machine.
+  static SttSettings load({required String sanadHome, Abi? abi}) {
     final preferences = SttRuntimePreferences.read(sanadHome: sanadHome);
-    final base = const SttSettings();
+    // The host default is a resolver, not a literal: an absent `use_gpu` must
+    // follow `defaultSttUseGpu()` on every path that returns before the section
+    // is parsed, or the Intel macOS carve-out silently stops applying.
+    final base = SttSettings(
+      useGpu: abi == null ? defaultSttUseGpu() : defaultSttUseGpuFor(abi),
+    );
+    SttSettings defaults() => SttSettings(
+      enabled: preferences.enabled ?? base.enabled,
+      useGpu: base.useGpu,
+    );
     final file = File('$sanadHome/config.yaml');
     if (!file.existsSync()) {
-      return SttSettings(
-        enabled: preferences.enabled ?? base.enabled,
-      );
+      return defaults();
     }
     final Object? root;
     try {
@@ -174,11 +185,11 @@ class SttSettings {
       throw SttException('config_invalid', 'stt config is not valid YAML: $error');
     }
     if (root is! YamlMap) {
-      return SttSettings(enabled: preferences.enabled ?? base.enabled);
+      return defaults();
     }
     final section = root['stt'];
     if (section == null) {
-      return SttSettings(enabled: preferences.enabled ?? base.enabled);
+      return defaults();
     }
     if (section is! YamlMap) {
       throw const SttException('config_invalid', 'stt must be a mapping');
@@ -228,7 +239,7 @@ class SttSettings {
       modelPath: readString('model_path'),
       language: language,
       threads: threads,
-      useGpu: readBool('use_gpu', defaultSttUseGpu()),
+      useGpu: readBool('use_gpu', base.useGpu),
       modelIdleMinutes: readInt('model_idle_minutes', 5),
       configKeys: {
         for (final key in section.keys) key.toString(),
