@@ -150,6 +150,12 @@ class LocalDaemonHttpControlRoutes {
         // yet" must not read as "closed".
         'secret_vault': vault?.statusLabel ?? 'unavailable',
         'secret_vault_reason': vault?.unavailableReason,
+        // Which secret namespace this runtime addresses. It is not a secret: the
+        // value is the item's service label, and it lets an operator (and the
+        // E2E suite) prove that a worktree runtime never addresses the
+        // production namespace. `app` keeps the production Home unchanged.
+        'secret_store_kind': vault?.kind.wireName,
+        'secret_store_service': vault?.secretStoreService,
         'cloud_registered': _isCloudRegistered(),
       });
       return true;

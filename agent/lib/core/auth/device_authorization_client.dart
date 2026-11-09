@@ -63,8 +63,9 @@ class DeviceKeyIdentity {
   );
 
   static const _legacyFileName = 'device_identity.json';
-  static const privateKeyEntry = 'device_private_key';
-  static const serverTimeOffsetEntry = 'trusted_server_time_offset_seconds';
+  static const privateKeyEntry = AgentSecretNamespaces.devicePrivateKeyKey;
+  static const serverTimeOffsetEntry =
+      AgentSecretNamespaces.serverTimeOffsetKey;
   static final _domain = ECDomainParameters('prime256v1');
   final ECPrivateKey _keyPair;
   final Map<String, String> publicJwk;
@@ -412,7 +413,7 @@ class DeviceAuthorizationClient {
       }
       if (!active()) return;
       if (response.statusCode == 200) {
-        final credential = data['device_credential'] as String;
+        final credential = data[AuthManager.deviceCredentialKey] as String;
         if (!active()) return;
         try {
           await authManager.saveDeviceToken(credential);

@@ -351,18 +351,13 @@ Future<void> handleRun({
   await writeRuntimeLauncherRecord(launcherRecord);
   await recordStartup(stage: SanadDevStartupStage.recordCreated);
 
-  final agentEnvironment =
-      buildUnifiedSanadHomeEnvironment(
-          Platform.environment,
-          sanadHome: runtime.sanadHome,
-        )
-        ..['ENABLE_LOCAL_GATEWAY'] = 'true'
-        ..['LOCAL_GATEWAY_PORT'] = '${runtime.agentPort}'
-        ..['ENABLE_GATEWAY'] = cloudEnabled ? 'true' : 'false'
-        ..['SANAD_DEV_LAUNCHER_ID'] = launcherId
-        ..['SANAD_DEV_RUNTIME_NONCE'] = runtimeNonce
-        ..['SANAD_DEV_WORKSPACE_HASH'] = runtime.worktreeId.split('-').last
-        ..addAll(cloudEndpoints?.toAgentEnvironment() ?? const {});
+  final agentEnvironment = buildSanadDevAgentEnvironment(
+    runtime,
+    launcherId: launcherId,
+    runtimeNonce: runtimeNonce,
+    cloudEnabled: cloudEnabled,
+    cloudEndpoints: cloudEndpoints,
+  );
   // Flutter's documented handoff keeps the authenticated DDS URI. The file is
   // prepared owner-only and removed before launch so discovery never accepts a
   // stale recording; a failure here only keeps the existing fallback.

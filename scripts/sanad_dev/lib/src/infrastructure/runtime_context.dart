@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_windows_path/windows_path.dart';
 
+import 'cloud_endpoints.dart';
 import 'path_equivalence.dart';
 import 'secure_runtime_file.dart';
 
@@ -274,8 +275,7 @@ Map<String, String> buildUnifiedSanadHomeEnvironment(
   required String sanadHome,
   WindowsSystemPath? windowsSystemPath,
   bool? isWindows,
-}) {
-  var env = Map<String, String>.from(baseEnvironment)
+}) {  var env = Map<String, String>.from(baseEnvironment)
     ..remove('SANAD_STATE_HOME')
     ..['SANAD_HOME'] = sanadHome;
   if (isWindows ?? Platform.isWindows) {
@@ -287,6 +287,50 @@ Map<String, String> buildUnifiedSanadHomeEnvironment(
   }
   return env;
 }
+
+/// The environment a `sanad-dev`-launched Agent needs to address its own secret
+/// namespace.
+///
+/// A linked worktree selects its own Sanad Home, and no packaged Agent has ever
+/// written an item there, so the development runtime may take the `dev`
+/// namespace on that Home without moving, copying or re-entering anything.
+///
+/// The primary checkout declares nothing on purpose: its Home already holds the
+/// production items (and the Device Credential), and those keep working exactly
+/// where they are.
+Map<String, String> sanadDevSecretNamespaceEnvironment({
+  required bool isLinkedWorktree,
+}) => isLinkedWorktree
+    ? const <String, String>{'SANAD_RUNTIME_KIND': 'dev'}
+    : const <String, String>{};
+
+/// The environment a `sanad-dev` source run hands its Agent.
+///
+/// It unifies the Home and state root, declares this runtime's secret
+/// namespace, and forwards the launcher identity, gateway ports and cloud
+/// endpoints the Agent reports back to its Client.
+Map<String, String> buildSanadDevAgentEnvironment(
+  SanadDevRuntime runtime, {
+  required String launcherId,
+  required String runtimeNonce,
+  required bool cloudEnabled,
+  SanadCloudEndpoints? cloudEndpoints,
+}) => buildUnifiedSanadHomeEnvironment(
+  Platform.environment,
+  sanadHome: runtime.sanadHome,
+)
+  ..['ENABLE_LOCAL_GATEWAY'] = 'true'
+  ..['LOCAL_GATEWAY_PORT'] = '${runtime.agentPort}'
+  ..['ENABLE_GATEWAY'] = cloudEnabled ? 'true' : 'false'
+  ..['SANAD_DEV_LAUNCHER_ID'] = launcherId
+  ..['SANAD_DEV_RUNTIME_NONCE'] = runtimeNonce
+  ..['SANAD_DEV_WORKSPACE_HASH'] = runtime.worktreeId.split('-').last
+  ..addAll(
+    sanadDevSecretNamespaceEnvironment(
+      isLinkedWorktree: runtime.isLinkedWorktree,
+    ),
+  )
+  ..addAll(cloudEndpoints?.toAgentEnvironment() ?? const {});
 
 String resolveSanadDevHome({
   required bool isLinkedWorktree,

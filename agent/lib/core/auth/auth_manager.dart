@@ -19,12 +19,18 @@ class AuthManager {
        _secretStore = secretStore ?? createAgentSecretStore(),
        _awaitVaultReady = awaitVaultReady;
 
-  static const deviceCredentialKey = 'device_credential';
-  static const pendingDeviceCredentialKey = 'pending_device_credential';
+  /// The identity entries this manager reads and writes.
+  ///
+  /// They alias [AgentSecretNamespaces] so one definition serves every reader,
+  /// the owner-file namespace and the refusal diagnostic.
+  static const deviceCredentialKey = AgentSecretNamespaces.deviceCredentialKey;
+  static const pendingDeviceCredentialKey =
+      AgentSecretNamespaces.pendingDeviceCredentialKey;
   static const previousDeviceCredentialKey =
-      'pairing_previous_device_credential';
-  static const pairingTokenKey = 'pairing_token';
-  static const pendingAgentLogoutKey = 'agent_logout_pending';
+      AgentSecretNamespaces.previousDeviceCredentialKey;
+  static const pairingTokenKey = AgentSecretNamespaces.pairingTokenKey;
+  static const pendingAgentLogoutKey =
+      AgentSecretNamespaces.pendingAgentLogoutKey;
 
   final _logger = Logger('AuthManager');
   final NativeAuthFileLock? _authFileLock;
@@ -114,7 +120,7 @@ class AuthManager {
         _pairingToken = null;
         data!
           ..remove('device_token')
-          ..remove('pairing_token')
+          ..remove(pairingTokenKey)
           ..remove('pending_device_token')
           ..remove(pendingAgentLogoutKey);
         await boundary.writeSecretBytes(
@@ -155,7 +161,7 @@ class AuthManager {
       _pendingDeviceToken = pendingCredential;
 
       var pairingToken = await _secretStore.read(pairingTokenKey);
-      final legacyPairingToken = data?['pairing_token'] as String?;
+      final legacyPairingToken = data?[pairingTokenKey] as String?;
       if (pairingToken == null && legacyPairingToken != null) {
         await _secretStore.write(pairingTokenKey, legacyPairingToken);
         pairingToken = await _secretStore.read(pairingTokenKey);
@@ -170,13 +176,13 @@ class AuthManager {
       if (data != null &&
           (data.containsKey('device_token') ||
               data.containsKey('pending_device_token') ||
-              data.containsKey('pairing_token') ||
+              data.containsKey(pairingTokenKey) ||
               data.containsKey('access_token') ||
               data.containsKey('refresh_token'))) {
         data
           ..remove('device_token')
           ..remove('pending_device_token')
-          ..remove('pairing_token')
+          ..remove(pairingTokenKey)
           ..remove('access_token')
           ..remove('refresh_token');
         await boundary.writeSecretBytes(
@@ -417,7 +423,7 @@ class AuthManager {
     data.remove('refresh_token');
     data.remove('hardware_id');
     data.remove('device_token');
-    data.remove('pairing_token');
+    data.remove(pairingTokenKey);
     data.remove('pending_device_token');
 
     if (_accessToken != null) data['access_token'] = _accessToken;
@@ -446,7 +452,7 @@ class AuthManager {
             data.remove('access_token');
             data.remove('refresh_token');
             data.remove('device_token');
-            data.remove('pairing_token');
+            data.remove(pairingTokenKey);
             data.remove('pending_device_token');
             data.remove(pendingAgentLogoutKey);
             await boundary.writeSecretBytes(
