@@ -208,10 +208,7 @@ Producer order is an obligation, not a convenience:
 - Exactly one route is opened per session, and the opening call is idempotent, so
   a repeated `start` cannot emit a second `dictation_start` for one
   `dictation_id`.
-- A claim whose route is refused still names a live session. The producer MUST
-  cancel it on the command path (`op: cancel`, §5), which keeps working when the
-  route does not; otherwise the engine lease survives until the Gateway's route
-  TTL releases it and every other press is refused with `busy`.
+- A claim whose route is refused still names a live session, but the command path cannot end it: a `dictation` command `op: cancel` is rejected by the daemon relay with `invalid_request`, by design. Teardown therefore travels on the ordered control — `dictation_end{reason: cancelled}` — when the route is still healthy, and nowhere at all when the route has already failed (it admits nothing; the daemon's first-audio watchdog releases the engine and the Gateway retires the route). A producer that simply stops talking keeps the Gateway's route occupied until its idle TTL, and every press on every client is answered `busy` in the meantime.
 - Frames and the ordered `dictation_end` are refused from the moment a route
   fails, so a failed route is not a reusable transport: a new session
   (`dictation_id` is a fresh UUID) is the only way back.

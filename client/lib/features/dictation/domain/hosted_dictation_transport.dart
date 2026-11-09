@@ -96,9 +96,6 @@ class HostedDictationTransport implements DictationTransport {
   /// True once the ordered `dictation_end` control left for this route.
   bool _endSent = false;
 
-  /// True once the `dictation` cancel command was dispatched.
-  bool _cancelSent = false;
-
   @override
   Stream<Map<String, dynamic>> get events => _events.stream;
 
@@ -193,33 +190,25 @@ class HostedDictationTransport implements DictationTransport {
       'hosted dictation route failed: code=$code'
       '${gatewayCode == null ? '' : ' gateway=$gatewayCode'}',
     );
-    // The route is dead; the daemon session the claim command started is not.
-    // Cancel it on the command path, which still works when the route does not,
-    // so the engine is released now instead of at the Gateway's idle TTL.
-    _cancelDaemonSession();
     if (!_events.isClosed) {
       _events.add({'event': 'dictation_error', 'code': code});
     }
   }
 
-  /// Dispatches the `dictation` command `op: cancel` for this session.
+  /// Sends the ordered `dictation_end` control for this route, at most once.
   ///
-  /// Deliberately not routed through [sendCommand]: that method refuses to write
-  /// once the route has failed, and this is exactly the case where the command
-  /// path still has to speak. One cancel per transport, whatever asked for it.
-  void _cancelDaemonSession() {
-    if (_cancelSent) return;
-    _cancelSent = true;
-    _socket.sendDeviceCommand(
-      deviceId: deviceId,
-      command: 'dictation',
-      payload: {
-        'version': 'v1',
-        'dictation_id': dictationId,
-        'request_id': dictationId,
-        'op': 'cancel',
-      },
-    );
+  /// It is the **only** carrier that ends a hosted session: the Agent relay
+  /// answers a `dictation` command `op: cancel` with `invalid_request` by design
+  /// ("stop and cancel travel on the ordered `dictation_end` control"), so the
+  /// command path never ends anything.
+  void _sendEnd(String reason) {
+    if (_endSent) return;
+    _endSent = true;
+    _socket.emit('dictation_end', {
+      'version': 'v1',
+      'dictation_id': dictationId,
+      'reason': reason,
+    });
   }
 
   @override
@@ -228,12 +217,7 @@ class HostedDictationTransport implements DictationTransport {
     if (event == 'stop' || event == 'cancel') {
       // Ordered route control: it can never overtake a frame that was already
       // admitted, which is why it does not ride the command path.
-      _endSent = true;
-      _socket.emit('dictation_end', {
-        'version': 'v1',
-        'dictation_id': dictationId,
-        'reason': event == 'stop' ? 'stopped' : 'cancelled',
-      });
+      _sendEnd(event == 'stop' ? 'stopped' : 'cancelled');
       return;
     }
     final modelId = payload['model_id'];
@@ -300,10 +284,17 @@ class HostedDictationTransport implements DictationTransport {
   @override
   Future<void> close() async {
     if (_closed) return;
-    // A session the daemon started must not outlive the transport that owned it:
-    // after a failure `sendCommand` cannot speak, and a silent close left the
-    // engine leased until the Gateway's route TTL released it.
-    if (_routeOpened && !_endSent) _cancelDaemonSession();
+    // A session the daemon started must not outlive the transport that owned it.
+    // The ordered `dictation_end` is the one carrier that ends it, so an abort
+    // that never asked for a stop still ends its route here — otherwise the
+    // Gateway held the device occupied until its idle route TTL and every press
+    // on every client was refused `busy` (5 m 35 s after one aborted press).
+    // A failed route admits nothing, so it is sent nothing: the Agent's
+    // `firstAudioTimeout` watchdog releases the daemon, and the Gateway retires
+    // the route on its own.
+    if (_routeOpened && !_routeFailed && _socket.isConnected) {
+      _sendEnd('cancelled');
+    }
     _closed = true;
     await _subscription?.cancel();
     _subscription = null;

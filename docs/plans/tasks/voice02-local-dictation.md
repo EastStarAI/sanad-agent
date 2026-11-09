@@ -628,6 +628,49 @@ owner.
 Still open by owner decision: the `U1` error-mapping changes, every Gateway /
 PR242 change (claim lifetime, never-started TTL), and N5 option (b).
 
+## G20 — Live-4 cloud leg: the teardown carrier was wrong (owner decisions 2026-11-09)
+
+G19's Client teardown sent the `dictation` command `op: cancel`. Live-4 proved
+that carrier can never work on this Agent, and that the Gateway was never told
+about an abandoned route at all. Both are Client-side defects; the approved fix
+uses the documented protocol and changes no Gateway, relay, or protocol rule.
+
+- [x] **C1 — the Agent refuses the command-path teardown.**
+      `HostedDictationRelay` answers `stop`/`cancel` ops with `invalid_request`
+      by design ("stop and cancel travel on the ordered `dictation_end`
+      control", `hosted_dictation_relay.dart:179-186`), so the Client's
+      `op: cancel` released nothing and the daemon was freed only by the 15 s
+      watchdog — measurably `dictation_event code=invalid_request` at
+      `07:46:55.039` and `07:47:52.007` (live-4). `_cancelDaemonSession` is gone.
+      Teardown now travels on the one documented carrier: `close()` sends the
+      ordered `dictation_end{reason: cancelled}` once when the route was opened,
+      is still healthy, and no end has left. A route that already failed admits
+      nothing, so nothing is sent and the Agent's `firstAudioTimeout` remains the
+      backstop. Pinned by
+      `client/test/unit/dictation/hosted_dictation_close_test.dart` (7 tests).
+- [x] **C2 — an abandoned route blocked every cloud press for ~5 m 35 s.** The
+      watchdog ends the daemon session but sent nothing to the Gateway, which
+      kept the device occupied until its idle route TTL: after one aborted press
+      at `05:46:54Z`, every press up to `05:53:26Z` was refused
+      `dictation_busy gateway=busy`, on any client, with the engine free. The
+      ordered `dictation_end{cancelled}` from `close()` is what releases the
+      route, so the next press no longer waits out a TTL.
+- [x] **Diagnostics unchanged:** one info line per failed route keeps the raw
+      Gateway code (`gateway=busy`), which is what distinguished a Gateway
+      refusal from a daemon one in live-4.
+
+Owner decisions recorded here (not implemented, deliberately):
+
+- The relay accepting `op: cancel` — rejected; the ordered control is the
+  documented carrier, so the Client was the defective side.
+- Any Gateway change: a shorter never-started TTL, or releasing a route when the
+  daemon watchdog fires. Both would shorten the exposure for a producer that
+  vanishes without sending anything (the Client can no longer leave a healthy
+  route behind, but a killed process still can). Deferred to the owner.
+- `C3` (a consumed single-use fixture poisoning the next press) was a harness
+  mistake, not a product defect: a leg must re-arm the fixture on the exact
+  Client that presses.
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

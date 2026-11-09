@@ -3,14 +3,23 @@ import 'package:sanad_client/features/dictation/domain/hosted_dictation_transpor
 
 import '../../helpers/fake_socket.dart';
 
-/// A hosted session the Client abandons must not keep the daemon's engine
-/// leased. The route control (`dictation_end`) is unusable after a route
-/// failure, so the cancel travels on the `dictation` **command** path, which
-/// still works: the route died, not the claim.
+/// Ending a hosted session is the documented ordered control and nothing else.
 ///
-/// Without it the daemon kept the engine until the Gateway's 300 s idle route
-/// TTL, and every press in that window was answered `dictation_busy`
-/// (`live-3/RESULT.md`, 03:50:17 → 03:55:47).
+/// An abandoned session — the capture failed, the cubit aborted, the widget went
+/// away — leaves a live daemon session behind. `/dictation-end` (§6.3) is the one
+/// carrier that ends it: the Agent relay answers a `dictation` command `op: cancel`
+/// with `invalid_request` **by design** ("stop and cancel travel on the ordered
+/// `dictation_end` control", `hosted_dictation_relay.dart:179-186`), so the command
+/// path released nothing at all.
+///
+/// Leaving the route open was worse than a wasted packet: the Gateway keeps the
+/// device occupied until its idle route TTL, so every press on every client was
+/// refused `busy` for **5 m 35 s** after one aborted press
+/// (`live-4/RESULT.md`, 05:46:54 → 05:53:26).
+///
+/// A route that already failed is the opposite case: it admits nothing, so the
+/// teardown sends **nothing** and the Agent's `firstAudioTimeout` watchdog is the
+/// backstop that releases the engine.
 void main() {
   late FakeSanadSocketService socket;
 
@@ -27,11 +36,23 @@ void main() {
     maxFrameBytes: 8192,
   );
 
-  List<Map<String, dynamic>> cancelCommands() => [
+  /// The ordered route control, `dictation_end`.
+  List<Map<String, dynamic>> ends() => [
+    for (final entry in socket.capturedCommands)
+      if (entry['event'] == 'dictation_end') entry['data'] as Map<String, dynamic>,
+  ];
+
+  /// The command-path teardown this Agent refuses.
+  List<Map<String, dynamic>> commandCancels() => [
     for (final entry in socket.capturedCommands)
       if (entry['command'] == 'dictation' &&
           (entry['payload'] as Map?)?['op'] == 'cancel')
         entry['payload'] as Map<String, dynamic>,
+  ];
+
+  List<Map<String, dynamic>> dictationCommands() => [
+    for (final entry in socket.capturedCommands)
+      if (entry['command'] == 'dictation') entry['payload'] as Map<String, dynamic>,
   ];
 
   Future<void> failRoute(String errorCode) async {
@@ -42,51 +63,92 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 20));
   }
 
-  test('a failed route cancels the daemon session on the command path', () async {
+  test('an abandoned session ends its route with the ordered control', () async {
+    final transport = openTransport();
+    transport.sendCommand('start');
+    expect(ends(), isEmpty);
+
+    // No `stop`/`cancel` was ever asked for: the capture failed, so the cubit
+    // just closes the transport.
+    await transport.close();
+
+    expect(ends(), hasLength(1));
+    expect(ends().single, {
+      'version': 'v1',
+      'dictation_id': 'dict-1',
+      'reason': 'cancelled',
+    });
+  });
+
+  test('the abort carries only the route control, never a command', () async {
+    final transport = openTransport();
+    transport.sendCommand('start');
+
+    await transport.close();
+
+    // This Agent refuses `op: cancel`, so the abort must not spend a packet on
+    // it: the route control is the documented carrier and the only one.
+    expect(commandCancels(), isEmpty);
+    expect(
+      [for (final command in dictationCommands()) command['op']],
+      ['start'],
+    );
+  });
+
+  test('a session that already ended sends no second end', () async {
+    final transport = openTransport();
+    transport.sendCommand('start');
+    transport.sendCommand('stop');
+    expect(ends(), hasLength(1));
+    expect(ends().single['reason'], 'stopped');
+
+    await transport.close();
+
+    // The daemon session is already over; a second `dictation_end` for the same
+    // route is a duplicate intent the Gateway would only have to referee.
+    expect(ends(), hasLength(1));
+  });
+
+  test('a cancel already carried on the route is not repeated', () async {
+    final transport = openTransport();
+    transport.sendCommand('start');
+    transport.sendCommand('cancel');
+    expect(ends(), hasLength(1));
+    expect(ends().single['reason'], 'cancelled');
+
+    await transport.close();
+
+    expect(ends(), hasLength(1));
+    expect(commandCancels(), isEmpty);
+  });
+
+  test('a failed route sends nothing on the way out', () async {
     final transport = openTransport();
     transport.sendCommand('start');
 
     await failRoute('forbidden');
 
-    final cancels = cancelCommands();
-    expect(cancels, hasLength(1));
-    expect(cancels.single, {
-      'version': 'v1',
-      'dictation_id': 'dict-1',
-      'request_id': 'dict-1',
-      'op': 'cancel',
-    });
-
-    await transport.close();
-  });
-
-  test('closing a started session cancels it exactly once', () async {
-    final transport = openTransport();
-    transport.sendCommand('start');
+    // The route admits nothing, so there is no carrier left: the Agent's
+    // first-audio watchdog releases the engine, and the Gateway retires the
+    // route on its own.
+    expect(ends(), isEmpty);
+    expect(commandCancels(), isEmpty);
 
     await transport.close();
 
-    expect(cancelCommands(), hasLength(1));
+    expect(ends(), isEmpty);
+    expect(commandCancels(), isEmpty);
   });
 
-  test('a session that already sent route control is not cancelled again', () async {
-    final transport = openTransport();
-    transport.sendCommand('start');
-    // `cancel` already travels as the ordered `dictation_end` control; a second
-    // cancel would be two carriers for one intent.
-    transport.sendCommand('cancel');
-
-    await transport.close();
-
-    expect(cancelCommands(), isEmpty);
-  });
-
-  test('a transport that never opened a route cancels nothing', () async {
+  test('a transport that never opened a route sends nothing', () async {
     final transport = openTransport();
 
     await transport.close();
 
-    expect(cancelCommands(), isEmpty);
+    // No claim, no route, no session: nothing to end.
+    expect(ends(), isEmpty);
+    expect(commandCancels(), isEmpty);
+    expect(dictationCommands(), isEmpty);
   });
 
   test('a failed route is not a reusable transport', () async {

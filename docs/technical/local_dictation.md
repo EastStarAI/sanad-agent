@@ -74,10 +74,13 @@ until the Gateway's route TTL released it — five minutes in the live run, duri
 which every other press was refused with `dictation_busy`. The window keys on
 **zero frames ever**, so it never fires for a user who is simply quiet.
 
-The Agent is not the only side that cleans up: a Client whose route failed
-dispatches the `dictation` command `op: cancel`, because the command path still
-works when the route does not. The watchdog is the backstop for a producer that
-disappeared without telling anyone.
+The Agent is not the only side that cleans up. A Client that abandons a healthy
+route ends it with the ordered `dictation_end{reason: cancelled}`, which ends the
+daemon session and releases the Gateway's route. The command path cannot do it: a
+`dictation` command `op: cancel` is refused with `invalid_request` by design, so a
+Client that relied on it released nothing and left the Gateway holding the device
+for its whole idle TTL. When the route itself has already failed there is nothing
+to send, and the watchdog below is the only cleanup left — which is why it exists.
 
 ## Batch and streaming
 
