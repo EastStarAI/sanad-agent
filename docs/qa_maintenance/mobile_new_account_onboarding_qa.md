@@ -26,6 +26,13 @@ window because the shared shell, picker, and gate are one implementation.
 | 4 | offline device never opens the gate | phone | no gate |
 | 4 | readiness failure never opens the gate | phone | no gate |
 | 3 | picker label stays bounded in a narrow composer | 280x500 | no overflow, picker and send button both present |
+| D-1 | back from Settings with zero devices | 390x844 | lands on the zero-device surface, no device-less composer |
+| D-1 | back from Settings with a device | 390x844 | Home's own surface, unchanged |
+| D-1 | landing on Home with zero devices | 390x844 | yields to the zero-device surface |
+| D-1 | landing on Home with a pending inventory | 390x844 | stays on Home (never bounced) |
+| D-1 | back from Settings with zero devices | 1400x1000 | Home, desktop unchanged |
+| D-2 | provider form footer with a provisional instance | 338x700 (en + ar) | every footer action inside the viewport |
+| D-2 | provider form footer | 1400x1000 | one row, primary action on the right |
 
 Regression suites that must stay green with this change: the conversation
 navigation suite, the composer chip/parity/inventory suites, the composer
@@ -41,7 +48,9 @@ owns no devices.
 1. Sign in and stop on the zero-device screen. Confirm the side-menu button is
    visible and that the card fits the screen with no overflow stripe.
 2. Open the side menu, choose Settings, then Profile. Confirm the Profile page
-   renders and offers Sign out (do not sign out).
+   renders and offers Sign out (do not sign out). Use the Settings back action and
+   confirm it returns to the **zero-device screen**, not to a device-less
+   composer.
 3. Return to the zero-device screen and choose `Add a Remote Device`. Enter a
    name and create the device.
 4. Confirm the install page appears with its commands and pairing token, and
@@ -52,7 +61,9 @@ owns no devices.
 6. With the device online and no provider configured, confirm the provider setup
    gate opens over the conversation. Dismiss it and confirm the composer is
    still usable; the model picker opens, states that no providers are
-   configured, and its Settings action opens provider settings.
+   configured, and its Settings action opens provider settings. On the custom
+   provider form, confirm the footer (Cancel, back to providers, Continue) fits
+   without an overflow stripe once the provisional instance exists.
 7. Configure a provider, return to the conversation, and confirm the picker
    lists that instance's models and the gate no longer opens.
 8. Repeat steps 1–7 in a desktop-width window (and on macOS) and confirm the

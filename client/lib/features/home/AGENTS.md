@@ -5,7 +5,8 @@ This contract applies to `client/lib/features/home/`.
 
 ## Bootstrap Ownership
 - `GatewayConnectionCubit` is the feature-level owner of gateway status and first-route resolution.
-- Complete first-launch gateway and registered-device routing before rendering `/home`; `HomeScreen` must not repeat bootstrap redirects after it renders.
+- `AccountLanding` (`lib/core/navigation/account_landing.dart`) owns the one landing-eligibility rule: a non-desktop account with no registered device belongs on the zero-device onboarding surface, desktop keeps its local-first Home, and an account with a device keeps the location it asked for. Cold-start bootstrap, the Settings back action, and Home itself all resolve through it; never re-derive the rule at a call site.
+- Complete first-launch gateway and registered-device routing before rendering `/home`; `HomeScreen` must not repeat bootstrap redirects after it renders, with one exception: an account that becomes ineligible for Home (no registered device, authoritative empty inventory) yields to the zero-device surface instead of rendering a device-less composer that has no route back to adding a device. A pending inventory is never ineligible.
 - Count offline cloud devices as registered devices. Connectivity affects presentation, not device-registration routing.
 - `HomeScreen` may reconcile the typed destination and active device before conversation providers exist, but session selection must run below the `SessionCubit` provider.
 

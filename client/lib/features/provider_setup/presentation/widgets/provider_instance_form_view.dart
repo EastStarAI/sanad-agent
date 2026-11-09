@@ -14,6 +14,13 @@ const _supportedProviderProtocols = [
   'anthropic_compatible',
 ];
 
+/// Below this footer width the form's actions stack instead of sharing one row.
+///
+/// An iPhone-width dialog gives the form ~338 logical px, which cannot hold
+/// Cancel + Back to providers + Continue on one line; wider (desktop) dialogs
+/// keep the single row.
+const double _stackedFooterMaxWidth = 420;
+
 String _protocolDisplayName(String protocol) => switch (protocol) {
   'openai_compatible' => 'OpenAI API Compatible',
   'anthropic_compatible' => 'Anthropic API Compatible',
@@ -305,43 +312,73 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
                 ],
               ],
             ),
-            footer: Row(
-              children: [
-                TextButton(
+            footer: LayoutBuilder(
+              builder: (context, constraints) {
+                final cancelButton = TextButton(
                   onPressed: saving ? null : () => _cancel(context),
                   child: const Text('Cancel'),
-                ),
+                );
                 // A provisional instance is already persisted, so leaving must
                 // not force a choice between an unusable form and deleting it
                 // (issue 339 review 2). Keyed stably for driver automation.
-                if (state.provisionalInstanceId != null) ...[
-                  const SizedBox(width: 8),
-                  TextButton.icon(
-                    key: const Key('provider_form_back_to_list'),
-                    onPressed: saving
-                        ? null
-                        : () => unawaited(
-                            context
-                                .read<ProviderSetupCubit>()
-                                .finishSetupKeepingInstance(),
-                          ),
-                    icon: const Icon(Icons.arrow_back, size: 16),
-                    label: Text(
-                      AppLocalizations.of(
-                        context,
-                      )!.providerFormBackToList,
-                    ),
-                  ),
-                ],
-                const Spacer(),
-                FilledButton(
+                final backToListButton = state.provisionalInstanceId == null
+                    ? null
+                    : TextButton.icon(
+                        key: const Key('provider_form_back_to_list'),
+                        onPressed: saving
+                            ? null
+                            : () => unawaited(
+                                context
+                                    .read<ProviderSetupCubit>()
+                                    .finishSetupKeepingInstance(),
+                              ),
+                        icon: const Icon(Icons.arrow_back, size: 16),
+                        label: Text(
+                          AppLocalizations.of(
+                            context,
+                          )!.providerFormBackToList,
+                        ),
+                      );
+                final submitButton = FilledButton(
                   key: const Key('provider_form_submit'),
                   onPressed: saving ? null : _submit,
                   child: Text(
                     saving ? 'Saving...' : (isEdit ? 'Save changes' : 'Continue'),
                   ),
-                ),
-              ],
+                );
+
+                // Three actions share this footer, which does not fit an
+                // iPhone-width dialog on one line (the live iOS pass measured
+                // 20 px of overflow at 338). Stack them instead of clipping, and
+                // keep the single row above that width so a desktop dialog is
+                // unchanged.
+                if (constraints.maxWidth < _stackedFooterMaxWidth) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      cancelButton,
+                      if (backToListButton != null) ...[
+                        const SizedBox(height: 8),
+                        backToListButton,
+                      ],
+                      const SizedBox(height: 8),
+                      submitButton,
+                    ],
+                  );
+                }
+
+                return Row(
+                  children: [
+                    cancelButton,
+                    if (backToListButton != null) ...[
+                      const SizedBox(width: 8),
+                      backToListButton,
+                    ],
+                    const Spacer(),
+                    submitButton,
+                  ],
+                );
+              },
             ),
           ),
         );

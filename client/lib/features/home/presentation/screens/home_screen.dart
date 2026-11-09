@@ -8,6 +8,8 @@ import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.da
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
+import 'package:sanad_client/core/navigation/account_landing.dart';
+import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/navigation/conversation_destination.dart';
 import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/navigation/navigation_history_controller.dart';
@@ -245,6 +247,7 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
     _applyInitialSessionSelection();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      _leaveHomeWhenNoDeviceSurface();
       _deletedSessionSubscription = context.read<SessionCubit>().deletedSessions.listen((deleted) {
         if (!mounted) return;
         context.read<SessionMessagesCubit>().invalidateDeletedSession(
@@ -262,6 +265,17 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
   void dispose() {
     unawaited(_deletedSessionSubscription?.cancel());
     super.dispose();
+  }
+
+  /// Home is not a surface a non-desktop account with zero registered devices
+  /// may sit on: it renders a composer it cannot send from and offers no route
+  /// back to "Add a Remote Device". The eligible surface is the zero-device
+  /// onboarding screen, chosen by the same rule the cold-start bootstrap uses
+  /// ([AccountLanding]).
+  void _leaveHomeWhenNoDeviceSurface() {
+    if (!mounted) return;
+    if (!AccountLanding.shouldLeaveHome(context.read<DeviceCubit>().state)) return;
+    context.go(AppRoutes.onboarding);
   }
 
   @override
@@ -541,9 +555,13 @@ class _HomeScreenContentState extends State<_HomeScreenContent> {
           final previousDevice = previous is DeviceActive ? previous.activeAgent : null;
           final currentDevice = current is DeviceActive ? current.activeAgent : null;
           if (previousDevice?.id != currentDevice?.id) return true;
+          // Entering the zero-device state is a Home-eligibility change even
+          // when the active device did not change shape (pending -> empty).
+          if (AccountLanding.shouldLeaveHome(current)) return true;
           return previousDevice?.isOnline != currentDevice?.isOnline;
         },
         listener: (context, state) {
+          _leaveHomeWhenNoDeviceSurface();
           final activeDevice = state is DeviceActive ? state.activeAgent : null;
           if (_skippedDeviceId != null && _skippedDeviceId != activeDevice?.id) {
             _skippedDeviceId = null;

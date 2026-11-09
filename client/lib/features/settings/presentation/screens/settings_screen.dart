@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
-import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/navigation/account_landing.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -297,7 +297,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           key: const Key('settings_back_to_conversations_btn'),
                           icon: const Icon(Icons.arrow_back_rounded),
                           tooltip: 'Back to conversations',
-                          onPressed: () => context.go(AppRoutes.home),
+                          // Same eligibility rule as the wide-layout back action:
+                          // a zero-device account returns to the zero-device
+                          // surface instead of a device-less Home.
+                          onPressed: () => context.go(AccountLanding.forCurrentAccount(context)),
                         ),
                         actions: [
                           Builder(

@@ -107,6 +107,35 @@ same rules hold on desktop.
       `docs/qa_maintenance/mobile_new_account_onboarding_qa.md` remains for the
       owner's device run; this task's automated coverage stands in for it.
 
+## Live-simulator follow-up (D-1, D-2)
+
+The owner's iOS Simulator pass on PR 371 (head `c4e7be82`) confirmed steps 1–7
+and found two defects that the automated matrix could not see:
+
+- **D-1 (blocking).** Menu → Settings → Profile → back landed on `/home`: a
+  device-less composer whose drawer offers no "Add a Remote Device" entry, so the
+  account had no in-app route back to onboarding. Before this task the Settings
+  screen was unreachable from the zero-device surface, so `/home` was unreachable
+  too; the new drawer made the dead end reachable, on the reviewer path itself.
+  - **Fix.** `AccountLanding` (`client/lib/core/navigation/account_landing.dart`)
+    owns the landing-eligibility rule that cold-start bootstrap already applied.
+    `GatewayConnectionCubit.resolveInitialRoute` now delegates to it, both
+    Settings back actions resolve through it, and `HomeScreen` yields to the
+    zero-device surface when a non-desktop account's authoritative inventory is
+    empty. A pending inventory is never treated as empty. Desktop and accounts
+    with devices are unchanged.
+- **D-2 (layout).** The custom-provider form footer overflowed by 20 px at 338
+  logical px once a provisional instance existed (`Cancel` + back-to-providers +
+  `Continue` in one row).
+  - **Fix.** The footer stacks its actions below an iPhone-class width and keeps
+    the single row (primary action on the right) above it.
+
+Both defects were reproduced as failing tests first (the D-1 router cases failed
+2/5 against the pre-fix code, the D-2 geometry case measured the primary action
+at 569 px inside a 338 px viewport) and are covered by
+`client/test/widget/mobile_new_account_onboarding_test.dart` and
+`client/test/features/provider_setup/widgets/provider_instance_form_footer_test.dart`.
+
 ## Follow-ups
 
 1. The model picker dialog header overflows by 5.8 px at 390 width

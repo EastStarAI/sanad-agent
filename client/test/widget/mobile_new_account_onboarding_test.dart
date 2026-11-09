@@ -161,6 +161,7 @@ void main() {
     String initialLocation, {
     required Size size,
     GatewayConnectionStatus? gateway,
+    bool settle = true,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -190,7 +191,15 @@ void main() {
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    if (settle) {
+      await tester.pumpAndSettle();
+    } else {
+      // A device-less Home keeps an indeterminate spinner alive, so it can never
+      // settle; bounded pumps are enough to observe a redirect away from it.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.pump(const Duration(milliseconds: 400));
+    }
     return setup.router;
   }
 
@@ -417,6 +426,80 @@ void main() {
         expect(find.byKey(const Key('model_picker_settings_btn')), findsOneWidget);
       });
     }
+  });
+
+  group('defect D-1 — Settings never strands a zero-device account', () {
+    testWidgets('phone: back from Settings with zero devices returns to the zero-device surface', (
+      tester,
+    ) async {
+      usePhone();
+      deviceCubit.emitState(const DeviceNoActive(agents: []));
+
+      final router = await pumpApp(tester, '${AppRoutes.settings}?section=profile', size: _phone);
+
+      await tester.tap(find.byKey(const Key('settings_back_to_conversations_btn')));
+      await tester.pumpAndSettle();
+
+      // The live iOS pass landed here on `/home`: a device-less composer with no
+      // route back to "Add a Remote Device".
+      expect(pathOf(router), AppRoutes.onboarding);
+      expect(find.byKey(const Key('onboarding_remote_action')), findsOneWidget);
+      expect(find.byKey(const Key('chat_input')), findsNothing);
+    });
+
+    testWidgets('phone: back from Settings with a device still returns to Home', (tester) async {
+      usePhone();
+      emitDevice(DeviceConfig(id: 'device-a', name: 'Phone', isOnline: true));
+
+      final router = await pumpApp(tester, '${AppRoutes.settings}?section=profile', size: _phone);
+
+      await tester.tap(find.byKey(const Key('settings_back_to_conversations_btn')));
+      await tester.pumpAndSettle();
+      drainExceptions(tester);
+
+      // Unchanged for an account with a device: Home's own surface, which may
+      // auto-route into that device's new conversation.
+      expect(pathOf(router), isNot(AppRoutes.onboarding));
+      expect(find.byKey(const Key('onboarding_remote_action')), findsNothing);
+    });
+
+    testWidgets('phone: landing on Home with zero devices returns to the zero-device surface', (
+      tester,
+    ) async {
+      usePhone();
+      deviceCubit.emitState(const DeviceNoActive(agents: []));
+
+      final router = await pumpApp(tester, AppRoutes.home, size: _phone, settle: false);
+      drainExceptions(tester);
+
+      expect(pathOf(router), AppRoutes.onboarding);
+      expect(find.byKey(const Key('onboarding_remote_action')), findsOneWidget);
+    });
+
+    testWidgets('phone: a pending inventory never bounces Home to onboarding', (tester) async {
+      usePhone();
+      deviceCubit.emitState(const DeviceNoActive(agents: [], isLoadingFromBackend: true));
+
+      final router = await pumpApp(tester, AppRoutes.home, size: _phone, settle: false);
+      drainExceptions(tester);
+
+      // An account with devices passes through this state on every cold start.
+      expect(pathOf(router), AppRoutes.home);
+    });
+
+    testWidgets('desktop: back from Settings with zero devices keeps the Home landing', (tester) async {
+      useDesktop();
+      deviceCubit.emitState(const DeviceNoActive(agents: []));
+
+      final router = await pumpApp(tester, '${AppRoutes.settings}?section=profile', size: _desktop);
+
+      await tester.tap(find.byKey(const Key('settings_back_to_conversations_btn')));
+      await tester.pumpAndSettle();
+      drainExceptions(tester);
+
+      // Desktop keeps its local-first Home; the zero-device rule is mobile-only.
+      expect(pathOf(router), AppRoutes.home);
+    });
   });
 
   group('defect 4 — provider setup on a fresh online device', () {
