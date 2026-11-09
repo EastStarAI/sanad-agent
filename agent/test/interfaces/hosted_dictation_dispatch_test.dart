@@ -221,6 +221,9 @@ stt:
       sanadHome: tempDir.path,
       platformSupported: true,
       engineFor: (_) => engine,
+      // The injected engine stands in for the shim, so the file probe must not
+      // refuse a session the test deliberately supplies.
+      whisperRuntimeAvailable: () => true,
     );
 
     getIt.registerSingleton<AuthManager>(authManager);

@@ -99,6 +99,9 @@ class _DictationMicButtonState extends State<DictationMicButton> {
     }
   }
 
+  /// One first-use sheet per session-ending refusal, not one per rebuild.
+  bool _firstUseSheetShown = false;
+
   void _syncText(DictationState state) {
     final text = state.visibleText;
     if (text == _appliedText) return;
@@ -195,6 +198,10 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       'invalid_session_identity' => l10n.dictationFailedGeneric,
       'remote_only_platform' => l10n.dictationUnsupportedPlatform,
       'dictation_unavailable' => l10n.dictationUnavailable,
+      // A session refused for a missing model is the first-use state, not a
+      // failure: the same sheet the readiness path opens is offered right here.
+      'model_not_installed' => l10n.dictationModelNotInstalled,
+      'sherpa_runtime_missing' => l10n.dictationSherpaRuntimeMissing,
       'audio_gap' => l10n.dictationFailedGeneric,
       'prepare_unavailable' => l10n.dictationFailedGeneric,
       // Unknown refusals are still a refusal: one localized generic notice, never
@@ -215,14 +222,25 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       listenWhen: (previous, current) =>
           previous.visibleText != current.visibleText ||
           previous.errorCode != current.errorCode ||
-          previous.status != current.status,
+          previous.status != current.status ||
+          previous.sessionNeedsFirstUseSheet != current.sessionNeedsFirstUseSheet,
       listener: (context, state) {
         // A new session can hit the same condition again (say, two silent
         // attempts in a row), so the announced code only guards one session.
         if (state.status == DictationStatus.preparing || state.status == DictationStatus.listening) {
           _announcedCode = null;
+          _firstUseSheetShown = false;
         }
         _announce(state);
+        // A session that ended because no model was installed (a model removed
+        // mid-session, or a readiness change between status and start) ends in
+        // the install sheet instead of a dead end. This is the one consumer of
+        // the cubit's first-use flag; the ordinary path opens the sheet before
+        // the session ever starts.
+        if (state.sessionNeedsFirstUseSheet && !_firstUseSheetShown) {
+          _firstUseSheetShown = true;
+          unawaited(_openSheet(state));
+        }
         if (state.status == DictationStatus.idle) {
           _settle(state);
         } else {

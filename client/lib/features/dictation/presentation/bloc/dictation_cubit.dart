@@ -501,18 +501,28 @@ class DictationCubit extends Cubit<DictationState> {
     final models = <DictationModelOption>[];
     for (final entry in candidates) {
       if (entry is! Map) continue;
+      final description = entry['description'];
       models.add(
         DictationModelOption(
           id: (entry['id'] as String?) ?? '',
-          label: (entry['label'] as String?) ?? '',
+          name: entry['name'] as String?,
           labelCode: entry['label_code'] as String?,
-          note: entry['note'] as String?,
-          totalBytes: (entry['total_bytes'] as num?)?.toInt(),
+          // A locale map, so a model's own copy travels with the model and the
+          // Client never has to grow a string per catalog entry.
+          description: description is Map
+              ? {
+                  for (final item in description.entries)
+                    if (item.key is String && item.value is String)
+                      item.key as String: item.value as String,
+                }
+              : const {},
+          badge: entry['badge'] as String?,
+          speedTier: (entry['speed_tier'] as num?)?.toInt(),
+          sizeBytes: (entry['size_bytes'] as num?)?.toInt(),
+          streaming: entry['streaming'] == true,
+          location: (entry['location'] as String?) ?? 'local',
           hosted: entry['hosted'] == true,
           installed: entry['installed'] == true,
-          mode: entry['mode'] == 'streaming'
-              ? DictationModelMode.streaming
-              : DictationModelMode.batch,
         ),
       );
     }
@@ -525,7 +535,7 @@ class DictationCubit extends Cubit<DictationState> {
       selectedModelId: selected,
       isReady:
           readyFlag is bool ? readyFlag : (selectedEntry?.installed ?? false),
-      installedBytes: selectedEntry?.totalBytes,
+      installedBytes: selectedEntry?.sizeBytes,
       // Same field, two meanings: unsupported is a platform verdict, while a
       // supported-but-not-ready device (native runtime missing or preparing)
       // must keep its reason so the sheet can offer the prepare action.

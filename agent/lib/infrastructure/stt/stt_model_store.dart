@@ -416,8 +416,11 @@ class _DigestCollector implements Sink<Digest> {
 /// Reads a catalog entry's manifest as JSON, used by tests and diagnostics.
 String describeCatalogEntry(SttCatalogEntry entry) => jsonEncode({
   'id': entry.id,
-  'label': entry.label,
+  'name': entry.name,
   'mode': entry.mode.name,
+  'badge': entry.badge.code,
+  'speed_tier': entry.speedTier,
+  'location': entry.location.name,
   'language': entry.language,
   'total_bytes': entry.totalBytes,
   'hosted': entry.hosted,

@@ -10,11 +10,11 @@
 /// entry point and the availability flag the daemon asks for.
 library;
 
-import 'dart:ffi';
-import 'dart:io';
-
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import 'src/sherpa_bindings.dart';
+
+export 'src/sherpa_bindings.dart' show loadSherpaBindings;
 export 'src/sherpa_worker.dart' show sherpaWorkerEntry;
 
 /// Whether this build can run sherpa-onnx at all.
@@ -37,13 +37,5 @@ String? sherpaNativeSourceDirectory() => sherpa.resolveSherpaOnnxPathSync();
 /// the engine resolve the library from this checkout's package resolution. It is
 /// the only entry point callers get: the raw `sherpa_onnx` import stays inside
 /// this package so a build without the engine cannot reference it.
-void sherpaInitBindings([String? directory]) {
-  if (directory != null && Platform.isWindows) {
-    // Windows resolves a DLL's imports from the process search path, not from
-    // the DLL's own directory, so the runtime must be loaded by path first. The
-    // same reason made the whisper shim preload its siblings.
-    final onnxruntime = File('$directory/onnxruntime.dll');
-    if (onnxruntime.existsSync()) DynamicLibrary.open(onnxruntime.path);
-  }
-  sherpa.initBindings(directory);
-}
+void sherpaInitBindings([String? directory]) =>
+    loadSherpaBindings(directory);

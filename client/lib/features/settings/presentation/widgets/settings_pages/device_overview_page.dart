@@ -476,6 +476,7 @@ class _DeviceOverviewPageState extends State<DeviceOverviewPage> {
             if (settings.dictation != null) ...[
               const SizedBox(height: 16),
               DictationSettingsCard(
+                device: widget.device,
                 dictation: settings.dictation!,
                 enabled: !_saving && !settings.dictation!.managedExternally,
                 onToggle: (value) => _update({'dictation_enabled': value}),

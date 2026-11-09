@@ -90,6 +90,24 @@ bool isIgnoredKey(String? key) {
   return false;
 }
 
+/// Finds the first element whose key is exactly [key].
+///
+/// It is the same whole-tree traversal the inspector uses — unbounded and
+/// iterative, so a Home with conversation history does not stop the search before
+/// it reaches the composer. A bounded walk made `dictation_control` answer
+/// `composer_not_mounted` on every real tree while `inspect_ui` found the same
+/// key instantly.
+Element? findElementByKey(Element root, String key) {
+  final pending = <Element>[root];
+  while (pending.isNotEmpty) {
+    final element = pending.removeLast();
+    final widgetKey = element.widget.key;
+    if (widgetKey is ValueKey<String> && widgetKey.value == key) return element;
+    element.visitChildren(pending.add);
+  }
+  return null;
+}
+
 /// Finds the element subtree matching [withinTarget] by key, text, or runtime type.
 Element? findScopeRoot(Element root, String? withinTarget) {
   if (withinTarget == null || withinTarget.trim().isEmpty) {

@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:material_symbols_icons/symbols.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
+import 'package:sanad_client/features/dictation/presentation/dictation_model_text.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
@@ -59,6 +61,21 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
     // The cubit owns the installing state, so the progress bar keeps rendering
     // until the daemon reports the model installed (no local flicker).
     return cubit.installModel(modelId, device: widget.device);
+  }
+
+  /// Installed and custom rows first, then the daemon's own order.
+  ///
+  /// A user opens this sheet to either use what is already on disk or add
+  /// something new; sorting installed rows to the top is the whole ordering rule,
+  /// so no sections, search, or grouping is needed.
+  static List<DictationModelOption> _ordered(List<DictationModelOption> models) {
+    final ordered = [...models];
+    final index = {for (var i = 0; i < ordered.length; i++) ordered[i].id: i};
+    ordered.sort((a, b) {
+      if (a.installed != b.installed) return a.installed ? -1 : 1;
+      return index[a.id]!.compareTo(index[b.id]!);
+    });
+    return ordered;
   }
 
   /// The one action the current unsupported state deserves.
@@ -139,7 +156,7 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                         children: [
                           Text(
                             '${l10n.dictationUnavailableTitle} · '
-                            '${_reasonLabel(l10n, model.blockedReason!)}',
+                            '${dictationReasonLabel(l10n, model.blockedReason!)}',
                             key: const Key('dictation_blocked_reason'),
                             style: bodyStyle,
                           ),
@@ -149,7 +166,7 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                     ),
                   ],
                   const SizedBox(height: 8),
-                  for (final option in model.models)
+                  for (final option in _ordered(model.models))
                     _ModelTile(
                       option: option,
                       selected: option.id == model.selectedModelId,
@@ -206,7 +223,9 @@ class _ModelTile extends StatelessWidget {
     final l10n = AppLocalizations.of(context)!;
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-    final size = _formatBytes(l10n, option.totalBytes);
+    final size = _formatBytes(l10n, option.sizeBytes);
+    final description = option.descriptionFor(Localizations.localeOf(context));
+    final badge = dictationModelBadge(l10n, option.badge);
 
     Widget? action;
     if (isDownloading) {
@@ -264,11 +283,15 @@ class _ModelTile extends StatelessWidget {
                       children: [
                         Flexible(
                           child: Text(
-                            // A daemon-owned row (the `stt.model_path` override)
-                            // arrives as a code, not as English copy.
-                            option.labelCode == null
-                                ? option.label
-                                : _labelForCode(l10n, option.labelCode!, option.label),
+                            // The model's own name, or the localized identity
+                            // of a row the daemon owns: never daemon copy.
+                            dictationModelTitle(
+                              l10n,
+                              id: option.id,
+                              name: option.name,
+                              labelCode: option.labelCode,
+                            ),
+                            key: Key('dictation_model_name_${option.id}'),
                             style: theme.textTheme.bodyMedium?.copyWith(
                               fontWeight: FontWeight.w600,
                             ),
@@ -279,26 +302,18 @@ class _ModelTile extends StatelessWidget {
                           Icon(Icons.check_circle,
                               size: 14, color: colorScheme.primary),
                         ],
-                        // The mode is the one thing the note cannot be trusted to
-                        // carry: a streaming model writes while you speak, a batch
-                        // model lands the text when you stop.
+                        // Streaming is a fact about the model, not a note: a
+                        // streaming model writes while you speak, a batch model
+                        // lands the text when you stop.
                         if (option.isStreaming) ...[
                           const SizedBox(width: 6),
-                          Container(
-                            key: const Key('dictation_mode_streaming_badge'),
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 6,
-                              vertical: 1,
-                            ),
-                            decoration: BoxDecoration(
-                              color: colorScheme.secondaryContainer,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              l10n.dictationModeStreaming,
-                              style: theme.textTheme.labelSmall?.copyWith(
-                                color: colorScheme.onSecondaryContainer,
-                              ),
+                          Tooltip(
+                            message: l10n.dictationModeStreaming,
+                            child: Icon(
+                              Symbols.graphic_eq,
+                              key: const Key('dictation_mode_streaming_badge'),
+                              size: 14,
+                              color: colorScheme.primary,
                             ),
                           ),
                         ],
@@ -313,20 +328,41 @@ class _ModelTile extends StatelessWidget {
                         ],
                       ],
                     ),
-                    if (option.note != null)
+                    if (badge != null)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: _BadgeChip(
+                          key: Key('dictation_badge_${option.id}'),
+                          label: badge,
+                          emphasized: option.badge == 'recommended',
+                        ),
+                      ),
+                    if (description.isNotEmpty)
                       Text(
-                        option.note!,
+                        description,
+                        key: Key('dictation_model_description_${option.id}'),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
                       ),
-                    if (size != null)
-                      Text(
-                        size,
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: colorScheme.onSurfaceVariant,
-                        ),
-                      ),
+                    Row(
+                      children: [
+                        if (size != null)
+                          Text(
+                            size,
+                            style: theme.textTheme.labelSmall?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        if (option.speedTier != null) ...[
+                          if (size != null) const SizedBox(width: 8),
+                          _SpeedBars(
+                            key: Key('dictation_speed_${option.id}'),
+                            tier: option.speedTier!,
+                          ),
+                        ],
+                      ],
+                    ),
                   ],
                 ),
               ),
@@ -361,33 +397,74 @@ class _ModelTile extends StatelessWidget {
   }
 }
 
-/// Localizes a daemon label code, falling back to the daemon's own text.
-///
-/// Codes are the daemon's stable identities (`path_override` today); the sheet
-/// owns every user-facing word, so no daemon string is ever shown untranslated.
-String _labelForCode(AppLocalizations l10n, String code, String fallback) {
-  return switch (code) {
-    'path_override' => l10n.dictationPathOverrideModel,
-    _ => fallback.isEmpty ? code : fallback,
-  };
+/// A closed-set badge code, rendered as one small chip.
+class _BadgeChip extends StatelessWidget {
+  const _BadgeChip({
+    super.key,
+    required this.label,
+    required this.emphasized,
+  });
+
+  final String label;
+  final bool emphasized;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final background = emphasized
+        ? colorScheme.primaryContainer
+        : colorScheme.surfaceContainerHighest;
+    final foreground = emphasized
+        ? colorScheme.onPrimaryContainer
+        : colorScheme.onSurfaceVariant;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        label,
+        style: theme.textTheme.labelSmall?.copyWith(color: foreground),
+      ),
+    );
+  }
 }
 
-/// Turns a daemon readiness code into user-facing copy.
+/// Relative decoding speed as four bars, filled up to [tier].
 ///
-/// The daemon reports codes, never sentences (it has no locale); anything the
-/// sheet does not know is shown verbatim so an unexpected code is still visible
-/// rather than silently swallowed.
-String _reasonLabel(AppLocalizations l10n, String reason) {
-  return switch (reason) {
-    'native_runtime_preparing' => l10n.dictationRuntimePreparing,
-    'native_runtime_missing' => l10n.dictationRuntimeMissing,
-    'native_runtime_install_failed' => l10n.dictationRuntimeInstallFailed,
-    'unsupported_platform' => l10n.dictationUnsupportedPlatform,
-    'dictation_disabled' => l10n.dictationDisabled,
-    'model_not_installed' => l10n.dictationModelRequired,
-    // The daemon may report `config_invalid` or a future code; the sheet owns
-    // every sentence it shows, so an unknown code falls back to neutral copy
-    // instead of a raw daemon or parser message.
-    _ => l10n.dictationUnavailable,
-  };
+/// It is a ranking the catalog declares, not a measurement, so it is drawn as
+/// bars with a localized semantic label instead of a number.
+class _SpeedBars extends StatelessWidget {
+  const _SpeedBars({super.key, required this.tier});
+
+  final int tier;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final colorScheme = Theme.of(context).colorScheme;
+    final clamped = tier.clamp(1, 4);
+    return Semantics(
+      label: l10n.dictationSpeedSemantics(clamped),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var bar = 1; bar <= 4; bar++)
+            Container(
+              width: 3,
+              height: 3.0 + bar * 2,
+              margin: const EdgeInsetsDirectional.only(end: 2),
+              decoration: BoxDecoration(
+                color: bar <= clamped
+                    ? colorScheme.primary
+                    : colorScheme.outlineVariant,
+                borderRadius: BorderRadius.circular(1),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
 }

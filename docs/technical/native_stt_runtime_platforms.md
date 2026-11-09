@@ -75,7 +75,20 @@ list; the packaged layout is:
 staged payload in release staging and in the pull-request lane, so a layout the
 loader cannot read fails before publication. On Windows the runtime is preloaded
 by path first: Windows resolves a DLL's imports from the process search path,
-not from the DLL's own directory — the same rule the whisper shim follows.
+not from the DLL's own directory — the same rule the whisper shim follows. That
+preload lives in `agent/packages/stt_sherpa/lib/src/sherpa_bindings.dart`, which
+the worker calls, so the packaging smoke test and the daemon exercise one loader
+instead of two.
+
+A **source checkout** has no `native/<tag>/sherpa/` directory, and it needs none:
+when the packaged copy is absent, `sherpaNativeDirectory` falls back to
+`package:sherpa_onnx`'s own resolution (`sherpaNativeSourceDirectory()`, the same
+directory release staging copies from) and passes that explicit path to the
+worker. Passing `null` would leave the engine to resolve the library itself, and
+on macOS that is `DynamicLibrary.process()` — valid only inside a Flutter host.
+`ensure_native_stt --stage` therefore stays a packaging step, not a developer
+prerequisite; readiness reports `sherpa_runtime_missing` only when neither source
+yields the library.
 
 The archive contract allows exactly this nesting and nothing else: members are
 `native/<tag>/<library>` or `native/<tag>/sherpa/<loader-relative library>`, at

@@ -23,8 +23,14 @@ const SttModelFile kSileroVadFile = SttModelFile(
 const List<SttCatalogEntry> kSttCatalog = [
   SttCatalogEntry(
     id: 'egy-whisper-turbo-int8',
-    label: 'Egyptian Whisper Turbo (int8)',
-    note: 'احتياطي sherpa — يستهلك ٢.٤–٣ جيجابايت من الذاكرة',
+    name: 'Egyptian Whisper Turbo Int8',
+    description: {
+      'en':
+          'Sherpa build with a lighter memory footprint; the whole model is '
+          'loaded into RAM.',
+      'ar': 'نسخة sherpa بذاكرة أخف — تُحمَّل في الذاكرة كاملة.',
+    },
+    speedTier: 3,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -56,8 +62,13 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'egy-whisper-turbo-ggml-q8',
-    label: 'المصري — دقة عالية',
-    note: 'يستهلك ≈١.٢ جيجابايت من الذاكرة — التوصية الافتراضية',
+    name: 'Egyptian Whisper Turbo Q8',
+    description: {
+      'en': 'Recommended for Arabic: 0.9 GB download, about 1.2 GB of memory.',
+      'ar': 'الموصى به للعربية: تنزيل ٠.٩ جيجابايت وذاكرة ≈١.٢ جيجابايت.',
+    },
+    badge: SttModelBadge.recommended,
+    speedTier: 3,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: true,
@@ -75,8 +86,13 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'egy-whisper-turbo-ggml-f16',
-    label: 'المصري — أقصى دقة',
-    note: 'يستهلك ≈١.٩ جيجابايت من الذاكرة — الأصل بلا تكميم',
+    name: 'Egyptian Whisper Turbo F16',
+    description: {
+      'en': 'The unquantized original: largest download and about 1.9 GB of memory.',
+      'ar': 'الأصل بلا تكميم: أكبر تنزيل وذاكرة ≈١.٩ جيجابايت.',
+    },
+    badge: SttModelBadge.moreAccurate,
+    speedTier: 2,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -96,8 +112,13 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'egy-whisper-turbo-ggml-q5',
-    label: 'المصري — خفيف',
-    note: 'يستهلك ≈٠.٩٥ جيجابايت من الذاكرة — فروق طفيفة في التشكيل',
+    name: 'Egyptian Whisper Turbo Q5',
+    description: {
+      'en': 'Smaller and faster download with about 0.95 GB of memory.',
+      'ar': 'تنزيل أصغر وأسرع بذاكرة ≈٠.٩٥ جيجابايت.',
+    },
+    badge: SttModelBadge.faster,
+    speedTier: 4,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -115,8 +136,12 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'whisper-turbo-ggml-q5',
-    label: 'Whisper Turbo (ggml q5_0)',
-    note: 'النسخة العالمية متعددة اللغات — للاختبار',
+    name: 'Whisper Large v3 Turbo Q5',
+    description: {
+      'en': 'Multilingual Whisper build kept for testing.',
+      'ar': 'نسخة Whisper متعددة اللغات — للاختبار.',
+    },
+    speedTier: 3,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -135,8 +160,13 @@ const List<SttCatalogEntry> kSttCatalog = [
   ),
   SttCatalogEntry(
     id: 'whisper-base-int8',
-    label: 'سريع جدًا — دقة أقل',
-    note: 'يستهلك ≈٠.٧٦ جيجابايت من الذاكرة — للأجهزة الضعيفة جدًا',
+    name: 'Whisper Base Int8',
+    description: {
+      'en': 'Small model for very weak devices: about 0.76 GB of memory.',
+      'ar': 'نموذج صغير للأجهزة الضعيفة جدًا: ذاكرة ≈٠.٧٦ جيجابايت.',
+    },
+    badge: SttModelBadge.faster,
+    speedTier: 4,
     mode: SttModelMode.batchVad,
     language: 'ar',
     isDefault: false,
@@ -181,8 +211,12 @@ const List<SttCatalogEntry> kSttCatalog = [
 /// kroko export below is the same size with a much newer model.
 const SttCatalogEntry _enStreaming20230626 = SttCatalogEntry(
   id: 'en-streaming-zipformer-2023-06-26',
-  label: 'إنجليزي — بث مباشر (٢٠٢٣)',
-  note: 'مهجور لصالح نموذج kroko بنفس الحجم',
+  name: 'Zipformer EN 2023-06-26',
+  description: {
+    'en': 'Superseded English streaming build, kept so existing installs resolve.',
+    'ar': 'نسخة بث إنجليزي قديمة، محفوظة للتنصيبات القائمة.',
+  },
+  speedTier: 4,
   mode: SttModelMode.streaming,
   language: 'en',
   hidden: true,
@@ -228,8 +262,12 @@ const SttCatalogEntry _enStreaming20230626 = SttCatalogEntry(
 /// It stays in the catalog so an existing install still resolves its files.
 const SttCatalogEntry _enStreamingZipformer20m = SttCatalogEntry(
   id: 'en-streaming-zipformer-20m',
-  label: 'إنجليزي — بث مباشر (٢٠ مليون، ضعيف)',
-  note: 'محفوظ للتوافق فقط — يقاس أنه لا ينتج نصًا قبل ٣–٥ ثوانٍ',
+  name: 'Zipformer EN 20M',
+  description: {
+    'en': 'First-generation English streaming build, kept for compatibility only.',
+    'ar': 'أول نسخة بث إنجليزي — للتوافق فقط.',
+  },
+  speedTier: 3,
   mode: SttModelMode.streaming,
   language: 'en',
   hidden: true,
@@ -279,8 +317,13 @@ const SttCatalogEntry _enStreamingZipformer20m = SttCatalogEntry(
 /// the first word.
 const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
   id: 'en-streaming-zipformer-kroko-2025-08-06',
-  label: 'إنجليزي — بث مباشر (kroko ٢٠٢٥)',
-  note: 'يستهلك ≈٠.٠٧ جيجابايت — نص فوري أثناء الكلام (إنجليزي فقط)',
+  name: 'Zipformer EN Kroko 2025-08-06',
+  description: {
+    'en': 'English streaming: text appears while you speak, about 0.07 GB.',
+    'ar': 'بث إنجليزي: يظهر النص أثناء الكلام، ≈٠.٠٧ جيجابايت.',
+  },
+  badge: SttModelBadge.faster,
+  speedTier: 4,
   mode: SttModelMode.streaming,
   language: 'en',
   files: [
@@ -327,8 +370,14 @@ const SttCatalogEntry kEnglishStreamingEntry = SttCatalogEntry(
 /// dictation no longer has to be batch-only.
 const SttCatalogEntry kMultilingualStreamingEntry = SttCatalogEntry(
   id: 'multilingual-streaming-zipformer-2025-02-10',
-  label: 'عربي + إنجليزي — بث مباشر',
-  note: 'يستهلك ≈٠.٣٤ جيجابايت — نص فوري أثناء الكلام بالعربية والإنجليزية',
+  name: 'Zipformer Multilingual 2025-02-10',
+  description: {
+    'en':
+        'Arabic and English streaming: text appears while you speak, about '
+        '0.34 GB.',
+    'ar': 'بث عربي وإنجليزي: يظهر النص أثناء الكلام، ≈٠.٣٤ جيجابايت.',
+  },
+  speedTier: 3,
   mode: SttModelMode.streaming,
   language: 'ar',
   files: [

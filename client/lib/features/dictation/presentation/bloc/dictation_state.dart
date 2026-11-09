@@ -1,47 +1,85 @@
 import 'package:equatable/equatable.dart';
+import 'package:flutter/widgets.dart' show Locale;
 
 /// How live transcript text is surfaced in the composer.
 enum DictationPreviewPolicy { live, onStop }
-
-/// Decoding strategy of a catalog model, mirrored from the daemon's catalog.
-enum DictationModelMode { batch, streaming }
 
 /// Session lifecycle of one dictation run.
 enum DictationStatus { idle, preparing, listening, finalizing }
 
 /// One catalog entry as reported by the daemon.
+///
+/// The daemon ships identity and facts, never sentences: [name] is the model's
+/// own proper noun, [description] is the model's locale map (the one exception to
+/// "no user-facing copy from the daemon"), and [badge] is a code this Client
+/// localizes.
 class DictationModelOption extends Equatable {
   const DictationModelOption({
     required this.id,
-    required this.label,
+    this.name,
     this.labelCode,
-    this.note,
-    this.totalBytes,
+    this.description = const {},
+    this.badge,
+    this.speedTier,
+    this.sizeBytes,
+    this.streaming = false,
+    this.location = 'local',
     this.hosted = false,
     this.installed = false,
-    this.mode = DictationModelMode.batch,
   });
 
   final String id;
-  final String label;
 
-  /// Translatable identity for a daemon-owned row (for example the
-  /// `stt.model_path` override). The daemon never ships user-facing copy, so the
-  /// sheet localizes this code and falls back to [label] for catalog names.
+  /// The model's real name — a proper noun, never translated.
+  final String? name;
+
+  /// Translatable identity for a daemon-owned row that is not a catalog model
+  /// (for example the `stt.model_path` override). The Client localizes it.
   final String? labelCode;
-  final String? note;
-  final int? totalBytes;
+
+  /// One-line description per locale, English being the fallback.
+  final Map<String, String> description;
+
+  /// `recommended`, `faster`, `more_accurate`, `custom`, or null for none.
+  final String? badge;
+
+  /// Relative speed, 1 (slowest) to 4 (fastest), or null when unknown.
+  final int? speedTier;
+
+  final int? sizeBytes;
+
+  /// True when the daemon publishes text while the user speaks.
+  final bool streaming;
+
+  /// Where the model runs: `local` today, `cloud` when the catalog adds one.
+  final String location;
+
   final bool hosted;
   final bool installed;
 
-  /// How the daemon decodes this model. Batch models publish one transcript at
-  /// the end; streaming models publish live text.
-  final DictationModelMode mode;
+  bool get isStreaming => streaming;
 
-  bool get isStreaming => mode == DictationModelMode.streaming;
+  /// A model the daemon did not ship, so the row has no catalog name.
+  bool get isCustom => badge == 'custom';
+
+  /// The description in [locale], falling back to English.
+  String descriptionFor(Locale locale) =>
+      description[locale.languageCode] ?? description['en'] ?? '';
 
   @override
-  List<Object?> get props => [id, label, labelCode, note, totalBytes, hosted, installed, mode];
+  List<Object?> get props => [
+        id,
+        name,
+        labelCode,
+        description,
+        badge,
+        speedTier,
+        sizeBytes,
+        streaming,
+        location,
+        hosted,
+        installed,
+      ];
 }
 
 /// Daemon-reported speech model state (`stt_status` + `stt_download_progress`).

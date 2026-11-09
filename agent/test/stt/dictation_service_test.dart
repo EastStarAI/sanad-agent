@@ -163,9 +163,10 @@ stt:
       final selected = models.firstWhere(
         (model) => model['id'] == 'whisper-base-int8',
       );
-      expect(selected['total_bytes'], greaterThan(0));
+      expect(selected['size_bytes'], greaterThan(0));
       expect(selected['installed'], isFalse);
-      expect(selected['mode'], isNotNull);
+      expect(selected['streaming'], isFalse);
+      expect(selected['name'], isNotEmpty);
     });
 
     test('selecting a model from settings uses the one selection owner', () async {
@@ -214,7 +215,7 @@ stt:
       for (final model in models.cast<Map<String, Object?>>()) {
         expect(model['installed'], isFalse);
         expect(model['id'], isNotNull);
-        expect(model['total_bytes'], greaterThan(0));
+        expect(model['size_bytes'], greaterThan(0));
       }
       // Hidden entries stay usable through stt.model_id but never reach the UI.
       final ids = models

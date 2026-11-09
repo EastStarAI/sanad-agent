@@ -7,6 +7,7 @@ import 'package:provider/provider.dart';
 import 'package:sanad_client/core/di/injection.dart';
 import 'package:sanad_client/driver/dictation_capture_fixture.dart';
 import 'package:sanad_client/driver/dictation_probe.dart';
+import 'package:sanad_client/driver/driver_widget_filters.dart';
 import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
@@ -70,7 +71,10 @@ void registerDictationDriverExtensions() {
         ? getIt<SanadSocketService>()
         : null;
     if (socket == null) return _error('socket_unavailable');
-    final probe = _probe ??= DriverDictationProbe(socket);
+    final probe = _probe ??= DriverDictationProbe(
+      events: socket.events,
+      isConnected: () => socket.isConnected,
+    );
     switch (parameters['action']) {
       case 'expect':
         probe.expect(
@@ -172,16 +176,10 @@ String _errorCode(Object error) {
   return 'capture_unavailable';
 }
 
-/// Bounded key lookup from the root element; the composer is always below it.
-Element? _findKeyed(Element? root, String key, {int maxVisited = 4000}) {
-  if (root == null) return null;
-  final stack = <Element>[root];
-  var visited = 0;
-  while (stack.isNotEmpty) {
-    final element = stack.removeLast();
-    if (++visited > maxVisited) return null;
-    if (element.widget.key == ValueKey<String>(key)) return element;
-    element.visitChildren(stack.add);
-  }
-  return null;
-}
+/// Key lookup over the whole tree, using the inspector's own traversal.
+///
+/// The bounded variant stopped at 4000 elements, which any Home with
+/// conversation history exceeds, so every control call answered
+/// `composer_not_mounted` even though the composer was mounted.
+Element? _findKeyed(Element? root, String key) =>
+    root == null ? null : findElementByKey(root, key);

@@ -48,6 +48,7 @@ stt:
     sanadHome: home.path,
     platformSupported: true,
     engineFor: (_) => engine,
+    whisperRuntimeAvailable: () => true,
   );
 
   group('owned dictation lease', () {

@@ -132,6 +132,34 @@ instead, which is the same setup action with a truthful reason: the runtime coul
 not be downloaded or verified, and `prepareRuntime` retries the verified download
 without touching the Agent itself.
 
+The second fact is the **model**. A device whose runtime is fine but which has no
+loadable model reports `supported: true, ready: false, reason:
+model_not_installed`; a streaming entry whose engine libraries cannot be resolved
+reports `sherpa_runtime_missing`. Both are answered from the same resolution the
+session start uses, so readiness and start cannot disagree, and the composer's
+first press opens the model sheet instead of starting a session the daemon would
+refuse. A `stt.model_path` override that no longer resolves counts as no model.
+
+Readiness order is runtime before model: a missing engine makes every model
+useless, and it is the reason with a build or download action behind it.
+
+### Where the streaming engine is loaded from
+
+The daemon resolves one directory and hands it to the worker, which passes it to
+`initBindings`. Two sources, in order:
+
+1. `agent/native/<tag>/sherpa/` — the packaged payload a released Agent installs
+   from its runtime archive;
+2. the engine's own package resolution (`sherpaNativeSourceDirectory()`) — the
+   directory a source checkout has, and the exact directory release staging
+   copies from.
+
+Passing `null` is never an option: the engine would then resolve the library
+itself, and on macOS that is `DynamicLibrary.process()`, which only works inside a
+Flutter host. A source checkout therefore needs **no staging step** to run
+streaming; `ensure_native_stt --stage` remains the packaging path, not a
+developer prerequisite.
+
 The same `reason` string is projected twice — as the platform verdict when
 `supported` is false and as the readiness reason when it is true. There is no
 second status field on the wire.
@@ -153,8 +181,20 @@ Consequences that are contract, not implementation detail:
   or reports the exact reason.
 - The device settings page renders the daemon's own `dictation` projection, so
   it cannot describe a state different from the mic.
-- A daemon-owned catalog row is identified by `label_code` (`path_override`
-  today) and localized by the Client; the daemon never ships user-facing copy.
+- A catalog row carries `name` (the model's real name, a proper noun, identical
+  in every locale), `description` (a locale map `{en, ar}`, English fallback),
+  and the facts `badge` (`recommended|faster|more_accurate|custom`),
+  `speed_tier` (1–4, relative), `size_bytes`, `streaming`, and `location`
+  (`local` today, `cloud` when the catalog grows one).
+- The description is the **one** exception to "the daemon ships no user-facing
+  copy": it belongs to the model, so it travels with the model and adding a model
+  never requires a Client string. Badges, titles, and every other word stay codes
+  the Client localizes.
+- A daemon-owned row that is not a model — the `stt.model_path` override — is
+  identified by `label_code` (`path_override`) instead, and carries the `custom`
+  badge.
+- Adding a model is a catalog change only: one entry in `stt_catalog.dart` with
+  its name, descriptions, badge, speed tier, and files.
 
 ## Driver acceptance seam
 
@@ -167,11 +207,31 @@ extensions:
   at most 60 s, 320..32000-byte chunks every 10..500 ms). A fixture is
   single-use; arming or disarming during an active session is refused, and
   cancellation stops its timer so no late chunk reaches the transport.
-- `dictation_probe` counts only known dictation/voice event classes plus
+- `dictation_probe` counts known dictation/voice event classes plus
   device/dictation identity equality over the existing authenticated event
-  stream. It stores no audio, transcript, or per-frame history.
+  stream, for **both** transports: the relay classes and the local ones
+  (`stt_status`, `dictation_ready`, `dictation_partial`, `dictation_final`,
+  `dictation_done`, `dictation_error`). A local event carries no identity, so it
+  is never counted as foreign. It stores no audio, transcript, or per-frame
+  history.
 - `dictation_control` reports the cubit phase and can invoke the existing
-  `DictationCubit.cancel()` for a live control leg.
+  `DictationCubit.cancel()` for a live control leg. It locates the composer with
+  the inspector's whole-tree traversal (`findElementByKey`), never a
+  visited-element cap: a bounded walk answered `composer_not_mounted` on every
+  Home with history while `inspect_ui` found the same key instantly.
+
+Committed acceptance audio:
+
+| Fixture | Leg | Shape |
+| --- | --- | --- |
+| `client/test/fixtures/dictation/en_streaming_quick_brown_fox.pcm` | English streaming | PCM16LE, 16 kHz mono, 2.7 s |
+| `client/test/fixtures/dictation/ar_batch_dictation_check.pcm` | Arabic batch | PCM16LE, 16 kHz mono, 4.9 s |
+
+Both are raw PCM (no container header), so a leg arms them without conversion;
+`test/unit/dictation/dictation_audio_fixtures_test.dart` asserts their shape and
+that they are not silence. Regenerate with macOS `say` plus `afconvert -f WAVE -d
+LEI16@16000 -c 1` and strip the 44-byte header, or any 16 kHz mono PCM16LE
+encoder.
 
 Production `main.dart` never installs the seam, so the real microphone remains
 the default. Every response is a boolean, count, or phase: audio, transcript

@@ -140,24 +140,29 @@ class DictationSettingsSetting {
 class DictationModelSizeSetting {
   const DictationModelSizeSetting({
     required this.id,
-    this.label,
+    this.name,
     this.labelCode,
-    this.totalBytes,
+    this.sizeBytes,
     this.installed = false,
   });
 
   final String id;
-  final String? label;
+
+  /// The model's real name, a proper noun the daemon never translates.
+  final String? name;
+
+  /// Identity of a daemon-owned row that is not a catalog model.
   final String? labelCode;
-  final int? totalBytes;
+
+  final int? sizeBytes;
   final bool installed;
 
   factory DictationModelSizeSetting.fromJson(Map<String, dynamic> json) {
     return DictationModelSizeSetting(
       id: json['id']?.toString() ?? '',
-      label: json['label'] as String?,
+      name: json['name'] as String?,
       labelCode: json['label_code'] as String?,
-      totalBytes: (json['total_bytes'] as num?)?.toInt(),
+      sizeBytes: (json['size_bytes'] as num?)?.toInt(),
       installed: json['installed'] == true,
     );
   }

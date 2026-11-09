@@ -41,9 +41,16 @@ void main() {
     }
   });
 
-  DictationService service({String? nativeRuntimeRoot, Future<void> Function()? runtimeInstaller}) {
+  DictationService service({
+    String? nativeRuntimeRoot,
+    Future<void> Function()? runtimeInstaller,
+    String? modelPath,
+  }) {
     File('${home.path}/config.yaml').writeAsStringSync(
-      'stt:\n  model_id: egy-whisper-turbo-ggml-q8\n',
+      modelPath == null
+          ? 'stt:\n  model_id: egy-whisper-turbo-ggml-q8\n'
+          : 'stt:\n  model_id: egy-whisper-turbo-ggml-q8\n'
+                '  model_path: $modelPath\n',
     );
     return DictationService(
       sanadHome: home.path,
@@ -151,10 +158,16 @@ void main() {
       nativeRoot,
       NativeRuntimeInstall.downloadFailed,
     );
+    // A device is only ready once it has both a runtime and a model, so the
+    // model is present here and the runtime is the one thing still missing.
+    final modelDir = Directory('${workdir.path}/manual-model')
+      ..createSync(recursive: true);
+    File('${modelDir.path}/ggml-trial.bin').writeAsBytesSync([0, 0, 0, 0]);
     final gate = Completer<void>();
     var attempts = 0;
     final dictation = service(
       nativeRuntimeRoot: nativeRoot.path,
+      modelPath: modelDir.path,
       runtimeInstaller: () async {
         attempts++;
         await gate.future;

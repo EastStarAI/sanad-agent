@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/dictation_model_text.dart';
+import 'package:sanad_client/features/dictation/presentation/widgets/dictation_model_sheet.dart';
 import 'package:sanad_client/features/settings/data/device_settings_client.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
@@ -13,10 +16,15 @@ import 'settings_widgets.dart';
 class DictationSettingsCard extends StatelessWidget {
   const DictationSettingsCard({
     super.key,
+    required this.device,
     required this.dictation,
     required this.enabled,
     required this.onToggle,
   });
+
+  /// The device whose daemon serves this projection; the install action opens
+  /// the same model sheet the composer mic does.
+  final DeviceConfig device;
 
   final DictationSettingsSetting dictation;
 
@@ -33,9 +41,12 @@ class DictationSettingsCard extends StatelessWidget {
     final reason = dictation.reason;
     final modelLabel = model == null
         ? null
-        : model.labelCode == 'path_override'
-        ? l10n.dictationPathOverrideModel
-        : (model.label ?? model.id);
+        : dictationModelTitle(
+            l10n,
+            id: model.id,
+            name: model.name,
+            labelCode: model.labelCode,
+          );
 
     return SettingsCard(
       child: Column(
@@ -80,9 +91,9 @@ class DictationSettingsCard extends StatelessWidget {
                       key: const Key('device_settings_dictation_model'),
                       style: theme.textTheme.bodyMedium,
                     ),
-                    if (model?.totalBytes != null && model!.totalBytes! > 0)
+                    if (model?.sizeBytes != null && model!.sizeBytes! > 0)
                       Text(
-                        _formatBytes(l10n, model.totalBytes!),
+                        _formatBytes(l10n, model.sizeBytes!),
                         style: theme.textTheme.labelSmall?.copyWith(
                           color: colorScheme.onSurfaceVariant,
                         ),
@@ -105,13 +116,28 @@ class DictationSettingsCard extends StatelessWidget {
           if (reason != null) ...[
             const SizedBox(height: 8),
             Text(
-              _reasonLabel(l10n, reason),
+              dictationReasonLabel(l10n, reason),
               key: const Key('device_settings_dictation_reason'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: colorScheme.error,
               ),
             ),
           ],
+          // The install route lives here as well as on the composer mic: a user
+          // who opens Settings to fix dictation should not have to leave it.
+          // It opens the same sheet, so there is one install surface.
+          Align(
+            alignment: AlignmentDirectional.centerEnd,
+            child: TextButton(
+              key: const Key('device_settings_dictation_manage'),
+              onPressed: () => DictationModelSheet.show(
+                context,
+                device: device,
+                isFirstUse: !dictation.ready,
+              ),
+              child: Text(l10n.deviceSettingsDictationManage),
+            ),
+          ),
         ],
       ),
     );
@@ -125,21 +151,6 @@ class DictationSettingsCard extends StatelessWidget {
         : l10n.dictationModelSizeMb(value.toStringAsFixed(0));
   }
 
-  static String _reasonLabel(AppLocalizations l10n, String reason) {
-    // The daemon reports machine codes only. An unknown code is localized to a
-    // neutral sentence rather than rendered verbatim, so a parser or config
-    // message can never reach the settings page.
-    return switch (reason) {
-      'native_runtime_preparing' => l10n.dictationRuntimePreparing,
-      'native_runtime_missing' => l10n.dictationRuntimeMissing,
-      'native_runtime_install_failed' => l10n.dictationRuntimeInstallFailed,
-      'unsupported_platform' => l10n.dictationUnsupportedPlatform,
-      'dictation_disabled' => l10n.dictationDisabled,
-      'model_not_installed' => l10n.dictationModelRequired,
-      'config_invalid' => l10n.dictationUnavailable,
-      _ => l10n.dictationUnavailable,
-    };
-  }
 }
 
 class _StatusChip extends StatelessWidget {

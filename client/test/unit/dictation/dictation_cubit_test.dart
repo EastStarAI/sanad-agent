@@ -157,14 +157,15 @@ void main() {
         'models': [
           {
             'id': 'whisper-base-int8',
-            'label': 'Whisper base',
-            'total_bytes': 161000000,
+            'name': 'Whisper Base Int8',
+            'description': {'en': 'Small model for very weak devices.'},
+            'size_bytes': 161000000,
             'hosted': true,
             'installed': true,
           },
           {
             'id': 'egy-whisper-turbo-int8',
-            'label': 'Egyptian',
+            'name': 'Egyptian Whisper Turbo Int8',
             'hosted': true,
             'installed': false,
           },
@@ -189,14 +190,14 @@ void main() {
         'models': [
           {
             'id': 'whisper-base-int8',
-            'label': 'Whisper base',
-            'mode': 'batchVad',
+            'name': 'Whisper Base Int8',
+            'streaming': false,
             'installed': true,
           },
           {
             'id': 'stream-en-int8',
-            'label': 'English streaming',
-            'mode': 'streaming',
+            'name': 'Zipformer EN Kroko',
+            'streaming': true,
             'installed': false,
           },
         ],
@@ -204,9 +205,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
 
       final models = cubit.state.model.models;
-      expect(models.first.mode, DictationModelMode.batch);
       expect(models.first.isStreaming, isFalse);
-      expect(models.last.mode, DictationModelMode.streaming);
       expect(models.last.isStreaming, isTrue);
     });
 
@@ -476,6 +475,8 @@ void main() {
         'event': 'stt_download_progress',
         'model_id': 'whisper-base-int8',
         'received_bytes': 50,
+        // The progress event keeps its own `total_bytes`; `size_bytes` is the
+        // catalog row's download size.
         'total_bytes': 200,
       });
       await Future<void>.delayed(Duration.zero);
@@ -488,7 +489,7 @@ void main() {
         'models': [
           {
             'id': 'whisper-base-int8',
-            'label': 'Whisper base',
+            'name': 'Whisper Base Int8',
             'hosted': true,
             'installed': true,
           },

@@ -675,6 +675,21 @@
   "dictationNotReadyTooltip": "Dictation is not ready · press for details",
   "dictationPrepareNow": "Set up now",
   "dictationModelRequired": "Install a dictation model to start.",
+  "dictationModelNotInstalled": "No dictation model is installed yet. Choose one to start.",
+  "dictationSherpaRuntimeMissing": "The live-transcription engine is not available on this device. Choose a Whisper model instead.",
+  "dictationBadgeRecommended": "Recommended",
+  "dictationBadgeFaster": "Faster",
+  "dictationBadgeMoreAccurate": "More accurate",
+  "dictationBadgeCustom": "Custom",
+  "dictationSpeedSemantics": "Relative speed {tier} of 4",
+  "@dictationSpeedSemantics": {
+    "placeholders": {
+      "tier": {
+        "type": "int"
+      }
+    }
+  },
+  "deviceSettingsDictationManage": "Manage models",
   "dictationNoSpeechDetected": "No speech detected. Try again.",
   "dictationLimitReached": "Dictation stopped at the 5-minute limit.",
   "dictationMicrophoneDenied": "Microphone access is required for dictation.",

@@ -404,6 +404,57 @@ Revisit later: our own pure-Dart FFI binding over `libsherpa-onnx-c-api` would
 remove the Flutter dependency from the Agent entirely and give arm64 streaming
 back. That is a separate task, deliberately not started here.
 
+## G16 — Live-local findings on the first-run path (owner decisions 2026-11-09)
+
+A live run against a Test Home with **no STT model** found that dictation
+reported `Ready`, the mic started a session the daemon immediately refused with
+`model_not_installed`, the install sheet never appeared, and the Settings card
+showed `Ready` for the same state. The owner's rule is unchanged and was simply
+broken: with no model, a **single** press opens the model sheet; long-press stays
+the explicit settings route.
+
+- [x] **Readiness includes the model.** `readiness()` resolves the model the
+      session would load (one resolution for both facts) and reports
+      `model_not_installed` when there is none, `sherpa_runtime_missing` when a
+      streaming entry's libraries cannot be resolved, and the existing runtime
+      reasons otherwise. `stt_status`, the settings projection, and the session
+      start all read the same answer.
+- [x] **The regression is pinned.** `755b7ee5` made the Client trust the daemon's
+      `ready` flag instead of the selected row's `installed` echo — correct — but
+      the daemon never counted the model, so nothing replaced that check.
+      `agent/test/stt/dictation_model_readiness_test.dart` pins readiness with
+      zero models, with an installed override, and with a vanished override path;
+      `client/test/widget/dictation/dictation_first_use_sheet_test.dart` pins that
+      one press opens the sheet and that a late refusal lands there too.
+- [x] **`sessionNeedsFirstUseSheet` has one consumer.** The mic button opens the
+      sheet when the cubit sets it, so the flag is no longer dead state; the
+      ordinary path still opens the sheet before a session starts.
+- [x] **Every reason is localized.** `model_not_installed` and
+      `sherpa_runtime_missing` gained en+ar notices and sheet/settings sentences
+      through one shared mapper (`dictation_model_text.dart`), so no surface can
+      render a daemon code.
+- [x] **One install surface, reachable from Settings.** The device settings card
+      opens the same model sheet (`device_settings_dictation_manage`) and never
+      shows `Ready` without a model, because it renders the daemon's readiness.
+- [x] **Catalog rows carry identity, not copy** (owner decision). `name` is the
+      model's real name, `description` is a locale map `{en, ar}` with an English
+      fallback — the single exception to "the daemon ships no user-facing copy" —
+      and `badge`, `speed_tier`, `size_bytes`, `streaming`, `location` are facts.
+      The rows render name, badge, description, size, speed bars, and a streaming
+      icon, installed rows first; no search, no grouping, no invented accuracy
+      grade. Adding a model is a catalog change only.
+- [x] **The driver seam works on real trees.** `dictation_control` uses the
+      inspector's whole-tree traversal instead of a 4000-element cap, and
+      `dictation_probe` counts the local event classes, so a local leg is
+      evidential.
+- [x] **Acceptance audio is committed.** Two raw PCM16LE fixtures (English
+      streaming, Arabic batch) under `client/test/fixtures/dictation/`, shape
+      asserted by a test.
+- [x] **A source checkout loads streaming with no staging step.** The daemon
+      resolves the engine directory from the packaged payload or the checkout's
+      own package resolution and passes it explicitly; `null` (the macOS
+      `DynamicLibrary.process()` path) is never used.
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

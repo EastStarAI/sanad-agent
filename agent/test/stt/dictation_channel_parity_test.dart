@@ -47,6 +47,9 @@ stt:
       sanadHome: home.path,
       platformSupported: true,
       engineFor: (_) => localEngine,
+      // A fake engine stands in for the shim; the file probe would refuse a
+      // session the test deliberately supplies.
+      whisperRuntimeAvailable: () => true,
     );
     final local = FakeDictationChannel();
     final localRun = localService.handleChannel(local);
@@ -70,6 +73,7 @@ stt:
       sanadHome: home.path,
       platformSupported: true,
       engineFor: (_) => hostedEngine,
+      whisperRuntimeAvailable: () => true,
     );
     final hostedEvents = <(String, Map<String, dynamic>)>[];
     final hosted = HostedDictationChannel(

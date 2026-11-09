@@ -85,24 +85,90 @@ class SttEngineAvailability {
       'SttEngineAvailability(sherpa=$sherpa, whisperCpp=$whisperCpp)';
 }
 
+/// Closed set of row badges a catalog entry may carry.
+///
+/// A badge is a code, not a sentence: the Client localizes it. The set is
+/// closed so a new entry cannot invent a label the UI has no word for.
+enum SttModelBadge {
+  /// No badge: the row is neither recommended nor a speed/accuracy variant.
+  none,
+
+  /// The entry the device should pick when the user has no preference.
+  recommended,
+
+  /// The smallest or quickest option in its family.
+  faster,
+
+  /// The largest or least quantized option in its family.
+  moreAccurate,
+
+  /// A model the daemon did not ship (a `stt.model_path` override).
+  custom;
+
+  /// Wire identity of the badge.
+  String get code => switch (this) {
+    SttModelBadge.none => '',
+    SttModelBadge.recommended => 'recommended',
+    SttModelBadge.faster => 'faster',
+    SttModelBadge.moreAccurate => 'more_accurate',
+    SttModelBadge.custom => 'custom',
+  };
+}
+
+/// Where a model runs.
+///
+/// `local` is the only value the daemon produces today; `cloud` exists so a
+/// catalog row and every Client surface are written against a field instead of
+/// an assumption, and adding a hosted model stays a catalog change.
+enum SttModelLocation { local, cloud }
+
 class SttCatalogEntry {
   const SttCatalogEntry({
     required this.id,
-    required this.label,
-    required this.note,
+    required this.name,
+    required this.description,
     required this.mode,
     required this.files,
+    this.badge = SttModelBadge.none,
+    this.speedTier = 2,
     this.language = 'ar',
     this.isDefault = false,
     this.hosted = true,
     this.engine = SttEngineKind.sherpa,
     this.hidden = false,
     this.streamingModelType = 'zipformer2',
-  });
+    this.location = SttModelLocation.local,
+  }) : assert(speedTier >= 1 && speedTier <= 4, 'speed tier is 1..4');
 
   final String id;
-  final String label;
-  final String note;
+
+  /// The model's real name — a proper noun, identical in every locale.
+  ///
+  /// It is an identity, not copy: the daemon never translates it and the Client
+  /// renders it verbatim.
+  final String name;
+
+  /// One-line description per locale, English being the fallback.
+  ///
+  /// This is the single exception to "the daemon ships no user-facing copy":
+  /// a description belongs to the model, so it travels with the model instead
+  /// of being a Client string that goes stale when the catalog grows. Every
+  /// other word on the surface — badges, titles, column names — stays a code
+  /// the Client localizes.
+  final Map<String, String> description;
+
+  /// The badge the row carries, if any.
+  final SttModelBadge badge;
+
+  /// Relative decoding speed, 1 (slowest) to 4 (fastest) within the catalog.
+  ///
+  /// It is a ranking, not a measurement in seconds: the Client draws it as
+  /// bars, and a new entry only has to say where it sits.
+  final int speedTier;
+
+  /// Where the model runs. Always [SttModelLocation.local] today.
+  final SttModelLocation location;
+
   final SttModelMode mode;
   final List<SttModelFile> files;
   final String language;

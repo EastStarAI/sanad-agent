@@ -36,8 +36,8 @@ void main() {
   SttCatalogEntry entryFor(List<int> payload, {String? sha, String url = ''}) {
     return SttCatalogEntry(
       id: 'test-model',
-      label: 'Test',
-      note: 'test',
+      name: 'Test model',
+      description: const {'en': 'A test model.'},
       mode: SttModelMode.batchVad,
       files: [
         SttModelFile(

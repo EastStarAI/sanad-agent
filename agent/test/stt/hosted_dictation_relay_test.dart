@@ -45,6 +45,7 @@ stt:
       sanadHome: home.path,
       platformSupported: true,
       engineFor: (_) => engine,
+      whisperRuntimeAvailable: () => true,
     );
     envelopes = <(Map<String, dynamic>, String?)>[];
     relay = HostedDictationRelay(

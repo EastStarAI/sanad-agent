@@ -242,7 +242,7 @@ void main() {
       'models': [
         {
           'id': 'whisper-base-int8',
-          'label': 'Whisper base',
+          'name': 'Whisper Base Int8',
           'hosted': true,
           'installed': true,
         },

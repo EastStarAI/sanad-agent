@@ -233,7 +233,7 @@ void main() {
             'id': 'path-override',
             'label_code': 'path_override',
             'note': '/models/ggml.bin',
-            'total_bytes': 0,
+            'size_bytes': 0,
             'installed': true,
           },
         ],

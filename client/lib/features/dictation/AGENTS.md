@@ -19,6 +19,7 @@ This contract applies to `client/lib/features/dictation/`.
 - Never log audio bytes or transcript text; log counts, codes, and durations only.
 - The hosted channel must produce the same `{"event", ...fields}` maps as the local one, so no state machine above the transport can tell them apart. Only the transport may depend on the relay envelope: it claims with the `dictation` command before opening the route, splits frames to the advertised bound, carries `stop`/`cancel` as the ordered `dictation_end`, and re-checks identity on every relayed event. The wire contract is [Dictation Transport Protocol](../../../../docs/technical/dictation_transport_protocol.md).
 - `stt_status.supported` is the platform verdict; `ready` plus `reason` is the current state. Keep them separate: a supported device that is missing its native runtime must keep its reason so the setup action stays reachable.
+- `ready` covers the whole start, not just the engine: a Home with no installed model reports `ready: false, reason: model_not_installed`, and a streaming entry whose engine libraries cannot be resolved reports `sherpa_runtime_missing`. Trusting the daemon flag is correct **because** the daemon owns that fact; deriving readiness from a catalog row instead is what once made a model-less device look ready.
 
 ## Composer Insertion
 - `DictationInsertion` owns the composer range dictation writes into: partials replace only that range, finals commit and advance it, cancel removes it in one step.
@@ -27,10 +28,17 @@ This contract applies to `client/lib/features/dictation/`.
 - The caret is never stolen: an offset outside the range keeps its place (shifted by the delta), and an offset inside it follows the replacement.
 - A session belongs to one `scopeKey` (conversation); switching it cancels the live session so no transcript crosses conversations.
 
+## Driver Seam
+- `ext.sanad_client.dictation_control` locates the composer through `findElementByKey` (`client/lib/driver/driver_widget_filters.dart`), the same whole-tree traversal the inspector uses. It must never reintroduce a visited-element cap: a bounded walk answers `composer_not_mounted` on any Home with history while `inspect_ui` finds the same key instantly.
+- `ext.sanad_client.dictation_probe` counts both transports: the relay classes (`dictation_event`, `dictation_route_ack`, `dictation_route_error`, `voice_relay_error`, `voice_audio_chunk_relay`) and the local ones (`stt_status`, `dictation_ready`, `dictation_partial`, `dictation_final`, `dictation_done`, `dictation_error`). A local event carries no identity, so it counts as matched rather than foreign; only relay events can be foreign.
+- Acceptance audio is committed: `client/test/fixtures/dictation/en_streaming_quick_brown_fox.pcm` (streaming leg) and `ar_batch_dictation_check.pcm` (batch leg) are raw PCM16LE, 16 kHz mono, under 200 KB, and asserted by `test/unit/dictation/dictation_audio_fixtures_test.dart`.
+
 ## Settings
 - The client never edits agent configuration directly. Dictation settings (model selection, enable toggle) are sent as commands over the existing connection layer and persisted by the daemon, which then re-advertises `supports_dictation`.
 - The Dictation section of the device settings page renders the daemon's own `dictation` projection (enabled, `managed_externally`, selected model, size, readiness, busy, reason). It must not read `config.yaml` or keep a second copy of that state, and it hides itself when the Agent serves no such block.
-- A catalog row owned by the daemon is identified by `label_code` (`path_override`) and localized here; the daemon never ships user-facing copy.
+- A catalog row carries identity and facts, never sentences: `name` is the model's own proper noun (identical in every locale), `description` is the model's locale map (`{en, ar}`, English fallback), and `badge`, `speed_tier`, `streaming`, `location`, `size_bytes` are facts. A row the daemon owns but did not publish as a model — the `stt.model_path` override — carries `label_code` instead. Badges, titles, and every other word stay Client strings.
+- The model description is the **one** exception to "the daemon ships no user-facing copy": it belongs to the model, so it travels with the model. Adding a model must never require a Client string.
+- `location` is `local` today and is already part of the row: the surface renders the field, not an assumption, so a `cloud` model is a catalog change rather than a UI change.
 
 ## Presentation
 - The mic button renders only when `capabilities.supportsDictation` is true; an unsupported device must explain the daemon-reported reason instead of degrading silently.
@@ -39,3 +47,7 @@ This contract applies to `client/lib/features/dictation/`.
 - The live meter is drawn **inside the composer's bottom action row** (key `dictation_row_meter`), never in the composer background. While it is visible, the row's selectors (permission picker, model selector, thinking-level selector) are hidden and the meter takes their width; the Stop and Send buttons stay. Ending the session — Stop, auto-stop, error, or cancel — restores the row exactly as it was, because none of those controls change state while hidden.
 - The meter's samples, smoothing, grow-in, floor, painter, and bar geometry are one implementation (`dictation_composer_backdrop.dart`); only its container adapts to the row (24 px height, leading-edge direction per `TextDirection`, and an opacity ramp that stays readable beside 32 px buttons).
 - The model sheet reuses the `full_access_confirmation_dialog.dart` visual pattern and is localized for English and Arabic.
+- A model row renders its name, badge, localized description, size, speed bars, and a streaming icon; installed rows come first. There is no search, no grouping, and no accuracy grade — a rank the catalog does not publish must not be invented in the UI.
+- First use is one path with one destination: a single press on a device that is not ready (no model, missing engine) opens the model sheet instead of starting a session. A session that is refused for `model_not_installed` after it started ends in the same sheet through the cubit's `sessionNeedsFirstUseSheet` flag — the only reader of that flag — plus a localized notice. Long-press keeps opening the sheet as the explicit settings route.
+- The device settings card offers the same install route (key `device_settings_dictation_manage`), so a user fixing dictation from Settings never has to leave the page; there is exactly one install surface, and it is the sheet.
+- Every readiness reason the daemon can report has a localized sentence (`model_not_installed`, `sherpa_runtime_missing`, `native_runtime_missing`, `native_runtime_preparing`, `native_runtime_install_failed`, `unsupported_platform`, `dictation_disabled`); an unknown code falls back to a neutral sentence and is never rendered verbatim.

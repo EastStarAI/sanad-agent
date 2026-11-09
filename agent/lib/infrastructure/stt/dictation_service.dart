@@ -7,8 +7,11 @@ import 'dart:typed_data';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_release_contract/release_contract.dart';
+import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart'
+    show sherpaNativeSourceDirectory;
 
 import 'dictation_session.dart';
+import 'dictation_status.dart';
 import 'stt_engine.dart';
 import 'stt_catalog.dart';
 import 'stt_model_store.dart';
@@ -169,8 +172,11 @@ class DictationService {
     Future<void> Function()? runtimeInstaller,
     String? nativeRuntimeRoot,
     SttEngineAvailability availability = const SttEngineAvailability.build(),
+    bool Function()? whisperRuntimeAvailable,
   }) : _engineFactory = engineFactory ?? SherpaSttEngine.new,
        _engineFor = engineFor,
+       _whisperRuntimeAvailable =
+           whisperRuntimeAvailable ?? (() => WhisperCppLibrary.isAvailable),
        _platformSupported = platformSupported ?? _nativeTargetSupported(),
        _runtimeInstaller = runtimeInstaller,
        _availability = availability,
@@ -200,6 +206,13 @@ class DictationService {
 
   /// Which engines this build can run. Injected so both builds are testable.
   final SttEngineAvailability _availability;
+
+  /// Whether the whisper.cpp shim is on disk for this CPU.
+  ///
+  /// Injected for the same reason as [_engineFor]: a channel test exercises the
+  /// real start/lease path with a fake engine, and the file probe would
+  /// otherwise refuse a session that the test deliberately supplies.
+  final bool Function() _whisperRuntimeAvailable;
 
   /// The engines this build can run.
   SttEngineAvailability get availability => _availability;
@@ -258,14 +271,41 @@ class DictationService {
     if (defaultUsableSttEntry(_availability) == null) {
       return const SttReadiness.unavailable('dictation_unavailable');
     }
+    // One resolution answers both remaining facts: which engine the session
+    // would load, and whether there is a model to load at all. Deriving them
+    // from the same call is what keeps readiness and the session start from
+    // disagreeing about a `stt.model_path` override or a half-installed entry.
+    SttModelFiles? files;
+    try {
+      files = _store.resolve(_settings, selectedModelId: selectedModelId);
+    } on Object {
+      files = null;
+    }
+    final engine = files?.engine ?? selectedEntry?.engine;
+    // The runtime comes before the model: a missing engine makes every model
+    // useless, and it is the reason with a build/download action behind it.
+    if (engine == SttEngineKind.sherpa && sherpaNativeDirectory == null) {
+      return const SttReadiness.unavailable(
+        'sherpa_runtime_missing',
+        isSupported: true,
+      );
+    }
     // Whisper needs its native shim on disk. Report that as its own reason so a
     // fresh clone shows "run ensure_native_stt" instead of a generic failure.
-    final entry = selectedEntry;
-    if (entry != null &&
-        entry.engine == SttEngineKind.whisperCpp &&
-        !WhisperCppLibrary.isAvailable) {
+    if (engine == SttEngineKind.whisperCpp && !_whisperRuntimeAvailable()) {
       return SttReadiness.unavailable(
         _nativeRuntimeReason(),
+        isSupported: true,
+      );
+    }
+    // Readiness is about starting a session, and a session needs a model as
+    // much as it needs an engine. Leaving this out reported a Home with zero
+    // installed models as ready, so the mic started a session that the daemon
+    // immediately refused with `model_not_installed` — and the install sheet,
+    // which only opens for a device that is not ready, never appeared.
+    if (files == null) {
+      return const SttReadiness.unavailable(
+        'model_not_installed',
         isSupported: true,
       );
     }
@@ -487,14 +527,28 @@ class DictationService {
   /// directory, so the engine resolves the library from the pub cache itself.
   /// The answer is computed, never cached: the runtime can be installed while
   /// the daemon is running.
+  /// Directory that holds the sherpa libraries this process loads, or null.
+  ///
+  /// The packaged payload comes first: a released Agent carries the verified
+  /// `native/<tag>/sherpa/` copy inside its runtime archive. A source checkout
+  /// has no such directory, and there the engine's own package resolution holds
+  /// the same libraries — the release tool stages from exactly that directory.
+  ///
+  /// The path is resolved here, on the main isolate, and handed to the worker
+  /// explicitly. Passing null would leave the engine to resolve the library
+  /// itself: on macOS that is `DynamicLibrary.process()`, which only works
+  /// inside a Flutter host and silently fails in a pure-Dart daemon.
   String? get sherpaNativeDirectory {
     if (!_availability.sherpa) return null;
     final target = SttNativeTarget.tryCurrent();
     if (target == null) return null;
-    final directory = '${_nativeRoot.path}/${target.nativeDirectory}'
-        '/${target.sherpaNativeSubdirectory}';
     final probe = target.sherpaLibraries.first;
-    return File('$directory/$probe').existsSync() ? directory : null;
+    final packaged = '${_nativeRoot.path}/${target.nativeDirectory}'
+        '/${target.sherpaNativeSubdirectory}';
+    if (File('$packaged/$probe').existsSync()) return packaged;
+    final source = sherpaNativeSourceDirectory();
+    if (source != null && File('$source/$probe').existsSync()) return source;
+    return null;
   }
 
   /// Starts (or reuses) the engine for [files].
@@ -574,73 +628,25 @@ class DictationService {
     }
   }
 
-  /// Catalog rows as the Client renders them.
-  ///
-  /// `label_code` carries a translatable identity for rows the daemon owns; the
-  /// catalog `label` is a product name and is used verbatim. The daemon never
-  /// ships user-facing sentences or non-English copy.
-  List<Map<String, dynamic>> _modelRows({
-    required String? installedOverrides,
-    required bool overrideReady,
-  }) {
-    return [
-      // An explicit `stt.model_path` is a ready model even though it is not a
-      // catalog entry; without this row the UI offers the setup sheet.
-      if (installedOverrides != null)
-        {
-          'id': 'path-override',
-          'label_code': 'path_override',
-          // The absolute override path never leaves this machine: the row's
-          // identity is enough for every surface to describe it.
-          'mode': SttModelMode.batchVad.name,
-          'language': _settings.language,
-          'total_bytes': 0,
-          'hosted': false,
-          'installed': overrideReady,
-          'engine': SttEngineKind.whisperCpp.name,
-        },
-      for (final entry in usableSttEntries(_availability))
-        if (!entry.hidden)
-          {
-            'id': entry.id,
-            'label': entry.label,
-            'note': entry.note,
-            'mode': entry.mode.name,
-            'language': entry.language,
-            'total_bytes': entry.totalBytes,
-            'hosted': entry.hosted,
-            'installed': _store.statusOf(entry).installed,
-            'engine': entry.engine.name,
-          },
-    ];
-  }
-
+  /// The configured override path, or null when the setting is empty.
   String? get _installedOverridePath {
     final overridePath = _settings.modelPath?.trim();
     return overridePath == null || overridePath.isEmpty ? null : overridePath;
   }
 
+  /// `stt_status` payload: readiness, selection, and the catalog rows.
   Map<String, dynamic> statusPayload() {
     final readiness = this.readiness();
-    final installedOverrides = _installedOverridePath;
-    // A path that does not resolve is not an installed model: reporting it as
-    // ready would start a session that fails at load time.
-    final overrideReady =
-        installedOverrides != null && _resolveOverrideExists();
-    return {
-      'supported': readiness.isSupported,
-      'ready': readiness.isReady,
-      if (readiness.reason != null) 'reason': readiness.reason,
-      'busy': isBusy,
-      'selected': selectedModelId,
-      // Host filesystem layout is never part of a status payload. A local or
-      // hosted reader only needs to know that an override exists.
-      'has_model_path': installedOverrides != null,
-      'models': _modelRows(
-        installedOverrides: installedOverrides,
-        overrideReady: overrideReady,
-      ),
-    };
+    return dictationStatusPayload(
+      readiness: readiness,
+      settings: _settings,
+      store: _store,
+      availability: _availability,
+      selectedModelId: selectedModelId,
+      busy: isBusy,
+      hasOverridePath: _installedOverridePath != null,
+      overrideReady: _resolveOverrideExists(),
+    );
   }
 
   /// Device settings projection of the dictation runtime.
@@ -649,23 +655,18 @@ class DictationService {
   /// settings page can never describe a different state than the mic.
   Map<String, dynamic> settingsSnapshot() {
     final readiness = this.readiness();
-    final installedOverrides = _installedOverridePath;
-    return {
-      'enabled': _settings.enabled,
-      'managed_externally': _settings.enabledManagedByConfig,
-      'selected_model_id': selectedModelId,
-      'supported': readiness.isSupported,
-      'ready': readiness.isReady,
-      if (readiness.reason != null) 'reason': readiness.reason,
-      'busy': isBusy,
-      'has_model_path': installedOverrides != null,
-      'models': _modelRows(
-        installedOverrides: installedOverrides,
-        overrideReady:
-            installedOverrides != null && _resolveOverrideExists(),
-      ),
-    };
+    return dictationSettingsPayload(
+      readiness: readiness,
+      settings: _settings,
+      store: _store,
+      availability: _availability,
+      selectedModelId: selectedModelId,
+      busy: isBusy,
+      hasOverridePath: _installedOverridePath != null,
+      overrideReady: _resolveOverrideExists(),
+    );
   }
+
 
   Future<void> install(
     String modelId, {

@@ -16,6 +16,8 @@ import 'dart:typed_data';
 import 'package:logging/logging.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import 'sherpa_bindings.dart';
+
 /// Typed failure raised inside the worker and reported as one error event.
 ///
 /// The daemon maps `code` onto its own exception type, so this package never
@@ -163,10 +165,11 @@ class _SttWorker {
     final stopwatch = Stopwatch()..start();
     _modelId = message['modelId'] as String? ?? '';
     _streaming = message['mode'] == 'streaming';
-    // The packaged runtime ships the sherpa libraries beside the whisper shim,
-    // so the worker is told exactly where they are. A source checkout passes
-    // null and sherpa resolves the library from the pub cache itself.
-    sherpa.initBindings(message['sherpaNativeDir'] as String?);
+    // The daemon resolves the directory (packaged payload, else this checkout's
+    // package resolution) and passes it in, so the loader never has to fall back
+    // to a null path — on macOS that would be `DynamicLibrary.process()`, which
+    // only works inside a Flutter host.
+    loadSherpaBindings(message['sherpaNativeDir'] as String?);
     if (_streaming) {
       _initStreaming(message);
       stopwatch.stop();

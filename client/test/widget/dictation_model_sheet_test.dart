@@ -166,8 +166,8 @@ void main() {
         models: [
           DictationModelOption(
             id: 'override',
-            label: 'stt.model_path',
             labelCode: 'path_override',
+            badge: 'custom',
             installed: true,
           ),
         ],
@@ -177,8 +177,8 @@ void main() {
     final l10n = await pumpSheet(tester);
 
     expect(find.text(l10n.dictationPathOverrideModel), findsOneWidget);
-    expect(find.text('stt.model_path'), findsNothing);
     expect(find.text('path_override'), findsNothing);
+    expect(find.byKey(const Key('dictation_badge_override')), findsOneWidget);
   });
 
   testWidgets('an unknown daemon code is localized, never rendered raw',
@@ -207,9 +207,9 @@ void main() {
         models: [
           DictationModelOption(
             id: 'large',
-            label: 'Large',
+            name: 'Whisper Large v3 Turbo',
             hosted: true,
-            totalBytes: 812000000,
+            sizeBytes: 812000000,
           ),
         ],
       ),
@@ -223,6 +223,90 @@ void main() {
     expect(find.byKey(const Key('dictation_download_large')), findsNothing);
   });
 
+  testWidgets('a row renders its name, badge, description and speed', (
+    tester,
+  ) async {
+    cubit.show(
+      const DictationModelStatus(
+        isPlatformSupported: true,
+        isReady: true,
+        selectedModelId: 'egy-whisper-turbo-ggml-q8',
+        models: [
+          DictationModelOption(
+            id: 'egy-whisper-turbo-ggml-q8',
+            name: 'Egyptian Whisper Turbo Q8',
+            description: {
+              'en': 'Recommended for Arabic.',
+              'ar': 'الموصى به للعربية.',
+            },
+            badge: 'recommended',
+            speedTier: 3,
+            sizeBytes: 874208239,
+            installed: true,
+          ),
+          DictationModelOption(
+            id: 'kroko',
+            name: 'Zipformer EN Kroko',
+            description: {'en': 'English streaming.', 'ar': 'بث إنجليزي.'},
+            badge: 'faster',
+            speedTier: 4,
+            sizeBytes: 70092599,
+            streaming: true,
+          ),
+        ],
+      ),
+    );
+
+    final l10n = await pumpSheet(tester);
+
+    // Names are proper nouns and never translated.
+    expect(find.text('Egyptian Whisper Turbo Q8'), findsOneWidget);
+    expect(find.text('Zipformer EN Kroko'), findsOneWidget);
+    // The description comes from the model's own locale map, in this locale.
+    expect(find.text('Recommended for Arabic.'), findsOneWidget);
+    expect(find.text('الموصى به للعربية.'), findsNothing);
+    // Badges are closed-set codes the Client localizes.
+    expect(find.text(l10n.dictationBadgeRecommended), findsOneWidget);
+    expect(find.text(l10n.dictationBadgeFaster), findsOneWidget);
+    expect(find.text('recommended'), findsNothing);
+    // Speed and streaming are drawn as bars and an icon, not as prose.
+    expect(
+      find.byKey(const Key('dictation_speed_egy-whisper-turbo-ggml-q8')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const Key('dictation_mode_streaming_badge')), findsOneWidget);
+  });
+
+  testWidgets('installed rows come first in the sheet', (tester) async {
+    cubit.show(
+      const DictationModelStatus(
+        isPlatformSupported: true,
+        isReady: true,
+        models: [
+          DictationModelOption(
+            id: 'new',
+            name: 'New Model',
+            hosted: true,
+          ),
+          DictationModelOption(
+            id: 'on-disk',
+            name: 'Installed Model',
+            installed: true,
+          ),
+        ],
+      ),
+    );
+
+    await pumpSheet(tester);
+
+    final installedY = tester
+        .getTopLeft(find.byKey(const Key('dictation_model_name_on-disk')))
+        .dy;
+    final newY =
+        tester.getTopLeft(find.byKey(const Key('dictation_model_name_new'))).dy;
+    expect(installedY, lessThan(newY));
+  });
+
   testWidgets('a downloaded model offers use, not another download',
       (tester) async {
     cubit.show(
@@ -231,10 +315,14 @@ void main() {
         isReady: true,
         selectedModelId: 'small',
         models: [
-          DictationModelOption(id: 'small', label: 'Small', installed: true),
+          DictationModelOption(
+            id: 'small',
+            name: 'Whisper Base Int8',
+            installed: true,
+          ),
           DictationModelOption(
             id: 'medium',
-            label: 'Medium',
+            name: 'Egyptian Whisper Turbo Q8',
             hosted: true,
             installed: true,
           ),

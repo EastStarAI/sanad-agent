@@ -1,7 +1,5 @@
 import 'dart:async';
 
-import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
-
 /// Driver-only counters over the existing authenticated connection.
 ///
 /// An acceptance run has to distinguish "the wire leaked" from "the UI ignored
@@ -10,19 +8,38 @@ import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 /// It never stores or returns audio, transcript text, or per-frame history, and
 /// it detaches its own subscription on dispose.
 class DriverDictationProbe {
-  DriverDictationProbe(this._socket) {
-    _subscription = _socket.events.listen(_onEvent);
+  /// It takes the two facts it needs instead of the whole socket service, so the
+  /// probe is testable without standing up a connection.
+  DriverDictationProbe({
+    required Stream<Map<String, dynamic>> events,
+    required bool Function() isConnected,
+  }) : _isConnected = isConnected {
+    _subscription = events.listen(_onEvent);
   }
 
+  /// Every event class a dictation leg can be evidenced by.
+  ///
+  /// The relay classes and the local classes are counted together: a local leg
+  /// previously reported `total: 0` for a real session, so the probe could not
+  /// evidence the very path it exists for. They share one vocabulary above the
+  /// transport boundary, and they are counted the same way here.
   static const Set<String> _knownClasses = {
+    // Hosted relay.
     'dictation_event',
     'dictation_route_ack',
     'dictation_route_error',
     'voice_relay_error',
     'voice_audio_chunk_relay',
+    // Local channel.
+    'stt_status',
+    'dictation_ready',
+    'dictation_partial',
+    'dictation_final',
+    'dictation_done',
+    'dictation_error',
   };
 
-  final SanadSocketService _socket;
+  final bool Function() _isConnected;
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
   String? _expectedDeviceId;
@@ -67,7 +84,7 @@ class DriverDictationProbe {
     'error_codes': Map<String, int>.unmodifiable(_errorCodes),
     'expects_device': _expectedDeviceId != null,
     'expects_dictation': _expectedDictationId != null,
-    'connected': _socket.isConnected,
+    'connected': _isConnected(),
   };
 
   void dispose() {
@@ -94,14 +111,23 @@ class DriverDictationProbe {
     final matchesDictation =
         _expectedDictationId == null || dictationId == _expectedDictationId;
 
-    if (matchesDevice && matchesDictation) {
+    // A local-channel event carries no identity at all: it cannot belong to
+    // another device or session, so it counts as matched instead of falling
+    // between the two counters.
+    final identified = deviceId != null || dictationId != null;
+    if (!identified || (matchesDevice && matchesDictation)) {
       _matched++;
-    } else if (deviceId != null || dictationId != null) {
+    } else {
       _foreign++;
     }
 
-    if (name == 'dictation_route_error' || name == 'voice_relay_error') {
-      final code = payload['error_code']?.toString();
+    if (name == 'dictation_route_error' ||
+        name == 'voice_relay_error' ||
+        name == 'dictation_error') {
+      // The local channel reports `code`, the relay reports `error_code`; both
+      // are counted, and neither is stored with any message text.
+      final code =
+          (payload['error_code'] ?? payload['code'])?.toString();
       if (code != null && code.isNotEmpty) {
         _errorCodes[code] = (_errorCodes[code] ?? 0) + 1;
       }
@@ -119,6 +145,25 @@ class DriverDictationProbe {
         'partial' => 'listening',
         _ => 'preparing',
       };
+      return;
+    }
+    // Local-channel lifecycle. `dictation_ready` is the moment the recognizer is
+    // loaded and capture starts, so it is the local counterpart of an ack.
+    switch (name) {
+      case 'dictation_ready':
+        _phase = 'listening';
+      case 'dictation_partial':
+        _phase = 'listening';
+      case 'dictation_final':
+        _phase = 'final';
+      case 'dictation_done':
+        _phase = 'done';
+      case 'stt_status':
+        // A status reply describes readiness, not a session: it only sets the
+        // phase when no session has been observed yet.
+        if (_phase == 'idle') {
+          _phase = payload['ready'] == true ? 'ready' : 'not_ready';
+        }
     }
   }
 }

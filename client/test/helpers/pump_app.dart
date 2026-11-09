@@ -13,6 +13,7 @@ import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dar
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_state.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -31,6 +32,7 @@ Future<void> pumpTestApp(
   DeviceCapabilitiesStore? capabilities,
   DeviceCapabilitiesCubit? deviceCapabilitiesCubit,
   VoiceStreamCubit? voiceStreamCubit,
+  DictationCubit? dictationCubit,
   ConversationCacheRepository? conversationCacheRepository,
   ConversationRepository? conversationRepository,
   bool wrapWithToastification = false,
@@ -55,6 +57,10 @@ Future<void> pumpTestApp(
 
   final blocProviders = [
     BlocProvider<VoiceStreamCubit>.value(value: voiceStreamCubit ?? FakeVoiceStreamCubit()),
+    // Only mounted when a test needs it: the dictation sheet is the one surface
+    // that reads the cubit from context.
+    if (dictationCubit != null)
+      BlocProvider<DictationCubit>.value(value: dictationCubit),
     if (agentCubit != null) BlocProvider<DeviceCubit>.value(value: agentCubit),
     if (deviceCapabilitiesCubit != null)
       BlocProvider<DeviceCapabilitiesCubit>.value(value: deviceCapabilitiesCubit)
