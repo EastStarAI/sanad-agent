@@ -679,6 +679,234 @@ class FlutterVmController {
     return {'status': 'ok', 'value': result};
   }
 
+  /// Places a synthetic mouse hover on a resolved target for one bounded dwell
+  /// and removes it again.
+  ///
+  /// Hover is split into two short extension calls instead of one blocking call
+  /// so the tree can be observed *while* the pointer is over the target: a
+  /// hover-driven affordance is only visible during the dwell, and a single
+  /// blocking RPC would exit before any capture could see it. The exit always
+  /// runs, including after a failed observation, so a caller never leaves a
+  /// control expanded.
+  Future<DriverActionResult> hover({
+    String? key,
+    String? text,
+    String? type,
+    String? within,
+    int index = 0,
+    double? x,
+    double? y,
+    Duration dwell = const Duration(milliseconds: hoverDefaultMs),
+    String? expect,
+    String? expectAbsent,
+    bool verify = true,
+    bool strictVerify = false,
+  }) async {
+    final stopwatch = Stopwatch()..start();
+    final targetDesc = key ?? text ?? type ?? '($x, $y)';
+    final withinDesc = within != null ? ' (within $within)' : '';
+    final strict = strictVerify || expect != null || expectAbsent != null;
+    // Unique per invocation, so an Added/Removed pair can never collide with a
+    // previous hover's device state.
+    final pointer = DateTime.now().microsecondsSinceEpoch & 0x3fffffff;
+
+    UiTreeCapture? before;
+    if (verify) {
+      try {
+        before = await captureTree();
+      } catch (_) {
+        before = null;
+      }
+    }
+
+    Object? enterError;
+    Map<String, dynamic>? entered;
+    try {
+      entered = await callExtension('ext.sanad_client.hover', {
+        'phase': 'enter',
+        'pointer': '$pointer',
+        'ms': '${dwell.inMilliseconds}',
+        if (key != null) 'key': key,
+        if (text != null) 'text': text,
+        if (type != null) 'type': type,
+        if (within != null) 'within': within,
+        if (index > 0) 'index': '$index',
+        if (x != null) 'x': x.toString(),
+        if (y != null) 'y': y.toString(),
+      });
+    } catch (error) {
+      enterError = error;
+    }
+
+    if (enterError != null) {
+      // The enter call may have placed the pointer before failing; a stray exit
+      // is harmless (an unknown device is ignored) and never leaves a hover.
+      await _exitHover(pointer);
+      stopwatch.stop();
+      return DriverActionResult(
+        success: false,
+        action: 'hover',
+        message:
+            'Failed to hover $targetDesc$withinDesc: ${_conciseError(enterError)}',
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.none,
+        generation: _nextGeneration(),
+      );
+    }
+
+    Object? observeError;
+    _PostConditionOutcome? outcome;
+    try {
+      if (before == null) {
+        await Future<void>.delayed(dwell);
+      } else {
+        outcome = await _awaitPostCondition(
+          before: before,
+          expect: expect,
+          expectAbsent: expectAbsent,
+          window: dwell,
+        );
+      }
+    } catch (error) {
+      observeError = error;
+    }
+
+    final exitError = await _exitHover(pointer);
+    stopwatch.stop();
+
+    final payload = <String, dynamic>{
+      'pointer': pointer,
+      'ms': dwell.inMilliseconds,
+      if (entered != null) ...entered,
+    };
+
+    if (observeError != null) {
+      return DriverActionResult(
+        success: false,
+        action: 'hover',
+        message:
+            'Hovered $targetDesc$withinDesc but could not observe the tree: '
+            '${_conciseError(observeError)}',
+        data: payload,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.none,
+        generation: _nextGeneration(),
+      );
+    }
+    if (exitError != null) {
+      return DriverActionResult(
+        success: false,
+        action: 'hover',
+        message:
+            'Hover on $targetDesc$withinDesc could not be released: $exitError. '
+            'The Client releases it at its bounded auto-exit; re-snapshot before '
+            'acting on that control.',
+        data: payload,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.none,
+        generation: _nextGeneration(),
+      );
+    }
+
+    final obstructionNote = _obstructionNote(entered?['obstruction']);
+    if (before == null) {
+      return DriverActionResult(
+        success: true,
+        action: 'hover',
+        message:
+            'Hovered $targetDesc$withinDesc for '
+            '${dwell.inMilliseconds}ms$obstructionNote',
+        data: payload,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.none,
+        generation: _nextGeneration(),
+      );
+    }
+
+    final effective = outcome!;
+    if (!effective.passed) {
+      final expectation = expect != null
+          ? 'expected $expect to be present'
+          : expectAbsent != null
+          ? 'expected $expectAbsent to be gone'
+          : 'the widget tree did not change';
+      if (!strict) {
+        return DriverActionResult(
+          success: true,
+          action: 'hover',
+          message:
+              'Hovered $targetDesc$withinDesc for '
+              '${dwell.inMilliseconds}ms; no observable change, so the target '
+              'has no hover state or the change is not in the inspected '
+              'projection$obstructionNote Pass --verify or --expect <key> to '
+              'make this a failure.',
+          data: payload,
+          duration: stopwatch.elapsed,
+          targetKey: key,
+          verification: UiVerification.noObservableChange,
+          generation: _nextGeneration(),
+        );
+      }
+      return DriverActionResult(
+        success: false,
+        action: 'hover',
+        message:
+            'hover dispatched; no observable change within '
+            '${dwell.inMilliseconds}ms: $expectation$obstructionNote',
+        data: payload,
+        duration: stopwatch.elapsed,
+        targetKey: key,
+        verification: UiVerification.noObservableChange,
+        generation: _nextGeneration(),
+      );
+    }
+
+    return DriverActionResult(
+      success: true,
+      action: 'hover',
+      message:
+          'Hovered $targetDesc$withinDesc for ${dwell.inMilliseconds}ms and '
+          'observed the hovered state$obstructionNote',
+      data: payload,
+      duration: stopwatch.elapsed,
+      targetKey: key,
+      verification: effective.verification,
+      generation: _nextGeneration(),
+    );
+  }
+
+  /// Releases one synthetic hover, returning its error text when it failed.
+  Future<String?> _exitHover(int pointer) async {
+    try {
+      await callExtension('ext.sanad_client.hover', {
+        'phase': 'exit',
+        'pointer': '$pointer',
+      });
+      return null;
+    } catch (error) {
+      return _conciseError(error);
+    }
+  }
+
+  /// Describes the widget a hover actually landed on, when one was reported.
+  String _obstructionNote(Object? obstruction) {
+    if (obstruction is! Map) return '';
+    final blockerKey = obstruction['blocker_key'];
+    final blocker = obstruction['blocker'];
+    final blockerType = blocker is Map ? blocker['type'] : null;
+    final label = blockerKey is String
+        ? blockerKey
+        : blockerType is String
+        ? blockerType
+        : null;
+    if (label == null) return '';
+    return '; the pointer is over $label, not the target.';
+  }
+
   /// Scrolls a selector into view without dispatching a pointer event.
   ///
   /// Returns false when the Client does not register
@@ -1345,6 +1573,24 @@ class FlutterVmController {
             verify: !step.noVerify,
             strictVerify: step.strictVerify,
             verifyTimeout: stepVerifyTimeout,
+          );
+          results.add(res);
+          break;
+
+        case 'hover':
+          final res = await hover(
+            key: step.key,
+            text: step.text,
+            type: step.type,
+            within: step.within,
+            index: step.index ?? 0,
+            x: step.x,
+            y: step.y,
+            dwell: Duration(milliseconds: step.hoverMs ?? hoverDefaultMs),
+            expect: step.expect,
+            expectAbsent: step.expectAbsent,
+            verify: !step.noVerify,
+            strictVerify: step.strictVerify,
           );
           results.add(res);
           break;

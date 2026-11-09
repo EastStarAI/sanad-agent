@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:developer' as developer;
 
@@ -23,6 +24,112 @@ const int maxHitTestAncestorDepth = 256;
 
 /// Most elements probed when naming the widget that covers a tap target.
 const int maxObstructionProbeElements = 4000;
+
+/// Dwell a synthetic hover stays over its target when the caller asks for none.
+const int hoverDefaultMs = 2000;
+
+/// Longest dwell a `hover` request may ask for, in milliseconds.
+///
+/// A hover is held by the caller, not by the Client, so the Client keeps an
+/// automatic exit at this bound plus [hoverExitGraceMs]. A driver process that
+/// dies between entering and exiting a hover can therefore never leave a menu
+/// or affordance expanded in the running Client.
+const int maxHoverMs = 5000;
+
+/// Extra time the Client keeps a synthetic hover alive past the requested
+/// dwell, so a caller still observing the tree is never exited from under it.
+const int hoverExitGraceMs = 500;
+
+/// A resolved `ms` request: the dwell in milliseconds and, when the request was
+/// invalid, the message that rejects it.
+typedef HoverRequest = ({int ms, String? error});
+
+/// Resolves a `hover` dwell into a bounded duration.
+HoverRequest parseHoverMs(String? raw, {int defaultMs = hoverDefaultMs}) {
+  if (raw == null || raw.trim().isEmpty) {
+    return (ms: defaultMs, error: null);
+  }
+  final parsed = int.tryParse(raw.trim());
+  if (parsed == null) {
+    return (
+      ms: defaultMs,
+      error: 'ms must be an integer number of milliseconds',
+    );
+  }
+  if (parsed < 0 || parsed > maxHoverMs) {
+    return (ms: defaultMs, error: 'ms must be between 0 and $maxHoverMs');
+  }
+  return (ms: parsed, error: null);
+}
+
+/// Automatic exits for synthetic hover pointers, keyed by pointer id.
+final Map<int, Timer> _hoverExitTimers = <int, Timer>{};
+
+/// Dispatches an in-app synthetic mouse hover at [position].
+///
+/// The events enter this process's own pointer pipeline — `GestureBinding` and
+/// `MouseTracker` — exactly as a real cursor would; no operating-system input is
+/// synthesized, injected, or requested. `MouseRegion.onEnter`, hover-driven
+/// `Visibility`, and hover cursor changes therefore react without a human
+/// pointer, a window focus change, or an accessibility grant.
+void dispatchSyntheticHoverEnter(int pointer, Offset position) {
+  GestureBinding.instance.handlePointerEvent(
+    PointerAddedEvent(
+      pointer: pointer,
+      position: position,
+      kind: PointerDeviceKind.mouse,
+    ),
+  );
+  GestureBinding.instance.handlePointerEvent(
+    PointerHoverEvent(
+      pointer: pointer,
+      position: position,
+      kind: PointerDeviceKind.mouse,
+    ),
+  );
+}
+
+/// Removes the synthetic pointer, which exits every region it was hovering.
+///
+/// `MouseTracker` maps a removal to an empty annotation set, so `onExit` fires
+/// for each region the pointer had entered — the same sequence a cursor leaving
+/// the window produces.
+void dispatchSyntheticHoverExit(int pointer) {
+  GestureBinding.instance.handlePointerEvent(
+    PointerRemovedEvent(pointer: pointer, kind: PointerDeviceKind.mouse),
+  );
+}
+
+/// Schedules the automatic exit that bounds one synthetic hover.
+void _scheduleHoverExit(int pointer, int afterMs) {
+  _hoverExitTimers.remove(pointer)?.cancel();
+  _hoverExitTimers[pointer] = Timer(Duration(milliseconds: afterMs), () {
+    _hoverExitTimers.remove(pointer);
+    dispatchSyntheticHoverExit(pointer);
+  });
+}
+
+/// Cancels a mechanical exit because the caller exited the hover itself.
+void _cancelScheduledHoverExit(int pointer) {
+  _hoverExitTimers.remove(pointer)?.cancel();
+}
+
+/// Schedules the automatic exit that bounds one synthetic hover.
+///
+/// Exposed so tests can drive the always-exit contract directly; production
+/// code reaches it only through `ext.sanad_client.hover`.
+@visibleForTesting
+void scheduleSyntheticHoverExit(int pointer, int afterMs) =>
+    _scheduleHoverExit(pointer, afterMs);
+
+/// Cancels the scheduled automatic exit for [pointer], if any.
+@visibleForTesting
+void cancelSyntheticHoverExit(int pointer) => _cancelScheduledHoverExit(pointer);
+
+/// Whether [pointer] still has an automatic exit pending.
+@visibleForTesting
+bool hasScheduledHoverExit(int pointer) =>
+    _hoverExitTimers.containsKey(pointer);
 
 /// A resolved `hold_ms` request: the duration to hold and, when the request was
 /// invalid, the message that rejects it.
@@ -692,11 +799,156 @@ void registerRevealExtension() {
   });
 }
 
+/// Registers the synthetic hover extension (`ext.sanad_client.hover`).
+///
+/// Hover is a two-phase extension rather than one blocking call so the caller
+/// can inspect the tree *while* the pointer is over the target: `phase: enter`
+/// places the pointer and returns, and `phase: exit` removes it. Both phases
+/// take the same caller-generated `pointer` id, so the Client keeps no state a
+/// restarted driver could trip over beyond its own bounded automatic exit.
+///
+/// The events are in-app only. Nothing here reads, injects, or asks the
+/// operating system for input, so a hover needs no window focus and no
+/// accessibility or automation grant.
+void registerHoverExtension() {
+  developer.registerExtension('ext.sanad_client.hover', (
+    method,
+    parameters,
+  ) async {
+    try {
+      final phase = (parameters['phase'] ?? 'enter').trim().toLowerCase();
+      final pointer = int.tryParse(parameters['pointer'] ?? '');
+      if (pointer == null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': 'hover requires an integer pointer id'}),
+        );
+      }
+
+      if (phase == 'exit') {
+        _cancelScheduledHoverExit(pointer);
+        dispatchSyntheticHoverExit(pointer);
+        return developer.ServiceExtensionResponse.result(
+          json.encode({'status': 'ok', 'phase': 'exit', 'pointer': pointer}),
+        );
+      }
+      if (phase != 'enter') {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({
+            'error': "hover phase must be 'enter' or 'exit'",
+          }),
+        );
+      }
+
+      final request = parseHoverMs(parameters['ms']);
+      final requestError = request.error;
+      if (requestError != null) {
+        return developer.ServiceExtensionResponse.error(
+          developer.ServiceExtensionResponse.extensionError,
+          json.encode({'error': requestError}),
+        );
+      }
+
+      double? targetX = double.tryParse(parameters['x'] ?? '');
+      double? targetY = double.tryParse(parameters['y'] ?? '');
+      Element? targetElement;
+
+      if (targetX == null || targetY == null) {
+        final root = WidgetsBinding.instance.rootElement;
+        if (root == null) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'Root element not found'}),
+          );
+        }
+        final startElement = findScopeRoot(root, parameters['within']?.trim());
+        final matchingElements = startElement == null
+            ? <Element>[]
+            : locateTapTargets(
+                startElement,
+                targetKey: parameters['key'],
+                targetText: parameters['text']?.trim(),
+                targetType: parameters['type']?.trim(),
+              );
+        if (matchingElements.isEmpty) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({'error': 'No matching element found to hover'}),
+          );
+        }
+        final targetIndex = int.tryParse(parameters['index'] ?? '0') ?? 0;
+        if (targetIndex < 0 || targetIndex >= matchingElements.length) {
+          return developer.ServiceExtensionResponse.error(
+            developer.ServiceExtensionResponse.extensionError,
+            json.encode({
+              'error':
+                  'Hover index $targetIndex is out of range '
+                  '(match_count: ${matchingElements.length})',
+            }),
+          );
+        }
+
+        targetElement = matchingElements[targetIndex];
+        try {
+          await Scrollable.ensureVisible(
+            targetElement,
+            alignment: 0.5,
+            duration: Duration.zero,
+          );
+        } catch (_) {}
+
+        final renderBox = targetElement.renderObject as RenderBox;
+        final translation = renderBox.getTransformTo(null).getTranslation();
+        final size = renderBox.size;
+        targetX = translation.x + size.width / 2;
+        targetY = translation.y + size.height / 2;
+      }
+
+      final position = Offset(targetX, targetY);
+      // A hover cannot click, so it is never refused for a covered target: the
+      // pointer goes where the caller asked. Naming what is on top keeps a
+      // "nothing changed" verdict honest instead of looking like a dead row.
+      final keyedTarget = targetElement;
+      final obstruction = keyedTarget == null
+          ? null
+          : describeObstruction(keyedTarget, position);
+
+      _scheduleHoverExit(pointer, request.ms + hoverExitGraceMs);
+      dispatchSyntheticHoverEnter(pointer, position);
+
+      return developer.ServiceExtensionResponse.result(
+        json.encode({
+          'status': 'ok',
+          'phase': 'enter',
+          'pointer': pointer,
+          'ms': request.ms,
+          'position': {
+            'x': targetX.round(),
+            'y': targetY.round(),
+          },
+          if (obstruction != null) 'obstruction': obstruction,
+        }),
+      );
+    } catch (e) {
+      _cancelScheduledHoverExit(
+        int.tryParse(parameters['pointer'] ?? '') ?? -1,
+      );
+      return developer.ServiceExtensionResponse.error(
+        developer.ServiceExtensionResponse.extensionError,
+        json.encode({'error': e.toString()}),
+      );
+    }
+  });
+}
+
 /// Convenience function that registers all interaction service extensions:
-/// `ext.sanad_client.enter_text`, `ext.sanad_client.scroll`, `ext.sanad_client.tap`, and `ext.sanad_client.reveal`.
+/// `ext.sanad_client.enter_text`, `ext.sanad_client.scroll`, `ext.sanad_client.tap`,
+/// `ext.sanad_client.reveal`, and `ext.sanad_client.hover`.
 void registerInteractionExtensions() {
   registerEnterTextExtension();
   registerScrollExtension();
   registerTapExtension();
   registerRevealExtension();
+  registerHoverExtension();
 }

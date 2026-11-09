@@ -77,6 +77,9 @@ class CliRunner {
         case 'tap':
           return await _handleTap(commandArgs, explicitUrl, isJson);
 
+        case 'hover':
+          return await _handleHover(commandArgs, explicitUrl, isJson);
+
         case 'enter-text':
         case 'entertext':
         case 'type':
@@ -382,6 +385,94 @@ class CliRunner {
         verify: !noVerify,
         strictVerify: strictVerify,
         verifyTimeout: Duration(milliseconds: verifyMs),
+      );
+
+      if (isJson) {
+        _printJson(res.toJson());
+      } else {
+        print(res.toString());
+      }
+      return res.success ? 0 : 1;
+    } finally {
+      await controller.close();
+    }
+  }
+
+  Future<int> _handleHover(
+    List<String> cmdArgs,
+    String? explicitUrl,
+    bool isJson,
+  ) async {
+    final key = _getOption(cmdArgs, '--key') ?? _getOption(cmdArgs, '-k');
+    final text = _getOption(cmdArgs, '--text') ?? _getOption(cmdArgs, '-t');
+    final type = _getOption(cmdArgs, '--type');
+    final within = _getOption(cmdArgs, '--within') ?? _getOption(cmdArgs, '-w');
+    final index = _getIntOption(
+      cmdArgs,
+      '--index',
+      defaultVal: _getIntOption(cmdArgs, '-i', defaultVal: 0),
+    );
+    final coords = _getOption(cmdArgs, '--coords');
+    double? targetX = double.tryParse(_getOption(cmdArgs, '-x') ?? '');
+    double? targetY = double.tryParse(_getOption(cmdArgs, '-y') ?? '');
+    if (coords != null && coords.contains(',')) {
+      final parts = coords.split(',');
+      targetX = double.tryParse(parts[0].trim());
+      targetY = double.tryParse(parts[1].trim());
+    }
+
+    // The dwell is bounded here, before a connection, and bounded again by the
+    // Client, which also keeps its own automatic exit at that bound.
+    final msOption = _getOption(cmdArgs, '--ms');
+    final dwellMs = msOption == null ? null : int.tryParse(msOption);
+    if (msOption != null &&
+        (dwellMs == null || dwellMs < 0 || dwellMs > maxHoverMs)) {
+      print('❌ --ms must be an integer between 0 and $maxHoverMs');
+      return 1;
+    }
+
+    if (key == null &&
+        text == null &&
+        type == null &&
+        (targetX == null || targetY == null)) {
+      print(
+        '❌ Must provide target identifier: --key, --text, --type, or --coords x,y',
+      );
+      return 1;
+    }
+
+    final timeoutSec = _getIntOption(
+      cmdArgs,
+      '--timeout',
+      defaultVal: defaultActionTimeoutSeconds,
+    );
+    final noVerify = _hasFlag(cmdArgs, '--no-verify');
+    final strictVerify =
+        !noVerify &&
+        (_hasFlag(cmdArgs, '--verify') ||
+            _hasFlag(cmdArgs, '--strict-verify'));
+
+    final controller = await _connect(
+      explicitUrl: explicitUrl,
+      rpcTimeout: Duration(seconds: timeoutSec),
+    );
+    try {
+      final res = await controller.hover(
+        key: key,
+        text: text,
+        type: type,
+        within: within,
+        index: index,
+        x: targetX,
+        y: targetY,
+        dwell: Duration(milliseconds: dwellMs ?? hoverDefaultMs),
+        expect:
+            _getOption(cmdArgs, '--expect') ?? _getOption(cmdArgs, '--expect-key'),
+        expectAbsent:
+            _getOption(cmdArgs, '--expect-absent') ??
+            _getOption(cmdArgs, '--expect-gone'),
+        verify: !noVerify,
+        strictVerify: strictVerify,
       );
 
       if (isJson) {
@@ -832,6 +923,18 @@ Commands:
                  refused with `verification: obscured`, the blocker's bounds and key,
                  and no pointer event dispatched; navigate back rather than retrying.
 
+  hover          Place a synthetic in-app mouse hover for one bounded dwell
+                 Options: --key <k>, --text <t>, --type <type>, --within <scope>, --index <i>, --coords x,y,
+                          --ms <ms> (dwell, 0-$maxHoverMs), --verify, --expect <key>, --expect-absent <key>,
+                          --no-verify, --timeout <sec>, --json
+                 The pointer enters the target, stays for --ms while the tree is
+                 observed, and always exits afterwards, so MouseRegion.onEnter/onExit
+                 and hover-driven Visibility react without OS input or window focus.
+                 A plain hover exits 0 with `verification: no_observable_change` when
+                 the tree never changed; --verify, --expect, or --expect-absent make
+                 that a failure. The result names the widget the pointer actually
+                 landed on when a route or overlay covers the target.
+
   enter-text     Enter text into an input field and verify the effect
                  Options: --key <k>, --text <t>, --no-tap-first, --no-verify, --verify-timeout <ms>, --timeout <sec>, --delay <ms>, --json
                  A field whose value is not exposed is verified by an observable tree change.
@@ -855,9 +958,10 @@ Commands:
 
   batch          Execute a sequence of actions from a JSON recipe file
                  Options: --file <path>, --json-steps '<json>', --report-file <path>, --json, --timeout <sec> (default per-step deadline)
-                 Steps: tap, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
+                 Steps: tap, hover, enter_text, scroll, wait_for, snapshot, screenshot, message_bodies, sleep.
                  A step's own timeout_seconds replaces the batch --timeout for that step.
-                 A tap step accepts `hold_ms` for a long press.
+                 A tap step accepts `hold_ms` for a long press; a hover step accepts
+                 `hover_ms` for its dwell.
                  --report-file receives each completed step before the next starts.
 
   ext            Call one allowlisted Sanad Client extension and print its JSON

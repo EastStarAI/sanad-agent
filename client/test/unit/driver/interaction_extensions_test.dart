@@ -2,6 +2,7 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/driver/interaction_extensions.dart';
+import 'package:sanad_client/driver/ui_bounds.dart';
 
 void main() {
   group('tap hold request', () {
@@ -222,6 +223,200 @@ void main() {
             .first,
       );
       expect(nearestKeyedLabel(unkeyed), 'outer_key');
+    });
+  });
+
+  group('synthetic hover dwell', () {
+    test('defaults to the shared dwell', () {
+      final request = parseHoverMs(null);
+      expect(request.error, isNull);
+      expect(request.ms, hoverDefaultMs);
+    });
+
+    test('treats an empty value as the default', () {
+      expect(parseHoverMs('   ').ms, hoverDefaultMs);
+      expect(parseHoverMs('   ').error, isNull);
+    });
+
+    test('accepts an explicit dwell', () {
+      final request = parseHoverMs('800');
+      expect(request.error, isNull);
+      expect(request.ms, 800);
+    });
+
+    test('accepts a zero dwell', () {
+      expect(parseHoverMs('0').ms, 0);
+      expect(parseHoverMs('0').error, isNull);
+    });
+
+    test('accepts the bound itself', () {
+      expect(parseHoverMs('$maxHoverMs').ms, maxHoverMs);
+      expect(parseHoverMs('$maxHoverMs').error, isNull);
+    });
+
+    test('rejects a dwell beyond the bound', () {
+      final request = parseHoverMs('${maxHoverMs + 1}');
+      expect(request.ms, hoverDefaultMs);
+      expect(request.error, contains('$maxHoverMs'));
+    });
+
+    test('rejects a negative dwell', () {
+      expect(parseHoverMs('-1').error, isNotNull);
+    });
+
+    test('rejects a non-numeric dwell', () {
+      expect(parseHoverMs('long').error, isNotNull);
+    });
+  });
+
+  group('synthetic hover dispatch', () {
+    /// A hover probe that records both callbacks, so a test proves the pointer
+    /// genuinely entered the frame's own mouse-tracking pipeline and left it
+    /// again, rather than only that a helper was called.
+    Widget probe(List<String> events) => MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: MouseRegion(
+            key: const ValueKey('hover_probe'),
+            onEnter: (_) => events.add('enter'),
+            onExit: (_) => events.add('exit'),
+            child: const SizedBox(width: 80, height: 80),
+          ),
+        ),
+      ),
+    );
+
+    testWidgets('entering and exiting fire onEnter and onExit', (tester) async {
+      final events = <String>[];
+      await tester.pumpWidget(probe(events));
+      final center = tester.getCenter(find.byKey(const ValueKey('hover_probe')));
+
+      dispatchSyntheticHoverEnter(41, center);
+      await tester.pump();
+      expect(events, ['enter']);
+
+      dispatchSyntheticHoverExit(41);
+      await tester.pump();
+      expect(events, ['enter', 'exit']);
+    });
+
+    testWidgets('the scheduled exit releases the hover on its own', (
+      tester,
+    ) async {
+      final events = <String>[];
+      await tester.pumpWidget(probe(events));
+      final center = tester.getCenter(find.byKey(const ValueKey('hover_probe')));
+
+      dispatchSyntheticHoverEnter(42, center);
+      await tester.pump();
+      expect(events, ['enter']);
+
+      scheduleSyntheticHoverExit(42, 300);
+      expect(hasScheduledHoverExit(42), isTrue);
+
+      await tester.pump(const Duration(milliseconds: 299));
+      expect(events, ['enter']);
+
+      await tester.pump(const Duration(milliseconds: 1));
+      expect(events, ['enter', 'exit']);
+      expect(hasScheduledHoverExit(42), isFalse);
+    });
+
+    testWidgets('an explicit exit cancels the automatic one', (tester) async {
+      final events = <String>[];
+      await tester.pumpWidget(probe(events));
+      final center = tester.getCenter(find.byKey(const ValueKey('hover_probe')));
+
+      dispatchSyntheticHoverEnter(43, center);
+      await tester.pump();
+      scheduleSyntheticHoverExit(43, 300);
+
+      cancelSyntheticHoverExit(43);
+      expect(hasScheduledHoverExit(43), isFalse);
+
+      await tester.pump(const Duration(seconds: 1));
+      // The pointer is still over the probe, so no exit fired and none is
+      // pending: the caller owns releasing it from here.
+      expect(events, ['enter']);
+
+      dispatchSyntheticHoverExit(43);
+      await tester.pump();
+      expect(events, ['enter', 'exit']);
+    });
+
+    testWidgets('a reveal-only hover moves the projected bounds', (
+      tester,
+    ) async {
+      // The desktop sidebar reveals its session menu with
+      // `Visibility(maintainState: true)`, so the button stays mounted while it
+      // is hidden and its key cannot distinguish the two states. What changes
+      // is its layout, and projected bounds are part of the tree signature, so
+      // this is the evidence a `hover --verify` on such a row can rely on.
+      var hovered = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: StatefulBuilder(
+                builder: (context, setState) => MouseRegion(
+                  key: const ValueKey('reveal_row'),
+                  onEnter: (_) => setState(() => hovered = true),
+                  onExit: (_) => setState(() => hovered = false),
+                  child: SizedBox(
+                    width: 200,
+                    height: 40,
+                    child: Stack(
+                      alignment: Alignment.centerRight,
+                      children: [
+                        Visibility(
+                          visible: hovered,
+                          maintainState: true,
+                          maintainAnimation: true,
+                          child: PopupMenuButton<String>(
+                            key: const ValueKey('reveal_only_menu'),
+                            tooltip: '',
+                            itemBuilder: (context) => const [
+                              PopupMenuItem(
+                                value: 'rename',
+                                child: Text('Rename'),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+
+      // The button is mounted but offstage, so the projection still sees it in
+      // both states; only its bounds differ.
+      final menu = find.byKey(
+        const ValueKey('reveal_only_menu'),
+        skipOffstage: false,
+      );
+      expect(menu, findsOneWidget);
+      final hiddenBounds = globalBoundsOf(tester.renderObject(menu));
+      expect(hiddenBounds, isNotNull);
+
+      final row = tester.getCenter(find.byKey(const ValueKey('reveal_row')));
+      dispatchSyntheticHoverEnter(44, row);
+      await tester.pumpAndSettle();
+
+      expect(hovered, isTrue);
+      final revealedBounds = globalBoundsOf(tester.renderObject(menu));
+      expect(revealedBounds, isNotNull);
+      expect(revealedBounds, isNot(hiddenBounds));
+
+      dispatchSyntheticHoverExit(44);
+      await tester.pumpAndSettle();
+
+      expect(hovered, isFalse);
+      expect(globalBoundsOf(tester.renderObject(menu)), hiddenBounds);
     });
   });
 

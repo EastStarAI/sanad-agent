@@ -21,6 +21,7 @@ The CLI is platform-neutral but is not an accessibility crawler for arbitrary Fl
 sanad-dev ui find --key chat_input --json
 sanad-dev ui tap --key send_message_btn
 sanad-dev ui tap --key dictation_mic_btn --hold-ms 800
+sanad-dev ui hover --key row_archive --ms 800 --verify
 sanad-dev ui enter-text --key chat_input --text "Hello Sanad"
 sanad-dev ui scroll --key conversation_timeline_scroll --direction up --json
 sanad-dev ui wait-for --key chat_input --timeout 10
@@ -28,7 +29,7 @@ sanad-dev ui ext --name ext.sanad_client.inspect_ui --args '{"onlyWithKeys":"tru
 sanad-dev ui batch --file client/test/interactive/sample_recipe.json
 ```
 
-`tap --hold-ms <ms>` (or `"hold_ms": <ms>` on a batch tap step) holds the same press for that long, which is how a long-press affordance is reached; 600 ms or more registers as a long press and the bound is 5000 ms. `ext` calls one `ext.sanad_client.*` extension on the discovered Client and prints its JSON result; names outside that prefix, including `ext.flutter.*`, are refused. A `tap` that reports `verification: obscured` was not dispatched — the result names the blocking key or widget above the target — so navigate back and re-snapshot instead of retrying.
+`tap --hold-ms <ms>` (or `"hold_ms": <ms>` on a batch tap step) holds the same press for that long, which is how a long-press affordance is reached; 600 ms or more registers as a long press and the bound is 5000 ms. `hover --ms <ms>` (or `"hover_ms": <ms>` on a batch `hover` step) rests a synthetic pointer on the target for that long, which is how a hover-only affordance is reached; the dwell defaults to 2000 ms and the bound is 5000 ms, the pointer is always removed again, and the events stay inside the Client so the hover never takes focus or moves the real cursor. `ext` calls one `ext.sanad_client.*` extension on the discovered Client and prints its JSON result; names outside that prefix, including `ext.flutter.*`, are refused. A `tap` that reports `verification: obscured` was not dispatched — the result names the blocking key or widget above the target — so navigate back and re-snapshot instead of retrying.
 
 6. Capture screenshots only when visual/layout evidence is needed:
 

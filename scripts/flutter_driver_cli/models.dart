@@ -203,6 +203,16 @@ const String sanadClientExtensionPrefix = 'ext.sanad_client.';
 /// a press the caller asked for, not a duration the driver invents.
 const int maxTapHoldMs = 5000;
 
+/// Dwell a hover keeps the pointer over its target when the caller asks for none.
+const int hoverDefaultMs = 2000;
+
+/// Longest hover dwell a caller may request, in milliseconds.
+///
+/// The Client validates the same bound and keeps its own automatic exit at that
+/// bound plus a grace, so a driver process that dies mid-hover can never leave a
+/// hover-expanded affordance open in a running Client.
+const int maxHoverMs = 5000;
+
 /// Validated `ext --args` payload or the reason it was rejected.
 typedef ExtensionArguments = ({Map<String, String>? arguments, String? error});
 
@@ -351,6 +361,10 @@ class BatchStep {
   /// Press duration in milliseconds for a `tap` step; a long press is the same
   /// pointer sequence held longer.
   final int? holdMs;
+
+  /// Dwell in milliseconds for a `hover` step: how long the synthetic pointer
+  /// stays over the target before its matching exit.
+  final int? hoverMs;
   final int? sleepMs;
 
   /// Post-condition keys for a `tap` step.
@@ -388,6 +402,7 @@ class BatchStep {
     this.timeoutSeconds,
     this.delayMs,
     this.holdMs,
+    this.hoverMs,
     this.sleepMs,
     this.expect,
     this.expectAbsent,
@@ -420,6 +435,7 @@ class BatchStep {
           json['timeout_seconds'] as int? ?? json['timeout'] as int?,
       delayMs: json['delay_ms'] as int? ?? json['delay'] as int?,
       holdMs: json['hold_ms'] as int?,
+      hoverMs: json['hover_ms'] as int?,
       sleepMs:
           json['sleep_ms'] as int? ??
           json['sleep'] as int? ??
@@ -453,6 +469,7 @@ class BatchStep {
     if (timeoutSeconds != null) 'timeout_seconds': timeoutSeconds,
     if (delayMs != null) 'delay_ms': delayMs,
     if (holdMs != null) 'hold_ms': holdMs,
+    if (hoverMs != null) 'hover_ms': hoverMs,
     if (sleepMs != null) 'sleep_ms': sleepMs,
     if (expect != null) 'expect': expect,
     if (expectAbsent != null) 'expect_absent': expectAbsent,

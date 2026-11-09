@@ -1787,6 +1787,250 @@ void main() {
     });
   });
 
+  group('Flutter VM driver hover', () {
+    late Directory tempDir;
+    late UiTreeGenerationStore generationStore;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('sanad-dev-ui-hover');
+      generationStore = UiTreeGenerationStore(File('${tempDir.path}/gen'));
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+    });
+
+    test('hover enters, observes, and exits as two phases of one pointer',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--ms',
+          '300',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['action'], 'hover');
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        expect(payload['message'], contains('no observable change'));
+
+        expect(fake.hoverCalls.map((call) => call['phase']), [
+          'enter',
+          'exit',
+        ]);
+        expect(fake.hoverCalls.first['ms'], '300');
+        expect(fake.hoverCalls.first['key'], 'row_archive');
+        // Both phases share one pointer id, so the Client can pair them and a
+        // stale hover can never be exited by a later action.
+        expect(
+          fake.hoverCalls.first['pointer'],
+          fake.hoverCalls.last['pointer'],
+        );
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --expect proves a hover-only affordance appeared', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+        mutateOnHoverKey: 'row_archive',
+        hoverAdds: {'type': 'IconButton', 'key': 'row_archive_menu'},
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--expect',
+          'row_archive_menu',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'key');
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('a failed hover expectation still releases the pointer', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--expect',
+          'row_archive_menu',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        expect(payload['message'], contains('expected row_archive_menu'));
+        // A failing verdict must never leave the hover expanded.
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --no-verify dispatches without capturing the tree', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--no-verify',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.rpcOrder, ['hover', 'hover']);
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover names the widget the pointer landed on when covered', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+        hoverEnterResult: {
+          'status': 'ok',
+          'phase': 'enter',
+          'ms': 2000,
+          'position': {'x': 12, 'y': 34},
+          'obstruction': {
+            'verdict': 'covered',
+            'blocker_key': 'settings_overlay',
+          },
+        },
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        // A hover cannot click, so a covered target is dispatched and reported,
+        // never refused — the verdict still has to say what is under the cursor.
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['message'], contains('settings_overlay'));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --ms is bounded before connecting', () async {
+      for (final value in <String>[
+        '${maxHoverMs + 1}',
+        '-1',
+        'long',
+      ]) {
+        expect(
+          await CliRunner([
+            'hover',
+            '--key',
+            'row_archive',
+            '--ms',
+            value,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: 'ms=$value must be refused locally',
+        );
+      }
+    });
+
+    test('hover requires a target before connecting', () async {
+      expect(
+        await CliRunner(const [
+          'hover',
+          '--ms',
+          '100',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+    });
+
+    test('batch forwards a hover step dwell as hover_ms', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          json.encode([
+            {
+              'action': 'hover',
+              'key': 'row_archive',
+              'hover_ms': 900,
+            },
+          ]),
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.hoverCalls.first['ms'], '900');
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+  });
+
   group('Flutter VM driver tree state', () {
     test('signature tracks element changes but stays stable otherwise', () {
       const base = [
@@ -1910,6 +2154,45 @@ void main() {
       );
     });
 
+    test('a batch hover step round-trips hover_ms', () {
+      final step = BatchStep.fromJson(const {
+        'action': 'hover',
+        'key': 'row_archive',
+        'hover_ms': 900,
+      });
+
+      expect(step.action, 'hover');
+      expect(step.hoverMs, 900);
+      expect(step.toJson()['hover_ms'], 900);
+
+      final plain = BatchStep.fromJson(const {
+        'action': 'hover',
+        'key': 'row_archive',
+      });
+      expect(plain.hoverMs, isNull);
+      expect(plain.toJson().containsKey('hover_ms'), isFalse);
+    });
+
+    test('the Client bounds a hover exit past the requested dwell', () {
+      final interactionSource = File(
+        'lib/driver/interaction_extensions.dart',
+      ).readAsStringSync();
+      // The caller always exits, but a driver that dies mid-hover must not
+      // leave a menu expanded: the Client schedules its own exit past the dwell.
+      expect(
+        interactionSource,
+        contains('_scheduleHoverExit(pointer, request.ms + hoverExitGraceMs)'),
+      );
+      expect(
+        interactionSource.indexOf('_scheduleHoverExit(pointer, request.ms'),
+        lessThan(
+          interactionSource.indexOf('dispatchSyntheticHoverEnter(pointer'),
+        ),
+      );
+      expect(interactionSource, contains("registerExtension('ext.sanad_client.hover'"));
+      expect(interactionSource, contains("if (phase == 'exit')"));
+    });
+
     test('a batch tap step round-trips hold_ms', () {
       final step = BatchStep.fromJson(const {
         'action': 'tap',
@@ -1996,7 +2279,7 @@ void main() {
       expect(inspectSource, isNot(contains('types.length >')));
     });
 
-    test('driver_main registers all six service extensions in documented order', () {
+    test('driver_main registers all seven service extensions in documented order', () {
       final driverSource = File('lib/driver_main.dart').readAsStringSync();
       const expectedRegistrationCalls = <String>[
         'registerAuthUrlExtension',
@@ -2005,6 +2288,7 @@ void main() {
         'registerScrollExtension',
         'registerTapExtension',
         'registerRevealExtension',
+        'registerHoverExtension',
       ];
       var lastCallIndex = -1;
       for (final call in expectedRegistrationCalls) {
@@ -2029,6 +2313,7 @@ void main() {
         'ext.sanad_client.scroll',
         'ext.sanad_client.tap',
         'ext.sanad_client.reveal',
+        'ext.sanad_client.hover',
       ];
       var lastExtensionIndex = -1;
       for (final extensionName in expectedExtensions) {
@@ -2105,6 +2390,18 @@ class _FakeDriverVm {
   /// Parameters of every `ext.sanad_client.tap` call, in order.
   final List<Map<String, dynamic>> tapCalls = [];
 
+  /// Parameters of every `ext.sanad_client.hover` call, in order, so a test can
+  /// prove both phases ran and that they shared one pointer id.
+  final List<Map<String, dynamic>> hoverCalls = [];
+
+  /// Key whose hover enter adds [hoverAdds], modelling a hover-only row action.
+  String? mutateOnHoverKey;
+  Map<String, dynamic>? hoverAdds;
+
+  /// Overrides the hover enter payload, so a test can model a Client that
+  /// reports an obstruction under the pointer.
+  Map<String, dynamic>? hoverEnterResult;
+
   /// Ordered record of driver RPCs, used to prove reveal-before-capture.
   final List<String> rpcOrder = [];
 
@@ -2161,6 +2458,9 @@ class _FakeDriverVm {
     int inspectDelayMs = 0,
     bool mutateOnInspect = false,
     Map<String, dynamic>? tapResult,
+    String? mutateOnHoverKey,
+    Map<String, dynamic>? hoverAdds,
+    Map<String, dynamic>? hoverEnterResult,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fake = _FakeDriverVm._(
@@ -2185,6 +2485,9 @@ class _FakeDriverVm {
     fake.inspectDelayMs = inspectDelayMs;
     fake.mutateOnInspect = mutateOnInspect;
     fake.tapResult = tapResult;
+    fake.mutateOnHoverKey = mutateOnHoverKey;
+    fake.hoverAdds = hoverAdds;
+    fake.hoverEnterResult = hoverEnterResult;
     if (obscuredKeys != null) fake.obscuredKeys.addAll(obscuredKeys);
     if (enterTextAdds != null) fake.enterTextAdds.addAll(enterTextAdds);
     server.listen(fake._handleRequest);
@@ -2223,6 +2526,7 @@ class _FakeDriverVm {
                     'ext.sanad_client.enter_text',
                     'ext.sanad_client.scroll',
                     'ext.sanad_client.auth_url',
+                    'ext.sanad_client.hover',
                   ]
                 : const ['ext.unrelated'],
           };
@@ -2309,6 +2613,35 @@ class _FakeDriverVm {
               {
                 'status': 'ok',
                 'tapped_at': {'x': 12, 'y': 34},
+              };
+        case 'ext.sanad_client.hover':
+          rpcOrder.add('hover');
+          hoverCalls.add(Map<String, dynamic>.from(params));
+          final phase = params['phase'] as String? ?? 'enter';
+          if (phase == 'exit') {
+            response['result'] = {
+              'status': 'ok',
+              'phase': 'exit',
+              'pointer': int.tryParse(params['pointer'] as String? ?? ''),
+            };
+            break;
+          }
+          final hoverKey = params['key'] as String?;
+          if (hoverKey != null && hoverKey == mutateOnHoverKey) {
+            final adds = hoverAdds;
+            if (adds != null &&
+                !_elements.any((element) => element['key'] == adds['key'])) {
+              _elements.add(Map<String, dynamic>.from(adds));
+            }
+          }
+          response['result'] =
+              hoverEnterResult ??
+              {
+                'status': 'ok',
+                'phase': 'enter',
+                'pointer': int.tryParse(params['pointer'] as String? ?? ''),
+                'ms': int.tryParse(params['ms'] as String? ?? ''),
+                'position': {'x': 12, 'y': 34},
               };
         case 'ext.sanad_client.enter_text':
           final key = params['key'] as String?;
