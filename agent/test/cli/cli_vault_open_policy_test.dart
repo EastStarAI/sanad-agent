@@ -4,8 +4,10 @@ import 'dart:io';
 
 import 'package:sanad_agent/cli/oneshot/oneshot_runner.dart';
 import 'package:sanad_agent/cli/runner/sanad_command_runner.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_identity.dart';
 import 'package:test/test.dart';
 
@@ -105,6 +107,58 @@ void main() {
       }
     });
 
+    test('the explicit grant opens the vault itself', () {
+      // `sanad vault authorize` is the only command that may start an OS
+      // authorization dialog, so it owns the open: asking for its help, or
+      // running it where it cannot prompt, must not query the vault first.
+      for (final arguments in <List<String>>[
+        ['vault'],
+        ['vault', 'authorize'],
+        ['vault', 'authorize', '--home', '/tmp/sanad-home'],
+      ]) {
+        expect(
+          SanadCommandRunner.requiresSecretVault(arguments),
+          isFalse,
+          reason: '${arguments.join(' ')} opens the vault itself',
+        );
+        expect(
+          SanadCommandRunner.entryOpensSecretVault(arguments),
+          isFalse,
+          reason: arguments.join(' '),
+        );
+      }
+    });
+
+    test('a daemon dispatch never opens the vault at the entry point', () {
+      for (final arguments in <List<String>>[
+        ['daemon'],
+        ['start'],
+        ['daemon', '--child-process'],
+        ['--child-process', 'daemon'],
+      ]) {
+        expect(
+          SanadCommandRunner.entryOpensSecretVault(arguments),
+          isFalse,
+          reason:
+              '${arguments.join(' ')} hands the Home to the daemon, which opens '
+              'its own vault without waiting and without prompting',
+        );
+      }
+      // Every other secret-bearing command still opens it before dispatch.
+      for (final arguments in <List<String>>[
+        ['providers'],
+        ['models', 'list'],
+        ['setup'],
+        ['doctor'],
+      ]) {
+        expect(
+          SanadCommandRunner.entryOpensSecretVault(arguments),
+          isTrue,
+          reason: arguments.join(' '),
+        );
+      }
+    });
+
     test('a daemon dispatch is never classified from the daemon stdio', () {
       for (final arguments in <List<String>>[
         ['daemon'],
@@ -155,6 +209,108 @@ void main() {
           reason: '${arguments.join(' ')} may read or write an Agent secret',
         );
       }
+    });
+  });
+
+  group('Explicit grant', () {
+    late Directory root;
+    late Directory home;
+
+    setUp(() async {
+      root = await Directory.systemTemp.createTemp('sanad-vault-authorize-');
+      home = Directory('${root.path}/home')..createSync(recursive: true);
+      selectSanadHome(home.path);
+      setSanadStateHomeOverride(home.path);
+      await SanadHomeBootstrap.identity().prepare();
+    });
+
+    tearDown(() async {
+      await SecretVaults.closeAll();
+      setSanadHomeOverride(null);
+      setSanadStateHomeOverride(null);
+      SecretVaultPolicy.reset();
+      SecretVaultNotice.reset();
+      if (await root.exists()) await root.delete(recursive: true);
+    });
+
+    Future<({int exitCode, String out, String err})> authorize() async {
+      final out = StringBuffer();
+      final err = StringBuffer();
+      final exitCode = await SanadCommandRunner(
+        stdoutSink: out,
+        stderrSink: err,
+      ).run(const ['vault', 'authorize']);
+      return (exitCode: exitCode, out: out.toString(), err: err.toString());
+    }
+
+    test('a process that may not prompt refuses before opening anything', () async {
+      // The daemon's own policy: a daemon must never ask, so the one command
+      // that can ask refuses instead of querying the store without a dialog.
+      SecretVaultPolicy.apply(
+        SecretVaultPolicy.daemonEntryDecision,
+        vaultSkipped: true,
+      );
+
+      final result = await authorize();
+
+      expect(result.exitCode, 1);
+      expect(result.err, contains('needs a terminal'));
+      expect(result.err, contains('daemon_background'));
+      expect(result.out, isEmpty, reason: 'nothing was opened or announced');
+      expect(
+        _vaultArtifacts(home),
+        isEmpty,
+        reason: 'a refused grant must not touch the vault at all',
+      );
+    });
+
+    test('an interactive grant opens the vault and prints no value', () async {
+      SecretVaultPolicy.apply(
+        const SecretVaultInteractionDecision(
+          SecretVaultInteraction.allowed,
+          SecretVaultInteractionEvidence.interactiveTerminal,
+        ),
+        vaultSkipped: true,
+      );
+
+      final result = await authorize();
+
+      expect(result.exitCode, 0, reason: 'stderr=${result.err}');
+      expect(result.out, contains('Agent vault is available'));
+      expect(
+        _vaultArtifacts(home),
+        isNotEmpty,
+        reason: 'the command opened the vault it was asked to open',
+      );
+      expect(
+        '${result.out}${result.err}',
+        isNot(contains('sk-')),
+        reason: 'the grant never prints a value',
+      );
+    });
+
+    test('a refused grant keeps the vault closed and says why', () async {
+      SecretVaultPolicy.apply(
+        const SecretVaultInteractionDecision(
+          SecretVaultInteraction.allowed,
+          SecretVaultInteractionEvidence.interactiveTerminal,
+        ),
+        vaultSkipped: true,
+      );
+      // The store refuses exactly as macOS answers an item whose access control
+      // does not accept this binary.
+      final vaults = SecretVaults.beginOpen(store: _RefusingStore());
+      await vaults.ready;
+
+      final result = await authorize();
+
+      expect(result.exitCode, 1);
+      expect(
+        result.err,
+        contains(AgentSecretStoreUnavailableReason.interactionForbidden),
+      );
+      expect(result.err, contains('sanad vault authorize'));
+      expect(vaults.available, isFalse, reason: 'failure keeps it closed');
     });
   });
 
@@ -347,4 +503,24 @@ Future<_BoundedResult> _runBounded(
       '(${arguments.join(' ')}): stdout=$stdout stderr=$stderr',
     );
   }
+}
+
+/// A store that refuses every query the way macOS answers an item whose access
+/// control does not accept the running binary, without touching any real
+/// operating-system vault.
+final class _RefusingStore implements AgentSecretStore {
+  static const _error = AgentSecretStoreUnavailable(
+    'The Agent vault item demands an interactive authorization and this process '
+    'has no human to answer it.',
+    reasonCode: AgentSecretStoreUnavailableReason.interactionForbidden,
+  );
+
+  @override
+  Future<String?> read(String key) async => throw _error;
+
+  @override
+  Future<void> write(String key, String value) async => throw _error;
+
+  @override
+  Future<void> delete(String key) async => throw _error;
 }

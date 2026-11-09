@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 
+import 'package:sanad_agent/core/auth/secret_vault.dart';
 import 'package:sanad_agent/core/provider_runtime/env_file_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_store.dart';
 import 'package:sanad_agent/engine/adapters/provider_profile.dart';
@@ -32,6 +33,17 @@ class CredentialResolutionResult {
   bool get isReady => status == CredentialResolutionStatus.ready;
 }
 
+/// The reason a credential read reports while the Agent vault is still opening.
+///
+/// A daemon opens its vault without waiting for the operating-system store, so a
+/// synchronous resolver cannot tell "this provider has no key" from "the store
+/// has not answered yet". Reporting the second answer as the first would tell a
+/// person their credential is gone.
+const vaultNotReadyReason =
+    'The Agent vault is still opening (vault_not_ready), so this provider '
+    'credential is unknown rather than missing. It becomes readable when the '
+    'operating-system credential store answers.';
+
 /// Resolves a usable credential at runtime for a given provider.
 ///
 /// - For api_key providers: reads the env key (provider-specific or generic
@@ -49,11 +61,38 @@ class ProviderCredentialResolver {
   final ProviderCredentialStore _credStore;
   final http.Client Function() _clientFactory;
 
+  /// The Agent vault's readiness, when this process opens one.
+  ///
+  /// It is a lookup rather than an instance, because the vault may be created
+  /// after this resolver is composed. `null` means the resolver has no vault to
+  /// wait for, which is the case for every store that answers synchronously.
+  final SecretVaultReadiness? Function()? _vaultReadiness;
+
   ProviderCredentialResolver(
     this._env,
     this._credStore, {
     http.Client Function()? clientFactory,
-  }) : _clientFactory = clientFactory ?? http.Client.new;
+    SecretVaultReadiness? Function()? vaultReadiness,
+  }) : _clientFactory = clientFactory ?? http.Client.new,
+       _vaultReadiness = vaultReadiness;
+
+  /// Whether this process's Agent vault has finished opening.
+  bool get _vaultIsReady => _vaultReadiness?.call()?.isReady ?? true;
+
+  /// Resolves credentials for [providerId] after waiting, at most [deadline],
+  /// for the Agent vault to finish opening.
+  ///
+  /// A caller that can wait uses this entry point so a first turn is not refused
+  /// with `vault_not_ready` for a vault that is merely still opening. The wait is
+  /// bounded and never throws, so a store that never answers cannot turn a turn
+  /// into an unbounded pause.
+  Future<CredentialResolutionResult> resolveAwaitingVault(
+    String providerId, {
+    Duration deadline = secretVaultStartupReadyDeadline,
+  }) async {
+    await _vaultReadiness?.call()?.readyWithin(deadline);
+    return resolve(providerId);
+  }
 
   /// Resolves credentials for [providerId] (name or alias).
   CredentialResolutionResult resolve(String providerId) {
@@ -108,6 +147,13 @@ class ProviderCredentialResolver {
       );
     }
     if (key.trim().isEmpty) {
+      if (!_vaultIsReady) {
+        return CredentialResolutionResult(
+          status: CredentialResolutionStatus.missing,
+          profile: profile,
+          reason: vaultNotReadyReason,
+        );
+      }
       return CredentialResolutionResult(
         status: CredentialResolutionStatus.missing,
         profile: profile,

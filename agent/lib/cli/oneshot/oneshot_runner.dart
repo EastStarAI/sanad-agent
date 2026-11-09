@@ -673,6 +673,33 @@ class OneshotRunner {
 
         switch (durableTurn.follow) {
           case DurableFollow.following:
+            // The daemon owns the turn. A scheduled retry is the one thing a
+            // re-attached reader must say out loud: nothing else on this
+            // transport publishes the notice the socket that died had already
+            // received, so staying silent made a turn the daemon was serving
+            // look like a stopped one (2026-11-09). One record per re-attach,
+            // in the shape the live path writes: `retrying (n/N) – <reason>`,
+            // or bare `retrying` for a daemon that states a wait without
+            // counters.
+            if (durableTurn.reportsRetrying) {
+              await coordinator.recordRuntimeNotice(
+                status: 'retrying',
+                code: durableTurn.retryCause ?? 'runtime_notice',
+                message: durableTurn.noticeMessage,
+                provider: finalProvider,
+                model: finalModel,
+                retryAttempt: durableTurn.retry.attempt,
+                retryBudget: durableTurn.retry.budget,
+              );
+              if (!json && !quiet) {
+                final label = durableTurn.retry.retryLabel;
+                err.writeln(
+                  durableTurn.noticeMessage.isEmpty
+                      ? 'Notice: $label'
+                      : 'Notice: $label — ${durableTurn.noticeMessage}',
+                );
+              }
+            }
             break;
           case DurableFollow.awaitingIntervention:
             hasError = true;

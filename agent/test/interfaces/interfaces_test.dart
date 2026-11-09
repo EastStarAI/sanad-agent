@@ -88,6 +88,7 @@ void main() {
   late LLMAdapter titleRouteAdapter;
   late LLMRouteSnapshot completedTurnRoute;
   late Directory tempDir;
+  late List<Map<String, dynamic>> appendedInFlightSnapshots;
   FutureOr<void> Function(Message message)? rootMessageCommitted;
 
   Future<void> commitMockRoot(String content, {String? requestId}) async {
@@ -309,6 +310,7 @@ Use the review skill.''',
     when(mockSessionManager.saveSessionMetadata(any, any)).thenReturn(null);
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
     final inFlightSnapshots = <String, Map<String, dynamic>>{};
+    appendedInFlightSnapshots = [];
     when(mockSessionManager.getInFlightSnapshot(any)).thenAnswer((invocation) {
       final sessionId = invocation.positionalArguments.single as String;
       return inFlightSnapshots[sessionId];
@@ -327,6 +329,54 @@ Use the review skill.''',
     ).thenAnswer((invocation) {
       final sessionId = invocation.positionalArguments.single as String;
       inFlightSnapshots.remove(sessionId);
+    });
+    // The daemon accumulates streamed deltas in `SessionManager` so a long
+    // answer is never re-copied per delta; this fake mirrors that projection.
+    when(
+      mockSessionManager.appendInFlightDelta(
+        sessionId: anyNamed('sessionId'),
+        runId: anyNamed('runId'),
+        turnId: anyNamed('turnId'),
+        modelStepId: anyNamed('modelStepId'),
+        type: anyNamed('type'),
+        delta: anyNamed('delta'),
+      ),
+    ).thenAnswer((invocation) {
+      final named = invocation.namedArguments;
+      final sessionId = named[#sessionId] as String;
+      final delta = named[#delta] as String;
+      final existing = inFlightSnapshots[sessionId];
+      final sameStream =
+          existing != null &&
+          existing['type'] == named[#type] &&
+          existing['run_id'] == named[#runId] &&
+          existing['turn_id'] == named[#turnId] &&
+          existing['model_step_id'] == named[#modelStepId] &&
+          existing['content'] is String;
+      final timestamp = DateTime.now().millisecondsSinceEpoch;
+      final snapshot = {
+        'type': named[#type],
+        'status': 'running',
+        'session_id': sessionId,
+        'run_id': named[#runId],
+        'turn_id': named[#turnId],
+        'model_step_id': named[#modelStepId],
+        'content': sameStream ? '${existing['content']}$delta' : delta,
+        'timestamp': timestamp,
+        'updated_at': timestamp,
+      };
+      inFlightSnapshots[sessionId] = snapshot;
+      appendedInFlightSnapshots.add(snapshot);
+    });
+    when(
+      mockSessionManager.hasInFlightSnapshot(any),
+    ).thenAnswer((invocation) {
+      final sessionId = invocation.positionalArguments.single as String;
+      return inFlightSnapshots.containsKey(sessionId);
+    });
+    when(mockSessionManager.inFlightRunId(any)).thenAnswer((invocation) {
+      final sessionId = invocation.positionalArguments.single as String;
+      return inFlightSnapshots[sessionId]?['run_id']?.toString();
     });
     when(mockSessionManager.updateSessionTitle(any, any)).thenReturn(null);
     when(
@@ -646,11 +696,11 @@ Use the review skill.''',
         ),
       ),
     ).called(1);
-    final savedSnapshots = verify(
-      mockSessionManager.saveInFlightSnapshot('session-123', captureAny),
-    ).captured.cast<Map>();
+    // `SessionManager` owns the accumulation now, so the projection this test
+    // observes is the delta stream it received: each append carries the
+    // accumulated content of that stream.
     expect(
-      savedSnapshots
+      appendedInFlightSnapshots
           .where((snapshot) => snapshot['type'] == 'thought_stream')
           .map((snapshot) => snapshot['content'])
           .toList()

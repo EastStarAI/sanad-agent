@@ -40,6 +40,7 @@ import {
   publicTask,
   readJson,
   runPaths,
+  sessionPin,
   withRunPaths,
   writeJsonAtomic,
 } from '../supervisor-core.mjs';
@@ -195,6 +196,10 @@ export function createWorkerContext(options) {
       }
       : {};
     Object.assign(state, queueFields, progressFields, retryFields, extra, { status: to });
+    // The pinned session is a projection of the task's own arguments, so
+    // `--new-session` clears it in the same transition that clears the live
+    // session id and no writer can leave the two disagreeing.
+    if (Array.isArray(task?.args)) state.pinnedSessionId = sessionPin(task.args).id;
     manifest.seq = ++ctx.seq;
     const event = {
       seq: ctx.seq,

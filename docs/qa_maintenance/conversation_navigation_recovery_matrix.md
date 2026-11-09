@@ -74,6 +74,7 @@ This matrix covers recovery scenarios for Plan 32e: navigation history, deletion
 | D3.1 | `session_deleted` event for non-current session | Removed from cache/history/stacks; current unchanged | ⬜ |
 | D3.2 | `session_deleted` event for current session | Same as D2.x fallback logic; no confirmation dialog | ⬜ |
 | D3.3 | External delete while offline → reconnect | Session removed; fallback applied on reconnect | ⬜ |
+| D3.4 | Delete through the `sanad` CLI while a Client is connected | Agent publishes a family-scoped `session_deleted`; the Client removes it from cache/history with no refetch and no restart | ✅ Automated (Agent announcement; live Client check owner-run) |
 
 ## S1: Conversation History Search
 

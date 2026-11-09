@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:sanad_auth_lock/sanad_auth_lock.dart';
 import 'package:test/test.dart';
+import 'package:sanad_agent/core/auth/agent_secret_store.dart';
 import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/core/constants.dart';
 import 'package:path/path.dart' as p;
@@ -387,4 +388,83 @@ void main() {
       },
     );
   });
+  group('Agent vault readiness', () {
+    test(
+      'a vault that has not answered keeps the daemon up without cloud authority',
+      () async {
+        await File(
+          p.join(tempDir.path, 'auth.json'),
+        ).writeAsString(jsonEncode({'hardware_id': 'stable-hardware'}));
+        final store = MemoryAgentSecretStore();
+        store.values[AuthManager.deviceCredentialKey] = 'sanad_device_0001';
+        var vaultReady = false;
+        final manager = AuthManager(
+          secretStore: store,
+          awaitVaultReady: () async => vaultReady,
+        );
+
+        await manager.initialize();
+
+        expect(
+          manager.canAuthenticateCloudAgent,
+          isFalse,
+          reason: 'an unread Device Credential is unknown, never authorized',
+        );
+        expect(manager.deviceToken, isNull);
+        expect(manager.hardwareId, 'stable-hardware');
+
+        // The same process sees the credential once the vault answers.
+        vaultReady = true;
+        await manager.reload();
+        expect(manager.canAuthenticateCloudAgent, isTrue);
+        expect(manager.deviceToken, 'sanad_device_0001');
+      },
+    );
+
+    test(
+      'a vault that never answers is never queried and never blocks startup',
+      () async {
+        final store = _UntouchableStore();
+        final manager = AuthManager(
+          secretStore: store,
+          awaitVaultReady: () async => false,
+        );
+
+        final started = DateTime.now();
+        await manager.initialize();
+
+        expect(
+          DateTime.now().difference(started),
+          lessThan(const Duration(seconds: 5)),
+          reason: 'a start must never wait on the operating-system store',
+        );
+        expect(store.touched, isFalse);
+        expect(manager.canAuthenticateCloudAgent, isFalse);
+      },
+    );
+  });
+}
+
+/// A store that fails the test if any query reaches it: a vault that has not
+/// answered must never be read.
+final class _UntouchableStore implements AgentSecretStore {
+  bool touched = false;
+
+  @override
+  Future<String?> read(String key) async {
+    touched = true;
+    throw StateError('an unanswered vault must never be read');
+  }
+
+  @override
+  Future<void> write(String key, String value) async {
+    touched = true;
+    throw StateError('an unanswered vault must never be written');
+  }
+
+  @override
+  Future<void> delete(String key) async {
+    touched = true;
+    throw StateError('an unanswered vault must never be deleted');
+  }
 }

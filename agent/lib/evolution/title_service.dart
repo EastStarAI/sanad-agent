@@ -10,6 +10,17 @@ import '../engine/runtime/llm_route_snapshot.dart';
 import 'models/session_state.dart';
 import 'session_manager.dart';
 
+/// The exact provider-bound route one title request must use.
+///
+/// [adapter] is the provider adapter that owns the session's model, and
+/// [providerInstanceId] keeps usage and thinking attribution on that same
+/// instance. A title request is never sent when this route cannot be resolved.
+typedef TitleRoute = ({
+  LLMAdapter adapter,
+  String? modelOverride,
+  String? providerInstanceId,
+});
+
 class TitleService {
   static final Logger _logger = Logger('TitleService');
   static const Duration _defaultRequestTimeout = Duration(seconds: 30);
@@ -18,19 +29,13 @@ class TitleService {
   final LLMAdapter? _adapter;
   final Duration _requestTimeout;
   final Expando<bool> _omitsUnsupportedOutputBound = Expando<bool>();
-  final ({LLMAdapter adapter, String? modelOverride}) Function(
-    String sessionId,
-    String? modelOverride,
-  )?
+  final TitleRoute? Function(String sessionId, String? modelOverride)?
   _sessionRouteResolver;
 
   TitleService({
     LLMAdapter? adapter,
     Duration requestTimeout = _defaultRequestTimeout,
-    ({LLMAdapter adapter, String? modelOverride}) Function(
-      String sessionId,
-      String? modelOverride,
-    )?
+    TitleRoute? Function(String sessionId, String? modelOverride)?
     sessionRouteResolver,
   }) : _adapter = adapter,
        _requestTimeout = requestTimeout,
@@ -38,19 +43,38 @@ class TitleService {
 
   /// Generates a short, descriptive title for the conversation based on user and assistant message.
   /// If the LLM call fails, falls back to the user message snippet.
-  Future<String> generateTitle({
+  ///
+  /// Returns `null` when no provider-bound route can be resolved for the
+  /// session. That is a deliberate skip: no request is sent, because pairing a
+  /// session model with another provider's adapter is a guaranteed provider
+  /// error (the model does not exist there), and the pending title must stay
+  /// eligible instead of being finalized from a failed call.
+  Future<String?> generateTitle({
     required String sessionId,
     required String userMessage,
     required String assistantResponse,
     String? modelOverride,
     LLMRouteSnapshot? route,
   }) async {
+    final resolvedRoute = route == null
+        ? _sessionRouteResolver?.call(sessionId, modelOverride) ??
+              _resolveSessionRoute(sessionId, modelOverride)
+        : (
+            adapter: route.adapter,
+            modelOverride: route.modelOverride,
+            providerInstanceId: route.providerInstanceId,
+          );
+
+    if (resolvedRoute == null) {
+      _logger.info(
+        'Skipping title generation for session $sessionId: '
+        'no provider route is resolvable.',
+      );
+      return null;
+    }
+
     try {
       _logger.info('🏷️ Generating intelligent title for session: $sessionId');
-      final resolvedRoute = route == null
-          ? _sessionRouteResolver?.call(sessionId, modelOverride) ??
-                _resolveSessionRoute(sessionId, modelOverride)
-          : (adapter: route.adapter, modelOverride: route.modelOverride);
 
       final messages = [
         Message(
@@ -75,7 +99,7 @@ class TitleService {
         messages: messages,
         modelOverride: resolvedRoute.modelOverride,
         sessionId: sessionId,
-        providerInstanceId: route?.providerInstanceId,
+        providerInstanceId: resolvedRoute.providerInstanceId,
       );
 
       final rawContent = response.message.content ?? '';
@@ -170,7 +194,8 @@ class TitleService {
 
   /// Restores title work that was interrupted after the terminal response was
   /// committed. Existing/manual titles remain protected by the pending-state
-  /// compare-and-set.
+  /// compare-and-set, and only sessions whose own provider route is still
+  /// resolvable are attempted.
   Future<int> recoverPendingTitles() async {
     if (!getIt.isRegistered<SessionManager>()) return 0;
     final sessionManager = getIt<SessionManager>();
@@ -185,6 +210,7 @@ class TitleService {
         assistantResponse: exchange.assistantResponse,
         modelOverride: session.model,
       );
+      if (title == null) continue;
       final updated = sessionManager.updateSessionTitleIfCurrent(
         session.sessionId,
         expectedTitle: expectedTitle,
@@ -283,30 +309,86 @@ class TitleService {
     return firstLine;
   }
 
-  ({LLMAdapter adapter, String? modelOverride}) _resolveSessionRoute(
-    String sessionId,
-    String? modelOverride,
-  ) {
+  /// Resolves the provider-bound route a title request must use.
+  ///
+  /// The live session signature is authoritative when this process ran a turn
+  /// for the session. After a daemon restart no turn has run, so the route is
+  /// rebuilt from the session's own persisted provider instance and model;
+  /// [AgentRuntimeService.defaultAdapter] is never used, because a default
+  /// provider cannot serve another instance's model. Returns `null` when the
+  /// session's own route cannot be resolved, so the caller skips the request.
+  TitleRoute? _resolveSessionRoute(String sessionId, String? modelOverride) {
     // When an explicit adapter was injected (tests), use it directly.
     if (_adapter != null) {
-      return (adapter: _adapter, modelOverride: modelOverride);
+      return (
+        adapter: _adapter,
+        modelOverride: modelOverride,
+        providerInstanceId: null,
+      );
     }
     if (!getIt.isRegistered<AgentRuntimeService>()) {
-      throw StateError(
-        'No LLMAdapter or AgentRuntimeService available for title generation.',
+      _logger.warning(
+        'No AgentRuntimeService available for title generation; skipping.',
       );
+      return null;
     }
 
     final runtime = getIt<AgentRuntimeService>();
-    final signature = runtime.sessionSignature(sessionId);
-    if (signature != null) {
+    final signature =
+        runtime.sessionSignature(sessionId) ??
+        _persistedSessionSignature(runtime, sessionId, modelOverride);
+    if (signature == null) return null;
+
+    try {
       return (
         adapter: runtime.adapterFor(signature),
         modelOverride: signature.modelId,
+        providerInstanceId: signature.providerInstanceId,
       );
+    } catch (error) {
+      _logger.warning(
+        'Title route for session $sessionId could not be built: $error',
+      );
+      return null;
     }
+  }
 
-    // No session-specific signature yet; resolve the live default adapter.
-    return (adapter: runtime.defaultAdapter(), modelOverride: modelOverride);
+  /// Rebuilds the signature of a session that has not run a turn in this
+  /// process from the provider instance and model it persisted.
+  RouteSignature? _persistedSessionSignature(
+    AgentRuntimeService runtime,
+    String sessionId,
+    String? modelOverride,
+  ) {
+    if (!getIt.isRegistered<SessionManager>()) return null;
+    final session = getIt<SessionManager>().getSessionRecord(sessionId);
+    final providerInstanceId = session?.providerId?.trim();
+    if (providerInstanceId == null || providerInstanceId.isEmpty) {
+      _logger.info(
+        'Session $sessionId has no persisted provider instance; skipping title.',
+      );
+      return null;
+    }
+    final explicitModel = modelOverride?.trim();
+    final modelId = explicitModel != null && explicitModel.isNotEmpty
+        ? explicitModel
+        : session?.model.trim();
+    if (modelId == null || modelId.isEmpty) {
+      _logger.info(
+        'Session $sessionId has no persisted model; skipping title.',
+      );
+      return null;
+    }
+    try {
+      return runtime.resolveSignature(
+        providerId: providerInstanceId,
+        modelId: modelId,
+      );
+    } catch (error) {
+      _logger.warning(
+        'Session $sessionId provider route is unavailable: $error',
+      );
+      return null;
+    }
   }
 }

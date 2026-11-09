@@ -161,7 +161,13 @@ function resolveSessionDetails(task, manifest) {
   const rawStatus = terminalStates.has(task.status)
     ? task.status
     : (result?.status || task.status);
-  const cause = result?.cause || task.cause || (rawStatus === 'timeout' ? 'timeout' : null);
+  // The daemon's own reason is the cause when nothing classified the failure:
+  // a retry that never produced an artifact used to report an unnamed cause
+  // instead of the `upstream_rate_limit` the daemon stated (2026-11-09). It is
+  // surfaced verbatim, so a reader can match it to the notice it came from.
+  const cause = result?.cause || task.cause || task.daemonRetryReason
+    || result?.daemonRetryReason
+    || (rawStatus === 'timeout' ? 'timeout' : null);
   let stateSince = result?.state_since || result?.stateSince || null;
   if (!stateSince && task.status === rawStatus) stateSince = task.stateSince || null;
   if (!stateSince && terminalStates.has(rawStatus)) {
@@ -243,6 +249,9 @@ function resolveSessionDetails(task, manifest) {
   return {
     taskId: task.id,
     sessionState,
+    // The daemon session every attempt of this task resumes, when its arguments
+    // pin one. A task with no pin starts a fresh session on each attempt.
+    pinnedSessionId: task.pinnedSessionId ?? null,
     cause: cause || '-',
     stateSince: formatIso(stateSince, '[unknown time]'),
     lastProgressAt: formatIso(lastProgressAt, '-'),
@@ -271,6 +280,7 @@ function formatSessionFooter(details) {
     '--- Session Observability ---',
     `Task ID:            ${details.taskId}`,
     `Session State:      ${details.sessionState}`,
+    `Pinned Session:     ${details.pinnedSessionId ?? '-'}`,
     `Cause:              ${details.cause}`,
     `State Since:        ${details.stateSince}`,
     `Last Progress:      ${details.lastProgressAt}`,
@@ -383,6 +393,9 @@ function briefTaskLine(manifest, task) {
   if (progress.stalled) parts.push('PROGRESS_STALL');
   if (task.queueStall) parts.push('QUEUED_STALL');
   if ((task.attempt ?? 1) > 1) parts.push(`attempt ${task.attempt}`);
+  // The session every attempt of this task resumes. Without it the line cannot
+  // answer the one question a continuation depends on.
+  if (task.pinnedSessionId) parts.push(`session ${task.pinnedSessionId}`);
   // Retry facts belong on the task line: a blocked task without them looks like
   // a permanent stop, and an exhausted one looks identical to a fresh block.
   const retry = retryFacts(manifest, task);
@@ -391,12 +404,15 @@ function briefTaskLine(manifest, task) {
   if (retry.exhausted) parts.push('RETRY_EXHAUSTED');
   if (retry.launchAttempts > 0) parts.push(`launch-retries ${retry.launchAttempts}`);
   // The daemon's own retry counters. While one is pending the task is live, so
-  // the line names the attempt the runtime is running instead of leaving a bare
-  // `retrying` status that a reader has to interpret.
+  // the line names the attempt the runtime is running and the cause it stated,
+  // instead of leaving a bare `retrying` status a reader has to interpret.
   if (task.daemonRetry) {
-    parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}`);
+    const reason = task.daemonRetryReason ? ` ${task.daemonRetryReason}` : '';
+    parts.push(`daemon-retry ${task.daemonRetry.attempt ?? '?'}/${task.daemonRetry.budget ?? '?'}${reason}`);
   } else if (task.status === 'retrying') {
-    parts.push('daemon-retry');
+    parts.push(task.daemonRetryReason
+      ? `daemon-retry ${task.daemonRetryReason}`
+      : 'daemon-retry');
   }
   const result = taskResultForView(task);
   if (TERMINAL_STATUSES.has(task.status) || result) {
@@ -449,6 +465,7 @@ function briefView(runDir, manifest) {
         id: task.id,
         status: task.status,
         attempt: task.attempt ?? 1,
+        pinnedSessionId: task.pinnedSessionId ?? null,
         elapsed: details.elapsed,
         progressAgeMs: progress.silentForMs,
         progressStalled: progress.stalled,
