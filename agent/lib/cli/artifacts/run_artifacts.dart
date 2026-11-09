@@ -492,6 +492,11 @@ class RunArtifactCoordinator {
   }
 
   /// Non-terminal runtime notice (e.g. blocked, waiting, resuming).
+  ///
+  /// [retryAfterMs] is the wait the daemon itself stated, when the notice
+  /// carries one: a reader that decides what to do next must not have to guess
+  /// it from prose, and a `blocked` notice can still name the wait an operator
+  /// would shorten by retrying.
   Future<void> recordRuntimeNotice({
     required String status,
     required String code,
@@ -501,6 +506,7 @@ class RunArtifactCoordinator {
     String? cause,
     int? retryAttempt,
     int? retryBudget,
+    int? retryAfterMs,
   }) {
     return _enqueue(() async {
       if (_isTerminal || _currentArtifact.isTerminal) return;
@@ -521,6 +527,7 @@ class RunArtifactCoordinator {
         'model': ?model,
         'retry_attempt': ?retryAttempt,
         'retry_budget': ?retryBudget,
+        'retry_after_ms': ?retryAfterMs,
       };
 
       _currentArtifact = _currentArtifact.copyWith(

@@ -51,8 +51,9 @@ regressed again.
    `CODE_BEHIND_ORIGIN_MAIN=<n>`, and `--json` carries `code`/`codeStaleness`. The comparison is
    offline against the locally known `origin/main` and never fails the read.
 6. **One named scenario per incident, gated by CI.** `test/incident_regression_test.mjs` holds nine
-   scenarios (§4). A new `Supervisor skill tests` job runs the whole Node suite on the `agent`
-   classification and is part of `All required checks pass`.
+   scenarios at the time of this task, and one more for each later incident (eleven after the CLI
+   `blocked`-record work, §4). A new `Supervisor skill tests` job runs the whole Node suite on the
+   `agent` classification and is part of `All required checks pass`.
 7. **Scope.** Supervisor skill, CI lane, and docs. No Agent, Client, or daemon change.
 
 ## 4. Definition of Done
