@@ -217,10 +217,14 @@ record attributed instead of appearing as `no matching worktree`, which is how
 its pids could otherwise be offered for deletion while the process still ran.
 `run` additionally adopts such a directory into `primary-<hash>` on its next
 non-dry launch: one same-filesystem rename, skipped when the canonical directory
-already exists, and silent on failure because the record is diagnostics. No
-observation command renames a record. `status` reports a managed Client of a
-non-linked checkout as `worktree=primary` rather than the old `main` fallback,
-which read like a branch fact.
+already exists, and silent on failure because the record is diagnostics. It is
+also skipped whenever the legacy record's recorded `agent_pid`/`client_pid`, the
+owning Home's endpoint pid, or a launcher lease for the same worktree still names
+a running process — a live group is never renamed out from under the launcher
+that wrote it, so adoption waits for a launch where the legacy group is provably
+stopped. No observation command renames a record. `status` reports a managed
+Client of a non-linked checkout as `worktree=primary` rather than the old `main`
+fallback, which read like a branch fact.
 
 ## Standalone clones
 

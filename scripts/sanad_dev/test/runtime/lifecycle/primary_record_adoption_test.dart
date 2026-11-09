@@ -47,6 +47,38 @@ void main() {
       );
     }
 
+    /// Writes the launcher lease `run` would have left behind for this Home.
+    ///
+    /// Liveness is the caller's seam, so the record only has to be the shape the
+    /// reader accepts: version 1 with every required field.
+    void writeLauncherLease({
+      required int launcherPid,
+      String? workspaceHash,
+      String? sourceRoot,
+    }) {
+      File(p.join(root.path, '.sanad', 'dev', 'runtime-launcher-58085.json'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          jsonEncode({
+            'version': 1,
+            'launcher_id': 'launcher-1',
+            'runtime_nonce': 'nonce-1',
+            'launcher_pid': launcherPid,
+            'launcher_process_identity': 'identity-1',
+            'workspace_hash': workspaceHash ?? hash(),
+            'source_root': sourceRoot ?? workspace,
+            'agent_port': 58085,
+            'sanad_home': p.join(root.path, '.sanad'),
+            'preferences_prefix': '',
+            'client_pids': <int>[],
+            'vm_service_ports': <int>[],
+            'status': 'running',
+            'updated_at': DateTime.utc(2026).toIso8601String(),
+            'source_commit': '',
+          }),
+        );
+    }
+
     Directory recordDirectory(String name) =>
         Directory(p.join(runtimesRoot(), name))..createSync(recursive: true);
 
@@ -70,7 +102,10 @@ void main() {
         p.join(legacy.path, 'runtime.json'),
       ).writeAsStringSync(jsonEncode({'agent_pid': 4242, 'agent_port': 58085}));
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
 
       final canonical = Directory(p.join(runtimesRoot(), 'primary-${hash()}'));
       expect(canonical.existsSync(), isTrue);
@@ -93,7 +128,10 @@ void main() {
       writeLocator(canonical, workspaceHash: null);
       File(p.join(canonical.path, 'runtime.json')).writeAsStringSync('{}');
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
 
       expect(legacy.existsSync(), isTrue);
       expect(File(p.join(canonical.path, 'runtime.json')).existsSync(), isTrue);
@@ -103,8 +141,14 @@ void main() {
       final legacy = recordDirectory('main-${hash()}');
       writeLocator(legacy);
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
 
       final canonical = Directory(p.join(runtimesRoot(), 'primary-${hash()}'));
       expect(canonical.existsSync(), isTrue);
@@ -113,10 +157,96 @@ void main() {
       ]);
     });
 
-    test('still adopts a record written without a locator', () async {
+    test('keeps a legacy record whose recorded process is still running', () async {
+      // A record is the last cheap pointer to the process that wrote it, and the
+      // rename runs before `run` classifies anything: renaming a live group's
+      // record would split its state from the launcher that owns it.
       final legacy = recordDirectory('sanad-agent-${hash()}');
+      writeLocator(legacy);
+      File(p.join(legacy.path, 'runtime.json')).writeAsStringSync(
+        jsonEncode({'agent_pid': 4242, 'client_pid': 4343}),
+      );
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: (pid) async => pid == 4343,
+      );
+
+      expect(legacy.existsSync(), isTrue);
+      expect(
+        Directory(p.join(runtimesRoot(), 'primary-${hash()}')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('keeps a legacy record whose launcher lease is still live', () async {
+      final legacy = recordDirectory('main-${hash()}');
+      writeLocator(legacy);
+      writeLauncherLease(launcherPid: 5252);
+
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: (pid) async => pid == 5252,
+      );
+
+      expect(legacy.existsSync(), isTrue);
+      expect(
+        Directory(p.join(runtimesRoot(), 'primary-${hash()}')).existsSync(),
+        isFalse,
+      );
+    });
+
+    test('adopts past a launcher lease that names another worktree', () async {
+      final legacy = recordDirectory('main-${hash()}');
+      writeLocator(legacy);
+      writeLauncherLease(
+        launcherPid: 5353,
+        workspaceHash: 'deadbeef',
+        sourceRoot: p.join(root.path, 'other-repo'),
+      );
+
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: (pid) async => pid == 5353,
+      );
+
+      expect(
+        legacy.existsSync(),
+        isFalse,
+        reason: 'a lease for another worktree never blocks adoption',
+      );
+      expect(
+        Directory(p.join(runtimesRoot(), 'primary-${hash()}')).existsSync(),
+        isTrue,
+      );
+    });
+
+    test('adopts once the recorded pids and the lease are dead', () async {
+      final legacy = recordDirectory('main-${hash()}');
+      writeLocator(legacy);
+      File(p.join(legacy.path, 'runtime.json')).writeAsStringSync(
+        jsonEncode({'agent_pid': 4242}),
+      );
+      writeLauncherLease(launcherPid: 5252);
+
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
+
+      expect(legacy.existsSync(), isFalse);
+      expect(
+        Directory(p.join(runtimesRoot(), 'primary-${hash()}')).existsSync(),
+        isTrue,
+      );
+    });
+
+    test('still adopts a record written without a locator', () async {      final legacy = recordDirectory('sanad-agent-${hash()}');
+
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
 
       expect(legacy.existsSync(), isFalse);
       expect(
@@ -129,7 +259,10 @@ void main() {
       final foreign = recordDirectory('other-${hash()}');
       writeLocator(foreign, workspaceHash: 'deadbeef');
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime());
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(),
+        processRunning: _noLiveProcess,
+      );
 
       expect(foreign.existsSync(), isTrue);
       expect(
@@ -142,7 +275,10 @@ void main() {
       final linked = recordDirectory('feat-x-${hash()}');
       writeLocator(linked);
 
-      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(runtime(linked: true));
+      await sanad_dev.adoptLegacyPrimaryRuntimeRecord(
+        runtime(linked: true),
+        processRunning: _noLiveProcess,
+      );
 
       expect(linked.existsSync(), isTrue);
     });
@@ -183,3 +319,6 @@ void main() {
     });
   });
 }
+
+/// No process is alive, so nothing can block a rename.
+Future<bool> _noLiveProcess(int? pid) async => false;
