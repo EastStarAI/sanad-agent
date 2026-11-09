@@ -182,6 +182,11 @@ class TurnEventPublisher {
     );
   }
 
+  /// Appends one streamed delta to the session's in-flight projection.
+  ///
+  /// `SessionManager` owns that projection: it keeps the partial text in a
+  /// growable buffer and materializes it only when a reader asks, so this path
+  /// never rebuilds the whole accumulated answer per delta.
   void appendInFlightSnapshot({
     required String sessionId,
     required String runId,
@@ -191,27 +196,14 @@ class TurnEventPublisher {
     required String delta,
   }) {
     if (delta.isEmpty) return;
-    final sessionManager = getIt<SessionManager>();
-    final existing = sessionManager.getInFlightSnapshot(sessionId);
-    final sameStream =
-        existing != null &&
-        existing['type'] == type &&
-        existing['run_id'] == runId &&
-        existing['turn_id'] == turnId &&
-        existing['model_step_id'] == modelStepId &&
-        existing['content'] is String;
-    final timestamp = DateTime.now().millisecondsSinceEpoch;
-    sessionManager.saveInFlightSnapshot(sessionId, {
-      'type': type,
-      'status': 'running',
-      'session_id': sessionId,
-      'run_id': runId,
-      'turn_id': ?turnId,
-      'model_step_id': modelStepId,
-      'content': sameStream ? '${existing['content']}$delta' : delta,
-      'timestamp': timestamp,
-      'updated_at': timestamp,
-    });
+    getIt<SessionManager>().appendInFlightDelta(
+      sessionId: sessionId,
+      runId: runId,
+      turnId: turnId,
+      modelStepId: modelStepId,
+      type: type,
+      delta: delta,
+    );
   }
 
   void emitCompletedSteerSegment({

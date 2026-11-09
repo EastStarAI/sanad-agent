@@ -12,6 +12,7 @@ This contract applies to `agent/lib/evolution/`.
 
 ## Sessions and Titles
 - Persist every accepted interaction through `SessionManager` with workspace and selected model as first-class session state.
+- `SessionManager` owns the in-memory projections a Client reads between turns. The in-flight partial answer is one buffered stream per session, materialized only when a reader asks, and released at the terminal, stop, or blocked-recovery boundary; identity checks never build the payload. The history snapshot cache is bounded by session count **and** retained text, and eviction costs one `state.db` re-read rather than changing correctness.
 - History records keep stable `message_id` and `turn_id`. Normal session history exposes active records only; soft rewind never deletes the original attempt.
 - Canonical history event ids are built only by `SessionHistoryEventId`; no producer formats an anchor itself, and an anchor a consumer cannot resolve is absent rather than approximated.
 - History rewrites align rows by `message_id`, never by content: identity-aligned rows keep `messages.id` even when their content changes, only a structural divergence re-inserts the active suffix, superseded rows are never deleted by a rewrite, and duplicate identities fail loudly (rules in `agent/lib/evolution/db/AGENTS.md`). Stored `providerState` and `metadata` round-trip byte-identically.

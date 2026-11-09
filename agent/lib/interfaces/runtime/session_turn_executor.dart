@@ -323,7 +323,7 @@ class SessionTurnExecutor {
         }
       }
 
-      String fullContent = '';
+      final fullContent = StringBuffer();
       bool stoppedCleanly = false;
       final sessionMetadata = isResume
           ? (sessionManager.getSessionMetadata(event.sessionId) ??
@@ -370,7 +370,7 @@ class SessionTurnExecutor {
                       terminalAt: terminalAt,
                       runtimeMs: runtimeMs,
                       errorCode: errorCode,
-                      onResetFullContent: () => fullContent = '',
+                      onResetFullContent: fullContent.clear,
                     );
                   },
               onSteerContinuation: () {
@@ -378,9 +378,9 @@ class SessionTurnExecutor {
                 _events.emitCompletedSteerSegment(
                   owner: owner,
                   event: event,
-                  content: fullContent,
+                  content: fullContent.toString(),
                 );
-                fullContent = '';
+                fullContent.clear();
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
               onThoughtDelta: (thought) => _events.emitThoughtDelta(
@@ -429,7 +429,7 @@ class SessionTurnExecutor {
                       terminalAt: terminalAt,
                       runtimeMs: runtimeMs,
                       errorCode: errorCode,
-                      onResetFullContent: () => fullContent = '',
+                      onResetFullContent: fullContent.clear,
                     );
                   },
               onSteerContinuation: () {
@@ -437,9 +437,9 @@ class SessionTurnExecutor {
                 _events.emitCompletedSteerSegment(
                   owner: owner,
                   event: event,
-                  content: fullContent,
+                  content: fullContent.toString(),
                 );
-                fullContent = '';
+                fullContent.clear();
                 sessionManager.clearInFlightSnapshot(event.sessionId);
               },
               onThoughtDelta: (thought) => _events.emitThoughtDelta(
@@ -470,7 +470,7 @@ class SessionTurnExecutor {
             owner.complete();
             return;
           }
-          fullContent += chunk;
+          fullContent.write(chunk);
           _events.appendInFlightSnapshot(
             sessionId: event.sessionId,
             runId: owner.runId,
@@ -554,7 +554,7 @@ class SessionTurnExecutor {
 
       final terminalMessage = Message(
         role: MessageRole.assistant,
-        content: fullContent,
+        content: fullContent.toString(),
         metadata: {
           ...turnMetadata,
           'run_id': activeRun.runId,
@@ -640,7 +640,7 @@ class SessionTurnExecutor {
                 platformId: event.platformId,
                 expectedTitle: expectedTitle,
                 userMessage: content,
-                assistantResponse: fullContent,
+                assistantResponse: fullContent.toString(),
                 route: agentRunner.lastSuccessfulLlmRoute,
                 runId: runId,
               )
@@ -670,8 +670,8 @@ class SessionTurnExecutor {
       // show` report a blocked session as `running` with a frozen timestamp
       // (Task 134). Only this run's own projection is released.
       if (activeRun != null) {
-        final snapshot = sessionManager.getInFlightSnapshot(event.sessionId);
-        if (snapshot == null || snapshot['run_id'] == activeRun.runId) {
+        final snapshotRunId = sessionManager.inFlightRunId(event.sessionId);
+        if (snapshotRunId == null || snapshotRunId == activeRun.runId) {
           sessionManager.clearInFlightSnapshot(event.sessionId);
         }
       }

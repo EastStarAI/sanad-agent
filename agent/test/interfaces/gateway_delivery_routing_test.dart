@@ -151,6 +151,18 @@ void main() {
     when(mockSessionManager.getSessionMetadata(any)).thenReturn(null);
     when(mockSessionManager.getInFlightSnapshot(any)).thenReturn(null);
     when(mockSessionManager.saveInFlightSnapshot(any, any)).thenReturn(null);
+    when(mockSessionManager.hasInFlightSnapshot(any)).thenReturn(false);
+    when(mockSessionManager.inFlightRunId(any)).thenReturn(null);
+    when(
+      mockSessionManager.appendInFlightDelta(
+        sessionId: anyNamed('sessionId'),
+        runId: anyNamed('runId'),
+        turnId: anyNamed('turnId'),
+        modelStepId: anyNamed('modelStepId'),
+        type: anyNamed('type'),
+        delta: anyNamed('delta'),
+      ),
+    ).thenReturn(null);
     when(mockSessionManager.clearInFlightSnapshot(any)).thenReturn(null);
     when(mockSessionManager.updateSessionTitle(any, any)).thenReturn(null);
     when(

@@ -500,6 +500,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       _platformRuntimeBridge.registerSessionHandlers(
         sessionId,
         responseEmitter: (response) => sendResponse(response),
+        channelScopedEmitter: true,
       );
     }
 
@@ -542,6 +543,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     _platformRuntimeBridge.registerSessionHandlers(
       resolvedSessionId,
       responseEmitter: (response) => sendResponse(response),
+      channelScopedEmitter: true,
     );
 
     _eventController.add(gatewayEvent);
