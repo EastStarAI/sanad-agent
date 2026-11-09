@@ -22,18 +22,29 @@ class DictationCubit extends Cubit<DictationState> {
     required DictationCapture capture,
     DictationPreviewPolicy previewPolicy = DictationPreviewPolicy.live,
     String Function()? sessionIdFactory,
+    DateTime Function()? now,
   })  : _resolver = resolver,
         _capture = capture,
         _sessionIdFactory = sessionIdFactory ?? DictationIdentity.next,
+        _now = now ?? DateTime.now,
         super(DictationState(previewPolicy: previewPolicy));
 
   static final _logger = Logger('DictationCubit');
+
+  /// How long a daemon model projection stays usable.
+  ///
+  /// The daemon owns the selected model and nothing pushes a change to this
+  /// Client, so an old answer is a guess: a press re-reads it instead.
+  static const Duration modelProjectionMaxAge = Duration(seconds: 30);
 
   static const Duration _stopTimeout = Duration(seconds: 240);
 
   final DictationResolver _resolver;
   final DictationCapture _capture;
   final String Function() _sessionIdFactory;
+
+  /// The Client's own clock, so a projection's age is testable.
+  final DateTime Function() _now;
 
   DictationTransport? _transport;
   DeviceConfig? _device;
@@ -88,6 +99,13 @@ class DictationCubit extends Cubit<DictationState> {
     if (state.previewPolicy == policy) return;
     emit(state.copyWith(previewPolicy: policy));
   }
+
+  /// True when the daemon's model projection is old enough to re-read.
+  ///
+  /// A ready device with an old answer is exactly the state in which another
+  /// Client's model change stays invisible (`live-3`, N5).
+  bool get modelProjectionIsStale =>
+      state.model.projectionOlderThan(modelProjectionMaxAge, now: _now());
 
   Future<void> start(DeviceConfig device) async {
     if (state.isActive || _device != null) return;
@@ -424,6 +442,10 @@ class DictationCubit extends Cubit<DictationState> {
             model: status.copyWith(
               clearInstallingModel: finished,
               clearDownloadProgress: finished,
+              // The projection is only ever as good as the moment the daemon
+              // answered it, and a press decides from that age whether to ask
+              // again (another Client can change the selection at any time).
+              fetchedAt: _now(),
             ),
           ),
         );
@@ -439,11 +461,23 @@ class DictationCubit extends Cubit<DictationState> {
           ),
         );
       case 'dictation_ready':
+        // The daemon names the model it actually loaded. That answer is
+        // authoritative for the projection, so a selection another Client
+        // changed is corrected here instead of surviving as a stale label.
+        final readyModel = (event['model_id'] as String?)?.trim() ?? '';
+        final runningModel =
+            readyModel.isEmpty ? state.model.selectedModelId : readyModel;
+        _logger.info(
+          'dictation ready: model=$runningModel '
+          'load_ms=${(event['load_ms'] as num?)?.toInt() ?? 0}',
+        );
         emit(
           state.copyWith(
             model: state.model.copyWith(
+              selectedModelId: readyModel.isEmpty ? null : readyModel,
               isReady: true,
               clearReadinessReason: true,
+              fetchedAt: _now(),
             ),
             // The recognizer exists now, so the user can speak. Until this
             // event the mic shows a loading affordance.

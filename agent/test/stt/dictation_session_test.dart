@@ -119,6 +119,70 @@ void main() {
     );
   }
 
+  group('first-audio watchdog', () {
+    // The engine lease is taken when the session starts, so a session that never
+    // receives a frame used to hold the daemon's only engine until the Gateway's
+    // route TTL freed it (`live-3/RESULT.md`, 03:50:17 → 03:55:47). The window
+    // keys on zero frames ever, never on silence.
+    test('a session that never receives audio closes itself', () async {
+      final session = DictationSession(
+        transport: channel,
+        engine: engine,
+        modelId: 'test-model',
+        firstAudioTimeout: const Duration(milliseconds: 25),
+      );
+      await session.start();
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      // Cancelled, not drained: nothing was spoken, so there is nothing to
+      // decode and the engine goes back to the daemon.
+      expect(engine.cancelCalled, isTrue);
+      expect(engine.finishCalled, isFalse);
+      expect(channel.closed, isTrue);
+      expect(channel.eventsOf('dictation_final'), isEmpty);
+      expect(channel.eventsOf('dictation_done'), isEmpty);
+      await session.close();
+    });
+
+    test('the first frame disarms the watchdog', () async {
+      final session = DictationSession(
+        transport: channel,
+        engine: engine,
+        modelId: 'test-model',
+        firstAudioTimeout: const Duration(milliseconds: 30),
+      );
+      await session.start();
+      channel.addAudio([1, 2, 3, 4]);
+      await Future<void>.delayed(const Duration(milliseconds: 90));
+
+      // A user who presses and then thinks is silence on an open stream: the
+      // session must survive it.
+      expect(engine.audio, [4]);
+      expect(engine.cancelCalled, isFalse);
+      expect(channel.closed, isFalse);
+      await session.close();
+    });
+
+    test('a stopped session never trips the watchdog afterwards', () async {
+      final session = DictationSession(
+        transport: channel,
+        engine: engine,
+        modelId: 'test-model',
+        firstAudioTimeout: const Duration(milliseconds: 20),
+      );
+      await session.start();
+      channel.addAudio([1, 2]);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      channel.sendCommand(DictationCommand.stop);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+
+      // The drain path owns the teardown; a late timer must not cancel a session
+      // that already finished.
+      expect(engine.finishCalled, isTrue);
+      expect(engine.cancelCalled, isFalse);
+    });
+  });
+
   group('dictation session', () {
     test('republishes ready and final events with client-safe payloads', () async {
       final session = sessionWith();

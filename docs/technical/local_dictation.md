@@ -55,6 +55,30 @@ range is rewritten.
 Nothing logs audio or transcript text. The daemon logs metadata only: session
 start, drain, and `audio_ms`/`decode_ms` per final.
 
+### Session lifetime
+
+A session is bounded from both ends, and each bound answers a different question:
+
+- **Audio arrived, then stopped:** the session runs until `maxSessionDuration`
+  (10 minutes), checked on every frame, and closes with `session_limit`. Silence
+  during an open, speaking session is legitimate — the user may be thinking — so
+  it never shortens a session.
+- **No audio ever arrived:** `start()` arms `firstAudioTimeout` (15 seconds, a
+  named constant beside `maxSessionDuration`) and the first frame disarms it.
+  On expiry the daemon logs `audio_ms=0` and the model it was loading, then calls
+  `_stop(drain: false)`.
+
+The second bound exists because the dictation lease is daemon-wide: a producer
+that vanished between the claim command and its first packet held the only engine
+until the Gateway's route TTL released it — five minutes in the live run, during
+which every other press was refused with `dictation_busy`. The window keys on
+**zero frames ever**, so it never fires for a user who is simply quiet.
+
+The Agent is not the only side that cleans up: a Client whose route failed
+dispatches the `dictation` command `op: cancel`, because the command path still
+works when the route does not. The watchdog is the backstop for a producer that
+disappeared without telling anyone.
+
 ## Batch and streaming
 
 | Mode | Runtime | Behaviour |

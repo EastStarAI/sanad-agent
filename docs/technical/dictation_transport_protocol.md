@@ -198,6 +198,24 @@ Client → Gateway → daemon:
 the ordered route channel (§6.3) so they can never overtake admitted audio. The
 daemon-facing vocabulary is unchanged; only the carrier differs.
 
+Producer order is an obligation, not a convenience:
+
+- A transport is built silent. The claim command is the only thing that may create
+  the session, and it MUST precede every route packet for that session.
+- A route packet never mints a claim. A producer that emits `dictation_start`
+  before its claim command will be refused with `forbidden` and MUST NOT treat
+  that refusal as a transport outage.
+- Exactly one route is opened per session, and the opening call is idempotent, so
+  a repeated `start` cannot emit a second `dictation_start` for one
+  `dictation_id`.
+- A claim whose route is refused still names a live session. The producer MUST
+  cancel it on the command path (`op: cancel`, §5), which keeps working when the
+  route does not; otherwise the engine lease survives until the Gateway's route
+  TTL releases it and every other press is refused with `busy`.
+- Frames and the ordered `dictation_end` are refused from the moment a route
+  fails, so a failed route is not a reusable transport: a new session
+  (`dictation_id` is a fresh UUID) is the only way back.
+
 ### 5.1 Origin claim
 
 Origin is server-bound socket authority. It is never derived from a payload

@@ -76,13 +76,18 @@ void main() {
   late DictationCubit cubit;
   late SlashCommandTextController chatController;
 
+  /// The Client's own clock, moved by a test to age the daemon's projection.
+  late DateTime now;
+
   setUp(() {
     transport = _Transport();
     capture = _Capture();
+    now = DateTime(2026, 11, 9, 12, 30);
     cubit = DictationCubit(
       resolver: _Resolver(transport),
       capture: capture,
       sessionIdFactory: () => 's1',
+      now: () => now,
     );
     chatController = SlashCommandTextController();
   });
@@ -323,6 +328,78 @@ void main() {
 
     expect(transport.commands, isNot(contains('start')));
     expect(find.byKey(const Key('dictation_model_sheet')), findsOneWidget);
+  });
+
+  testWidgets('a press spends no round trip on a fresh model projection', (
+    tester,
+  ) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+    transport.commands.clear();
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+
+    // The daemon answered a moment ago: the press starts the session directly.
+    expect(transport.commands, ['start']);
+  });
+
+  testWidgets('a press re-reads a model projection older than the bound', (
+    tester,
+  ) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+    transport.commands.clear();
+
+    // Another Client can change the selected model at any time, and nothing
+    // pushes that change to this one.
+    now = now.add(DictationCubit.modelProjectionMaxAge);
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    expect(transport.commands, ['status']);
+
+    transport.eventsController.add({
+      'event': 'stt_status',
+      'supported': true,
+      'selected': 'en-streaming',
+      'models': [
+        {
+          'id': 'en-streaming',
+          'name': 'Zipformer EN',
+          'streaming': true,
+          'installed': true,
+        },
+      ],
+    });
+    await tester.pump();
+    await tester.pump();
+
+    // The start follows the daemon's answer, and the projection adopted it.
+    expect(transport.commands, ['status', 'start']);
+    expect(cubit.state.model.selectedModelId, 'en-streaming');
+  });
+
+  testWidgets('the projection follows the model a session actually loaded', (
+    tester,
+  ) async {
+    await tester.pumpWidget(build());
+    await seedReadyModel(tester);
+
+    await tester.tap(find.byKey(const Key('dictation_mic_btn')));
+    await tester.pump();
+    transport.eventsController.add({
+      'event': 'dictation_ready',
+      'model_id': 'en-streaming',
+      'load_ms': 12,
+    });
+    await tester.pump();
+    await tester.pump();
+
+    // The daemon named the model it loaded: that answer replaces whatever the
+    // projection held, so the next press log cannot name a different one.
+    expect(cubit.state.model.selectedModelId, 'en-streaming');
+    expect(cubit.state.model.fetchedAt, now);
   });
 
   testWidgets('changing the composer scope cancels the live session', (tester) async {

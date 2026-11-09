@@ -566,6 +566,68 @@ only; the cloud findings N1–N5 are studied and awaiting an owner decision.
       fixes are recorded in the delegate run's `live3-fixes/STUDY-N.md` (run
       `voice02-fullstack-20261108-b999`). No code was written for them.
 
+## G19 — Cloud relay N-item closure, Client and Agent only (owner decisions 2026-11-09)
+
+Approved scope was exactly four of the studied findings, and nothing else in the
+relay chain. The order defect (N1) is repaired on the producing side, the
+abandoned-session defect (N2) on both sides, recovery (N3) by refusing a dead
+transport, and the projection defect (N5) by dating the daemon's answer. The
+Gateway needed no change for any of them, and none was made: PR242 stays as it
+is, and the `U1` mapping proposals (a `relay_forbidden` sentence, promoting
+`incompatible` to `update_required`) plus N5 option (b) are deferred to the
+owner.
+
+- [x] **N1 — the route was opened before the claim existed.**
+      `HostedDictationTransport.connect()` emitted `dictation_start` during
+      construction, i.e. before `sendCommand('start')` had sent the `dictation`
+      claim command, and `sendCommand('start')` then opened the route a second
+      time through its own `_routeOpened` flag. Two packets for one press: the
+      Gateway refused the first with `forbidden`, and the claim it raced had
+      already started a daemon session that then got no audio. Construction now
+      puts nothing on the wire; `_openRoute()` is idempotent in itself and is
+      reached only from `sendCommand('start')` after the claim command, with the
+      caller-side flag juggling gone. Pinned by
+      `client/test/unit/dictation/hosted_dictation_claim_order_test.dart`
+      (construction is silent, a repeated start opens exactly one route, the
+      claim still precedes the route, and stop/cancel never open one).
+- [x] **N2 — a session that never received audio leased the engine for five
+      minutes.** The Agent now owns the bound: `DictationSession.start()` arms
+      `firstAudioTimeout` (15 s, a named constant beside `maxSessionDuration`),
+      the first audio frame disarms it, and expiry logs `audio_ms=0` plus the
+      attempt's model and calls `_stop(drain: false)`. It keys on **zero frames
+      ever**, never on silence, so a user who pauses mid-session keeps the
+      session. The Client stops leaving such a session behind: a route failure —
+      or a close after the route opened without an end — dispatches the
+      `dictation` command `op: cancel` on the command path, which still works
+      when the route does not. Pinned by
+      `agent/test/stt/dictation_session_test.dart` (never-speaks, speaks-too-late
+      keeps the session, and the window is the shared constant) and by
+      `client/test/unit/dictation/hosted_dictation_close_test.dart` (one cancel
+      on failure, one on close, none for a clean session).
+- [x] **N3 — a failed route was still reported as open.** `isOpen` ignored
+      `_routeFailed`, so every write became a silent no-op on a transport whose
+      route could never be admitted again, and the cloud path looked wedged for
+      the rest of the session. `isOpen` now includes the failure, so the resolver
+      builds a new transport instead of talking into a dead one. No new recovery
+      state machine: one predicate, one law.
+- [x] **N5 (option a) — the daemon's model answer was undated, so a change on
+      another Client could not be noticed.** `stt_status` now stamps
+      `fetchedAt`, `dictation_ready` adopts the `model_id` the daemon actually
+      loaded and re-stamps the projection, and the idle press re-reads the
+      catalog once the answer is older than `modelProjectionMaxAge` (30 s) —
+      the same path it already took when no model was ready. A fresh press still
+      spends no round trip. The press log now reports the model the daemon last
+      named, and one `dictation ready: model=… load_ms=…` line per session
+      records the authoritative answer, so a stale label is diagnosable without
+      reading the daemon log.
+- [x] **Diagnostics — the raw refusal code is logged once.** One info line per
+      failed route carries the mapped Client code plus the Gateway's own code
+      (`gateway=forbidden`), so a misordered route is distinguishable from an
+      outage in a support log. Codes and counts only; never payload text.
+
+Still open by owner decision: the `U1` error-mapping changes, every Gateway /
+PR242 change (claim lifetime, never-started TTL), and N5 option (b).
+
 ## Definition of done
 
 Analyzer and focused tests green in `agent` and `client`; batch/streaming contracts documented and

@@ -97,21 +97,27 @@ void main() {
   late FakeCapture capture;
   late DictationCubit cubit;
 
+  /// The Client's own clock, moved by a test to age the daemon's projection.
+  late DateTime now;
+
   DictationCubit build({
     Object? failure,
     DictationPreviewPolicy policy = DictationPreviewPolicy.live,
+    DateTime Function()? clock,
   }) {
     return DictationCubit(
       resolver: FakeResolver(transport: transport, failure: failure),
       capture: capture,
       previewPolicy: policy,
       sessionIdFactory: () => 'session-1',
+      now: clock ?? () => now,
     );
   }
 
   setUp(() {
     transport = FakeDictationTransport();
     capture = FakeCapture();
+    now = DateTime(2026, 11, 9, 12, 30);
   });
 
   tearDown(() async {
@@ -590,6 +596,82 @@ void main() {
 
       expect(cubit.state.model.installingModelId, isNull);
       expect(cubit.state.errorCode, 'download_failed');
+    });
+  });
+
+  // The daemon owns the selected model. A Client can only render what the daemon
+  // last answered, so the projection carries the moment it was read and adopts
+  // the model the daemon names when a session actually starts.
+  group('daemon model projection', () {
+    Future<void> seedStatus({String selected = 'whisper-base-int8'}) async {
+      final pending = cubit.refreshStatus(device);
+      await Future<void>.delayed(Duration.zero);
+      transport.controller.add({
+        'event': 'stt_status',
+        'supported': true,
+        'selected': selected,
+        'models': [
+          for (final id in const ['whisper-base-int8', 'en-streaming'])
+            {'id': id, 'name': id, 'installed': true},
+        ],
+      });
+      await pending;
+      await Future<void>.delayed(Duration.zero);
+    }
+
+    test('an answer stamps the projection with the Client clock', () async {
+      cubit = build();
+      await seedStatus();
+
+      expect(cubit.state.model.selectedModelId, 'whisper-base-int8');
+      expect(cubit.state.model.fetchedAt, now);
+      expect(cubit.modelProjectionIsStale, isFalse);
+    });
+
+    test('the projection goes stale after the bound', () async {
+      cubit = build();
+      await seedStatus();
+
+      now = now.add(DictationCubit.modelProjectionMaxAge);
+
+      // A press has to re-read the daemon rather than start a session on a
+      // selection another Client may already have changed.
+      expect(cubit.modelProjectionIsStale, isTrue);
+    });
+
+    test('a session adopts the model the daemon actually loaded', () async {
+      cubit = build();
+      await seedStatus(selected: 'whisper-base-int8');
+      final answeredAt = now;
+      now = now.add(const Duration(seconds: 3));
+
+      await cubit.start(device);
+      transport.controller.add({
+        'event': 'dictation_ready',
+        'model_id': 'en-streaming',
+        'load_ms': 12,
+      });
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      // Another Client changed the model between the status reply and the
+      // press: the daemon's own answer wins, and it re-dates the projection.
+      expect(cubit.state.model.selectedModelId, 'en-streaming');
+      expect(cubit.state.model.fetchedAt, isNot(answeredAt));
+      expect(cubit.state.model.fetchedAt, now);
+    });
+
+    test('a ready event without a model keeps the projection it had', () async {
+      cubit = build();
+      await seedStatus(selected: 'whisper-base-int8');
+
+      await cubit.start(device);
+      transport.controller.add({'event': 'dictation_ready', 'load_ms': 12});
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(cubit.state.model.selectedModelId, 'whisper-base-int8');
+      expect(cubit.state.model.isReady, isTrue);
     });
   });
 }

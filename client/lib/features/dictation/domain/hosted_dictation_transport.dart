@@ -37,10 +37,15 @@ class HostedDictationTransport implements DictationTransport {
     _listen();
   }
 
-  /// Opens the origin claim, then the audio route, on the shared cloud socket.
+  /// Builds the transport over the shared cloud socket.
   ///
-  /// Order is contract: the claim exists before any route packet, and the route
-  /// never creates authority.
+  /// Construction only. `dictation_start` is emitted by `sendCommand('start')`
+  /// **after** the `dictation` claim command (§5.1), because order is contract:
+  /// the claim exists before any route packet, and a route never creates
+  /// authority. Opening the route here — before anything had minted the claim —
+  /// made the Gateway refuse the first packet with `forbidden` while the claim
+  /// command it raced had already started a daemon session, and the Client then
+  /// abandoned that session with no audio.
   static HostedDictationTransport connect({
     required SanadSocketService socket,
     required String deviceId,
@@ -50,7 +55,7 @@ class HostedDictationTransport implements DictationTransport {
     int maxSessionSeconds = defaultMaxSessionSeconds,
     DateTime Function()? clock,
   }) {
-    final transport = HostedDictationTransport._(
+    return HostedDictationTransport._(
       socket: socket,
       deviceId: deviceId,
       dictationId: dictationId,
@@ -59,8 +64,6 @@ class HostedDictationTransport implements DictationTransport {
       maxSessionSeconds: maxSessionSeconds,
       clock: clock ?? DateTime.now,
     );
-    transport._openRoute();
-    return transport;
   }
 
   /// Contract bound for one audio session (12 MiB, §6.1).
@@ -90,13 +93,30 @@ class HostedDictationTransport implements DictationTransport {
   bool _routeFailed = false;
   bool _routeOpened = false;
 
+  /// True once the ordered `dictation_end` control left for this route.
+  bool _endSent = false;
+
+  /// True once the `dictation` cancel command was dispatched.
+  bool _cancelSent = false;
+
   @override
   Stream<Map<String, dynamic>> get events => _events.stream;
 
+  /// A route that already failed is not a usable transport, even on a healthy
+  /// socket: every write is refused from that moment, so reusing it made the
+  /// cloud path look permanently wedged (each press talked into a dead
+  /// transport instead of building a new one).
   @override
-  bool get isOpen => !_closed && _socket.isConnected;
+  bool get isOpen => !_closed && !_routeFailed && _socket.isConnected;
 
+  /// Opens the origin route, at most once per session.
+  ///
+  /// Idempotent by itself: the route carries the session identity, so a second
+  /// packet with the same `dictation_id` can only be a duplicate for the Gateway
+  /// to referee.
   void _openRoute() {
+    if (_routeOpened) return;
+    _routeOpened = true;
     if (!_socket.isConnected) {
       _fail('relay_unavailable');
       return;
@@ -161,16 +181,45 @@ class HostedDictationTransport implements DictationTransport {
       // Every other refusal is the same retry-later outcome.
       _ => 'relay_unavailable',
     };
-    _fail(mapped);
+    _fail(mapped, gatewayCode: errorCode);
   }
 
-  void _fail(String code) {
+  void _fail(String code, {String? gatewayCode}) {
     if (_routeFailed) return;
     _routeFailed = true;
-    _logger.info('hosted dictation route failed: code=$code');
+    // Codes only, never text: the raw Gateway code is what separates a
+    // misordered route (`forbidden`) from a real outage in a support log.
+    _logger.info(
+      'hosted dictation route failed: code=$code'
+      '${gatewayCode == null ? '' : ' gateway=$gatewayCode'}',
+    );
+    // The route is dead; the daemon session the claim command started is not.
+    // Cancel it on the command path, which still works when the route does not,
+    // so the engine is released now instead of at the Gateway's idle TTL.
+    _cancelDaemonSession();
     if (!_events.isClosed) {
       _events.add({'event': 'dictation_error', 'code': code});
     }
+  }
+
+  /// Dispatches the `dictation` command `op: cancel` for this session.
+  ///
+  /// Deliberately not routed through [sendCommand]: that method refuses to write
+  /// once the route has failed, and this is exactly the case where the command
+  /// path still has to speak. One cancel per transport, whatever asked for it.
+  void _cancelDaemonSession() {
+    if (_cancelSent) return;
+    _cancelSent = true;
+    _socket.sendDeviceCommand(
+      deviceId: deviceId,
+      command: 'dictation',
+      payload: {
+        'version': 'v1',
+        'dictation_id': dictationId,
+        'request_id': dictationId,
+        'op': 'cancel',
+      },
+    );
   }
 
   @override
@@ -179,6 +228,7 @@ class HostedDictationTransport implements DictationTransport {
     if (event == 'stop' || event == 'cancel') {
       // Ordered route control: it can never overtake a frame that was already
       // admitted, which is why it does not ride the command path.
+      _endSent = true;
       _socket.emit('dictation_end', {
         'version': 'v1',
         'dictation_id': dictationId,
@@ -200,10 +250,10 @@ class HostedDictationTransport implements DictationTransport {
         if (modelId is String && modelId.isNotEmpty) 'model_id': modelId,
       },
     );
-    if (event == 'start' && !_routeOpened) {
+    if (event == 'start') {
       // Claim first, route second: the Gateway refuses a route without a claim
-      // and creates none from a route packet.
-      _routeOpened = true;
+      // and creates none from a route packet. `_openRoute` is idempotent, so a
+      // repeated start cannot send a second route packet.
       _openRoute();
     }
   }
@@ -250,6 +300,10 @@ class HostedDictationTransport implements DictationTransport {
   @override
   Future<void> close() async {
     if (_closed) return;
+    // A session the daemon started must not outlive the transport that owned it:
+    // after a failure `sendCommand` cannot speak, and a silent close left the
+    // engine leased until the Gateway's route TTL released it.
+    if (_routeOpened && !_endSent) _cancelDaemonSession();
     _closed = true;
     await _subscription?.cancel();
     _subscription = null;

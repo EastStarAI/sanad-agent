@@ -153,7 +153,13 @@ class _DictationMicButtonState extends State<DictationMicButton> {
         _forgetAnnouncement();
         // One press starts recording when a model is ready; the sheet only
         // appears when there is nothing to record with (or on long press).
-        if (cubit.state.model.models.isEmpty || !cubit.state.model.isReady) {
+        final model = cubit.state.model;
+        if (model.models.isEmpty ||
+            !model.isReady ||
+            // The daemon owns the selection and nothing pushes a change to this
+            // Client, so an old answer may name a model it no longer has
+            // selected. Re-read it before starting on a stale guess.
+            cubit.modelProjectionIsStale) {
           // Re-read the catalog whenever this press could not start: the daemon
           // may have installed a model, gained a `stt.model_path` override, or
           // restarted since the composer last asked.
@@ -162,6 +168,8 @@ class _DictationMicButtonState extends State<DictationMicButton> {
         }
         final ready = cubit.state.model.isReady &&
             cubit.state.model.blockedReason == null;
+        // `selected` is the daemon's own last answer (`stt_status`, or the model
+        // a session reported in `dictation_ready`), never a Client invention.
         _logger.info(
           'dictation press: ready=$ready '
           'selected=${cubit.state.model.selectedModelId} '

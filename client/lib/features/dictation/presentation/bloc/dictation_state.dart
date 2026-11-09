@@ -95,6 +95,7 @@ class DictationModelStatus extends Equatable {
     this.busy = false,
     this.models = const [],
     this.installingModelId,
+    this.fetchedAt,
   });
 
   final String? selectedModelId;
@@ -116,6 +117,20 @@ class DictationModelStatus extends Equatable {
 
   /// Whether the Agent reported `supported` for dictation on this device.
   final bool isPlatformSupported;
+
+  /// When the daemon last answered with this projection.
+  ///
+  /// The daemon owns the selected model and another Client can change it, so the
+  /// projection carries the moment it was read: a press can then tell a fresh
+  /// answer from one that may already be wrong.
+  final DateTime? fetchedAt;
+
+  /// True when the daemon has never answered, or answered longer ago than [age].
+  bool projectionOlderThan(Duration age, {required DateTime now}) {
+    final at = fetchedAt;
+    if (at == null) return true;
+    return now.difference(at) >= age;
+  }
 
   /// Another session holds the daemon's single dictation lease.
   final bool busy;
@@ -149,6 +164,7 @@ class DictationModelStatus extends Equatable {
     List<DictationModelOption>? models,
     String? installingModelId,
     bool clearInstallingModel = false,
+    DateTime? fetchedAt,
   }) {
     return DictationModelStatus(
       selectedModelId: selectedModelId ?? this.selectedModelId,
@@ -166,6 +182,7 @@ class DictationModelStatus extends Equatable {
       installingModelId: clearInstallingModel
           ? null
           : (installingModelId ?? this.installingModelId),
+      fetchedAt: fetchedAt ?? this.fetchedAt,
     );
   }
 
@@ -181,6 +198,7 @@ class DictationModelStatus extends Equatable {
         busy,
         models,
         installingModelId,
+        fetchedAt,
       ];
 }
 

@@ -146,13 +146,26 @@ class DictationSession {
     required this.engine,
     required this.modelId,
     this.maxSessionDuration = const Duration(minutes: 5),
+    Duration firstAudioTimeout = DictationSession.firstAudioTimeout,
     this.onRelease,
-  });
+  }) : _firstAudioTimeout = firstAudioTimeout;
+
+  /// How long a session may wait for its first audio frame.
+  ///
+  /// A session takes the daemon-wide engine lease when it starts, so one that
+  /// never receives a frame used to hold the only engine until the Gateway's
+  /// route TTL released it (`live-3/RESULT.md`, 03:50:17 → 03:55:47). The window
+  /// keys on **zero frames ever**: a user who presses and then thinks is silence
+  /// on an open stream, which is legitimate and is never cut off.
+  static const Duration firstAudioTimeout = Duration(seconds: 15);
 
   final DictationChannel transport;
   final SttEngine engine;
   final String modelId;
   final Duration maxSessionDuration;
+
+  /// How long this session may wait for its first frame before it closes.
+  final Duration _firstAudioTimeout;
 
   /// Called instead of disposing the engine when the session ends.
   ///
@@ -167,6 +180,10 @@ class DictationSession {
   StreamSubscription<DictationMessage>? _commandSubscription;
   StreamSubscription<SttEvent>? _eventSubscription;
   final Stopwatch _sessionClock = Stopwatch();
+
+  /// Armed at [start] and disarmed by the first audio frame.
+  Timer? _firstAudioTimer;
+  bool _firstAudioSeen = false;
 
   bool _started = false;
   bool _closing = false;
@@ -184,6 +201,7 @@ class DictationSession {
     if (_started || _closing) return;
     _started = true;
     _sessionClock.start();
+    _armFirstAudioWatchdog();
 
     // Replay readiness: the recognizer is loaded before this session attached
     // its listener, so the client's loading state would otherwise never end.
@@ -244,6 +262,9 @@ class DictationSession {
     _audioSubscription = transport.audio.listen(
       (pcm16) {
         if (_closing) return;
+        // The first frame is the only proof the producing side is alive; from
+        // here the session is bounded by [maxSessionDuration] instead.
+        _disarmFirstAudioWatchdog();
         if (_sessionClock.elapsed > maxSessionDuration) {
           unawaited(_stopWithLimit());
           return;
@@ -276,6 +297,30 @@ class DictationSession {
     await _stop(drain: false);
   }
 
+  /// Closes a session that never received a single frame.
+  ///
+  /// The lease is daemon-wide (`DictationService.acquireSession`), so a session
+  /// whose producer vanished before speaking held the only engine until the
+  /// Gateway's route TTL released it — five minutes in the live run. This window
+  /// keys on **zero frames ever**: silence on an open stream is legitimate and is
+  /// bounded by [maxSessionDuration] instead.
+  void _armFirstAudioWatchdog() {
+    _firstAudioTimer?.cancel();
+    _firstAudioTimer = Timer(_firstAudioTimeout, () {
+      _firstAudioTimer = null;
+      if (_closing || _firstAudioSeen) return;
+      _logger.warning('dictation start timed out: audio_ms=0 model=$modelId');
+      unawaited(_stop(drain: false));
+    });
+  }
+
+  void _disarmFirstAudioWatchdog() {
+    if (_firstAudioSeen) return;
+    _firstAudioSeen = true;
+    _firstAudioTimer?.cancel();
+    _firstAudioTimer = null;
+  }
+
   Future<void> _stop({required bool drain}) {
     final existing = _termination;
     if (existing != null) return existing;
@@ -286,6 +331,8 @@ class DictationSession {
 
   Future<void> _stopOnce({required bool drain}) async {
     _closing = true;
+    _firstAudioTimer?.cancel();
+    _firstAudioTimer = null;
     _sessionClock.stop();
     if (drain) {
       await engine.finish();

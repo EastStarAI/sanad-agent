@@ -67,4 +67,50 @@ void main() {
       expect(state.nextSegmentSeq, 2);
     });
   });
+
+  // The daemon owns the selected model, and another Client can change it at any
+  // time. The projection therefore has to remember **when** it was read, so a
+  // press can tell a fresh answer from one that may already be wrong.
+  group('model projection freshness', () {
+    final now = DateTime(2026, 11, 9, 12, 30);
+    const bound = Duration(seconds: 30);
+
+    test('a projection the daemon never answered is stale', () {
+      const never = DictationModelStatus(selectedModelId: 'whisper-base-int8');
+      expect(never.fetchedAt, isNull);
+      expect(never.projectionOlderThan(bound, now: now), isTrue);
+    });
+
+    test('a projection follows the moment it was read', () {
+      final fresh = DictationModelStatus(
+        selectedModelId: 'whisper-base-int8',
+        fetchedAt: now.subtract(const Duration(seconds: 5)),
+      );
+      expect(fresh.projectionOlderThan(bound, now: now), isFalse);
+
+      final stale = DictationModelStatus(
+        selectedModelId: 'whisper-base-int8',
+        fetchedAt: now.subtract(const Duration(seconds: 31)),
+      );
+      expect(stale.projectionOlderThan(bound, now: now), isTrue);
+    });
+
+    test('the bound is inclusive, so exactly-at-age is re-read', () {
+      final atBound = DictationModelStatus(
+        fetchedAt: now.subtract(bound),
+      );
+      expect(atBound.projectionOlderThan(bound, now: now), isTrue);
+    });
+
+    test('a daemon answer keeps the selection and the timestamp together', () {
+      final status = const DictationModelStatus(selectedModelId: 'a')
+          .copyWith(selectedModelId: 'b', fetchedAt: now);
+      expect(status.selectedModelId, 'b');
+      expect(status.fetchedAt, now);
+      expect(
+        status.projectionOlderThan(bound, now: now.add(const Duration(seconds: 1))),
+        isFalse,
+      );
+    });
+  });
 }
