@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership"
-description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, the reset, apply, refresh, `cli`, status, and doctor runtime tooling, and the read-only `inventory` projection."
+description: "Managed launcher leases, workspace/client ownership, clone isolation, continuous source handoff, agent supervision and identity-verified restart, the reset, apply, refresh, `cli`, status, and doctor runtime tooling, and the read-only `inventory` projection."
 ---
 
 # sanad-dev Runtime Ownership
@@ -676,6 +676,11 @@ stale PID in the lease must never hide a running Client from the operator.
 | `runtime_record` | `dead launcher pid <pid>` | `rm -rf '<runtime record dir>'` (a live worktree's record names `sanad-dev doctor --fix` first) |
 | `endpoint_record` | `dead endpoint pid <pid>` | `rm -f '<home>/.local_gateway_endpoint.json'` |
 
+A record that still names a live process is never listed: a `runtime_record` with a running
+`agent_pid`/`client_pid`, or an `endpoint_record` with a running `pid`, is live evidence
+rather than an orphan, and `cleanup-orphans --confirm` refuses it with
+`recorded process pid <pid> is still running` if it reaches the plan anyway.
+
 A Home whose leases are still live is never reported as an orphan, and a runtime
 record for another branch of an existing worktree (same path hash) is a stale
 record rather than a second runtime. Windows prints `Remove-Item` instead of
@@ -750,7 +755,9 @@ the following hold:
   it stay untouched);
 - it is not a symbolic link, and its parent resolves consistently, so a link
   created after the plan cannot redirect the deletion;
-- no live runtime group claims the same Home or worktree id.
+- no live runtime group claims the same Home or worktree id;
+- it names no running process: a `runtime_record` whose recorded `agent_pid`/`client_pid`,
+  or an `endpoint_record` whose recorded `pid`, is alive is refused by pid.
 
 Every other target is listed as `refuse` with its named reason —
 `target is the primary Home`, `target is a Test Home`, `outside the sanad-dev
@@ -937,6 +944,66 @@ keeps exit 1, and the background launcher and `status` report that stored reason
 so `sanad-dev reset` names the child's error instead of only
 `agent readiness failed`. The paired Client readiness ends with the same signal,
 because an Agent that cannot start makes that Client useless.
+
+## Agent supervision and restart identity
+
+The Agent runs under the in-process `HotRestartManager` supervisor. That supervisor is a
+process owner, so every rule below exists to keep it from becoming a second owner of the
+runtime — the failure mode where a supervisor outlives its launcher, keeps respawning a
+child against a Home it can never own, and wins the Home lock on the next managed restart.
+
+**The supervisor belongs to its launcher.** A managed launcher injects
+`SANAD_DEV_LAUNCHER_ID` and `SANAD_DEV_RUNTIME_NONCE`. Before every respawn the supervisor
+reads the `dev/runtime-launcher-<port>.json` lease family for its Home and requires a lease
+whose `launcher_id` and `runtime_nonce` match its own and whose `launcher_pid` is still
+running; otherwise it prints one bounded reason and exits without spawning. The port
+variable is a hint (the lease is looked up by identity), an unknown schema version is
+ignored, and a launch with no `SANAD_DEV_LAUNCHER_ID` — a deliberate manual
+`fvm dart run … bin/sanad_agent.dart daemon` — keeps the unmanaged behaviour. The
+supervisor also treats end-of-file on its stdin as that launcher's death: a managed launch
+receives a pipe from the launcher, so EOF shuts the child down and ends the supervisor,
+while an interactive or unmanaged run never sees an automatic end-of-file shutdown.
+
+**The breaker counts failures, not time.** Five consecutive child failures end the
+supervisor with one bounded reason and a nonzero exit. The delay before each respawn is
+capped exponential — 0.5, 1, 2, 5, 10 s — and a clean exit (`/restart`), or a child that ran
+for at least 60 s, clears the count. Wall-clock spacing is deliberate non-input: the
+previous policy allowed five failures inside a 15-second window, so a child that died every
+~5.3 s could only ever place three failures in a window and the supervisor restarted it
+forever (28 restarts in 150 s, observed). The retained window value is reported beside the
+count as flapping density and never decides the exit.
+
+**Restart success requires the lease identity.** After `/restart`, `sanad-dev` waits for
+`/health` to present the lease's `launcher_id` and `runtime_nonce`
+(`matchesSanadDevAgentHealth`). A healthy answer carrying another identity is a foreign
+owner of the port: the command fails immediately, names the port and the foreign Agent's
+recorded pid (from the Home's `.local_gateway_endpoint.json`), and states that the restart
+did not take effect. Waiting longer cannot change who answers, so the probe does not wait;
+an unanswered port keeps polling to the bounded timeout. The workspace hash alone is only
+used where adopting an unmanaged Agent is the point (`takeover`).
+
+**The same lease has a face on the daemon side.** `SanadRuntimeOwnership` records the lock
+holder — pid plus the inherited launcher id/nonce and acquisition time — in
+`.runtime-owner.json` beside `.runtime-owner.lock`, written atomically through the Home
+boundary and carrying no credential. It is best-effort diagnostics, never a second
+authority: the exclusive lock decides, a record whose pid is gone is reported as stale, and
+the daemon prints one bounded conflict line naming the holder instead of an unhandled
+exception. `SanadRuntimeOwnershipConflict` keeps its base sentence and appends the holder
+when it is readable.
+
+**Supervisor lifecycle is one rotated file.** Each transition — `start`, `respawn` with its
+attempt number, `childStop`, `breakerExit`, `leaseMismatchExit`, `launcherExit`, `shutdown`
+— is one line in `<home>/logs/agent-supervisor.log`, capped at 256 KiB per segment with two
+segments retained. stdout stays a terminal surface, and the launcher-owned component journal
+is not a substitute: it dies with the launcher, which is exactly when the supervisor's
+record matters. A Home that does not exist yet is never created by the supervisor.
+
+**Records are evidence.** `cleanup-orphans` never projects a `runtime_record` whose legacy
+`agent_pid`/`client_pid`, or an `endpoint_record` whose `pid`, is still running, and the plan
+re-reads the record immediately before deleting it: a live pid is a refusal named
+`recorded process pid <pid> is still running`. Neither record family carries a
+process-start identity, so pid existence is the strongest check the record allows; a
+recycled pid therefore errs towards keeping the record, which is the safe direction.
 
 ## Managed component journals
 

@@ -42,6 +42,16 @@ no writer outside this helper reaches the filesystem.
   and opened by `SanadHomeBootstrap`; callers never replace a lock inode while
   another process may hold it. The daemon and in-process CLI hold one shared
   state-root runtime-ownership lease before any SQLite connection opens.
+- The runtime-ownership lease records its holder: pid, inherited launcher
+  id/nonce, and acquisition time, in `.runtime-owner.json` written atomically
+  through the boundary. It is best effort and never fails an acquisition that
+  already won the lock, it contains no credential, and a reader treats a record
+  whose pid is gone as stale. A conflict message names the holder when it is
+  readable — the lock file itself stays anonymous.
+- The supervisor lease check (`supervisor_launcher_lease.dart`) reads the same
+  `dev/runtime-launcher-<port>.json` family the launcher writes, so the
+  supervisor and `sanad-dev` agree on who owns the runtime; a lease of another
+  schema version is ignored rather than reinterpreted.
 - The configured root and child path components are rejected when they are
   symlinks; the resulting real path is verified against the canonical root.
 - Identity prepare creates `workspaces/` as a non-symlink managed remote

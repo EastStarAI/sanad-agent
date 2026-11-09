@@ -1,6 +1,6 @@
 ---
 title: "sanad-dev Runtime Ownership QA"
-description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, continuous source handoff, the read-only inventory projection with its worktree health columns, the confirmed dev-area orphan cleanup, and the reset, apply, refresh, cli, status, and doctor runtime tooling."
+description: "Regression matrix for managed launcher ownership, reconciliation, clone isolation, continuous source handoff, agent supervision and identity-verified restart, the read-only inventory projection with its worktree health columns, the confirmed dev-area orphan cleanup, the pre-restart operator checklist, and the reset, apply, refresh, cli, status, and doctor runtime tooling."
 ---
 
 # sanad-dev Runtime Ownership QA
@@ -19,6 +19,11 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Run wrapper help before runtime discovery | Help remains mutation-free and retains the baseline command and option surface. |
 | Run default and explicit-Home dry runs | Default worktree selection and explicit absolute Home selection match the pre-refactor behavior. |
 | Run an isolated managed Agent/Client pair after refactor | Status, bounded Agent/Client logs, UI snapshot, Client reload/restart, safe Agent restart, complete stop, post-stop status, and retained journals succeed without a live source handoff. |
+| Run `restart agent` while a foreign Agent answers on the port | The command fails, names the port, the foreign `dev_launcher_id`/`dev_runtime_nonce`, and its recorded pid from the Home endpoint record, and says the restart did not take effect; it never prints `restarted and healthy`, and it does not wait out the full timeout. |
+| Run `restart agent` and let the daemon come back with the lease identity | The probe accepts only the lease's launcher id and runtime nonce and prints the healthy line once they match. |
+| Run `restart client` when no discovered Client is owned | The refusal names the predicate — no Agent on the expected port, an Agent without a managed launcher identity, a Client launched by another launcher (both identities named), a nonce mismatch, or an incomplete launch profile — plus the active instances, instead of only `no clients`. |
+| Inspect `.runtime-owner.json` while a daemon owns the Home | It holds the holding pid, the inherited launcher id/nonce, and the acquisition time, is owner-only, and carries no credential. |
+| Start a second daemon against an owned Home | It fails with one bounded line that names the recorded holder (or reports the record as stale when its pid is gone); no unhandled stack trace, and no second SQLite owner. |
 
 ## Regression matrix
 
@@ -268,6 +273,48 @@ testers instead of rebuilding worktree, port, and orphan state by hand.
 | A branch head moves after a cached answer | The cache entry is stale, so the next `--pr` run queries `gh` again. |
 | Edit `.sanad-dev/inventory/pr-cache.json` to be corrupt or an unknown version | The cache is a miss, `gh` is consulted again, and the report still succeeds. |
 | `inventory --json` on schema 2 | Every schema-1 key keeps its name and order, the new health and verdict keys are appended, `summary` adds `removal_safe`/`removal_keep`, and `schema` is `2`. |
+
+## Agent supervision and restart identity matrix
+
+The supervisor is a process owner, so each row proves it cannot become a second runtime
+owner after its launcher is gone.
+
+| Scenario | Expected result |
+|---|---|
+| A managed launch (`SANAD_DEV_LAUNCHER_ID` set) loses its lease file before a respawn | The supervisor prints one bounded reason naming the missing lease and exits without spawning; no child starts and no Home lock is taken. |
+| A lease exists but names another launcher id, or another runtime nonce | The supervisor refuses to respawn and names the observed id/nonce; the lease is never rewritten. |
+| The lease matches but its `launcher_pid` is no longer running | The supervisor refuses to respawn and names that pid. |
+| The launcher dies hard and closes the supervisor's stdin pipe | EOF ends the supervisor cleanly (exit `0`) and kills the child; the supervisor does not survive as `ppid 1`. |
+| A manual `fvm dart run … bin/sanad_agent.dart daemon` (no launcher identity) | Behaviour is unchanged: no lease check, no EOF shutdown, interactive keys and signals work as before. |
+| A child fails every ~5.3 s | The supervisor counts consecutive failures, waits 0.5/1/2/5 s between respawns, and exits with one bounded reason after the fifth; it never restarts forever. |
+| A child that ran for at least 60 s, or a clean `/restart` exit | The consecutive count resets, so a healthy runtime never accumulates its way to the breaker. |
+| Inspect `<home>/logs/agent-supervisor.log` after a restart, a respawn, and a breaker exit | Exactly one line per transition (`start`, `respawn attempt=N`, `breakerExit`, `leaseMismatchExit`, `launcherExit`, `shutdown`), the file is rotated at 256 KiB with two segments kept, and stdout is unchanged. |
+
+## Pre-restart operator checklist
+
+Run this before **any** `sanad-dev restart agent` on a shared or primary runtime. It is the
+condensed form of the incident study that produced the fixes above.
+
+1. **Enumerate supervisors, not ports.**
+   `ps -Ao pid,ppid,lstart,command | grep 'sanad_agent.dart daemon' | grep -v grep`
+   Expect exactly one chain `fvm → dartvm (supervisor) → dartvm --child-process`, all
+   started with the launcher. Any entry with `ppid 1` is an orphan.
+2. **Stop on an orphan.** A restart releases the Home lock, and a crash-looping orphan
+   retries faster than a cold start reaches it. Stop; do not restart.
+3. **Prove the listener is ours.** One PID from
+   `lsof -nP -iTCP:<port> -sTCP:LISTEN`, consistent with the Home's
+   `.local_gateway_endpoint.json` (`pid`, `port`) and the lease's `launcher_pid` chain.
+4. **Read the lease.** `<home>/dev/runtime-launcher-<port>.json`: `launcher_pid` alive,
+   process identity equal to `launcher_process_identity`, `updated_at` recent.
+5. **Do not detach HEAD or check out while a managed runtime is live.** The worktree id,
+   and therefore the diagnostics namespace, changes mid-session.
+6. **Run `setup` before a mutating command** when the wrapper reports a stale runtime;
+   then re-run `status` and confirm the launcher id you are about to restart.
+7. **After the restart, verify identity, not just health:**
+   `/health` → `dev_launcher_id`/`dev_runtime_nonce` must equal the lease. `restart agent`
+   now enforces exactly this and fails otherwise.
+8. **Never delete a runtime record while any `sanad_agent` process is alive.** Records are
+   evidence; `cleanup-orphans` now refuses a record whose recorded pid is running.
 
 ## Orphan cleanup matrix
 

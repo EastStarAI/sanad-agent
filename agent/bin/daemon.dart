@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
@@ -46,7 +47,15 @@ Future<void> main(List<String> args) async {
   // launches; keeping it here protects direct daemon entry points and tests.
   requireSanadE2eTestIsolation();
   await SanadHomeBootstrap.prepareAll();
-  _runtimeOwnership ??= await SanadRuntimeOwnership.acquire();
+  try {
+    _runtimeOwnership ??= await SanadRuntimeOwnership.acquire();
+  } on SanadRuntimeOwnershipConflict catch (error) {
+    // One bounded line, not an unhandled stack trace: the supervisor above
+    // reports only the child's exit status and its first output line, so the
+    // holder has to be named here or the operator sees an anonymous conflict.
+    stderr.writeln('Error: ${error.message}');
+    exit(1);
+  }
   setupDI();
 
   final config = getIt<Config>();

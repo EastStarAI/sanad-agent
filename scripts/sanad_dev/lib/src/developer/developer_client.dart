@@ -127,10 +127,16 @@ Future<void> handleClientDeveloperAction(
         (client) => client.port == instance.port && client.pid == instance.pid,
       );
   if (!selectedClientIsManaged) {
+    // Name the failed predicate: "not managed" alone hid a foreign Agent that
+    // answered with another launcher identity.
+    final classification = ownership.isManaged
+        ? 'unmanaged'
+        : ownership.classification.name;
+    final reason = ownership.reason;
     stderr.writeln(
       'Client ${action == 'R' ? 'restart' : 'reload'} aborted: the selected '
-      'client is ${ownership.isManaged ? 'unmanaged' : ownership.classification.name}, not owned by the live '
-      'sanad-dev launcher.',
+      'client is $classification, not owned by the live sanad-dev launcher'
+      '${reason == null ? '' : ' ($reason)'}.',
     );
     exitCode = 1;
     return;

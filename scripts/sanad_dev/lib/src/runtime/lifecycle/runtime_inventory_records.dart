@@ -13,6 +13,8 @@ class InventoryRuntimeRecord {
     this.recordedAgentPort,
     this.recordedVmServicePort,
     this.workspaceHash,
+    this.agentPid,
+    this.clientPid,
   });
 
   final String worktreeId;
@@ -21,6 +23,20 @@ class InventoryRuntimeRecord {
   final int? recordedAgentPort;
   final int? recordedVmServicePort;
   final String? workspaceHash;
+
+  /// `agent_pid` the legacy record still names, when it names one.
+  ///
+  /// The record is configuration only — it never proves liveness — but a pid it
+  /// names that is still alive is a reason not to delete it: the record is then
+  /// the last on-disk pointer to a running process, and deleting it destroys the
+  /// only cheap way to find that process.
+  final int? agentPid;
+
+  /// `client_pid` the legacy record still names, when it names one.
+  final int? clientPid;
+
+  /// Every process id the record names, in recorded order.
+  Iterable<int> get recordedPids => [agentPid, clientPid].whereType<int>();
 }
 
 /// One `.local_gateway_endpoint.json` record as read-only evidence.
@@ -173,7 +189,8 @@ Future<List<InventoryRuntimeRecord>> readInventoryRuntimeRecords(
           asInt(locator?['agent_port']) ?? asInt(legacy?['agent_port']),
       recordedVmServicePort: asInt(legacy?['vm_service_port']),
       workspaceHash: locator?['workspace_hash']?.toString(),
+      agentPid: asInt(legacy?['agent_pid']),
+      clientPid: asInt(legacy?['client_pid']),
     );
   });
 }
-

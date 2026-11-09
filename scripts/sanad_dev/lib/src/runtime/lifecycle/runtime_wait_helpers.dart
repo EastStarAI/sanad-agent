@@ -1,5 +1,12 @@
 part of '../../../sanad_dev_cli.dart';
 
+/// Waits for any Agent serving [workspaceHash] on [port].
+///
+/// This is the identity-free wait used by flows that deliberately adopt an
+/// unmanaged Agent (takeover). A managed restart must not use it: it proves only
+/// that *some* Agent for the source answers, which is how a foreign daemon was
+/// once reported as a successful restart. `waitForRestartedAgentIdentity` adds
+/// the lease identity that a restart has to prove.
 Future<bool> _waitForAgentHealthPort(
   int port,
   String workspaceHash,
@@ -8,26 +15,9 @@ Future<bool> _waitForAgentHealthPort(
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (DateTime.now().isBefore(deadline)) {
-    final client = HttpClient();
-    try {
-      final request = await client.getUrl(
-        Uri.parse('http://127.0.0.1:$port/health'),
-      );
-      await authorizeLocalGatewayRequest(request, sanadHome);
-      final response = await request.close().timeout(
-        const Duration(milliseconds: 250),
-      );
-      final body = await response.transform(utf8.decoder).join();
-      final decoded = jsonDecode(body);
-      if (response.statusCode == HttpStatus.ok &&
-          decoded is Map &&
-          decoded['workspace_hash'] == workspaceHash) {
-        return true;
-      }
-    } on Object {
-      // Continue until the bounded deadline.
-    } finally {
-      client.close(force: true);
+    final decoded = await readAgentHealthDocument(port, sanadHome);
+    if (decoded != null && decoded['workspace_hash'] == workspaceHash) {
+      return true;
     }
     await Future<void>.delayed(const Duration(milliseconds: 250));
   }

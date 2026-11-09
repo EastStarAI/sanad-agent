@@ -179,31 +179,33 @@ String inventoryContainmentPath(String path) {
 /// Deletion is allowed only for a target strictly inside `<primary home>/dev`,
 /// below the `homes`/`runtimes` group directory, that is not a symbolic link and
 /// that no live runtime or lease claims. Everything else is refused by name.
-SanadDevOrphanCleanupPlan buildSanadDevOrphanCleanupPlan(
+Future<SanadDevOrphanCleanupPlan> buildSanadDevOrphanCleanupPlan(
   SanadDevInventory inventory, {
   required DateTime now,
-}) {
+  Future<bool> Function(int? pid) processRunning = isProcessRunning,
+}) async {
   final devArea = p.join(inventory.primaryHome, 'dev');
-  final entries = <SanadDevOrphanCleanupEntry>[
-    for (final orphan in inventory.orphans)
-      () {
-        final refusal = inventoryOrphanCleanupRefusal(
-          orphan,
-          inventory: inventory,
-          devArea: devArea,
-        );
-        return SanadDevOrphanCleanupEntry(
-          kind: orphan.kind,
-          target: orphan.target,
-          reason: orphan.reason,
-          action: refusal == null
-              ? OrphanCleanupAction.delete
-              : OrphanCleanupAction.refuse,
-          refusal: refusal,
-          detail: orphan.detail,
-        );
-      }(),
-  ];
+  final entries = <SanadDevOrphanCleanupEntry>[];
+  for (final orphan in inventory.orphans) {
+    final refusal = await inventoryOrphanCleanupRefusal(
+      orphan,
+      inventory: inventory,
+      devArea: devArea,
+      processRunning: processRunning,
+    );
+    entries.add(
+      SanadDevOrphanCleanupEntry(
+        kind: orphan.kind,
+        target: orphan.target,
+        reason: orphan.reason,
+        action: refusal == null
+            ? OrphanCleanupAction.delete
+            : OrphanCleanupAction.refuse,
+        refusal: refusal,
+        detail: orphan.detail,
+      ),
+    );
+  }
   return SanadDevOrphanCleanupPlan(
     generatedAt: now,
     devArea: devArea,
@@ -214,15 +216,19 @@ SanadDevOrphanCleanupPlan buildSanadDevOrphanCleanupPlan(
 }
 
 /// Returns the reason one orphan target may not be deleted, or null.
-String? inventoryOrphanCleanupRefusal(
+Future<String?> inventoryOrphanCleanupRefusal(
   InventoryOrphan orphan, {
   required SanadDevInventory inventory,
   required String devArea,
-}) {
+  Future<bool> Function(int? pid) processRunning = isProcessRunning,
+}) async {
   final target = orphan.target.trim();
   if (target.isEmpty) return 'target is empty';
   final canonicalTarget = inventoryContainmentPath(target);
-  if (p.equals(canonicalTarget, inventoryContainmentPath(inventory.primaryHome))) {
+  if (p.equals(
+    canonicalTarget,
+    inventoryContainmentPath(inventory.primaryHome),
+  )) {
     return 'target is the primary Home';
   }
   if (inventoryTestHomeAncestor(target, inventory.userHome) != null) {
@@ -246,7 +252,53 @@ String? inventoryOrphanCleanupRefusal(
   }
   final liveRuntime = inventoryLiveRuntimeFor(orphan, inventory);
   if (liveRuntime != null) return 'live runtime ($liveRuntime)';
+  // Two layers agree here on purpose: the projection never lists a record that
+  // names a live process, and the plan re-reads the record before deleting it,
+  // because a process can appear between the dry run and the confirmation. A
+  // record is evidence, so a live pid is a refusal and never a stale record.
+  final livePid = await firstLiveRecordedPid(
+    await inventoryRecordedPids(target),
+    processRunning: processRunning,
+  );
+  if (livePid != null) {
+    return 'recorded process pid $livePid is still running';
+  }
   return null;
+}
+
+/// Process ids the record at [target] still names, if any.
+///
+/// A legacy `runtime.json` records `agent_pid`/`client_pid`; an endpoint record
+/// records the daemon `pid`. Neither carries a process-start identity, so pid
+/// existence is the strongest check the record allows — which errs towards
+/// keeping a record, the safe direction. A target that is absent or unreadable
+/// names no process.
+Future<List<int>> inventoryRecordedPids(String target) async {
+  try {
+    final type = FileSystemEntity.typeSync(target, followLinks: false);
+    final String path;
+    if (type == FileSystemEntityType.directory) {
+      path = p.join(target, 'runtime.json');
+      if (!await File(path).exists()) return const [];
+    } else if (type == FileSystemEntityType.file &&
+        p.basename(target) == '.local_gateway_endpoint.json') {
+      path = target;
+    } else {
+      return const [];
+    }
+    final decoded = jsonDecode(await File(path).readAsString());
+    if (decoded is! Map) return const [];
+    int? asInt(Object? value) =>
+        value is int ? value : int.tryParse('${value ?? ''}');
+    final pids = <int>[];
+    for (final key in const ['agent_pid', 'client_pid', 'pid']) {
+      final value = asInt(decoded[key]);
+      if (value != null && value > 0) pids.add(value);
+    }
+    return pids;
+  } on Object {
+    return const [];
+  }
 }
 
 /// Names the live runtime group that still owns [orphan]'s Home or record.
@@ -408,11 +460,9 @@ Future<void> handleSanadDevOrphanCleanup({
   }
 
   if (!confirm) {
-    final plan = buildSanadDevOrphanCleanupPlan(planned, now: now);
+    final plan = await buildSanadDevOrphanCleanupPlan(planned, now: now);
     if (json) {
-      stdout.writeln(
-        const JsonEncoder.withIndent('  ').convert(plan.toJson()),
-      );
+      stdout.writeln(const JsonEncoder.withIndent('  ').convert(plan.toJson()));
       return;
     }
     printSanadDevOrphanCleanupPlan(plan, confirm: false);
@@ -427,7 +477,7 @@ Future<void> handleSanadDevOrphanCleanup({
     exitCode = 1;
     return;
   }
-  final plan = buildSanadDevOrphanCleanupPlan(fresh, now: now);
+  final plan = await buildSanadDevOrphanCleanupPlan(fresh, now: now);
   if (plan.deletable.isEmpty) {
     if (json) {
       stdout.writeln(
@@ -439,8 +489,10 @@ Future<void> handleSanadDevOrphanCleanup({
     }
     print('Nothing to clean: no deletable orphan in ${plan.devArea}.');
     for (final entry in plan.refused) {
-      print('  kept ${_orphanCleanupKindLabel(entry.kind)} ${entry.target}'
-          '${entry.refusal == null ? '' : ' (${entry.refusal})'}');
+      print(
+        '  kept ${_orphanCleanupKindLabel(entry.kind)} ${entry.target}'
+        '${entry.refusal == null ? '' : ' (${entry.refusal})'}',
+      );
     }
     return;
   }

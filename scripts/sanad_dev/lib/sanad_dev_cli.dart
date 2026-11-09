@@ -7,6 +7,7 @@ import 'dart:math';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 
+import 'src/infrastructure/agent_restart_probe.dart';
 import 'src/infrastructure/client_launch_profile.dart';
 import 'src/infrastructure/cloud_endpoints.dart';
 import 'src/infrastructure/command_options.dart';

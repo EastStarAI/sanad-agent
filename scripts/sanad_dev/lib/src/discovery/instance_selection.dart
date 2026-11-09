@@ -77,6 +77,65 @@ List<ClientInstance> clientsForAgentPort(
   return matches;
 }
 
+/// Names the predicate that excluded every discovered Client.
+///
+/// `selectClientInstance` used to print one generic "no clients" line for a
+/// manual runtime, a foreign Agent, and an incomplete launch profile. During one
+/// incident that was the whole diagnosis: the Client existed, attached to a
+/// daemon carrying another launcher identity, and the command said nothing.
+/// Every branch below names the evidence it has instead of the absence it saw.
+String? clientSelectionFailureReason(
+  RuntimeProcessState state, {
+  required int agentPort,
+}) {
+  if (state.agentAmbiguous) {
+    return 'more than one Agent matches this worktree, so none can own a Client';
+  }
+  final agent = state.agent;
+  final blocked = state.blockedClients;
+  if (agent == null) {
+    if (blocked.isEmpty) return 'no Agent answers on port $agentPort';
+    return 'the Client on VM port ${blocked.first.port} '
+        '${_clientBlockReason(blocked.first, agent: null)}';
+  }
+  if (agent.launcherId == null || agent.runtimeNonce == null) {
+    return 'the Agent on port ${agent.port} reports no managed launcher '
+        'identity, so it cannot own a Client';
+  }
+  if (blocked.isNotEmpty) {
+    return 'the Client on VM port ${blocked.first.port} '
+        '${_clientBlockReason(blocked.first, agent: agent)}';
+  }
+  return null;
+}
+
+/// Why one Client is not part of the selected Agent's ownership.
+String _clientBlockReason(
+  ClientInstance client, {
+  required AgentInstance? agent,
+}) {
+  final profile = client.launchProfile;
+  if (profile == null) return 'has no readable launch profile';
+  final launcherId = profile.define('SANAD_DEV_LAUNCHER_ID');
+  final runtimeNonce = profile.define('SANAD_DEV_RUNTIME_NONCE');
+  if (launcherId == null || runtimeNonce == null) {
+    return 'has an incomplete launch profile (no launcher id or runtime nonce)';
+  }
+  if (agent == null) {
+    return 'was launched by launcher $launcherId, which no live Agent answers '
+        'for';
+  }
+  if (launcherId != agent.launcherId) {
+    return 'was launched by launcher $launcherId, but the Agent on port '
+        '${agent.port} answers as ${agent.launcherId}';
+  }
+  if (runtimeNonce != agent.runtimeNonce) {
+    return 'was launched with runtime nonce $runtimeNonce, but the Agent on '
+        'port ${agent.port} answers as ${agent.runtimeNonce}';
+  }
+  return 'is not owned by the live sanad-dev launcher';
+}
+
 Future<ClientInstance?> selectClientInstance(
   int? portOverride, {
   String? sanadHomePath,
@@ -140,8 +199,13 @@ Future<ClientInstance?> selectClientInstance(
 
   if (matchingInstances.isEmpty) {
     print(
-      'Error: No running client instances found for the current worktree (${runtime.worktreeId}).',
+      'Error: No owned running client instances found for the current worktree (${runtime.worktreeId}).',
     );
+    final reason = clientSelectionFailureReason(
+      state,
+      agentPort: runtime.agentPort,
+    );
+    if (reason != null) print('Reason: $reason.');
     final ownerHint = explicitHomeOwnerHint(
       explicitHome: sanadHomePath,
       runtime: runtime,

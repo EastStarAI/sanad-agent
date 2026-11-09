@@ -281,7 +281,12 @@ String? clientSourceWorktreeId(String clientPath) {
 }
 
 /// Builds the orphan list: dead Homes, dead runtime records, dead endpoints.
-List<InventoryOrphan> buildInventoryOrphans({
+///
+/// A record that still names a live process is never an orphan. Records are
+/// evidence: deleting the record of a running process destroys the only cheap
+/// pointer to that process, and a pid that was recycled by an unrelated process
+/// must fail towards keeping the record rather than towards deleting it.
+Future<List<InventoryOrphan>> buildInventoryOrphans({
   required String userHome,
   required List<String> devHomes,
   required List<InventoryRuntimeRecord> records,
@@ -290,7 +295,8 @@ List<InventoryOrphan> buildInventoryOrphans({
   required List<RuntimeLauncherRecord> leases,
   required List<AgentInstance> agents,
   required bool Function(RuntimeLauncherRecord? lease) leaseIsAlive,
-}) {
+  Future<bool> Function(int? pid) processRunning = isProcessRunning,
+}) async {
   final knownIds = worktrees.map((row) => row.worktreeId).toSet();
   final statesByHome = {for (final state in homeStates) state.home: state};
   final orphans = <InventoryOrphan>[];
@@ -311,6 +317,7 @@ List<InventoryOrphan> buildInventoryOrphans({
     );
   }
 
+  final recordOrphans = <InventoryRuntimeRecord, InventoryOrphan>{};
   for (final record in records) {
     final agent = agents
         .where((instance) => instance.workspaceHash == record.workspaceHash)
@@ -324,36 +331,41 @@ List<InventoryOrphan> buildInventoryOrphans({
         )
         .firstOrNull;
     if (!knownIds.contains(record.worktreeId)) {
-      orphans.add(
-        InventoryOrphan(
-          kind: InventoryOrphanKind.runtimeRecord,
-          target: record.directory,
-          reason: 'no matching worktree',
-          cleanupCommand: inventoryRemoveCommand(
-            record.directory,
-            recursive: true,
-          ),
-          detail: 'Runtime record ${record.worktreeId} belongs to no current worktree id',
+      recordOrphans[record] = InventoryOrphan(
+        kind: InventoryOrphanKind.runtimeRecord,
+        target: record.directory,
+        reason: 'no matching worktree',
+        cleanupCommand: inventoryRemoveCommand(
+          record.directory,
+          recursive: true,
         ),
+        detail:
+            'Runtime record ${record.worktreeId} belongs to no current worktree id',
       );
       continue;
     }
     if (lease != null && !leaseIsAlive(lease) && agent == null) {
-      orphans.add(
-        InventoryOrphan(
-          kind: InventoryOrphanKind.runtimeRecord,
-          target: record.directory,
-          reason: 'dead launcher pid ${lease.launcherPid}',
-          cleanupCommand: inventoryRemoveCommand(
-            record.directory,
-            recursive: true,
-          ),
-          detail:
-              'Stale launcher lease on port ${lease.agentPort}; '
-              'run "sanad-dev doctor --fix" before removing this record',
+      recordOrphans[record] = InventoryOrphan(
+        kind: InventoryOrphanKind.runtimeRecord,
+        target: record.directory,
+        reason: 'dead launcher pid ${lease.launcherPid}',
+        cleanupCommand: inventoryRemoveCommand(
+          record.directory,
+          recursive: true,
         ),
+        detail:
+            'Stale launcher lease on port ${lease.agentPort}; '
+            'run "sanad-dev doctor --fix" before removing this record',
       );
     }
+  }
+  for (final entry in recordOrphans.entries) {
+    final livePid = await firstLiveRecordedPid(
+      entry.key.recordedPids,
+      processRunning: processRunning,
+    );
+    if (livePid != null) continue;
+    orphans.add(entry.value);
   }
 
   for (final state in homeStates) {
@@ -376,4 +388,18 @@ List<InventoryOrphan> buildInventoryOrphans({
     return byKind != 0 ? byKind : left.target.compareTo(right.target);
   });
   return orphans;
+}
+
+/// The first process id in [pids] that is still running, or null.
+///
+/// Shared by the inventory projection and the cleanup plan so both agree that a
+/// record naming a live process is not deletable.
+Future<int?> firstLiveRecordedPid(
+  Iterable<int> pids, {
+  Future<bool> Function(int? pid) processRunning = isProcessRunning,
+}) async {
+  for (final recorded in pids) {
+    if (await processRunning(recorded)) return recorded;
+  }
+  return null;
 }

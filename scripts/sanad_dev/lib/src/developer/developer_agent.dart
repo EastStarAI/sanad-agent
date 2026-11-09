@@ -147,23 +147,49 @@ Future<bool> handleAgentRestart(
       print(
         'Waiting for local agent daemon on port ${instance.port} to complete restart...',
       );
-      final healthy = await _waitForAgentHealthPort(
-        instance.port,
-        workspaceHash,
-        activeHome,
+      // Health is not ownership. The lease names the launcher id and runtime
+      // nonce that must answer here; a daemon carrying another identity is a
+      // foreign owner of this port, and reporting it as a successful restart is
+      // how one incident hid a two-day-old orphan supervisor.
+      final record = ownership.record!;
+      final probe = await waitForRestartedAgentIdentity(
+        port: instance.port,
+        workspaceHash: workspaceHash,
+        launcherId: record.launcherId,
+        runtimeNonce: record.runtimeNonce,
+        sanadHome: activeHome,
         timeout: Duration(seconds: timeoutSeconds),
       );
-      if (healthy) {
+      if (probe.matched) {
         print('✓ Agent daemon restarted and healthy on port ${instance.port}.');
         return true;
-      } else {
+      }
+      if (probe.sawForeignIdentity) {
+        final foreignPid = await readRecordedDaemonPid(
+          activeHome,
+          instance.port,
+        );
         stderr.writeln(
-          'Restart failed: daemon accepted the request, but the health probe '
-          'timed out on port ${instance.port} after ${timeoutSeconds}s.',
+          'Restart failed: port ${instance.port} is served by a foreign Agent '
+          '(${probe.describeObserved(pid: foreignPid)}), but the live lease '
+          'names launcher ${record.launcherId} with nonce '
+          '${record.runtimeNonce}; the restart did not take effect.',
+        );
+        stderr.writeln(
+          'Check for an unrelated Agent supervision for this Sanad Home before '
+          'retrying: an orphaned supervisor keeps winning the Home lock and '
+          'will answer here again.',
         );
         if (exitOnError) exitCode = 1;
         return false;
       }
+      stderr.writeln(
+        'Restart failed: daemon accepted the request, but no Agent proved '
+        'launcher ${record.launcherId} on port ${instance.port} within '
+        '${timeoutSeconds}s.',
+      );
+      if (exitOnError) exitCode = 1;
+      return false;
     } else {
       stderr.writeln(
         'Restart failed: '
