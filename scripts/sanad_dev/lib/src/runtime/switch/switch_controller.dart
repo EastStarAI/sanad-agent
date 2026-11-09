@@ -381,6 +381,12 @@ class _SwitchableRuntimeController {
         device: request.deviceId ?? _defaultDesktopDevice(),
         environment: _clientEnvironment,
       );
+      await applySanadDevWebBrowserProfile(
+        arguments,
+        device: request.deviceId ?? _defaultDesktopDevice(),
+        sanadHome: _launcherRecord.sanadHome,
+        clientInstanceSlot: requestedSlot,
+      );
       final process = await Process.start(
         'fvm',
         arguments,

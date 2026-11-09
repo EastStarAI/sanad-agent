@@ -10,13 +10,18 @@ const String canonicalPrimaryGatewayUrl =
 const String sanadDevClientInstanceSlotDefine =
     'SANAD_DEV_CLIENT_INSTANCE_SLOT';
 
+/// The slot grammar shared by the preference namespace and every per-slot
+/// runtime artefact, such as a persistent browser profile directory.
+bool isValidSanadDevClientInstanceSlot(String slot) =>
+    RegExp(r'^[a-z0-9][a-z0-9-]{0,31}$').hasMatch(slot);
+
 String sanadDevPreferencesPrefixForClientInstance(
   String basePrefix,
   String? instanceSlot,
 ) {
   final slot = instanceSlot?.trim() ?? '';
   if (slot.isEmpty) return basePrefix;
-  if (!RegExp(r'^[a-z0-9][a-z0-9-]{0,31}$').hasMatch(slot)) {
+  if (!isValidSanadDevClientInstanceSlot(slot)) {
     throw const FormatException(
       'Client instance must use 1-32 lowercase letters, digits, or hyphens.',
     );
