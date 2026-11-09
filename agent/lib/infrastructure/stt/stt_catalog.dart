@@ -143,7 +143,7 @@ const List<SttCatalogEntry> kSttCatalog = [
     },
     speedTier: 3,
     mode: SttModelMode.batchVad,
-    language: 'ar',
+    language: 'auto',
     isDefault: false,
     hidden: true,
     engine: SttEngineKind.whisperCpp,
@@ -152,7 +152,7 @@ const List<SttCatalogEntry> kSttCatalog = [
         name: 'ggml-large-v3-turbo-q5_0.bin',
         url:
             'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin',
-        sizeBytes: 574122867,
+        sizeBytes: 574041195,
         sha256:
             '394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2',
       ),
@@ -194,6 +194,66 @@ const List<SttCatalogEntry> kSttCatalog = [
         sizeBytes: 816730,
         sha256:
             'b34b360dbb493e781e479794586d661700670d65564001f23024971d1f2fa126',
+      ),
+    ],
+  ),
+  // English whisper entries. `language` is the decode language, not a label: a
+  // whisper.cpp entry is decoded with the language it declares, and an
+  // English-only checkpoint must never be handed 'auto', because whisper.cpp
+  // scores a language token per language that such a vocabulary does not have.
+  SttCatalogEntry(
+    id: 'whisper-small-en-ggml-q8',
+    name: 'Whisper Small EN Q8',
+    description: {
+      'en':
+          'Recommended for English: 0.26 GB download, about 0.5 GB of memory, '
+          'and the fastest English option on a CPU-only machine.',
+      'ar':
+          'الموصى به للإنجليزية: تنزيل ٠.٢٦ جيجابايت وذاكرة ≈٠.٥ جيجابايت، '
+          'وهو أسرع خيار للإنجليزية على جهاز بلا كرت شاشة.',
+    },
+    badge: SttModelBadge.recommended,
+    speedTier: 4,
+    mode: SttModelMode.batchVad,
+    language: 'en',
+    isDefault: false,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-small.en-q8_0.bin',
+        url:
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.en-q8_0.bin',
+        sizeBytes: 264477561,
+        sha256:
+            '67a179f608ea6114bd3fdb9060e762b588a3fb3bd00c4387971be4d177958067',
+      ),
+    ],
+  ),
+  SttCatalogEntry(
+    id: 'whisper-medium-en-ggml-q8',
+    name: 'Whisper Medium EN Q8',
+    description: {
+      'en':
+          'More accurate English and about three times slower on a CPU: '
+          '0.82 GB download, about 1.1 GB of memory.',
+      'ar':
+          'إنجليزية أدق وأبطأ نحو ثلاث مرات على المعالج: تنزيل ٠.٨٢ جيجابايت '
+          'وذاكرة ≈١.١ جيجابايت.',
+    },
+    badge: SttModelBadge.moreAccurate,
+    speedTier: 3,
+    mode: SttModelMode.batchVad,
+    language: 'en',
+    isDefault: false,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'ggml-medium.en-q8_0.bin',
+        url:
+            'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.en-q8_0.bin',
+        sizeBytes: 823382461,
+        sha256:
+            '43fa2cd084de5a04399a896a9a7a786064e221365c01700cea4666005218f11c',
       ),
     ],
   ),

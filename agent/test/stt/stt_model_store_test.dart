@@ -77,6 +77,19 @@ void main() {
     File(store.vadPath).writeAsBytesSync(const [1, 2, 3]);
   }
 
+  /// Materialises a catalog entry on disk as sparse files: only the declared
+  /// length matters to `statusOf()`, so no model bytes are involved.
+  void installCatalogEntry(SttCatalogEntry entry) {
+    Directory(store.modelDir(entry.id)).createSync(recursive: true);
+    for (final file in entry.files) {
+      final handle = File(
+        '${store.modelDir(entry.id)}/${file.name}',
+      ).openSync(mode: FileMode.write);
+      handle.truncateSync(file.sizeBytes);
+      handle.closeSync();
+    }
+  }
+
   group('stt model store', () {
     test('resolve returns real on-disk paths for an installed catalog model', () {
       final entry = kSttCatalog.firstWhere((e) => e.id == 'whisper-base-int8');
@@ -236,14 +249,7 @@ void main() {
       final entry = kSttCatalog.firstWhere(
         (e) => e.engine == SttEngineKind.whisperCpp,
       );
-      Directory(store.modelDir(entry.id)).createSync(recursive: true);
-      for (final file in entry.files) {
-        final handle = File(
-          '${store.modelDir(entry.id)}/${file.name}',
-        ).openSync(mode: FileMode.write);
-        handle.truncateSync(file.sizeBytes);
-        handle.closeSync();
-      }
+      installCatalogEntry(entry);
 
       final files = store.resolve(
         const SttSettings(),
@@ -257,6 +263,39 @@ void main() {
       // The sherpa artifacts are not part of a whisper.cpp entry.
       expect(files.encoder, isEmpty);
       expect(files.vad, isEmpty);
+      // A catalog row decodes the language it declares. The daemon-wide
+      // `stt.language` describes a `stt.model_path` override, which has no
+      // catalog metadata, and must never override a catalog row.
+      expect(files.language, entry.language);
+    });
+
+    test('an English entry decodes English while stt.language defaults to Arabic', () {
+      final entry = sttEntryById('whisper-small-en-ggml-q8')!;
+      installCatalogEntry(entry);
+
+      final files = store.resolve(
+        const SttSettings(),
+        selectedModelId: entry.id,
+      );
+
+      expect(files, isNotNull);
+      // `SttSettings()` defaults to 'ar'. Handing that to an English-only
+      // checkpoint is the defect this pins: the decode came back as Arabic text
+      // with no error at all.
+      expect(files!.language, 'en');
+    });
+
+    test('the multilingual entry resolves auto', () {
+      final entry = sttEntryById('whisper-turbo-ggml-q5')!;
+      installCatalogEntry(entry);
+
+      final files = store.resolve(
+        const SttSettings(),
+        selectedModelId: entry.id,
+      );
+
+      expect(files, isNotNull);
+      expect(files!.language, 'auto');
     });
 
     test('a model_path holding one ggml file resolves to whisper.cpp', () {
