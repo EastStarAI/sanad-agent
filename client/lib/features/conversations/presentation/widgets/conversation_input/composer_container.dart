@@ -280,7 +280,11 @@ class ComposerContainer extends StatelessWidget {
   }) {
     final hasPendingRequest = inputSlice.pendingSuspendedRequest != null;
 
-    final modelChip = !hasPendingRequest && capabilities.supportsModelChange
+    // The picker is the only route to provider setup, so it stays available
+    // whether or not the device has a capability snapshot or a configured
+    // provider. An empty catalog is a valid picker state, not a reason to hide
+    // the control.
+    final modelChip = !hasPendingRequest
         ? _ComposerBoundModelChip(
             agentSlice: agentSlice,
             inputSlice: inputSlice,

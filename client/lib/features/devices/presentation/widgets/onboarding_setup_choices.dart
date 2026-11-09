@@ -206,13 +206,21 @@ class _BrandHeader extends StatelessWidget {
           color: theme.colorScheme.primary,
         ),
         const SizedBox(width: 12),
-        Text(
-          'Sanad Agent',
-          style: TextStyle(
-            fontSize: 36,
-            fontWeight: FontWeight.bold,
-            letterSpacing: -1,
-            color: theme.colorScheme.onSurface,
+        // The wordmark keeps its proportions and scales down instead of
+        // overflowing a phone-width card.
+        Flexible(
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: AlignmentDirectional.centerStart,
+            child: Text(
+              'Sanad Agent',
+              style: TextStyle(
+                fontSize: 36,
+                fontWeight: FontWeight.bold,
+                letterSpacing: -1,
+                color: theme.colorScheme.onSurface,
+              ),
+            ),
           ),
         ),
       ],

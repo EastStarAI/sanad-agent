@@ -7,7 +7,7 @@ import 'package:sanad_client/features/conversations/domain/models/thinking_contr
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_cubit.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/conversation_input_state.dart';
 import 'package:sanad_client/features/conversations/presentation/bloc/session_cubit.dart';
-import 'package:sanad_client/features/conversations/presentation/bloc/session_state.dart';
+import 'package:sanad_client/features/conversations/presentation/bloc/session_messages_cubit.dart';
 import 'package:sanad_client/features/provider_setup/data/models/model_cache_snapshot_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/conversations/domain/models/slash_command_entry.dart';
@@ -37,6 +37,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import '../helpers/composer_conversation_scope.dart';
 import '../helpers/pump_app.dart';
 
 void main() {
@@ -107,12 +108,21 @@ void main() {
     ConversationInputCubit? inputCubit,
     DictationCubit? dictationCubit,
   }) {
+    // The composer's model/provider picker is always present, so the composer
+    // always needs the conversation scope it binds to. A test that passes no
+    // session gets the "no conversation context" stub rather than a missing
+    // provider.
+    final conversationScope = sessionCubit ?? StubSessionCubit();
+    if (sessionCubit == null) addTearDown(conversationScope.close);
+    final messagesScope = StubSessionMessagesCubit();
+    addTearDown(messagesScope.close);
     return tester.pumpWidget(
       MultiBlocProvider(
         providers: [
           BlocProvider<ComposerSlashCommandsCubit>.value(value: slashCubit),
           BlocProvider<VoiceStreamCubit>.value(value: voiceCubit),
-          if (sessionCubit != null) BlocProvider<SessionCubit>.value(value: sessionCubit),
+          BlocProvider<SessionCubit>.value(value: conversationScope),
+          BlocProvider<SessionMessagesCubit>.value(value: messagesScope),
           if (inputCubit != null) BlocProvider<ConversationInputCubit>.value(value: inputCubit),
           if (dictationCubit != null)
             BlocProvider<DictationCubit>.value(value: dictationCubit),
@@ -906,7 +916,7 @@ void main() {
 
       final inputCubit = _StubConversationInputCubit();
       addTearDown(inputCubit.close);
-      final sessionCubit = _StubSessionCubit(
+      final sessionCubit = StubSessionCubit(
         Session(
           id: 'session-1',
           title: 'Session 1',
@@ -971,13 +981,6 @@ class _StubProviderSetupClient extends Fake implements ProviderSetupClient {
 
   @override
   Future<ModelCacheSnapshotDto> modelSnapshot({DeviceConfig? agent}) async => snapshot;
-}
-
-class _StubSessionCubit extends Cubit<SessionState> implements SessionCubit {
-  _StubSessionCubit(Session? session) : super(SessionState(selectedSession: session));
-
-  @override
-  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
 }
 
 class _StubConversationInputCubit extends Cubit<ConversationInputState> implements ConversationInputCubit {

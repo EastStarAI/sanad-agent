@@ -78,7 +78,17 @@ establishes liveness or ownership. When `SANAD_DEV_WEB_PORT` is present,
 `sanad-dev` validates it as a TCP port and adds `--web-port` only to Chrome;
 the owning launcher reapplies it when starting an additional Chrome Client. This
 allows a persistent browser profile to retain origin-scoped Web Storage across
-stops without leaking the setting into native platform launches. `sanad-dev ui`
+stops without leaking the setting into native platform launches. That profile is
+not left to the browser: a Chrome Client always receives
+`--web-browser-flag=--user-data-dir=<Home>/dev/chrome-web/<slot|primary>`, so
+flutter_tools stops creating its throwaway temporary profile. The directory is
+Home-scoped runtime state created through the secure runtime-file boundary
+(`0700`), it is excluded from Home fixtures like the rest of `dev/`, and an
+inherited profile flag is replaced rather than duplicated. Web storage is keyed
+by the browser profile and the origin, so port and profile together are what let
+a restarted Web Client resume its signed-in session; a source-handoff switch
+still builds its own client vector and therefore does not carry either one.
+`sanad-dev ui`
 narrows the exact owned set
 again to launch profiles targeting `lib/driver_main.dart`; a regular managed
 Client can neither replace nor make a worktree's driver selection ambiguous.
