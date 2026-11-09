@@ -241,7 +241,7 @@ standalone executable is signed anywhere else.
 - A source checkout still reads the same `ai.eaststar.sanad.agent` service and the
   same per-Home account as the packaged Agent, so the two identities compete for
   one item. Separating them by runtime kind is the follow-up tracked in
-  `docs/plans/tasks/148-vault-startup-and-runtime-isolation.md`; until it lands, a
+  `docs/plans/tasks/151-vault-startup-and-runtime-isolation.md`; until it lands, a
   development runtime is expected to report `authorization_denied` instead of
   prompting.
 

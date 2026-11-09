@@ -1,9 +1,9 @@
 ---
 title: "Vault Startup and Runtime Isolation"
-description: "Task 148: no Agent start waits on or prompts for the OS credential vault (PR-1), and dev/test runtimes get their own vault namespace (PR-2)."
+description: "Task 151: no Agent start waits on or prompts for the OS credential vault (PR-1), and dev/test runtimes get their own vault namespace (PR-2)."
 ---
 
-# Task 148 — Vault Startup and Runtime Isolation
+# Task 151 — Vault Startup and Runtime Isolation
 
 ## Goal
 
