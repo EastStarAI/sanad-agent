@@ -90,20 +90,52 @@ export function progressReference(state) {
 const LIVE_STATUSES = new Set(['running', 'resuming']);
 
 /**
+ * The moment the daemon said it would try again, in epoch milliseconds.
+ *
+ * A scheduled retry is progress no worker can publish as output: the stream is
+ * silent for exactly as long as the daemon waits. The daemon therefore states
+ * its own deadline and it outranks the task's silence — `resume_at` when the
+ * notice carried one, else the notice's `retry_after_ms` measured from the state
+ * that published it (`stateSince`, the retry transition's own timestamp).
+ *
+ * `null` means the task has no stated wait, so nothing is assumed: a task that
+ * never promised an attempt is measured by its silence alone.
+ */
+export function retryDeadlineMs(state) {
+  const resumeAt = parseIsoMillis(state?.daemonRetry?.resumeAt);
+  if (resumeAt != null) return resumeAt;
+  const retryAfter = Number(state?.daemonRetry?.retryAfterMs ?? state?.retryAfterMs);
+  if (!Number.isFinite(retryAfter) || retryAfter <= 0) return null;
+  const since = parseIsoMillis(state?.stateSince ?? state?.startedAt);
+  return since == null ? null : since + retryAfter;
+}
+
+/**
  * Progress verdict for one task.
  *
  * `reference` is the clock the silence was measured from, so a notice can name
  * the signal it waited on even when the task never published one of its own.
+ *
+ * The silence clock is `max(latest signal, stated retry deadline)`, one rule for
+ * every reader: the task is not silent while the daemon is still inside a wait it
+ * announced (2026-11-09: a legitimate 30s rate-limit wait was reported as a
+ * `progress_stall`). A deadline that has already passed still stalls, because a
+ * promise the daemon did not keep is exactly what a coordinator must hear.
  */
 export function evaluateProgress({ state, manifest, now = Date.now() }) {
   const reference = progressReference(state);
   const referenceMs = reference ? parseIsoMillis(reference) : null;
+  const retryDeadline = retryDeadlineMs(state);
+  const clockMs = referenceMs == null
+    ? retryDeadline
+    : (retryDeadline == null ? referenceMs : Math.max(referenceMs, retryDeadline));
   const thresholdMs = progressThresholdMs(manifest, state);
-  const silentForMs = referenceMs == null ? null : Math.max(0, now - referenceMs);
+  const silentForMs = clockMs == null ? null : Math.max(0, now - clockMs);
   const live = LIVE_STATUSES.has(state?.status);
   return {
     reference,
     lastProgressAt: state?.lastProgressAt ?? null,
+    retryDeadlineAt: retryDeadline == null ? null : new Date(retryDeadline).toISOString(),
     silentForMs,
     thresholdMs,
     // Silence only means something while the task is supposed to be working:

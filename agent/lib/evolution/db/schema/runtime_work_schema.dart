@@ -101,6 +101,18 @@ class RuntimeWorkSchema {
         updated_at TEXT NOT NULL
       );
     ''');
+    // The attempt counters the daemon publishes as `retry_attempt` /
+    // `retry_budget`. Additive and nullable: an older row has no counter, which
+    // is exactly "unknown budget" and today's behaviour, so no backfill and no
+    // rewrite of surviving rows.
+    safeAddColumn(
+      db,
+      'ALTER TABLE session_runtime_notices ADD COLUMN retry_attempt INTEGER',
+    );
+    safeAddColumn(
+      db,
+      'ALTER TABLE session_runtime_notices ADD COLUMN retry_budget INTEGER',
+    );
 
     // ── session_work_items (Gate C.1) ─────────────────────────────────────
     db.execute('''

@@ -3,6 +3,7 @@ import 'dart:developer' as developer;
 
 import 'package:flutter/material.dart';
 import 'package:sanad_client/driver/driver_widget_filters.dart';
+import 'package:sanad_client/driver/ui_bounds.dart';
 import 'package:sanad_client/driver/ui_inspection_state.dart';
 import 'package:sanad_client/driver/ui_inspection_text.dart';
 import 'package:sanad_client/driver/ui_type_census.dart';
@@ -186,7 +187,6 @@ void registerInspectUiExtension() {
       final isTextField = widget is TextField;
       final hasKey = keyString != null;
       final isText = effectiveText?.trim().isNotEmpty ?? false;
-      final hasTooltip = tooltipValue != null && tooltipValue.trim().isNotEmpty;
       final isButton =
           widget is ElevatedButton ||
           widget is FilledButton ||
@@ -194,6 +194,19 @@ void registerInspectUiExtension() {
           widget is TextButton ||
           widget is IconButton ||
           widget is PopupMenuButton;
+
+      // A control may carry its tooltip as a descendant: `IconButton(tooltip:)`
+      // builds the `Tooltip` as its own child, so the ancestor propagation
+      // below never reaches the keyed row. Keyed and actionable rows therefore
+      // also project a message found inside them, under a bounded probe and a
+      // bounded message length.
+      final projectedTooltip = (hasKey || isButton) && !isText
+          ? inspectableTooltip(element, inherited: tooltipValue)
+          : null;
+      final effectiveTooltip = projectedTooltip?.text ?? tooltipValue;
+      final tooltipTruncated = projectedTooltip?.truncated ?? false;
+      final hasTooltip =
+          effectiveTooltip != null && effectiveTooltip.trim().isNotEmpty;
 
       final isStandaloneTooltip = widget is Tooltip && !hasKey;
       if (isStandaloneTooltip) {
@@ -241,7 +254,7 @@ void registerInspectUiExtension() {
             filterQuery.isEmpty ||
             keyString.toLowerCase().contains(filterQuery) ||
             (primaryText?.toLowerCase().contains(filterQuery) ?? false) ||
-            (tooltipValue?.toLowerCase().contains(filterQuery) ?? false) ||
+            (effectiveTooltip?.toLowerCase().contains(filterQuery) ?? false) ||
             (semanticsLabel?.toLowerCase().contains(filterQuery) ?? false) ||
             widgetType.toLowerCase().contains(filterQuery);
 
@@ -251,9 +264,10 @@ void registerInspectUiExtension() {
             'key': keyString,
           };
           if (primaryText != null) data['text'] = primaryText;
-          if (tooltipValue != null && tooltipValue.trim().isNotEmpty) {
-            data['tooltip'] = tooltipValue;
+          if (effectiveTooltip != null && effectiveTooltip.trim().isNotEmpty) {
+            data['tooltip'] = effectiveTooltip;
           }
+          if (tooltipTruncated) data['tooltip_truncated'] = true;
           if (semanticsLabel?.trim().isNotEmpty ?? false) {
             data['semantics_label'] = semanticsLabel;
           }
@@ -267,19 +281,8 @@ void registerInspectUiExtension() {
           if (enabled != null) data['enabled'] = enabled;
 
           if (includeBounds) {
-            final renderObject = element.renderObject;
-            if (renderObject is RenderBox && renderObject.hasSize && renderObject.attached) {
-              try {
-                final translation = renderObject.getTransformTo(null).getTranslation();
-                final size = renderObject.size;
-                data['bounds'] = {
-                  'x': translation.x.round(),
-                  'y': translation.y.round(),
-                  'width': size.width.round(),
-                  'height': size.height.round(),
-                };
-              } catch (_) {}
-            }
+            final bounds = globalBoundsOf(element.renderObject);
+            if (bounds != null) data['bounds'] = bounds;
           }
 
           widgets.add(data);
@@ -327,7 +330,7 @@ void registerInspectUiExtension() {
             (keyString != null && keyString.toLowerCase().contains(filterQuery)) ||
             (effectiveText != null && effectiveText.toLowerCase().contains(filterQuery)) ||
             (hintValue != null && hintValue.toLowerCase().contains(filterQuery)) ||
-            (tooltipValue != null && tooltipValue.toLowerCase().contains(filterQuery)) ||
+            (effectiveTooltip != null && effectiveTooltip.toLowerCase().contains(filterQuery)) ||
             widgetType.toLowerCase().contains(filterQuery);
 
         if (matchesFilter) {
@@ -339,26 +342,16 @@ void registerInspectUiExtension() {
           if (hintValue != null && hintValue.trim().isNotEmpty) {
             data['hint'] = hintValue;
           }
-          if (tooltipValue != null && tooltipValue.trim().isNotEmpty) {
-            data['tooltip'] = tooltipValue;
+          if (effectiveTooltip != null && effectiveTooltip.trim().isNotEmpty) {
+            data['tooltip'] = effectiveTooltip;
           }
+          if (tooltipTruncated) data['tooltip_truncated'] = true;
           final enabled = inspectableWidgetEnabled(widget);
           if (enabled != null) data['enabled'] = enabled;
 
           if (includeBounds) {
-            final renderObject = element.renderObject;
-            if (renderObject is RenderBox && renderObject.hasSize && renderObject.attached) {
-              try {
-                final translation = renderObject.getTransformTo(null).getTranslation();
-                final size = renderObject.size;
-                data['bounds'] = {
-                  'x': translation.x.round(),
-                  'y': translation.y.round(),
-                  'width': size.width.round(),
-                  'height': size.height.round(),
-                };
-              } catch (_) {}
-            }
+            final bounds = globalBoundsOf(element.renderObject);
+            if (bounds != null) data['bounds'] = bounds;
           }
 
           widgets.add(data);

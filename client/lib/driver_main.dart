@@ -58,12 +58,14 @@ void main() {
   // 4. ext.sanad_client.scroll
   // 5. ext.sanad_client.tap
   // 6. ext.sanad_client.reveal
+  // 7. ext.sanad_client.hover
   registerAuthUrlExtension();
   registerInspectUiExtension();
   registerEnterTextExtension();
   registerScrollExtension();
   registerTapExtension();
   registerRevealExtension();
+  registerHoverExtension();
 
   app.main();
 }

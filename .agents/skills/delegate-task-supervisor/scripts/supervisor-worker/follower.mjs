@@ -14,6 +14,7 @@ import { basename, join } from 'node:path';
 
 import { parseIsoMillis, readResultDigest } from '../supervisor-core.mjs';
 import {
+  firstText,
   followDeadlineMsFor,
   followOutcome,
   followPollMsFor,
@@ -188,19 +189,28 @@ export function createFollower(ctx) {
       // The daemon scheduled another automatic attempt. The task stays live and
       // says so, with the attempt counters, instead of parking as `blocked` and
       // waiting for a retry an operator was never needed for.
-      const cause = snapshot.cause ?? state.cause ?? 'unknown';
+      //
+      // The daemon's own reason and deadline are recorded with it: without the
+      // reason a retry that never produced an artifact reported an unnamed
+      // cause, and without the deadline the stall rule could not tell a wait the
+      // daemon announced from a silent turn (2026-11-09).
+      const daemonRetryReason = firstText(snapshot.retry?.reason);
+      const cause = snapshot.cause ?? state.cause ?? daemonRetryReason ?? 'unknown';
       follow.lastCause = cause;
       const daemonRetry = {
         ...(typeof snapshot.retry?.attempt === 'number' ? { attempt: snapshot.retry.attempt } : {}),
         ...(typeof snapshot.retry?.budget === 'number' ? { budget: snapshot.retry.budget } : {}),
+        ...(firstText(snapshot.retryResumeAt) ? { resumeAt: firstText(snapshot.retryResumeAt) } : {}),
       };
       const label = snapshot.retry?.label ?? 'retrying';
       if (state.status !== 'retrying' || (state.cause ?? null) !== cause
-        || JSON.stringify(state.daemonRetry ?? null) !== JSON.stringify(daemonRetry)) {
+        || JSON.stringify(state.daemonRetry ?? null) !== JSON.stringify(daemonRetry)
+        || (state.daemonRetryReason ?? null) !== (daemonRetryReason ?? null)) {
         ctx.transition(task, 'retrying', {
           sessionId: state.sessionId ?? null,
           cause,
           daemonRetry,
+          ...(daemonRetryReason ? { daemonRetryReason } : {}),
           retryLabel: label,
           stateSince: observedAt,
           ...(snapshot.retryAfterMs ? { retryAfterMs: snapshot.retryAfterMs } : {}),
@@ -235,6 +245,11 @@ export function createFollower(ctx) {
           requestId: null,
           intervention: null,
           cause: null,
+          // The attempt arrived, so the retry facts that described the wait no
+          // longer describe anything: keeping them would report a live turn
+          // with a stale cause and measure its silence from a spent deadline.
+          daemonRetry: null,
+          daemonRetryReason: null,
           stateSince: observedAt,
         });
       }
@@ -275,6 +290,10 @@ export function createFollower(ctx) {
         requestId: null,
         intervention: null,
         cause: null,
+        // The turn is live again, so the retry facts of the wait it left are
+        // spent (§ above).
+        daemonRetry: null,
+        daemonRetryReason: null,
         stateSince: observedAt,
       });
     }

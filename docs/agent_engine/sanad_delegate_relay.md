@@ -145,7 +145,7 @@ A restart adds up to three non-terminal lifecycle records between `running` and 
 |---|---|
 | `reconnecting` | The gateway dropped mid-turn. `data.window_seconds` is the reconnect window that bounds the wait. |
 | `reconnected` | A same-Home endpoint answered and the transport is live again. `data.attempts` and `data.elapsed_ms` bound the cost. |
-| `re_attached` | The durable turn was reclaimed and is being followed. `data.state` is the snapshot state, `data.request_id` the followed turn, and `data.recovery_scheduled` whether the daemon owns automatic recovery. |
+| `re_attached` | The durable turn was reclaimed and is being followed. `data.state` is the snapshot state, `data.request_id` the followed turn, and `data.recovery_scheduled` whether the daemon owns automatic recovery. When the durable projection shows a scheduled retry, one `retrying (n/N) – <reason>` record follows it (§4.4.1). |
 | `refused` | A dispatch was refused before sending anything. `data.reason` is the typed cause. |
 
 ### 4.3. Exit Codes & Scoped Cancellation
@@ -192,9 +192,12 @@ A retryable failure is not a verdict. The daemon publishes it as `waiting` — w
 | Daemon evidence | `sanad run` | Delegate supervisor |
 |---|---|---|
 | Notice `waiting`/`resuming`, or `retry_attempt < retry_budget` | Keep following; prints `retrying (n/N)` on stderr and records artifact `status: retrying` | Task stays live as `retrying` with `daemonRetry: {attempt, budget}` |
+| A re-attached turn (`reconnected`/`re_attached`) whose durable projection carries a scheduled wait | Journals **one** `retrying (n/N) – <reason>` record — or bare `retrying` for a daemon that states a wait without counters — and still exits `0` when the retried attempt finishes | Task becomes `retrying` through the same timeline record an attached worker writes |
 | Notice `blocked` with the budget spent, notice `fatal`, or a non-retryable reason | Exit `1` with `cause: blocked` | Task `blocked`, then terminal `failed` with the block cause |
 | No notice, durable snapshot `waiting` (restored resume) | Keep following | Task stays live as `retrying` |
 | Notice `blocked`, durable snapshot `idle`, no answer | — | Task `failed` (`turn_interrupted` or the block cause) |
+
+The re-attached row is the durable half of §4.4.1: the notice that reached the socket which died is not replayed by the new transport, so the reclaimed turn reads it from the session projection and journals it once. The record is the one the live path already writes, so no new event type or field vocabulary is introduced, and a retry the daemon states but does not count is still reported (bare `retrying`) instead of staying silent.
 
 `sanad session retry` still applies to `retrying` and `waiting`: a manual retry shortens a scheduled wait instead of starting a second turn. The supervisor's blocked-task auto-retry policy (§5.11) is unchanged — it keys off `blocked`, which now means exactly what it says.
 
@@ -281,6 +284,8 @@ For temporary execution without logical continuity, use `--execution-root <targe
 ### 5.6. Silence and Dead-Worker Detection (W2, W3)
 
 **Progress silence.** A running task that publishes no progress for its threshold is silent, not busy. Progress is any observable write the task produces — a new timeline record, growth of its `events.jsonl`, its stdout or stderr stream, or a change to its `result.json` — and the silence is measured from the **latest** of them, never from `startedAt` once newer evidence exists. Reading one blessed event type is what made a headless `sanad run` turn (which publishes only lifecycle records and streams its whole case to stdout) look silent for its entire length and produced a false `progress_stall` at exactly the threshold for every long task in a live round (2026-11-08, run12). The threshold is a run default (`start --progress-stall-sec`, default `900`) that a spec may override per task (`"progressStallSec"`; `progressStallMs` is accepted for compressed-time diagnosis). The worker journals exactly one `progress_stall` notice per stall episode — carrying `silentForMs`, `thresholdMs`, `lastProgressAt`, and the task status — and clears it with a non-actionable `progress_resumed` notice when progress returns (carrying the silence it ended and the `resumedAt` signal), so a later stall is reported again and work that keeps going never re-fires. Leaving `running`/`resuming` clears the flag, so a settled task never carries a stale one. `status` recomputes the same condition on read (`PROGRESS_STALL` in text, `tasks[<id>].progress.stalled` in JSON), so a caller that never watched still sees a silent turn.
+
+**A scheduled retry is the one silence a task cannot publish.** When the daemon states a wait, the silence clock is `max(latest signal, stated deadline)`: `daemonRetry.resumeAt` when the notice carried `resume_at`, else the notice's `retry_after_ms` measured from the state that published it. Nothing is called silent while the daemon is still inside a wait it announced (2026-11-09: a legitimate 30s rate-limit wait was reported as a `progress_stall`), and a deadline that has **passed** still stalls, because a promise the daemon did not keep is exactly what a coordinator must hear. It is one exported rule (`retryDeadlineMs`/`evaluateProgress` in `scripts/supervisor-stalls.mjs`) that `status`, the `inspect` view, and the worker journal all call, so a read-only surface can never disagree with the journal.
 
 **Worker loss.** A task is never left `running` forever:
 
@@ -384,7 +389,7 @@ The worker's `result.json` is archived to `<run>/follow/<task>/attempt-<n>/resul
 |---|---|
 | pending request, `status: needs_input` | `needs_input` with `request_id`, `tool_name`, and `questions` |
 | pending request, `status: needs_permission` | `needs_permission` with the same whitelisted fields |
-| runtime notice `waiting`/`resuming`, snapshot `waiting`, or a `blocked` notice with `retry_attempt < retry_budget` | `retrying` with `daemonRetry: {attempt, budget}` and the notice reason — live progress, never a wake-up (classification owned by `docs/technical/sanad_cli_architecture.md` "Recovery state") |
+| runtime notice `waiting`/`resuming`, snapshot `waiting`, or a `blocked` notice with `retry_attempt < retry_budget` | `retrying` with `daemonRetry: {attempt, budget, resumeAt}`, the notice reason (recorded as `daemonRetryReason`, and used as the task `cause` when the worker's own artifact named none), and `retryAfterMs` — live progress, never a wake-up (classification owned by `docs/technical/sanad_cli_architecture.md` "Recovery state"). `resumeAt` is the deadline the daemon stated, and it is what §5.6 measures silence from |
 | `execution_snapshot.state: blocked` with no scheduled retry | `blocked` with its `cause` (and `retry_after_ms` when the notice carries one) |
 | `execution_snapshot.state: resuming` | `resuming` |
 | `execution_snapshot.state: running` | stays `following` (a live turn with no worker); the poll refreshes `lastProgressAt` |

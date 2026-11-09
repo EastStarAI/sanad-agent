@@ -38,12 +38,17 @@ class DurableTurn {
   final String noticeMessage;
   final bool hasScheduledResume;
 
+  /// The daemon's own recovery classification for this turn, read from the same
+  /// projection `session show` publishes.
+  final RuntimeRetryState retry;
+
   const DurableTurn({
     required this.follow,
     required this.state,
     required this.requestId,
     required this.noticeMessage,
     required this.hasScheduledResume,
+    required this.retry,
   });
 
   factory DurableTurn.fromPayload(Map<String, dynamic> payload) {
@@ -94,6 +99,7 @@ class DurableTurn {
       requestId: requestId,
       noticeMessage: noticeMessage,
       hasScheduledResume: hasScheduledResume,
+      retry: retry,
     );
   }
 
@@ -102,4 +108,20 @@ class DurableTurn {
   /// it never blocks a new dispatch.
   bool get blocksNewDispatch =>
       follow == DurableFollow.following && state != 'queued';
+
+  /// Whether the daemon stated it is retrying this turn, so a re-attached
+  /// reader must report the retry instead of following silently.
+  ///
+  /// A `resuming` notice is excluded even though it promises a resume: that
+  /// state means the daemon already restarted the attempt, and calling it
+  /// `retrying` would report a wait that is not happening. Everything else the
+  /// classifier calls auto-retrying is a retry an operator can see: a scheduled
+  /// `waiting` notice (with or without counters), a retryable failure with
+  /// budget left, or a durable `waiting` snapshot whose notice was not
+  /// projected.
+  bool get reportsRetrying =>
+      retry.isAutoRetrying && retry.noticeStatus != 'resuming';
+
+  /// The structured cause the daemon named for this retry, when it named one.
+  String? get retryCause => retry.reason;
 }

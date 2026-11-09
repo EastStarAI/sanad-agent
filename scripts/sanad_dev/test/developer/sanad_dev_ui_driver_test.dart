@@ -74,6 +74,122 @@ void main() {
       expect(plan.wallTimeout, const Duration(milliseconds: 15550));
     });
 
+    test('a long press extends the tap wall clock', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'tap',
+        '--key',
+        'dictation_mic_btn',
+        '--hold-ms',
+        '800',
+      ]);
+      // 30 s action + 10 s grace + 300 ms post-delay + 2000 ms verification
+      // + 800 ms hold.
+      expect(plan.wallTimeout, const Duration(milliseconds: 43100));
+      expect(plan.activatesUi, isTrue);
+    });
+
+    test('a batch long press extends the recipe budget', () {
+      final plan = sanad_dev.planUiDriverRun(
+        ['batch', '--file', 'recipe.json'],
+        batchSteps: const [
+          sanad_dev.UiDriverBatchStepBudget(
+            action: 'tap',
+            timeoutSeconds: 30,
+            holdMs: 900,
+          ),
+        ],
+      );
+      // 30 s step + 300 ms delay + 2000 ms verify + 900 ms hold (rounded up to
+      // whole seconds) + 10 s grace.
+      expect(plan.wallTimeout, const Duration(seconds: 44));
+    });
+
+    test('a hover spends its dwell inside the wall clock', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'hover',
+        '--key',
+        'row_archive',
+        '--ms',
+        '800',
+      ]);
+      // 30 s action + 10 s grace, and the 800 ms dwell is added on top because
+      // the pointer is held while the tree is observed.
+      expect(plan.wallTimeout, const Duration(milliseconds: 40800));
+      // A hover is in-app only: it must never take focus from the user.
+      expect(plan.activatesUi, isFalse);
+    });
+
+    test('a hover without --ms gets the default dwell', () {
+      final plan = sanad_dev.planUiDriverRun(['hover', '--key', 'row_archive']);
+      expect(plan.wallTimeout, const Duration(milliseconds: 42000));
+    });
+
+    test('a batch hover extends the recipe budget by its dwell', () {
+      final plan = sanad_dev.planUiDriverRun(
+        ['batch', '--file', 'recipe.json'],
+        batchSteps: const [
+          sanad_dev.UiDriverBatchStepBudget(
+            action: 'hover',
+            timeoutSeconds: 30,
+            hoverMs: 900,
+          ),
+        ],
+      );
+      // 30 s step + 900 ms dwell (rounded up to whole seconds) + 10 s grace.
+      expect(plan.wallTimeout, const Duration(seconds: 41));
+    });
+
+    test('hover --ms stays a driver value, not a launcher flag', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'hover',
+        '--key',
+        'row_archive',
+        '--ms',
+        '250',
+        '--home',
+        '/tmp/home',
+      ]);
+
+      expect(plan.driverArguments, [
+        'hover',
+        '--key',
+        'row_archive',
+        '--ms',
+        '250',
+      ]);
+    });
+
+    test('ext is forwarded with its name and argument values intact', () {
+      final plan = sanad_dev.planUiDriverRun([
+        'ext',
+        '--name',
+        'ext.sanad_client.inspect_ui',
+        '--args',
+        '{"within":"--home"}',
+        '--timeout',
+        '5',
+        '--home',
+        '/tmp/home',
+      ]);
+
+      // `--name` and `--args` consume their values, so a value that looks like
+      // a launcher flag survives; the real launcher flag is still stripped.
+      expect(plan.driverArguments, [
+        'ext',
+        '--name',
+        'ext.sanad_client.inspect_ui',
+        '--args',
+        '{"within":"--home"}',
+        '--timeout',
+        '5',
+      ]);
+      // ext never takes focus from the user.
+      expect(plan.activateWindow, isTrue);
+      expect(plan.activatesUi, isFalse);
+      expect(plan.wallTimeout, const Duration(seconds: 15));
+      expect(plan.isBatch, isFalse);
+    });
+
     test('scales the wall clock with each step timeout and wait', () {
       final plan = sanad_dev.planUiDriverRun(
         ['batch', '--file', 'recipe.json'],

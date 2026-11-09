@@ -96,6 +96,120 @@ void main() {
       );
     });
 
+    test('tap rejects a hold outside the bound before connecting', () async {
+      // The unreachable endpoint proves nothing was contacted: the value is
+      // rejected locally instead of becoming a Client-side surprise.
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          '${maxTapHoldMs + 1}',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          '-1',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+      expect(
+        await CliRunner(const [
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--hold-ms',
+          'long',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+    });
+
+    test('ext refuses a non-sanad extension before connecting', () async {
+      for (final name in <String>[
+        'ext.flutter.reassemble',
+        'ext.sanad_client',
+        'ext.sanad_client.',
+        'reassemble',
+      ]) {
+        expect(
+          await CliRunner([
+            'ext',
+            '--name',
+            name,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: '$name must be refused',
+        );
+      }
+      expect(
+        await CliRunner(const ['ext', '--vm-url', 'http://127.0.0.1:1/']).run(),
+        1,
+      );
+    });
+
+    test('ext refuses malformed arguments before connecting', () async {
+      for (final raw in <String>[
+        'not-json',
+        '[]',
+        '{"nested":{"a":1}}',
+        '{"list":[1,2]}',
+        '{"": "empty-key"}',
+      ]) {
+        expect(
+          await CliRunner([
+            'ext',
+            '--name',
+            'ext.sanad_client.inspect_ui',
+            '--args',
+            raw,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: '$raw must be refused',
+        );
+      }
+    });
+
+    test('extension name validation accepts the allowlisted shape', () {
+      expect(validateSanadExtensionName('ext.sanad_client.inspect_ui'), isNull);
+      expect(validateSanadExtensionName('ext.sanad_client.dictation_control'), isNull);
+      expect(validateSanadExtensionName(null), isNotNull);
+      expect(validateSanadExtensionName('ext.flutter.screenshot'), isNotNull);
+      expect(
+        validateSanadExtensionName('ext.sanad_client.inspect-ui'),
+        isNotNull,
+      );
+    });
+
+    test('extension arguments flatten scalars and drop nulls', () {
+      final parsed = parseExtensionArguments(
+        '{"onlyWithKeys":true,"limit":5,"text":"a b","empty":null}',
+      );
+      expect(parsed.error, isNull);
+      expect(parsed.arguments, {
+        'onlyWithKeys': 'true',
+        'limit': '5',
+        'text': 'a b',
+      });
+      expect(parseExtensionArguments(null).arguments, isEmpty);
+    });
+
     test('auth-url selects the isolate that advertises the extension', () async {
       const expectedUrl = 'https://portal.example.test/authorize?id=active';
       final fakeService = await _FakeVmService.start(
@@ -849,6 +963,152 @@ void main() {
       }
     });
 
+    test('ext prints the extension payload and forwards flattened arguments',
+        () async {
+      final fakeService = await _FakeVmService.start(
+        extensionName: 'ext.sanad_client.inspect_ui',
+        extensionResult: const {
+          'status': 'ok',
+          'count': 1,
+          'elements': [
+            {'type': 'Text', 'key': 'only_row'},
+          ],
+        },
+      );
+      try {
+        final result = await _runCli([
+          'ext',
+          '--name',
+          'ext.sanad_client.inspect_ui',
+          '--args',
+          '{"onlyWithKeys":"true","interactive":true}',
+          '--vm-url',
+          fakeService.httpUrl,
+        ]);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['status'], 'ok');
+        expect(payload['extension'], 'ext.sanad_client.inspect_ui');
+        expect(payload['result']['count'], 1);
+
+        // The extension runs on the isolate that advertises it, and receives
+        // its arguments as the flat string map the Client extensions read.
+        final call = fakeService.extensionCalls.single;
+        expect(call['isolateId'], 'isolates/main');
+        expect(call['onlyWithKeys'], 'true');
+        expect(call['interactive'], 'true');
+      } finally {
+        await fakeService.close();
+      }
+    });
+
+    test('ext reports a client rejection as error JSON', () async {
+      final fakeService = await _FakeVmService.start(
+        extensionName: 'ext.sanad_client.inspect_ui',
+        extensionError: 'UI inspection is disabled for this Client',
+      );
+      try {
+        final result = await _runCli([
+          'ext',
+          '--name',
+          'ext.sanad_client.inspect_ui',
+          '--vm-url',
+          fakeService.httpUrl,
+        ]);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['status'], 'error');
+        expect(payload['extension'], 'ext.sanad_client.inspect_ui');
+        expect(payload['error'], contains('UI inspection is disabled'));
+      } finally {
+        await fakeService.close();
+      }
+    });
+
+    test('tap forwards a bounded long press to the client', () async {
+      final fake = await _FakeDriverVm.start();
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'send_message_btn',
+          '--hold-ms',
+          '800',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.tapCalls.single['hold_ms'], '800');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('a batch tap step forwards hold_ms', () async {
+      final fake = await _FakeDriverVm.start(
+        mutateOnTapKey: 'send_message_btn',
+        tapAdds: {'type': 'Text', 'key': 'sent_marker', 'text': 'sent'},
+      );
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          '[{"action":"tap","key":"send_message_btn","hold_ms":900}]',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.tapCalls.single['hold_ms'], '900');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('an obscured tap names the blocker and dispatches nothing', () async {
+      final fake = await _FakeDriverVm.start(
+        tapResult: const {
+          'status': 'obscured',
+          'obscured': true,
+          'resolved_at': {'x': 40, 'y': 60},
+          'blocker_key': 'settings_overlay',
+          'blocker': {
+            'type': 'ColoredBox',
+            'bounds': {'x': 0, 'y': 0, 'width': 800, 'height': 600},
+          },
+        },
+      );
+      try {
+        final result = await _runCli([
+          'tap',
+          '--key',
+          'dictation_mic_btn',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        // The action did not happen, so it must not exit successfully.
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isFalse);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'obscured');
+        expect(payload['key'], 'dictation_mic_btn');
+        expect(payload['message'], contains('settings_overlay'));
+        expect(payload['message'], contains('no pointer event was dispatched'));
+        // The blocker evidence is passed through for the caller to inspect.
+        expect(payload['data']['blocker_key'], 'settings_overlay');
+      } finally {
+        await fake.close();
+      }
+    });
+
     test('tap reports the resolved key, coordinates, and verification', () async {
       final fake = await _FakeDriverVm.start(
         elements: [
@@ -1527,6 +1787,250 @@ void main() {
     });
   });
 
+  group('Flutter VM driver hover', () {
+    late Directory tempDir;
+    late UiTreeGenerationStore generationStore;
+
+    setUp(() {
+      tempDir = Directory.systemTemp.createTempSync('sanad-dev-ui-hover');
+      generationStore = UiTreeGenerationStore(File('${tempDir.path}/gen'));
+    });
+
+    tearDown(() {
+      if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+    });
+
+    test('hover enters, observes, and exits as two phases of one pointer',
+        () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--ms',
+          '300',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['action'], 'hover');
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        expect(payload['message'], contains('no observable change'));
+
+        expect(fake.hoverCalls.map((call) => call['phase']), [
+          'enter',
+          'exit',
+        ]);
+        expect(fake.hoverCalls.first['ms'], '300');
+        expect(fake.hoverCalls.first['key'], 'row_archive');
+        // Both phases share one pointer id, so the Client can pair them and a
+        // stale hover can never be exited by a later action.
+        expect(
+          fake.hoverCalls.first['pointer'],
+          fake.hoverCalls.last['pointer'],
+        );
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --expect proves a hover-only affordance appeared', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+        mutateOnHoverKey: 'row_archive',
+        hoverAdds: {'type': 'IconButton', 'key': 'row_archive_menu'},
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--expect',
+          'row_archive_menu',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['verified'], isTrue);
+        expect(payload['verification'], 'key');
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('a failed hover expectation still releases the pointer', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--expect',
+          'row_archive_menu',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 1);
+        final payload = json.decode(result.lines.single);
+        expect(payload['verified'], isFalse);
+        expect(payload['verification'], 'no_observable_change');
+        expect(payload['message'], contains('expected row_archive_menu'));
+        // A failing verdict must never leave the hover expanded.
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --no-verify dispatches without capturing the tree', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--no-verify',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.rpcOrder, ['hover', 'hover']);
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover names the widget the pointer landed on when covered', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+        hoverEnterResult: {
+          'status': 'ok',
+          'phase': 'enter',
+          'ms': 2000,
+          'position': {'x': 12, 'y': 34},
+          'obstruction': {
+            'verdict': 'covered',
+            'blocker_key': 'settings_overlay',
+          },
+        },
+      );
+      try {
+        final result = await _runCli([
+          'hover',
+          '--key',
+          'row_archive',
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        // A hover cannot click, so a covered target is dispatched and reported,
+        // never refused — the verdict still has to say what is under the cursor.
+        expect(result.code, 0);
+        final payload = json.decode(result.lines.single);
+        expect(payload['success'], isTrue);
+        expect(payload['message'], contains('settings_overlay'));
+      } finally {
+        await fake.close();
+      }
+    });
+
+    test('hover --ms is bounded before connecting', () async {
+      for (final value in <String>[
+        '${maxHoverMs + 1}',
+        '-1',
+        'long',
+      ]) {
+        expect(
+          await CliRunner([
+            'hover',
+            '--key',
+            'row_archive',
+            '--ms',
+            value,
+            '--vm-url',
+            'http://127.0.0.1:1/',
+          ]).run(),
+          1,
+          reason: 'ms=$value must be refused locally',
+        );
+      }
+    });
+
+    test('hover requires a target before connecting', () async {
+      expect(
+        await CliRunner(const [
+          'hover',
+          '--ms',
+          '100',
+          '--vm-url',
+          'http://127.0.0.1:1/',
+        ]).run(),
+        1,
+      );
+    });
+
+    test('batch forwards a hover step dwell as hover_ms', () async {
+      final fake = await _FakeDriverVm.start(
+        elements: [
+          {'type': 'InkWell', 'key': 'row_archive'},
+        ],
+      );
+      try {
+        final result = await _runCli([
+          'batch',
+          '--json-steps',
+          json.encode([
+            {
+              'action': 'hover',
+              'key': 'row_archive',
+              'hover_ms': 900,
+            },
+          ]),
+          '--json',
+          '--vm-url',
+          fake.httpUrl,
+        ], store: generationStore);
+
+        expect(result.code, 0);
+        expect(fake.hoverCalls.first['ms'], '900');
+        expect(fake.hoverCalls.last['phase'], 'exit');
+      } finally {
+        await fake.close();
+      }
+    });
+  });
+
   group('Flutter VM driver tree state', () {
     test('signature tracks element changes but stays stable otherwise', () {
       const base = [
@@ -1586,6 +2090,7 @@ void main() {
         'text',
         'tree',
         'no_observable_change',
+        'obscured',
         'none',
         'type_census',
       ]);
@@ -1632,6 +2137,77 @@ void main() {
       expect(payload.containsKey('verification'), isTrue);
       expect(payload['verified'], isFalse);
       expect(payload['verification'], 'none');
+    });
+
+    test('obscured is a non-proving channel', () {
+      expect(UiVerification.obscured.verified, isFalse);
+      expect(UiVerification.fromWire('obscured'), UiVerification.obscured);
+      expect(
+        const DriverActionResult(
+          success: false,
+          action: 'tap',
+          message: 'obscured',
+          duration: Duration.zero,
+          verification: UiVerification.obscured,
+        ).toJson()['verification'],
+        'obscured',
+      );
+    });
+
+    test('a batch hover step round-trips hover_ms', () {
+      final step = BatchStep.fromJson(const {
+        'action': 'hover',
+        'key': 'row_archive',
+        'hover_ms': 900,
+      });
+
+      expect(step.action, 'hover');
+      expect(step.hoverMs, 900);
+      expect(step.toJson()['hover_ms'], 900);
+
+      final plain = BatchStep.fromJson(const {
+        'action': 'hover',
+        'key': 'row_archive',
+      });
+      expect(plain.hoverMs, isNull);
+      expect(plain.toJson().containsKey('hover_ms'), isFalse);
+    });
+
+    test('the Client bounds a hover exit past the requested dwell', () {
+      final interactionSource = File(
+        'lib/driver/interaction_extensions.dart',
+      ).readAsStringSync();
+      // The caller always exits, but a driver that dies mid-hover must not
+      // leave a menu expanded: the Client schedules its own exit past the dwell.
+      expect(
+        interactionSource,
+        contains('_scheduleHoverExit(pointer, request.ms + hoverExitGraceMs)'),
+      );
+      expect(
+        interactionSource.indexOf('_scheduleHoverExit(pointer, request.ms'),
+        lessThan(
+          interactionSource.indexOf('dispatchSyntheticHoverEnter(pointer'),
+        ),
+      );
+      expect(interactionSource, contains("registerExtension('ext.sanad_client.hover'"));
+      expect(interactionSource, contains("if (phase == 'exit')"));
+    });
+
+    test('a batch tap step round-trips hold_ms', () {
+      final step = BatchStep.fromJson(const {
+        'action': 'tap',
+        'key': 'dictation_mic_btn',
+        'hold_ms': 800,
+      });
+
+      expect(step.holdMs, 800);
+      expect(step.toJson()['hold_ms'], 800);
+      expect(BatchStep.fromJson(const {'action': 'tap'}).holdMs, isNull);
+      final longPress = BatchStep.fromJson(const {
+        'action': 'tap',
+        'hold_ms': 600,
+      });
+      expect(longPress.toJson()['hold_ms'], 600);
     });
 
     test('UI matching covers agent-facing labels', () {
@@ -1703,7 +2279,7 @@ void main() {
       expect(inspectSource, isNot(contains('types.length >')));
     });
 
-    test('driver_main registers all six service extensions in documented order', () {
+    test('driver_main registers all seven service extensions in documented order', () {
       final driverSource = File('lib/driver_main.dart').readAsStringSync();
       const expectedRegistrationCalls = <String>[
         'registerAuthUrlExtension',
@@ -1712,6 +2288,7 @@ void main() {
         'registerScrollExtension',
         'registerTapExtension',
         'registerRevealExtension',
+        'registerHoverExtension',
       ];
       var lastCallIndex = -1;
       for (final call in expectedRegistrationCalls) {
@@ -1736,6 +2313,7 @@ void main() {
         'ext.sanad_client.scroll',
         'ext.sanad_client.tap',
         'ext.sanad_client.reveal',
+        'ext.sanad_client.hover',
       ];
       var lastExtensionIndex = -1;
       for (final extensionName in expectedExtensions) {
@@ -1809,11 +2387,30 @@ class _FakeDriverVm {
   final Set<String> obscuredKeys = {};
   final Map<String, Map<String, dynamic>> enterTextAdds = {};
 
+  /// Parameters of every `ext.sanad_client.tap` call, in order.
+  final List<Map<String, dynamic>> tapCalls = [];
+
+  /// Parameters of every `ext.sanad_client.hover` call, in order, so a test can
+  /// prove both phases ran and that they shared one pointer id.
+  final List<Map<String, dynamic>> hoverCalls = [];
+
+  /// Key whose hover enter adds [hoverAdds], modelling a hover-only row action.
+  String? mutateOnHoverKey;
+  Map<String, dynamic>? hoverAdds;
+
+  /// Overrides the hover enter payload, so a test can model a Client that
+  /// reports an obstruction under the pointer.
+  Map<String, dynamic>? hoverEnterResult;
+
   /// Ordered record of driver RPCs, used to prove reveal-before-capture.
   final List<String> rpcOrder = [];
 
   String? mutateOnTapKey;
   Map<String, dynamic>? tapAdds;
+
+  /// Overrides the tap extension's payload, so a test can model a Client that
+  /// refuses an obscured target instead of dispatching.
+  Map<String, dynamic>? tapResult;
   int? appearAfterInspectCalls;
   Map<String, dynamic>? appearElement;
   bool mutateOnInspect = false;
@@ -1860,6 +2457,10 @@ class _FakeDriverVm {
     bool revealAvailable = true,
     int inspectDelayMs = 0,
     bool mutateOnInspect = false,
+    Map<String, dynamic>? tapResult,
+    String? mutateOnHoverKey,
+    Map<String, dynamic>? hoverAdds,
+    Map<String, dynamic>? hoverEnterResult,
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final fake = _FakeDriverVm._(
@@ -1883,6 +2484,10 @@ class _FakeDriverVm {
     fake.revealAvailable = revealAvailable;
     fake.inspectDelayMs = inspectDelayMs;
     fake.mutateOnInspect = mutateOnInspect;
+    fake.tapResult = tapResult;
+    fake.mutateOnHoverKey = mutateOnHoverKey;
+    fake.hoverAdds = hoverAdds;
+    fake.hoverEnterResult = hoverEnterResult;
     if (obscuredKeys != null) fake.obscuredKeys.addAll(obscuredKeys);
     if (enterTextAdds != null) fake.enterTextAdds.addAll(enterTextAdds);
     server.listen(fake._handleRequest);
@@ -1921,6 +2526,7 @@ class _FakeDriverVm {
                     'ext.sanad_client.enter_text',
                     'ext.sanad_client.scroll',
                     'ext.sanad_client.auth_url',
+                    'ext.sanad_client.hover',
                   ]
                 : const ['ext.unrelated'],
           };
@@ -1993,6 +2599,7 @@ class _FakeDriverVm {
           };
         case 'ext.sanad_client.tap':
           rpcOrder.add('tap');
+          tapCalls.add(Map<String, dynamic>.from(params));
           final key = params['key'] as String?;
           if (key != null && key == mutateOnTapKey) {
             final adds = tapAdds;
@@ -2001,10 +2608,41 @@ class _FakeDriverVm {
               _elements.add(Map<String, dynamic>.from(adds));
             }
           }
-          response['result'] = {
-            'status': 'ok',
-            'tapped_at': {'x': 12, 'y': 34},
-          };
+          response['result'] =
+              tapResult ??
+              {
+                'status': 'ok',
+                'tapped_at': {'x': 12, 'y': 34},
+              };
+        case 'ext.sanad_client.hover':
+          rpcOrder.add('hover');
+          hoverCalls.add(Map<String, dynamic>.from(params));
+          final phase = params['phase'] as String? ?? 'enter';
+          if (phase == 'exit') {
+            response['result'] = {
+              'status': 'ok',
+              'phase': 'exit',
+              'pointer': int.tryParse(params['pointer'] as String? ?? ''),
+            };
+            break;
+          }
+          final hoverKey = params['key'] as String?;
+          if (hoverKey != null && hoverKey == mutateOnHoverKey) {
+            final adds = hoverAdds;
+            if (adds != null &&
+                !_elements.any((element) => element['key'] == adds['key'])) {
+              _elements.add(Map<String, dynamic>.from(adds));
+            }
+          }
+          response['result'] =
+              hoverEnterResult ??
+              {
+                'status': 'ok',
+                'phase': 'enter',
+                'pointer': int.tryParse(params['pointer'] as String? ?? ''),
+                'ms': int.tryParse(params['ms'] as String? ?? ''),
+                'position': {'x': 12, 'y': 34},
+              };
         case 'ext.sanad_client.enter_text':
           final key = params['key'] as String?;
           final text = params['text'] as String? ?? '';
@@ -2071,14 +2709,21 @@ class _FakeVmService {
     required this.extensionResult,
     required this.extensionError,
     required this.advertiseExtension,
+    required this.extensionName,
   });
 
   final HttpServer _server;
   final Map<String, dynamic>? extensionResult;
   final String? extensionError;
   final bool advertiseExtension;
+
+  /// Extension this fake advertises and answers.
+  final String extensionName;
   final List<WebSocket> _sockets = [];
   final List<String> authUrlIsolateIds = [];
+
+  /// Parameters of every call to [extensionName], in order.
+  final List<Map<String, dynamic>> extensionCalls = [];
 
   String get httpUrl => 'http://127.0.0.1:${_server.port}/';
 
@@ -2086,6 +2731,7 @@ class _FakeVmService {
     Map<String, dynamic>? extensionResult,
     String? extensionError,
     bool advertiseExtension = true,
+    String extensionName = 'ext.sanad_client.auth_url',
   }) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final service = _FakeVmService._(
@@ -2093,6 +2739,7 @@ class _FakeVmService {
       extensionResult: extensionResult,
       extensionError: extensionError,
       advertiseExtension: advertiseExtension,
+      extensionName: extensionName,
     );
     server.listen(service._handleRequest);
     return service;
@@ -2123,27 +2770,30 @@ class _FakeVmService {
         case 'getIsolate':
           response['result'] = {
             'extensionRPCs': advertiseExtension && params['isolateId'] == 'isolates/main'
-                ? ['ext.sanad_client.auth_url']
+                ? [extensionName]
                 : ['ext.unrelated'],
           };
-        case 'ext.sanad_client.auth_url':
-          authUrlIsolateIds.add(params['isolateId'] as String);
-          if (extensionError != null) {
-            response['error'] = {
-              'code': -32000,
-              'message': 'Service extension failed',
-              'data': {
-                'details': json.encode({'error': extensionError}),
-              },
-            };
-          } else {
-            response['result'] = extensionResult;
-          }
         default:
-          response['error'] = {
-            'code': -32601,
-            'message': 'Method not found',
-          };
+          if (method == extensionName) {
+            extensionCalls.add(params);
+            authUrlIsolateIds.add(params['isolateId'] as String);
+            if (extensionError != null) {
+              response['error'] = {
+                'code': -32000,
+                'message': 'Service extension failed',
+                'data': {
+                  'details': json.encode({'error': extensionError}),
+                },
+              };
+            } else {
+              response['result'] = extensionResult;
+            }
+          } else {
+            response['error'] = {
+              'code': -32601,
+              'message': 'Method not found',
+            };
+          }
       }
       socket.add(json.encode(response));
     });
