@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:test/test.dart';
 
+import '../support/compiled_agent_cli.dart';
 import '../support/isolated_sanad_test_home.dart';
 
 /// Regression for the G0 incident: `sanad … --home <TestHome>` migrated the
@@ -15,15 +16,34 @@ import '../support/isolated_sanad_test_home.dart';
 /// untouched. `SANAD_E2E_TEST_MODE=true` is the existing subprocess test seam;
 /// it also selects the owner-only file secret store, so the subprocess never
 /// reaches the OS credential vault.
+///
+/// The entry point is the real one, compiled once for the whole suite: six
+/// cases that each paid a `dart run` compilation were 3× more expensive per case
+/// than the same work on the shared kernel artifact.
 void main() {
   useIsolatedSanadTestHome();
 
+  late Directory artifactDirectory;
+  late CompiledAgentCli cli;
   late Directory root;
   late Directory selectedHome;
   late Directory userHome;
   late Directory defaultHome;
 
+  setUpAll(() async {
+    artifactDirectory = await Directory.systemTemp.createTemp(
+      'sanad-g0-home-selection-artifact-',
+    );
+  });
+
+  tearDownAll(() async {
+    try {
+      await artifactDirectory.delete(recursive: true);
+    } catch (_) {}
+  });
+
   setUp(() {
+    cli = CompiledAgentCli(artifactDirectory);
     root = Directory(
       Directory.systemTemp
           .createTempSync('sanad-g0-home-selection-')
@@ -45,16 +65,12 @@ void main() {
   });
 
   Map<String, String> isolatedEnvironment({required bool withStateHome}) {
-    final parentHome =
-        Platform.environment['HOME'] ?? Platform.environment['USERPROFILE'];
     return {
       if (Platform.environment['PATH'] != null)
         'PATH': Platform.environment['PATH']!,
-      // `dart run` resolves packages through the developer's pub cache, which
-      // `HOME` would otherwise relocate.
-      'PUB_CACHE':
-          Platform.environment['PUB_CACHE'] ??
-          p.join(parentHome ?? userHome.path, '.pub-cache'),
+      // No `PUB_CACHE`: the child runs a precompiled kernel artifact, so it
+      // never resolves packages through the developer's cache after `HOME` is
+      // relocated.
       'HOME': userHome.path,
       if (Platform.isWindows) 'USERPROFILE': userHome.path,
       'SANAD_E2E_TEST_MODE': 'true',
@@ -68,13 +84,11 @@ void main() {
     List<String> arguments, {
     bool withStateHome = true,
   }) {
-    return Process.run(
-      Platform.resolvedExecutable,
-      ['run', 'bin/sanad_agent.dart', ...arguments],
-      workingDirectory: Directory.current.path,
+    return cli.runWithEnvironment(
+      arguments,
       environment: isolatedEnvironment(withStateHome: withStateHome),
-      includeParentEnvironment: false,
-    ).timeout(const Duration(seconds: 120));
+      budget: const Duration(seconds: 120),
+    );
   }
 
   Map<String, String> snapshot(Directory directory) {

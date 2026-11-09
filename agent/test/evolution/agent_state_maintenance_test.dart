@@ -13,6 +13,7 @@ import 'package:sanad_agent/evolution/db/runtime/session_work_item_repository.da
 import 'package:test/test.dart';
 
 import '../../bin/daemon.dart' as daemon_entry;
+import '../support/compiled_agent_cli.dart';
 import '../support/isolated_sanad_test_home.dart';
 
 void main() {
@@ -786,15 +787,17 @@ void main() {
   });
 
   test('daemon-backed readiness precedes deferred terminal prune', () async {
-    final configUri = await Isolate.resolvePackageUri(
-      Uri.parse('package:sanad_agent/core/config.dart'),
-    );
-    final packageRoot = File.fromUri(configUri!).parent.parent.parent;
     final home = Directory.systemTemp.createTempSync('sanad-maint-home-');
     final stateHome = Directory.systemTemp.createTempSync('sanad-maint-state-');
+    final artifactDirectory = await Directory.systemTemp.createTemp(
+      'sanad-maint-daemon-artifact-',
+    );
     addTearDown(() {
       if (home.existsSync()) home.deleteSync(recursive: true);
       if (stateHome.existsSync()) stateHome.deleteSync(recursive: true);
+      if (artifactDirectory.existsSync()) {
+        artifactDirectory.deleteSync(recursive: true);
+      }
     });
 
     final seed = AgentStateDatabase.atPath(stateHome.path);
@@ -820,14 +823,19 @@ void main() {
     );
     seed.dispose();
 
-    final process = await Process.start(
-      Platform.resolvedExecutable,
-      ['bin/daemon.dart'],
-      workingDirectory: packageRoot.path,
-      environment: {
-        ...Platform.environment,
-        'SANAD_HOME': home.path,
-        'SANAD_STATE_HOME': stateHome.path,
+    // The daemon entry point is compiled once for this suite and then spawned
+    // from its kernel artifact: a per-case `dart run` recompiled the daemon
+    // inside the readiness window and cost 2.5–3.7× the same work on slow
+    // runners. Compilation therefore happens before the readiness deadline
+    // starts, so the wait below measures the daemon's own startup.
+    final process = await CompiledAgentCli(
+      artifactDirectory,
+      entrypoint: 'bin/daemon.dart',
+    ).start(
+      const <String>[],
+      home: home,
+      stateHome: stateHome,
+      extraEnvironment: const <String, String>{
         'SANAD_E2E_TEST_MODE': 'true',
         'ENABLE_GATEWAY': 'false',
         'ENABLE_LOCAL_GATEWAY': 'false',
@@ -845,9 +853,8 @@ void main() {
         .listen((chunk) => output.write(chunk));
 
     try {
-      // The daemon subprocess compiles its own source before it can print the
-      // readiness signal, so the wait is deadline-based, generous for slow
-      // runners, and exits as soon as the signal appears.
+      // The readiness signal is the contract: the wait samples it and exits as
+      // soon as it appears, so the budget below is only a failure deadline.
       final deadline = DateTime.now().add(_daemonReadinessBudget);
       var ready = false;
       while (DateTime.now().isBefore(deadline)) {
@@ -883,9 +890,10 @@ void main() {
 /// contract, so the poll interval only samples it and never retries the daemon.
 const _daemonReadinessBudget = Duration(seconds: 120);
 
-/// Stays above [_daemonReadinessBudget] so a stalled daemon reports the
-/// readiness assertion instead of a test-runner timeout.
-const _daemonReadinessTestTimeout = Timeout(Duration(seconds: 150));
+/// Stays above one suite kernel compile plus [_daemonReadinessBudget] so a slow
+/// compile or a stalled daemon reports its own assertion instead of a
+/// test-runner timeout.
+const _daemonReadinessTestTimeout = Timeout(Duration(seconds: 240));
 
 void _seedSession(AgentStateDatabase db, String sessionId) {
   db.db.execute(

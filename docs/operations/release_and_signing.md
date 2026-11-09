@@ -60,6 +60,41 @@ protected deployment is `release-publication`.
 The Agent job validates the same release surface on macOS, Linux, and Windows,
 so every gate has to mean the same thing on all three.
 
+### Release test scope
+
+A release run proves the complete agent suite on **Linux only** (x64 and arm64),
+and the platform-sensitive **macOS subset** plus the CWD-sensitive suites on both
+macOS architectures. `scripts/ci/list_test_shard.sh --platform-macos` is the one
+declaration of that subset; it covers the real Keychain and file credential
+stores, launchd service management, POSIX permissions and atomic rollback, file
+locks and Home ownership, native dictation, build-tool paths, and the process and
+filesystem owners that use POSIX-only primitives. The Windows lane runs no Agent
+suite; it runs the one release-contract test its packaging needs.
+
+The rest of the suite is not unproven, it is proven elsewhere: Public CI runs all
+381 agent test files on four Ubuntu shards for every pull request and merge, and
+`.github/workflows/macos-full-suite.yml` runs the same complete suite on
+`macos-26` and `macos-15-intel` on every push to `main`. That workflow is
+deliberately not a required check — it reports on the merge commit and is fixed
+forward — so a red `macOS full suite` run blocks the next release even though it
+does not block a merge. `docs/operations/continuous_integration.md` owns the
+split and the reasons behind it.
+
+Two consequences are worth stating explicitly, because they are easy to get
+wrong:
+
+- "The release is green" is never evidence that the whole macOS suite is green.
+  Only the subset ran there.
+- A macOS-only regression must be caught by the post-merge workflow before a
+  release tag is cut. Cutting a release while that workflow is red turns the
+  release lanes into the first place the regression could be observed.
+
+The suite a release lane *does* run must stay priced: a fixed per-case
+`dart run` compilation is the largest avoidable cost on the slowest runner, so
+real-CLI tests spawn one compiled kernel artifact per suite
+(`agent/test/support/compiled_agent_cli.dart`), and a cross-process wait is a
+state observation with a measured deadline rather than a short fixed timer.
+
 Linux arm64 is a supported Agent target and uses the GitHub-hosted
 `ubuntu-24.04-arm` runner with the same steps, `release-build` Environment, and
 trust policy as Linux x64: both carry SHA-256 plus GitHub attestation and no

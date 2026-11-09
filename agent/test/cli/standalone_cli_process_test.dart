@@ -4,7 +4,13 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/capabilities/skills/generated_bundled_skills.dart';
 import 'package:test/test.dart';
+import '../support/compiled_agent_cli.dart';
 import '../support/isolated_sanad_test_home.dart';
+
+/// One standalone run owns a measured budget of its own: the CLI resolves its
+/// runtime, executes a deterministic turn, and may wait on its own `--timeout`
+/// bound, which is a different contract from a compiled-artifact smoke.
+const _standaloneRunBudget = Duration(seconds: 90);
 
 void preseedBundledSkillsState(Directory home) {
   final skillsDir = Directory(p.join(home.path, 'skills'))
@@ -20,6 +26,26 @@ void preseedBundledSkillsState(Directory home) {
 
 void main() {
   useIsolatedSanadTestHome();
+
+  late Directory artifactDirectory;
+  late CompiledAgentCli cli;
+
+  setUpAll(() async {
+    artifactDirectory = await Directory.systemTemp.createTemp(
+      'sanad-standalone-process-artifact-',
+    );
+  });
+
+  tearDownAll(() async {
+    try {
+      await artifactDirectory.delete(recursive: true);
+    } catch (_) {}
+  });
+
+  setUp(() {
+    cli = CompiledAgentCli(artifactDirectory);
+  });
+
   test(
     'standalone entry point executes the deterministic engine and releases Home ownership',
     () async {
@@ -31,19 +57,10 @@ void main() {
       final home = Directory('${root.path}/home');
       final stateHome = Directory('${root.path}/state');
       preseedBundledSkillsState(home);
-      final environment = <String, String>{
-        ...Platform.environment,
-        'SANAD_HOME': home.path,
-        'SANAD_STATE_HOME': stateHome.path,
-        'SANAD_E2E_TEST_MODE': 'true',
-      };
 
       Future<ProcessResult> runStandalone(String outputFlag) {
-        return Process.run(
-          Platform.resolvedExecutable,
+        return cli.run(
           [
-            'run',
-            'bin/sanad_agent.dart',
             'run',
             '--standalone',
             '--home',
@@ -53,9 +70,11 @@ void main() {
             outputFlag,
             'standalone process smoke',
           ],
-          workingDirectory: Directory.current.path,
-          environment: environment,
-        ).timeout(const Duration(seconds: 90));
+          home: home,
+          stateHome: stateHome,
+          extraEnvironment: const {'SANAD_E2E_TEST_MODE': 'true'},
+          budget: _standaloneRunBudget,
+        );
       }
 
       try {
@@ -91,11 +110,8 @@ void main() {
       final stateHome = Directory('${root.path}/state');
       preseedBundledSkillsState(home);
       try {
-        final result = await Process.run(
-          Platform.resolvedExecutable,
+        final result = await cli.run(
           [
-            'run',
-            'bin/sanad_agent.dart',
             'run',
             '--standalone',
             '--home',
@@ -107,14 +123,11 @@ void main() {
             '60',
             '__SANAD_E2E_RUNTIME_FAILURE__',
           ],
-          workingDirectory: Directory.current.path,
-          environment: {
-            ...Platform.environment,
-            'SANAD_HOME': home.path,
-            'SANAD_STATE_HOME': stateHome.path,
-            'SANAD_E2E_TEST_MODE': 'true',
-          },
-        ).timeout(const Duration(seconds: 90));
+          home: home,
+          stateHome: stateHome,
+          extraEnvironment: const {'SANAD_E2E_TEST_MODE': 'true'},
+          budget: _standaloneRunBudget,
+        );
 
         // The deterministic provider failure leaves the turn blocked (or
         // refused) by the runtime. A non-interactive run cannot intervene, so
@@ -154,16 +167,8 @@ void main() {
       final stateHome = Directory('${root.path}/state');
       preseedBundledSkillsState(home);
       final readyFile = File('${root.path}/tool-ready');
-      final environment = <String, String>{
-        ...Platform.environment,
-        'SANAD_HOME': home.path,
-        'SANAD_STATE_HOME': stateHome.path,
-        'SANAD_E2E_TEST_MODE': 'true',
-      };
       final prompt = '__SANAD_E2E_DELAY__${readyFile.path}';
       final baseArguments = <String>[
-        'run',
-        'bin/sanad_agent.dart',
         'run',
         '--standalone',
         '--home',
@@ -172,14 +177,16 @@ void main() {
         root.path,
         '--quiet',
       ];
+      const e2eEnvironment = {'SANAD_E2E_TEST_MODE': 'true'};
 
       try {
-        final timeoutResult = await Process.run(
-          Platform.resolvedExecutable,
+        final timeoutResult = await cli.run(
           [...baseArguments, '--timeout', '1', prompt],
-          workingDirectory: Directory.current.path,
-          environment: environment,
-        ).timeout(const Duration(seconds: 90));
+          home: home,
+          stateHome: stateHome,
+          extraEnvironment: e2eEnvironment,
+          budget: _standaloneRunBudget,
+        );
         expect(
           timeoutResult.exitCode,
           124,
@@ -196,11 +203,11 @@ void main() {
           ]) {
             final signalReadyFile = File('${root.path}/${signalCase.$3}');
             final signalPrompt = '__SANAD_E2E_DELAY__${signalReadyFile.path}';
-            final interrupted = await Process.start(
-              Platform.resolvedExecutable,
+            final interrupted = await cli.start(
               [...baseArguments, signalPrompt],
-              workingDirectory: Directory.current.path,
-              environment: environment,
+              home: home,
+              stateHome: stateHome,
+              extraEnvironment: e2eEnvironment,
             );
             try {
               final deadline = DateTime.now().add(const Duration(seconds: 60));

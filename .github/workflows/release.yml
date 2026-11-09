@@ -197,7 +197,7 @@ jobs:
       - name: Set up MSVC
         if: matrix.platform == 'windows'
         uses: ilammy/msvc-dev-cmd@v1
-      - name: Install dependencies and test
+      - name: Install dependencies and check generated sources
         if: matrix.platform != 'windows'
         working-directory: agent
         shell: bash
@@ -206,7 +206,49 @@ jobs:
           ${{ env.DART }} run tool/generate_bundled_skills.dart --check
           ${{ env.DART }} run tool/generate_model_capability_defaults.dart --check
           ${{ env.DART }} analyze
-          ${{ env.DART }} test
+      # The full suite runs on Linux only. Public CI already executes all 381
+      # agent test files on four Ubuntu shards for every pull request and merge,
+      # and `.github/workflows/macos-full-suite.yml` proves the same suite on both
+      # macOS architectures on every push to `main`. A macOS release lane instead
+      # re-proves the platform-sensitive subset that a Linux lane cannot
+      # (`scripts/ci/list_test_shard.sh --platform-macos`), which is the one
+      # source of truth for that selection.
+      - name: Test the whole agent suite
+        if: matrix.platform == 'linux'
+        working-directory: agent
+        shell: bash
+        run: ${{ env.DART }} test
+      - name: Test the macOS platform subset
+        if: matrix.platform == 'macos'
+        working-directory: agent
+        shell: bash
+        run: |
+          set -o pipefail
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . --platform-macos)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "The macOS platform subset is empty; refusing to prove nothing."
+            exit 1
+          fi
+          echo "macOS platform subset runs ${#files[@]} test files."
+          ${{ env.DART }} test "${files[@]}"
+      - name: Test the CWD-sensitive suites alone
+        if: matrix.platform == 'macos'
+        working-directory: agent
+        shell: bash
+        run: |
+          set -o pipefail
+          files=()
+          while IFS= read -r file; do
+            files+=("$file")
+          done < <(../scripts/ci/list_test_shard.sh . --isolated)
+          if [[ ${#files[@]} -eq 0 ]]; then
+            echo "No suite assigns the process working directory."
+            exit 0
+          fi
+          ${{ env.DART }} test --concurrency 1 "${files[@]}"
       - name: Analyze the dictation engine package
         if: matrix.platform != 'windows'
         working-directory: agent

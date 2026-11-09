@@ -135,6 +135,17 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
+The Agent macOS rows above are proved by two different lanes, and neither one
+alone is the whole suite. The release Agent job runs the complete suite on Linux
+and the macOS platform subset (`scripts/ci/list_test_shard.sh --platform-macos`,
+which contains both hard-gated Keychain tests at
+`agent/test/core/agent_secret_store_test.dart:500,527`) on each macOS
+architecture. The complete agent suite on macOS comes from the post-merge
+`macOS full suite` workflow, which is not a required check. Release verification
+therefore cannot cite "the release was green" as whole-suite macOS evidence: cite
+the post-merge run for the same merge commit instead, and treat a red one as a
+release blocker.
+
 A Linux arm64 Agent is built and published, but the hosted arm64 job proves the
 build, the shipped-binary smoke, and provenance, not a host install. Clean
 arm64 systemd/OpenRC lifecycle, upgrade, and rollback evidence must be recorded
