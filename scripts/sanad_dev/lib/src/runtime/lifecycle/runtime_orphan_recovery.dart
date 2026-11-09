@@ -108,7 +108,3 @@ Future<String?> recoverStaleAgentLease({
   await deleteRecord();
   return null;
 }
-
-bool get _hasAgentToolRequester =>
-    Platform.environment['SANAD_REQUESTER_SESSION_ID']?.isNotEmpty == true ||
-    Platform.environment['SANAD_REQUESTER_TOOL_CALL_ID']?.isNotEmpty == true;

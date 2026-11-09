@@ -196,6 +196,7 @@ Future<void> handleRuntimeDoctor({
       );
   var staleAgentRecoveryAvailable = false;
   var staleRecordRemovalAvailable = false;
+  var orphanReclaimAvailable = false;
   if (record != null) {
     final launcherLive = await processRunning(record.launcherPid);
     print(
@@ -223,6 +224,19 @@ Future<void> handleRuntimeDoctor({
       endpointLive: endpointLive,
       clientLive: clientLive,
     );
+    if (ownership.classification == RuntimeOwnershipClass.orphaned &&
+        ownership.reason == orphanReclaimIdentityReason) {
+      // Read-only: the same proofs takeover uses, collected to name a real next
+      // action instead of leaving this class without one.
+      final reclaim = await assessOrphanReclaim(
+        runtime: runtime,
+        state: state,
+        ownership: ownership,
+        activeHome: activeHome,
+        processRunning: processRunning,
+      );
+      orphanReclaimAvailable = reclaim.ready;
+    }
     if (fix) {
       final switchPath = runtimeSwitchManifestPath(
         activeHome,
@@ -266,7 +280,7 @@ Future<void> handleRuntimeDoctor({
         return;
       }
       if (staleAgentRecoveryAvailable) {
-        if (_hasAgentToolRequester) {
+        if (hasAgentToolRequester()) {
           stderr.writeln(
             'No fix applied: stale Agent recovery must run from a '
             'human-owned terminal so the recovering Agent cannot interrupt '
@@ -344,6 +358,7 @@ Future<void> handleRuntimeDoctor({
     state: state,
     staleAgentRecoveryAvailable: staleAgentRecoveryAvailable,
     staleRecordRemovalAvailable: staleRecordRemovalAvailable,
+    orphanReclaimAvailable: orphanReclaimAvailable,
   );
   print('Next action: $nextAction');
   await reportSanadDevDoctorDriverHost(
@@ -361,6 +376,7 @@ String doctorNextAction({
   required RuntimeProcessState state,
   required bool staleAgentRecoveryAvailable,
   required bool staleRecordRemovalAvailable,
+  bool orphanReclaimAvailable = false,
 }) => staleRecordRemovalAvailable
     ? 'Run "sanad-dev doctor --fix" to remove the stale record; no process '
           'will be signaled.'
@@ -372,6 +388,10 @@ String doctorNextAction({
           staleAgentRecoveryAvailable
               ? 'Run "sanad-dev doctor --fix" from a human-owned terminal to '
                     'safely drain this exact Agent-only orphan.'
+              : orphanReclaimAvailable
+              ? 'Run "sanad-dev takeover" from a human-owned terminal: the '
+                    'daemon on this port does not belong to this lease, and '
+                    'takeover will drain it and relaunch the pair.'
               : state.agent != null
               ? 'Automatic recovery is refused because the live runtime does not '
                     'match the narrow Agent-only recovery contract.'

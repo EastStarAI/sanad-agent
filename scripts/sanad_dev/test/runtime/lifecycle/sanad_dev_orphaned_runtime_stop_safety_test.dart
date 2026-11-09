@@ -9,7 +9,15 @@ import 'package:sanad_dev/src/runtime/ownership/runtime_ownership.dart'
     as runtime_ownership;
 import '../../support/sanad_dev_caller_env.dart';
 
+const _orphanLauncherPid = 999410;
+const _orphanLauncherIdentity = 'launcher-order-identity';
+
 void main() {
+  setUp(() {
+    // `exitCode` is process-wide, so each case must start from a clean slate.
+    exitCode = 0;
+  });
+
   group('orphaned runtime stop process ownership safety', () {
     test(
       'force stop terminates launcher only when process identity matches lease',
@@ -287,6 +295,109 @@ void main() {
 
       expect(terminatedPids, isEmpty);
       expect(await recordFile.exists(), isTrue);
+    });
+  });
+
+  group('forced orphan stop ordering', () {
+    Future<(Directory, File)> prepareOrphan({required String prefix}) async {
+      final home = await Directory.systemTemp.createTemp(prefix);
+      addTearDown(() => home.delete(recursive: true));
+      final runtime = await resolveHandlerRuntime(sanadHomeOverride: home.path);
+      final record = runtime_ownership.RuntimeLauncherRecord(
+        launcherId: 'launcher-order',
+        runtimeNonce: 'nonce-order',
+        launcherPid: _orphanLauncherPid,
+        launcherProcessIdentity: _orphanLauncherIdentity,
+        workspaceHash: runtime.worktreeId.split('-').last,
+        sourceRoot: runtime.repositoryRoot,
+        agentPort: runtime.agentPort,
+        sanadHome: home.path,
+        preferencesPrefix: '',
+        clientPids: const [],
+        vmServicePorts: const [],
+        status: 'running',
+        updatedAt: DateTime.now().toUtc(),
+      );
+      await runtime_ownership.writeRuntimeLauncherRecord(record);
+      return (
+        home,
+        File(
+          runtime_ownership.runtimeLauncherRecordPath(
+            home.path,
+            runtime.agentPort,
+          ),
+        ),
+      );
+    }
+
+    test('preserves the lease when the daemon refuses to exit', () async {
+      final (home, recordFile) = await prepareOrphan(
+        prefix: 'sanad-force-order-',
+      );
+      final runtime = await resolveHandlerRuntime(sanadHomeOverride: home.path);
+      final terminatedPids = <int>[];
+
+      await sanad_dev.handleRuntimeStop(
+        force: true,
+        sanadHomePath: home.path,
+        processRunning: (pid) async => pid == _orphanLauncherPid,
+        processIdentity: (pid) async =>
+            pid == _orphanLauncherPid ? _orphanLauncherIdentity : null,
+        terminateProcess: (pid) async => terminatedPids.add(pid),
+        discoverAgents: ({sanadHomeOverride}) async => [
+          sanad_dev.AgentInstance(
+            runtime.agentPort,
+            runtime.worktreeId.split('-').last,
+            'worktree',
+            launcherId: 'launcher-foreign',
+            runtimeNonce: 'nonce-foreign',
+            sanadHome: home.path,
+          ),
+        ],
+        discoverClients: () async => const [],
+        requestPermanentRestart:
+            (port, sanadHome, {bool force = false}) async => false,
+        waitForAgentExit: (port, sanadHome) async => false,
+      );
+
+      expect(exitCode, 1);
+      expect(terminatedPids, isEmpty);
+      expect(await recordFile.exists(), isTrue);
+    });
+
+    test('keeps stopping the pair only after a verified daemon exit', () async {
+      final (home, recordFile) = await prepareOrphan(
+        prefix: 'sanad-force-order-ok-',
+      );
+      final runtime = await resolveHandlerRuntime(sanadHomeOverride: home.path);
+      final terminatedPids = <int>[];
+
+      await sanad_dev.handleRuntimeStop(
+        force: true,
+        sanadHomePath: home.path,
+        processRunning: (pid) async => pid == _orphanLauncherPid,
+        processIdentity: (pid) async =>
+            pid == _orphanLauncherPid ? _orphanLauncherIdentity : null,
+        terminateProcess: (pid) async => terminatedPids.add(pid),
+        discoverAgents: ({sanadHomeOverride}) async => [
+          sanad_dev.AgentInstance(
+            runtime.agentPort,
+            runtime.worktreeId.split('-').last,
+            'worktree',
+            launcherId: 'launcher-foreign',
+            runtimeNonce: 'nonce-foreign',
+            sanadHome: home.path,
+          ),
+        ],
+        discoverClients: () async => const [],
+        requestPermanentRestart:
+            (port, sanadHome, {bool force = false}) async => true,
+        waitForAgentExit: (port, sanadHome) async => true,
+      );
+
+      expect(exitCode, 0);
+      expect(terminatedPids, contains(_orphanLauncherPid));
+      expect(await recordFile.exists(), isFalse);
     });
   });
 }

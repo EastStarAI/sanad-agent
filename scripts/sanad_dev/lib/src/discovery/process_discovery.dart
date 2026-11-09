@@ -403,3 +403,154 @@ Future<List<ClientInstance>> discoverClientInstances({
   }
   return instances;
 }
+
+/// One OS process table as `pid → parent pid`, or an empty map when the
+/// platform cannot provide it.
+///
+/// Ownership evidence names *what* answers a port — the `/health` identity, the
+/// Home holder record, the endpoint record — but it never says *which process
+/// started it*. A proven reclaim needs that lineage, because the process that
+/// respawns a daemon is its parent, not the daemon itself. The table is
+/// read-only evidence: every pid still has to be proven before it is signalled.
+Future<Map<int, int>> readProcessParentMap() async {
+  if (Platform.isWindows) return _readWindowsProcessParentMap();
+  final result = await Process.run('ps', ['-axo', 'pid=,ppid=']);
+  if (result.exitCode != 0) return const {};
+  return parseProcessParentMap(result.stdout.toString());
+}
+
+/// Parses a `pid ppid` table into a parent map.
+Map<int, int> parseProcessParentMap(String listing) {
+  final parents = <int, int>{};
+  for (final line in LineSplitter.split(listing)) {
+    final match = RegExp(r'^\s*(\d+)\s+(\d+)\s*$').firstMatch(line);
+    if (match == null) continue;
+    parents[int.parse(match.group(1)!)] = int.parse(match.group(2)!);
+  }
+  return parents;
+}
+
+Future<Map<int, int>> _readWindowsProcessParentMap() async {
+  const script =
+      '(Get-CimInstance Win32_Process | Select-Object ProcessId,'
+      'ParentProcessId | ConvertTo-Json -Compress)';
+  final result = await Process.run('powershell', [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    script,
+  ]);
+  if (result.exitCode != 0) return const {};
+  try {
+    final decoded = jsonDecode(result.stdout.toString().trim());
+    final entries = decoded is List ? decoded : <Object?>[decoded];
+    final parents = <int, int>{};
+    for (final entry in entries) {
+      if (entry is! Map) continue;
+      final child = int.tryParse('${entry['ProcessId']}');
+      final parent = int.tryParse('${entry['ParentProcessId']}');
+      if (child == null || parent == null || child <= 1) continue;
+      parents[child] = parent;
+    }
+    return parents;
+  } on Object {
+    return const {};
+  }
+}
+
+/// Every live descendant of [rootPid] in one parent map.
+Set<int> processDescendants({
+  required int rootPid,
+  required Map<int, int> parentByPid,
+}) {
+  final children = <int, List<int>>{};
+  parentByPid.forEach((child, parent) {
+    if (child <= 1 || child == parent) return;
+    children.putIfAbsent(parent, () => <int>[]).add(child);
+  });
+  final descendants = <int>{};
+  final pending = <int>[rootPid];
+  while (pending.isNotEmpty) {
+    final current = pending.removeLast();
+    for (final child in children[current] ?? const <int>[]) {
+      if (!descendants.add(child)) continue;
+      pending.add(child);
+    }
+  }
+  return descendants;
+}
+
+/// Candidate lineage of [daemonPid], ordered outermost → daemon.
+///
+/// Bounded by [maxHops] and stopped at the first parent that is missing, `1`
+/// (reparented to init/launchd), itself, or already in the chain. The result is
+/// a *candidate* list: every pid still has to be proven by its own command.
+List<int> agentDaemonChainCandidates({
+  required int daemonPid,
+  required Map<int, int> parentByPid,
+  int maxHops = 4,
+}) {
+  if (daemonPid <= 1) return const [];
+  final chain = <int>[daemonPid];
+  var current = daemonPid;
+  while (chain.length <= maxHops) {
+    final parent = parentByPid[current];
+    if (parent == null ||
+        parent <= 1 ||
+        parent == current ||
+        chain.contains(parent)) {
+      break;
+    }
+    chain.add(parent);
+    current = parent;
+  }
+  return chain.reversed.toList(growable: false);
+}
+
+/// Whether one process identity (start time + command line) is an Agent runtime
+/// process.
+///
+/// The supervisor, the source wrapper, and the supervised child all name the
+/// Agent script or binary and the `daemon` role; the child additionally carries
+/// `--child-process`.
+bool isAgentRuntimeCommand(String? identity) {
+  if (identity == null) return false;
+  final text = identity.toLowerCase();
+  return text.contains('sanad_agent') && text.contains('daemon');
+}
+
+/// The proven lineage of [daemonPid], ordered outermost → daemon.
+///
+/// Every returned pid named an Agent runtime command at proof time; the walk
+/// stops at the first ancestor that is a *different* command, because that is
+/// where the Agent lineage ends (a shell, an IDE, or the terminal). An ancestor
+/// whose identity cannot be read is **not** a boundary: it is unproven, so the
+/// whole chain is refused instead of shortened. Signalling a daemon whose
+/// respawning supervisor is still alive cannot free the port, and guessing is
+/// not permission to terminate a process.
+Future<List<int>> proveAgentDaemonChain({
+  required int daemonPid,
+  Map<int, int>? parentByPid,
+  Future<String?> Function(int pid) processIdentity = readProcessIdentity,
+  int maxHops = 4,
+}) async {
+  final parents = parentByPid ?? await readProcessParentMap();
+  final candidates = agentDaemonChainCandidates(
+    daemonPid: daemonPid,
+    parentByPid: parents,
+    maxHops: maxHops,
+  );
+  if (candidates.isEmpty) return const [];
+  final provenLeafFirst = <int>[];
+  for (final pid in candidates.reversed) {
+    final identity = await processIdentity(pid);
+    if (identity == null) return const [];
+    if (!isAgentRuntimeCommand(identity)) break;
+    provenLeafFirst.add(pid);
+  }
+  return provenLeafFirst.reversed.toList(growable: false);
+}
+
+/// [proveAgentDaemonChain] with no optional arguments, for injection.
+Future<List<int>> proveAgentDaemonChainForPid(int daemonPid) =>
+    proveAgentDaemonChain(daemonPid: daemonPid);

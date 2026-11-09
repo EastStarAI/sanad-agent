@@ -130,7 +130,10 @@ void main(List<String> args) async {
   }
 
   if (command == 'takeover') {
-    await handleRuntimeTakeover(sanadHomePath: sanadHomePath);
+    await handleRuntimeTakeover(
+      sanadHomePath: sanadHomePath,
+      force: parsed.forceRestart,
+    );
     return;
   }
 

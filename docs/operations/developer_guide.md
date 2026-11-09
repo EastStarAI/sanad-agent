@@ -367,7 +367,9 @@ cleanup-orphans [--confirm] [--json]
                           unless --confirm is passed.
 stop [all|agent|client]   Stop all components (default) or one component.
 doctor [--fix]            Diagnose ownership; remove only proven stale records.
-takeover                  Relaunch one complete manual pair under sanad-dev.
+takeover [--force]        Relaunch one complete manual pair, or reclaim an
+                          orphaned runtime whose lease still proves the process
+                          on its port.
 cleanup-target-orphans    Remove proven stale target clients only.
 switch --runtime current  Move one active runtime group to the invoking worktree.
 logs [client|agent]       Show client or agent logs.
@@ -476,7 +478,13 @@ applies.
 
 Use `sanad-dev doctor` before reconciling a Terminal/IDE launch. A complete
 single manual pair may be converted with `sanad-dev takeover`; it passes through
-the daemon's safe restart boundary and refuses Agent-tool-origin takeover. When
+the daemon's safe restart boundary and refuses Agent-tool-origin takeover. The
+same command reclaims an orphaned runtime whose expired lease still proves the
+process holding the port (a proven live launcher tree, or one dead lease proven
+by its recorded pid and process identity): it prints the evidence, drains the
+foreign daemon by default, and stops it only with `--force`, and only through a
+proven parent tree or, as a last resort, the proven Agent chain. It never adopts
+the previous identity — the relaunch writes a new launcher id and nonce. When
 doctor reports an exact Agent-only orphan behind a dead launcher, run
 `sanad-dev doctor --fix` from a human-owned terminal. It requests permanent
 shutdown through the authenticated Agent boundary and removes the stale lease
