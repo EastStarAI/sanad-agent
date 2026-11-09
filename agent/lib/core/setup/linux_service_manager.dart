@@ -377,18 +377,24 @@ class LinuxServiceManager {
       MapEntry(ServiceScope.systemdSystem, _systemUnitPath),
       MapEntry(ServiceScope.openRc, _openRcPath),
     ]) {
-      if (File(entry.value).existsSync()) {
-        return ServiceStatus(
-          state: ServiceState.failed,
-          scope: entry.key,
-          backend: entry.key.wireName,
-          installed: true,
-          enabled: false,
-          running: false,
-          error: 'Service exists without Sanad ownership metadata.',
-          configPath: entry.value,
-        );
-      }
+      if (!File(entry.value).existsSync()) continue;
+      // A definition on this host may serve another Home: an explicit
+      // `--home` that never installed a service would otherwise be told its
+      // service failed. Only a definition that names this Home — or names
+      // none, and is therefore unattributable — is reported as this Home's
+      // unowned service.
+      final declared = _declaredHome(entry.value);
+      if (declared != null && declared != p.normalize(sanadHome)) continue;
+      return ServiceStatus(
+        state: ServiceState.failed,
+        scope: entry.key,
+        backend: entry.key.wireName,
+        installed: true,
+        enabled: false,
+        running: false,
+        error: 'Service exists without Sanad ownership metadata.',
+        configPath: entry.value,
+      );
     }
     return const ServiceStatus.missing();
   }
@@ -924,6 +930,19 @@ class LinuxServiceManager {
     isRoot: false,
     dedicated: metadata['dedicated'] as bool? ?? false,
   );
+
+  /// The Sanad Home the definition at [path] declares for itself, normalized,
+  /// or null when it declares none or cannot be read.
+  String? _declaredHome(String path) {
+    final String content;
+    try {
+      content = File(path).readAsStringSync();
+    } catch (_) {
+      return null;
+    }
+    final declared = ServiceUnitBuilder.declaredSanadHome(content);
+    return declared == null ? null : p.normalize(declared);
+  }
 
   String _pathFor(ServiceScope scope) => switch (scope) {
     ServiceScope.systemdUser => _userUnitPath,

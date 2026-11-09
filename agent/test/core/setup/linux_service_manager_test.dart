@@ -902,6 +902,108 @@ void main() {
   });
 
   test(
+    'a definition that names another Home is not this Home\'s service',
+    () async {
+      final override = Directory(p.join(root.path, 'override'))
+        ..createSync(recursive: true);
+      File(p.join(paths.systemUnitDirectory, 'sanad-agent.service'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          ServiceUnitBuilder.systemdUnit(
+            executable: '/var/lib/sanad-agent/bin/sanad',
+            arguments: const ['daemon'],
+            sanadHome: '/var/lib/sanad-agent',
+            systemScope: true,
+            user: 'sanad-agent',
+            group: 'sanad-agent',
+            home: '/var/lib/sanad-agent',
+          ),
+        );
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: override.path,
+        identity: _user(loginHome.path),
+      );
+
+      final status = await manager.status();
+
+      // An override Home that never installed a service has no service: the
+      // live system unit belongs to the Home it names, and reporting `Failed`
+      // there claims a failure this Home never had.
+      expect(status.state, ServiceState.missing);
+      expect(status.installed, isFalse);
+      expect(status.running, isFalse);
+      expect(status.error, isNull);
+      expect(status.configPath, isNull);
+    },
+  );
+
+  test(
+    'an unowned definition that names this Home is still reported',
+    () async {
+      final unit = File(
+        p.join(paths.systemUnitDirectory, 'sanad-agent.service'),
+      )
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          ServiceUnitBuilder.systemdUnit(
+            executable: '/opt/sanad/bin/sanad',
+            arguments: const ['daemon'],
+            sanadHome: sanadHome.path,
+            systemScope: true,
+            user: 'developer',
+            group: 'developers',
+            home: loginHome.path,
+          ),
+        );
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: sanadHome.path,
+        identity: _user(loginHome.path),
+      );
+
+      final status = await manager.status();
+
+      expect(status.state, ServiceState.failed);
+      expect(status.installed, isTrue);
+      expect(status.error, contains('without Sanad ownership metadata'));
+      expect(status.configPath, unit.path);
+    },
+  );
+
+  test(
+    'an OpenRC script that names another Home is not this Home\'s service',
+    () async {
+      final override = Directory(p.join(root.path, 'override'))
+        ..createSync(recursive: true);
+      File(p.join(paths.openRcInitDirectory, 'sanad-agent'))
+        ..createSync(recursive: true)
+        ..writeAsStringSync(
+          ServiceUnitBuilder.openRcScript(
+            executable: '/var/lib/sanad-agent/bin/sanad',
+            arguments: const ['daemon'],
+            sanadHome: '/var/lib/sanad-agent',
+            user: 'sanad-agent',
+            group: 'sanad-agent',
+          ),
+        );
+      final manager = _manager(
+        host: host,
+        paths: paths,
+        loginHome: loginHome.path,
+        sanadHome: override.path,
+        identity: _user(loginHome.path),
+      );
+
+      expect((await manager.status()).state, ServiceState.missing);
+    },
+  );
+
+  test(
     'reports unreadable ownership metadata instead of not installed',
     () async {
       Directory(paths.systemdRuntimeDirectory).createSync(recursive: true);
