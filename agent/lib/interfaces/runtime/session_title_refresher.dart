@@ -52,6 +52,13 @@ class SessionTitleRefresher {
         assistantResponse: assistantResponse,
         route: route,
       );
+      if (newTitle == null) {
+        _logger.info(
+          'Skipped title generation for session $sessionId: '
+          'no provider route is resolvable.',
+        );
+        return;
+      }
 
       final sessionManager = getIt<SessionManager>();
       final updated = sessionManager.updateSessionTitleIfCurrent(
