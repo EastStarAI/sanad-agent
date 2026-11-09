@@ -83,6 +83,13 @@ description: "Regression matrix for managed launcher ownership, reconciliation, 
 | Doctor reports manual, orphaned, cross-owned, or unverifiable | Output gives one concrete takeover/doctor-fix/target-cleanup/owning-worktree/IDE-close next action; every mutating command still revalidates ownership. |
 | Complete manual pair | `takeover` uses a safe Agent drain followed by permanent supervisor shutdown, relaunches it as one managed group, and attempts restoration on launch failure. |
 | Incomplete/manual pair or Agent-origin takeover | Takeover refuses before client mutation. |
+| Orphaned runtime whose lease is still evidence (proven launcher tree, or one dead proven launcher lease) | `takeover` prints the evidence block, drains the foreign daemon without `--force`, stops the proven launcher root, and relaunches under a new identity and nonce. |
+| Orphaned runtime whose drain is refused | `takeover` without `--force` stops before signaling anything and names `--force`, leaving every process and the old lease untouched. |
+| Orphaned runtime with `--force` and a refused drain | Kill tier A2 terminates only the proven parent tree of the foreign daemon, then relaunches; A3 (proven Agent chain, outermost first) is attempted only when A2 cannot be attempted. |
+| Orphaned runtime with an unprovable daemon lineage and `--force` | Takeover refuses after A2/A3 with no signal sent, and the old lease is preserved. |
+| Orphaned runtime served by a live foreign launcher, an Agent-only lease, or a dead unproven launcher | Takeover refuses with the named next action and signals nothing. |
+| `doctor` on a reclaimable orphan | Names `takeover` as the next action only when the same read-only assessment succeeds. |
+| `stop --force` on an orphaned Agent | Drains the daemon first and deletes the lease plus launcher shutdown only after a proven exit; a refused or unproven drain preserves the lease and signals nothing. |
 | Target orphan attached to requester/source port | Cleanup refuses before signaling any PID. |
 | Target client has a live Agent/launcher, IDE ownership, or incomplete nonce | Cleanup refuses. |
 | Proven target-only stale clients | Only exact recorded target PIDs are signaled and their stale record is removed. |

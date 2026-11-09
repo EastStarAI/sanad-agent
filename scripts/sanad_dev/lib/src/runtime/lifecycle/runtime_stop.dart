@@ -106,6 +106,11 @@ Future<void> handleRuntimeStop({
       discoverAgentInstances,
   Future<List<ClientInstance>> Function() discoverClients =
       discoverClientInstances,
+  Future<bool> Function(int port, String sanadHome, {bool force})
+      requestPermanentRestart =
+      _requestTakeoverRestart,
+  Future<bool> Function(int port, String sanadHome) waitForAgentExit =
+      _waitForAgentPortToStop,
 }) async {
   final runtime = await discoverSanadDevRuntime(
     callerDirectory: _callerDirectory,
@@ -137,6 +142,8 @@ Future<void> handleRuntimeStop({
           processRunning: processRunning,
           processIdentity: processIdentity,
           terminateProcess: terminateProcess,
+          requestPermanentRestart: requestPermanentRestart,
+          waitForAgentExit: waitForAgentExit,
         );
         return;
       }
@@ -161,6 +168,8 @@ Future<void> handleRuntimeStop({
         processRunning: processRunning,
         processIdentity: processIdentity,
         terminateProcess: terminateProcess,
+        requestPermanentRestart: requestPermanentRestart,
+        waitForAgentExit: waitForAgentExit,
       );
       return;
     }
@@ -232,11 +241,35 @@ Future<void> _forceStopOrphanedRuntime({
   required Future<bool> Function(int? pid) processRunning,
   required Future<String?> Function(int pid) processIdentity,
   required Future<void> Function(int pid) terminateProcess,
+  required Future<bool> Function(int port, String sanadHome, {bool force})
+  requestPermanentRestart,
+  required Future<bool> Function(int port, String sanadHome) waitForAgentExit,
 }) async {
   print(
     'Forced stop requested for orphaned runtime ${runtime.worktreeId}. '
     'Cleaning up orphaned processes and records...',
   );
+  // The daemon goes first, and only a verified exit continues. Deleting the
+  // lease before the daemon is proven gone turns a recoverable orphan into a
+  // runtime no command can reclaim: the lease is the only proof that this port
+  // and Home belong to this checkout.
+  final agent = processState.agent;
+  if (agent != null) {
+    try {
+      await requestPermanentRestart(agent.port, activeHome, force: false);
+    } on Object {}
+    if (!await waitForAgentExit(agent.port, activeHome)) {
+      stderr.writeln(
+        'Forced stop aborted: the Agent on port ${agent.port} did not exit, so '
+        'the launcher lease was preserved and no process was signalled. Run '
+        '"sanad-dev takeover" for a lease-proven reclaim, or stop the daemon '
+        'from a human terminal.',
+      );
+      exitCode = 1;
+      return;
+    }
+  }
+
   if (record != null && await processRunning(record.launcherPid)) {
     final launcherIdentity = await processIdentity(record.launcherPid);
     if (launcherIdentity != null &&
@@ -248,14 +281,6 @@ Future<void> _forceStopOrphanedRuntime({
         'does not match the lease (PID was reused or stale).',
       );
     }
-  }
-
-  final agent = processState.agent;
-  if (agent != null) {
-    try {
-      await _requestTakeoverRestart(agent.port, activeHome);
-    } catch (_) {}
-    await _waitForAgentPortToStop(agent.port, activeHome);
   }
 
   final pidsToKill = await _collectProvenClientPids(

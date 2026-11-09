@@ -39,7 +39,7 @@ void printUsage() {
   );
   print('  cli agent|client -- <args>  Run the cached compiled CLI artifact.');
   print(
-    '  takeover                  Relaunch a complete manual pair under sanad-dev.',
+    '  takeover [--force]        Relaunch a complete manual pair, or reclaim this runtime when its port is served by a daemon that is not its lease.',
   );
   print(
     '  cleanup-target-orphans    Remove proven stale clients in this target only.',
@@ -129,7 +129,7 @@ void printUsage() {
     '  --timeout <seconds>       Agent restart safety timeout (default: 60).',
   );
   print(
-    '  --force                   Force restart, or cancel work for stop agent/all.',
+    '  --force                   Force restart, cancel work for stop agent/all, or allow a forced reclaim in takeover.',
   );
   print('');
   print('Examples:');
