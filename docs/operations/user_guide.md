@@ -181,6 +181,16 @@ running the installer whenever you want to choose the Home yourself:
 curl -fsSL https://sanad.eaststarai.com/install.sh | SANAD_HOME=/var/lib/sanad-agent bash
 ```
 
+Once that installation exists, the binary at
+`/var/lib/sanad-agent/bin/sanad` finds its own Home even with `SANAD_HOME`
+unset, so `service status`, `service restart`, `service stop`, and `service
+start` report and act on the installed unit whether you run them as the service
+account or as root. Restarting the unit itself stays an administrator action:
+
+```bash
+sudo systemctl restart sanad-agent.service
+```
+
 If you need the background service to run as an existing account instead, name it
 explicitly. The account must exist, the install must run as root, and the
 installer places that account's Home under `~/.sanad` and gives it ownership:
