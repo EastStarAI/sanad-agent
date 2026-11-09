@@ -29,6 +29,7 @@ slowest single shard instead of the whole suite.
 | Client Web guard | `Web startup composition` | `client` paths |
 | Agent checks | `Agent contract checks and analyze` | `agent` paths |
 | Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent` paths |
+| Supervisor skill tests | `Supervisor skill tests` | `agent` paths |
 | CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `agent` paths |
 | Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `agent` paths |
 | `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `client` or `docs` paths |
@@ -41,6 +42,25 @@ slowest single shard instead of the whole suite.
 matrix, and it fails unless each dependency succeeded or was skipped by
 classification. A new lane that is not added to its `needs` and to its result
 check is a coverage hole, so both edits belong to the same change.
+
+### Supervisor Skill Tests
+
+`.agents/skills/delegate-task-supervisor/` is Node code, so no Dart lane can
+execute it. `Supervisor skill tests` runs
+`node --test test/*_test.mjs` in that directory on the runner's preinstalled
+Node, and it is classified by the same `agent` output as the Agent lanes
+(`.agents/skills/*` is an `agent` path). It exists because the alternative was
+what actually happened: every supervisor fix was verified by hand once, so a
+regression could not fail a pull request, and a live run could execute
+code that was already several fixes behind.
+
+`test/incident_regression_test.mjs` holds one named scenario per past supervisor
+incident — outage alerting, daemon-restart follow survival, an expired restart
+window, `follow_lost` actionability, gone-vs-unreachable classification, the
+scheduled-retry stall rule, the `continue --new-session` pin, the stale-code
+guard, and the lingering watcher — so a change that reintroduces one of them
+fails here instead of in a coordinator round. The rest of `test/` is the
+mechanism suite; both run in the same command.
 
 `CLI automation (ubuntu-24.04-arm)` runs the Agent AOT smoke on GitHub's arm64
 runner, so a native arm64 executable is proved at pull-request time on the same

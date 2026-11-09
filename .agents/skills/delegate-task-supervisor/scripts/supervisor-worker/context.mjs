@@ -27,6 +27,7 @@ import {
   DEFAULT_FOLLOW_LOST_POLLS,
   DEFAULT_FOLLOW_POLL_MS,
   DEFAULT_FOLLOW_PROBE_TIMEOUT_MS,
+  DEFAULT_FOLLOW_UNREADABLE_GRACE_MS,
   followPolicy,
 } from '../supervisor-follow.mjs';
 import {
@@ -80,6 +81,7 @@ export function createWorkerContext(options) {
     pollMs: integerOption(options, 'follow-poll-ms', DEFAULT_FOLLOW_POLL_MS, '--follow-poll-ms', 1),
     deadlineMs: integerOption(options, 'follow-deadline-ms', DEFAULT_FOLLOW_DEADLINE_MS, '--follow-deadline-ms', 1),
     lostAfterPolls: integerOption(options, 'follow-lost-polls', DEFAULT_FOLLOW_LOST_POLLS, '--follow-lost-polls', 1),
+    unreadableGraceMs: integerOption(options, 'follow-unreadable-grace-ms', DEFAULT_FOLLOW_UNREADABLE_GRACE_MS, '--follow-unreadable-grace-ms', 1),
     probeTimeoutMs: integerOption(options, 'follow-probe-timeout-ms', DEFAULT_FOLLOW_PROBE_TIMEOUT_MS, '--follow-probe-timeout-ms', 1),
   });
   const paths = runPaths(runDir);
@@ -124,6 +126,18 @@ export function createWorkerContext(options) {
   };
 
   const workerStartedAt = new Date().toISOString();
+  // `start` recorded which code this run executes before the worker took over.
+  // The worker rewrites the manifest from scratch, so it carries that record
+  // forward instead of dropping it: `status` compares it with origin/main for the
+  // whole life of the run, which is the whole point of recording it (a run two
+  // merged fixes behind must not report itself as current).
+  const startedCode = (() => {
+    try {
+      return readJson(paths.manifest, 'run manifest').code ?? null;
+    } catch {
+      return null;
+    }
+  })();
   const manifest = {
     version: 'delegate-supervisor.v1',
     runDir,
@@ -133,6 +147,7 @@ export function createWorkerContext(options) {
     seq: ctx.seq,
     startedAt: workerStartedAt,
     finishedAt: null,
+    code: startedCode,
     maxConcurrency: ctx.maxConcurrency,
     active: ctx.active,
     queuedStallMs: ctx.queuedStallMs,

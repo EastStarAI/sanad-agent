@@ -2422,8 +2422,19 @@ function writeSanadMock(root) {
       });
       let body = null;
       try { body = JSON.parse(readFileSync(sessionFile, 'utf8')); } catch {}
-      if (!body || body.__unreadable === true) {
-        process.stderr.write('Error: Failed to show session: session not found\\n');
+      if (!body || body.__unreadable) {
+        // Two failure shapes, because the difference between them is the whole
+        // 2026-11-09 defect: a transport failure (a daemon restart) must never
+        // end a follow, while a session the daemon says it does not know must.
+        const transient = body && body.__unreadable === 'transient';
+        const sessionId = (body && body.session_id) || 'ses_mock_1';
+        const error = transient
+          ? 'SocketException: Connection refused (errno = 61)'
+          : 'Session ' + sessionId + ' was not found on this daemon.';
+        process.stderr.write('Error: ' + (transient ? 'Failed to show session: ' : '') + error);
+        process.stdout.write(JSON.stringify(transient
+          ? {exit_code: 1, error}
+          : {exit_code: 1, error_code: 'session_not_found', session_id: sessionId, error}));
         process.exit(Number(process.env.MOCK_SHOW_EXIT || 1));
       }
       const payload = {...body};
@@ -4112,7 +4123,18 @@ function writeFakeWrapperFixture(root) {
     if (args[0] === 'session' && args[1] === 'show') {
       let body = null;
       try { body = JSON.parse(readFileSync(process.env.MOCK_SESSION_FILE, 'utf8')); } catch {}
-      if (!body || body.__unreadable === true) { process.stderr.write('Error: session not found\\n'); process.exit(1); }
+      if (!body || body.__unreadable) {
+        const transient = body && body.__unreadable === 'transient';
+        const sessionId = (body && body.session_id) || 'ses_mock_1';
+        const error = transient
+          ? 'SocketException: Connection refused (errno = 61)'
+          : 'Session ' + sessionId + ' was not found on this daemon.';
+        process.stderr.write('Error: ' + (transient ? 'Failed to show session: ' : '') + error);
+        process.stdout.write(JSON.stringify(transient
+          ? {exit_code: 1, error}
+          : {exit_code: 1, error_code: 'session_not_found', session_id: sessionId, error}));
+        process.exit(1);
+      }
       const payload = {...body};
       delete payload.__unreadable;
       const exitCode = Number(payload.__exit || 0);
@@ -4207,6 +4229,7 @@ test('a worker that exits while the daemon owns the turn is followed and its que
     pollMs: 100,
     deadlineMs: 3_600_000,
     lostAfterPolls: 3,
+    unreadableGraceMs: 300_000,
     probeTimeoutMs: 5_000,
   });
 
@@ -4576,7 +4599,7 @@ test('a followed turn whose retry budget is exhausted ends blocked', async () =>
   runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
 
-test('a followed session that becomes unreadable ends follow_lost instead of blocking forever', async () => {
+test('a followed session the daemon no longer knows ends follow_lost instead of blocking forever', async () => {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-follow-lost-test-')));
   const runDir = join(root, 'run');
   const env = followEnv(root);
@@ -4592,14 +4615,15 @@ test('a followed session that becomes unreadable ends follow_lost instead of blo
 
   const manifestPath = join(runDir, 'manifest.json');
   await waitForCondition(() => readJsonFile(manifestPath).tasks.lost?.follow?.confirmed === true, 15_000);
-  // The session disappears (a deleted session, a Home switch, an unreachable
-  // daemon). It is not the worker's failure, and it is not an infinite wait.
-  writeSessionState(env.MOCK_SESSION_FILE, { __unreadable: true });
+  // The session is gone for good: the CLI answers `session_not_found`, which is
+  // the one failure that waits for nothing. A transport failure is the opposite
+  // case and is covered by the restart scenario in incident_regression_test.mjs.
+  writeSessionState(env.MOCK_SESSION_FILE, { __unreadable: true, session_id: 'ses_mock_1' });
   const lost = await waitForCondition(() => {
     const state = readJsonFile(manifestPath).tasks.lost;
     return state?.status === 'follow_lost' ? state : null;
   }, 15_000);
-  assert.equal(lost.cause, 'session_unreadable');
+  assert.equal(lost.cause, 'session_not_found');
   assert.equal(lost.follow.active, false);
   assert.match(lost.error, /2 consecutive session reads failed/);
   const lostEvent = readJournal(runDir).find((event) => event.to === 'follow_lost');

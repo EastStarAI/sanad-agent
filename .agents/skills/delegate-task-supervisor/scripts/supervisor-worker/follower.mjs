@@ -14,10 +14,12 @@ import { basename, join } from 'node:path';
 
 import { parseIsoMillis, readResultDigest } from '../supervisor-core.mjs';
 import {
+  SESSION_NOT_FOUND_CODE,
   firstText,
   followDeadlineMsFor,
   followOutcome,
   followPollMsFor,
+  followReadFailure,
   interpretSessionSnapshot,
   parseSessionShowOutput,
 } from '../supervisor-follow.mjs';
@@ -301,16 +303,106 @@ export function createFollower(ctx) {
     ctx.persist();
   };
 
-  const settleFollowLost = (task, reason, detail) => {
+  const settleFollowLost = (task, verdict, detail) => {
     settleFollow(task, {
       status: 'follow_lost',
-      cause: reason,
+      cause: verdict.cause,
       resultSource: 'daemon_session',
       note: 'the durable session could not be read any more; the turn may still be running on the daemon',
       error: detail,
     });
     const state = ctx.manifest.tasks[task.id];
-    if (state) state.follow = { ...state.follow, active: false, lostReason: reason };
+    if (state) state.follow = { ...state.follow, active: false, lostReason: verdict.cause };
+  };
+
+  // One owner for "this durable read failed".
+  //
+  // The distinction it makes is the whole 2026-11-09 defect: a session the
+  // daemon states it does not know (`session_not_found`) is gone, while an
+  // unreachable gateway or a timed-out probe is a daemon restart — the session
+  // is still there and the same follow must survive it. So a transient failure
+  // never ends a confirmed follow on its own: it is journalled once as a
+  // non-actionable `follow_unreadable`, tolerated for the run's grace window,
+  // and then the same poll resumes the same session id with no re-follow.
+  //
+  // Before the turn was confirmed in flight, a probe that never worked cannot
+  // invent a follow, so the worker's own verdict stands exactly as before.
+  const recordFollowReadFailure = (task, { error, errorCode = null }) => {
+    const state = ctx.manifest.tasks[task.id];
+    if (!state || !isFollowing(state)) return;
+    const follow = state.follow;
+    const nowMs = Date.now();
+    const failures = (follow.unreadablePolls ?? 0) + 1;
+    const firstFailureAtMs = parseIsoMillis(follow.firstFailureAt);
+    const startedMs = firstFailureAtMs ?? nowMs;
+    follow.unreadablePolls = failures;
+    follow.firstFailureAt = follow.firstFailureAt ?? new Date(nowMs).toISOString();
+    follow.lastError = String(error ?? 'session show failed').slice(0, 400);
+    follow.lastErrorCode = errorCode ?? null;
+    follow.lastPollAt = new Date(nowMs).toISOString();
+    const verdict = followReadFailure({
+      failures,
+      firstFailureAtMs: startedMs,
+      nowMs,
+      minPolls: follow.lostAfterPolls ?? ctx.followPolicyConfig.lostAfterPolls,
+      graceMs: follow.unreadableGraceMs ?? ctx.followPolicyConfig.unreadableGraceMs,
+      definitive: errorCode === SESSION_NOT_FOUND_CODE,
+    });
+    follow.unreadableForMs = verdict.waitedMs;
+    if (follow.confirmed !== true) {
+      // The worker's own verdict is the honest answer while the follow has never
+      // been readable, and the poll floor still bounds it.
+      if (failures >= verdict.minPolls) settleWorkerVerdict(task, 'session_unreadable');
+      else ctx.persist();
+      return;
+    }
+    if (verdict.lost) {
+      settleFollowLost(
+        task,
+        verdict,
+        `${failures} consecutive session reads failed over ${Math.round((verdict.waitedMs ?? 0) / 1000)}s`
+          + ` (grace ${Math.round(verdict.graceMs / 1000)}s): ${follow.lastError}`,
+      );
+      return;
+    }
+    if (follow.degradedAt == null) {
+      // One record per outage, not one per poll: the coordinator learns that the
+      // follow is degraded while the task is still alive, and the task stays
+      // `following` because it is.
+      follow.degradedAt = follow.firstFailureAt;
+      ctx.notice(task, 'follow_unreadable', {
+        sessionId: state.sessionId ?? null,
+        reason: errorCode ?? 'session_unreadable',
+        failures,
+        graceMs: verdict.graceMs,
+        toleratedUntil: new Date(startedMs + verdict.graceMs).toISOString(),
+      });
+    }
+    ctx.persist();
+  };
+
+  // The failure a non-zero `session show` reported, in the CLI's own vocabulary.
+  // A failed read still prints a JSON payload, so its `error_code` and message
+  // outrank a bare exit status; stderr is the fallback because it is the only
+  // diagnosis available when the CLI could not answer at all (`Error: Failed to
+  // show session: …`, or a truncated write during a daemon restart).
+  const failingProbe = (probe) => {
+    const parsed = parseSessionShowOutput(probe.stdout);
+    if (parsed.reported) return parsed;
+    const stderr = String(probe.stderr ?? '')
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+      .slice(-2)
+      .join(' ');
+    const status = probe.error ?? `session show exited ${probe.exitCode ?? 'unknown'}`;
+    return {
+      ok: false,
+      payload: null,
+      error: String(stderr ? `${status}: ${stderr}` : status).slice(0, 400),
+      errorCode: null,
+      reported: false,
+    };
   };
 
   const pollFollow = async (task) => {
@@ -334,41 +426,28 @@ export function createFollower(ctx) {
       return;
     }
     const probeTimeoutMs = initial.follow.probeTimeoutMs ?? ctx.followPolicyConfig.probeTimeoutMs;
-    const lostAfterPolls = initial.follow.lostAfterPolls ?? ctx.followPolicyConfig.lostAfterPolls;
     ctx.followInFlight.add(task.id);
     try {
       const probe = await ctx.runAuxiliaryCommand(invocation, task, probeTimeoutMs);
       const current = ctx.manifest.tasks[task.id];
       if (!current || !isFollowing(current)) return;
-      const parsed = probe.ok
-        ? parseSessionShowOutput(probe.stdout)
-        : {
-          ok: false,
-          error: probe.error ?? `session show exited ${probe.exitCode ?? 'unknown'}`,
-        };
+      // A non-zero exit still carries a machine-readable payload: `session show
+      // --json` prints its own `error_code` for every failure, and
+      // `session_not_found` is the only one that proves the session is gone.
+      // Reading it is what separates a deleted session from a daemon that is
+      // restarting, and stderr is kept because "exited 1" is not a diagnosis.
+      const parsed = probe.ok ? parseSessionShowOutput(probe.stdout) : failingProbe(probe);
       current.follow.lastPollAt = new Date().toISOString();
       if (!parsed.ok) {
-        current.follow.unreadablePolls = (current.follow.unreadablePolls ?? 0) + 1;
-        current.follow.lastError = String(parsed.error ?? 'session show failed').slice(0, 400);
-        if (current.follow.unreadablePolls >= lostAfterPolls) {
-          // Before the turn was confirmed in flight the worker's own verdict is
-          // the honest answer; afterwards the follow itself is what was lost.
-          if (current.follow.confirmed === true) {
-            settleFollowLost(
-              task,
-              'session_unreadable',
-              `${current.follow.unreadablePolls} consecutive session reads failed: ${current.follow.lastError}`,
-            );
-          } else {
-            settleWorkerVerdict(task, 'session_unreadable');
-          }
-          return;
-        }
-        ctx.persist();
+        recordFollowReadFailure(task, { error: parsed.error, errorCode: parsed.errorCode ?? null });
         return;
       }
       current.follow.unreadablePolls = 0;
+      current.follow.firstFailureAt = null;
+      current.follow.degradedAt = null;
+      current.follow.unreadableForMs = null;
       current.follow.lastError = null;
+      current.follow.lastErrorCode = null;
       current.follow.polls = (current.follow.polls ?? 0) + 1;
       const snapshot = interpretSessionSnapshot(parsed.payload);
       current.follow.lastSnapshot = {
@@ -391,24 +470,10 @@ export function createFollower(ctx) {
       }
       applyFollowSnapshot(task, snapshot);
     } catch (error) {
-      const current = ctx.manifest.tasks[task.id];
-      if (!current || !isFollowing(current)) return;
-      current.follow.unreadablePolls = (current.follow.unreadablePolls ?? 0) + 1;
-      current.follow.lastError = String(error?.message ?? error).slice(0, 400);
-      current.follow.lastPollAt = new Date().toISOString();
-      if (current.follow.unreadablePolls >= lostAfterPolls) {
-        if (current.follow.confirmed === true) {
-          settleFollowLost(
-            task,
-            'session_unreadable',
-            `${current.follow.unreadablePolls} consecutive session reads failed: ${current.follow.lastError}`,
-          );
-        } else {
-          settleWorkerVerdict(task, 'session_unreadable');
-        }
-        return;
-      }
-      ctx.persist();
+      // A thrown probe (spawn failure, a rejected run) is the same fact as an
+      // unreadable answer: the read did not happen, so it goes through the same
+      // classification and can never end a follow on its own.
+      recordFollowReadFailure(task, { error: String(error?.message ?? error) });
     } finally {
       ctx.followInFlight.delete(task.id);
     }
@@ -506,9 +571,20 @@ export function createFollower(ctx) {
       deadlineMs,
       pollMs,
       lostAfterPolls: ctx.followPolicyConfig.lostAfterPolls,
+      // The restart window the follow was started with. Persisted with the task
+      // so a reader can tell what this follow actually tolerated, and so the
+      // rule never depends on a default the handshake did not report.
+      unreadableGraceMs: ctx.followPolicyConfig.unreadableGraceMs,
       probeTimeoutMs: ctx.followPolicyConfig.probeTimeoutMs,
       polls: 0,
       unreadablePolls: 0,
+      // The first unreadable read of the current outage. The grace window is
+      // measured from here, so a flapping daemon earns one window per outage and
+      // a recovery clears it.
+      firstFailureAt: null,
+      degradedAt: null,
+      unreadableForMs: null,
+      lastErrorCode: null,
       lastPollAt: null,
       lastSnapshot: null,
       lastLive: null,

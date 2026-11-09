@@ -221,6 +221,17 @@ This command is event-driven. By default, it blocks until a task enters an inter
 
 A watcher can be interrupted and restarted without stopping workers or losing already-journaled events.
 
+**A one-shot watcher is not a daemon.** `supervisor.mjs watch --once` prints the current batch and returns by design: everything journaled after it exits stays unread until it is invoked again. On 2026-11-09 (run13) that cost three `blocked` transitions and four `follow_lost` records, which sat unread for 17 minutes after the run had already stopped. For a coordinator that wants to be told, keep the watcher running with an additive linger window instead of re-invoking it by hand:
+
+```bash
+node "<skill-dir>/scripts/supervisor.mjs" watch \
+  --run <run-directory> \
+  --cursor <cursor-file> \
+  --once --linger-sec 3600
+```
+
+`--linger-sec <n>` keeps consuming for `n` seconds after the first batch and prints every later alerting transition as it arrives; with it set, `--timeout-sec` measures "no new actionable event for n seconds" from the last printed batch instead of from the start. Omitting the flag keeps the documented one-shot contract exactly. `--cursor` still advances only after a line is flushed, so a killed watcher replays rather than loses.
+
 **Caller timeout does not mean worker failure.** If an agent tool call that blocks on `watch-once` times out, the worker and the supervised tasks keep running; a watcher timeout only ends the caller's wait. Re-enter with the cursor from the last returned event (or `supervisor status --run <dir> --json` to read the current `seq`), then resume with `--since <seq>`. Use only bounded `status`/`inspect` reads between waits; never schedule polling or stop the worker because a watcher call timed out.
 
 ### 5.1. Keep watching after a worker exits
@@ -235,10 +246,20 @@ The poll journals the same events an attached worker produces: `needs_input` and
 |---|---|---|
 | `--follow-poll-ms` | `30000` | How often the durable session is read |
 | `--follow-deadline-ms` | `3600000`, or the task's own `--timeout` | How long a followed turn may stay in flight before the task ends `timeout` |
-| `--follow-lost-polls` | `3` | Consecutive unreadable reads after which the task ends `follow_lost` |
+| `--follow-lost-polls` | `3` | Consecutive unreadable reads that, together with the window below, end the task `follow_lost` |
+| `--follow-unreadable-grace-ms` | `300000` | How long a confirmed follow tolerates an unreachable daemon (a restart) before `follow_lost` |
 | `--cancel-force-kill-ms` | `10000` | Grace between the cancelling `SIGTERM` and the forced `SIGKILL`, both sent to the process group |
 
 Start the run with `--follow-poll-ms 5000` when a question must reach a human quickly, and set the task's `--timeout` when the work has a known bound: that timeout becomes the follow window.
+
+**A restart is not a lost session.** An unreadable probe is classified before it is allowed to end anything, because "the session is gone" and "the daemon is not answering" are different facts:
+
+- The CLI's own `error_code: session_not_found` (from `session show <id> --json`) is definitive: the id is not on this daemon any more, so the task ends `follow_lost` with cause `session_not_found` as soon as `--follow-lost-polls` reads agree.
+- Every other failure — an unreachable gateway, a probe timeout, an unknown fault — is transient. It is tolerated for `--follow-unreadable-grace-ms`, journalled **once** as a `follow_unreadable` notice (not a wake-up), and then the same follow resumes the **same** session with no re-follow command, no new attempt, and no lost conversation. Only when the window itself expires does the task end `follow_lost`, with cause `session_unreadable` and the failures, the window, and the CLI's own stderr in `follow.error`.
+
+The rule lives in one pure function (`followReadFailure` in `scripts/supervisor-follow.mjs`) that the follower and the incident suite share, so a mock cannot disagree with production. On 2026-11-09 (run13) a deliberate daemon restart outlived three 30s polls and turned four live, `resuming` sessions into terminal `follow_lost` tasks; one of them finished its turn afterwards.
+
+**Watch the code, not only the run.** A run executes the skill scripts of the checkout it was started in, for its whole life, so a merged fix is not a running fix. `start` records `code` (`root`, `commit`, `shortCommit`, `branch`, `dirty`) in the manifest and prints it in the handshake; `status` prints a `CODE` line and `status --brief` adds `code=<short>` plus `CODE_BEHIND_ORIGIN_MAIN=<n>` when the run is behind the locally known `origin/main` (no network is used, and an unavailable comparison says `unknown` instead of guessing). Restart the supervisor after a merged supervisor fix, and check that line before concluding that a fix did not work.
 
 **`completed` needs evidence.** An `idle` session is not a verdict: it only says nothing is publishing the turn any more. `sanad session show <id> --json` carries no terminal turn record, so the verdict comes from the durable message accounting in `summary` — `final_answers` counts the assistant's finished replies and `user_messages` counts the turns sent to the session. A turn that finished normally leaves a final answer behind; one that was stopped, cancelled, or interrupted leaves its user message and whatever tool activity it produced, and no answer. So a followed task ends `completed` only when a final answer appeared inside the follow window or the session holds one for every user turn, and otherwise ends `failed` with `cause: turn_interrupted` (or the daemon's own cause) and an event a watcher can act on. The verdict is recorded under `follow.evidence` (`finalAnswers`, `userMessages`, `reason`). The result the task reports is that same verdict, so a status line can never show `completed` next to a worker artifact's `interrupted`: a late artifact is reported as `later-result` for triage.
 
@@ -306,6 +327,7 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 - `scripts/supervisor-control.mjs` — `sendControlRequest` and the commands that change a live run: `add`, `enqueue`, `continue`, `steer`, `retry`, `cancel`, `set-concurrency`, `close`, plus the launch verification they report.
 - `scripts/supervisor-views.mjs` — the read-only surfaces (`status` verbose/`--brief`/`--json`, `inspect`, `timeline`, `logs`, `view`) and the queue/progress formatting they quote.
 - `scripts/supervisor-watch.mjs` — the durable `watch` loop with its cursor, the actionable-event enrichment every wake-up goes through, and `reconcileRun`, which turns a dead worker or a settled session into manifest state (`status` imports it too, so both surfaces repair the same way).
+- `scripts/supervisor-provenance.mjs` — the code a run executes (`git rev-parse` of the skill's own checkout at `start`) and the offline comparison with `origin/main` that `status` reports as its `CODE` line.
 - `scripts/supervisor-worker/context.mjs` — `createWorkerContext`: run configuration, mutable worker state, and the four journal writers (`persist`, `persistTasks`, `transition`, `notice`).
 - `scripts/supervisor-worker/child-process.mjs` — process spawning, task environment composition, process-group signalling, and group-survival probes.
 - `scripts/supervisor-worker/reconcile.mjs` — `createReconciler`: progress-signal sampling (timeline, stdout/stderr, and result artifact growth), queue stall, progress stall, and lost-worker detection.
@@ -321,3 +343,5 @@ A terminal status means the relay exited; it does not prove correctness. Follow 
 - `scripts/supervisor-stalls.mjs` — the stall policy both the worker and `status` import: the artifact signatures that count as progress, the silence verdict measured from the latest signal, and the queue verdict that separates `awaiting_slot` from `launch_pending` and `slots_frozen`.
 
 The pure policy modules `scripts/supervisor-events.mjs`, `scripts/supervisor-stalls.mjs`, `scripts/supervisor-retry.mjs`, and `scripts/supervisor-follow.mjs` are imported by these owners as well; none of the scripts keeps a private copy of their rules.
+
+`test/` holds the mechanism suite (`supervisor_test.mjs`, `retry_policy_test.mjs`, `follow_classification_test.mjs`, `process_guard_test.mjs`, `bootstrap_test.mjs`) and `test/incident_regression_test.mjs`, which states one named scenario per past supervisor incident. Run them from this directory with `node --test test/*_test.mjs`; Public CI runs the same command as the `Supervisor skill tests` job, so a change that breaks following, alerting, or a previous incident fails a pull request instead of a live run.

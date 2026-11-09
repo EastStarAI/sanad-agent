@@ -34,6 +34,7 @@ import {
   windowsBatchQuote,
 } from './supervisor-windows.mjs';
 import { reconcileRun } from './supervisor-watch.mjs';
+import { codeStaleness, codeStalenessLine } from './supervisor-provenance.mjs';
 import { TERMINAL_STATUSES } from './supervisor-events.mjs';
 import {
   DEFAULT_AUTO_RETRY_MAX_ATTEMPTS,
@@ -349,6 +350,11 @@ function statusSnapshot(runDir) {
     && snapshot.queued.length === 0
     && !following
     && !manifest.closed;
+  // Whether the code this run executes is still the code on origin/main. The
+  // comparison is offline and never fails the read; a manifest that recorded no
+  // commit says "unknown" instead of guessing (2026-11-09: a supervisor two
+  // merged fixes behind reported the run as current because nothing asked).
+  manifest.codeStaleness = codeStaleness(manifest.code);
   return manifest;
 }
 
@@ -444,7 +450,18 @@ function briefRunHeader(runDir, manifest) {
     + `  queued=${snapshot.queued.length}`
     + `  tasks=${Object.keys(manifest.tasks || {}).length}`
     + `  seq=${manifest.seq}`
-    + `  supervisor=${manifest.supervisorPid}`;
+    + `  supervisor=${manifest.supervisorPid}`
+    + `${codeMarker(manifest)}`;
+}
+
+// The brief form keeps one line per run, so staleness is a marker rather than a
+// sentence: a coordinator that reads only `--brief` still sees it.
+function codeMarker(manifest) {
+  if (!manifest.code) return '';
+  const commitment = `  code=${manifest.code.shortCommit ?? '?'}`;
+  if (!manifest.codeStaleness) return commitment;
+  if (!manifest.codeStaleness.stale) return commitment;
+  return `${commitment}  CODE_BEHIND_ORIGIN_MAIN=${manifest.codeStaleness.behind}`;
 }
 
 function briefView(runDir, manifest) {
@@ -457,6 +474,8 @@ function briefView(runDir, manifest) {
     maxConcurrency: manifest.maxConcurrency ?? null,
     seq: manifest.seq,
     supervisorPid: manifest.supervisorPid ?? null,
+    code: manifest.code ?? null,
+    codeStaleness: manifest.codeStaleness ?? null,
     tasks: Object.values(manifest.tasks || {}).map((task) => {
       const details = resolveSessionDetails(task, manifest);
       const progress = task.progress ?? describeProgress(manifest, task);
@@ -553,6 +572,9 @@ function printVerboseStatus(manifest, options, runCount = 1) {
   const closedIndicator = manifest.closed ? ' (closed)' : '';
   const idleIndicator = manifest.idle ? ' (idle)' : '';
   process.stdout.write(`RUN ${manifest.status}${closedIndicator}${idleIndicator}  seq=${manifest.seq}  supervisor=${manifest.supervisorPid}\n`);
+  // The code is reported next to the pid because a live supervisor running
+  // stale code is the difference between a fixed defect and an unfixed one.
+  process.stdout.write(`${codeStalenessLine(manifest.code, manifest.codeStaleness)}\n`);
   process.stdout.write('TASK\tIMPLEMENTER\tSTATUS\tPID\tWORKSPACE\n');
   for (const task of Object.values(manifest.tasks)) {
     process.stdout.write(`${task.id}\t${task.implementer}\t${task.status}\t${task.pid ?? '-'}\t${task.workspace}\n`);

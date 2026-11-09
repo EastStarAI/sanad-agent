@@ -373,7 +373,10 @@ function enrichWatchEvent(runDir, event) {
     if (result.headSha) parts.push(`sha ${result.headSha}`);
     if (result.branch) parts.push(`branch ${result.branch}`);
     if (result.summary) parts.push(`summary ${result.summary}`);
-    parts.push(`result-file ${result.path}`);
+    // A followed task's verdict has no artifact path: it comes from the durable
+    // session, and printing `result-file undefined` for it named a file that
+    // never existed (2026-11-09, every `follow_lost` line).
+    if (result.path) parts.push(`result-file ${result.path}`);
   }
   enriched.line = parts.join('  ');
   return enriched;
@@ -395,6 +398,12 @@ export async function watchCommand(options) {
   const once = options.once === true;
   const includeAll = options.all === true;
   const timeoutMs = secondsOption(options, 'timeout-sec', 0, '--timeout-sec');
+  // How long a `--once` watcher keeps consuming after its first batch. Zero (the
+  // default) keeps the documented one-shot contract exactly; a positive value is
+  // the long-lived watcher a coordinator needs, and it is additive so every
+  // existing invocation behaves byte-for-byte as before.
+  const lingerMs = secondsOption(options, 'linger-sec', 0, '--linger-sec');
+  let lingerDeadline = null;
 
   const cursor = loadCursor(cursorPath);
   const runs = runDirs.map((runDir) => ({
@@ -517,14 +526,25 @@ export async function watchCommand(options) {
     }
   };
 
-  const deadline = timeoutMs > 0
-    ? setTimeout(() => {
+  const deadline = { handle: null };
+  const stopDeadline = () => {
+    if (deadline.handle) clearTimeout(deadline.handle);
+    deadline.handle = null;
+  };
+  // The timeout means "no new actionable event for n seconds". A lingering
+  // watcher re-arms it after every printed batch so it keeps that meaning, and a
+  // one-shot watcher keeps its single absolute deadline.
+  const armDeadline = () => {
+    stopDeadline();
+    if (timeoutMs <= 0) return;
+    deadline.handle = setTimeout(() => {
       stop();
       process.stderr.write(`supervisor: watch timed out after ${timeoutMs}ms with no new actionable event\n`);
       process.exit(4);
-    }, timeoutMs)
-    : null;
-  if (deadline && typeof deadline.unref === 'function') deadline.unref();
+    }, timeoutMs);
+    if (typeof deadline.handle.unref === 'function') deadline.handle.unref();
+  };
+  armDeadline();
 
   const finishIfAllRunsEnded = () => {
     if (!runDirs.every((runDir) => runIsFinished(runDir))) return false;
@@ -536,10 +556,22 @@ export async function watchCommand(options) {
     while (!stopped) {
       const printed = await cycle();
       if (once && printed > 0) {
+        // A lingering watcher has already reported its first batch; it now keeps
+        // streaming every later alert for the requested window instead of exiting
+        // and leaving them unread until someone re-invokes it.
+        if (lingerMs > 0) {
+          if (lingerDeadline == null) lingerDeadline = Date.now() + lingerMs;
+          armDeadline();
+        } else {
+          stop();
+          return;
+        }
+      }
+      if (finishIfAllRunsEnded()) return;
+      if (lingerDeadline != null && Date.now() >= lingerDeadline) {
         stop();
         return;
       }
-      if (finishIfAllRunsEnded()) return;
       if (once && printed === 0) {
         // Nothing actionable yet: wait for the next wake-up instead of
         // re-invoking the caller with an empty batch.
@@ -550,5 +582,6 @@ export async function watchCommand(options) {
     }
   } finally {
     stop();
+    stopDeadline();
   }
 }

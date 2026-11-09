@@ -22,12 +22,29 @@ export const DEFAULT_FOLLOW_POLL_MS = 30_000;
 // Bounded, always: the default deadline applies only when the task declares no
 // `--timeout` of its own, and that timeout is the documented follow window.
 export const DEFAULT_FOLLOW_DEADLINE_MS = 3_600_000;
-// Consecutive unreadable probes that mean the session is gone (a Home switch, a
-// deleted session, an unreachable daemon) instead of a single slow read.
+// Consecutive unreadable probes that are never enough on their own: a session
+// that is gone is only declared gone once both this count and the grace window
+// below have elapsed, so one slow CLI can never end a follow.
 export const DEFAULT_FOLLOW_LOST_POLLS = 3;
+// How long a confirmed follow tolerates unreadable probes before it ends.
+//
+// A daemon restart is not a deleted session. The transport refuses connections
+// for as long as the daemon takes to come back — migrations, secret vault,
+// session rehydration — and three 30s polls are 90 seconds, which is shorter
+// than a cold start. On 2026-11-09 (run13) a deliberate restart therefore turned
+// four live, `resuming` sessions into terminal `follow_lost` tasks, and one of
+// them finished its turn afterwards. The window is deliberately generous and
+// named: a *definitive* answer from the CLI (`error_code: session_not_found`)
+// still ends the follow at once, so the only thing this costs is patience for an
+// unreachable daemon.
+export const DEFAULT_FOLLOW_UNREADABLE_GRACE_MS = 300_000;
 // One probe is bounded well below the default poll interval so a hung CLI can
 // never stack probes.
 export const DEFAULT_FOLLOW_PROBE_TIMEOUT_MS = 20_000;
+// The CLI's machine-readable answer for a session id the daemon does not know
+// (`sanad session show <id> --json`). Every other failure is a transport or an
+// unknown fault, which is exactly the difference between "gone" and "not now".
+export const SESSION_NOT_FOUND_CODE = 'session_not_found';
 
 // Durable session states that still own the turn. `stopping` is deliberately not
 // here: a stopping session has already decided the turn's outcome.
@@ -215,15 +232,67 @@ export function followPolicy({
   pollMs = DEFAULT_FOLLOW_POLL_MS,
   deadlineMs = DEFAULT_FOLLOW_DEADLINE_MS,
   lostAfterPolls = DEFAULT_FOLLOW_LOST_POLLS,
+  unreadableGraceMs = DEFAULT_FOLLOW_UNREADABLE_GRACE_MS,
   probeTimeoutMs = DEFAULT_FOLLOW_PROBE_TIMEOUT_MS,
 } = {}) {
   return {
     pollMs: positiveInteger(pollMs, DEFAULT_FOLLOW_POLL_MS),
     deadlineMs: positiveInteger(deadlineMs, DEFAULT_FOLLOW_DEADLINE_MS),
     lostAfterPolls: positiveInteger(lostAfterPolls, DEFAULT_FOLLOW_LOST_POLLS),
+    unreadableGraceMs: positiveInteger(unreadableGraceMs, DEFAULT_FOLLOW_UNREADABLE_GRACE_MS),
     probeTimeoutMs: positiveInteger(probeTimeoutMs, DEFAULT_FOLLOW_PROBE_TIMEOUT_MS),
   };
 }
+
+/**
+ * What one failed durable-session probe means for a confirmed follow.
+ *
+ * The rule is the one thing this module never had, and the 2026-11-09 outage is
+ * what its absence cost: every failure was the same failure, so a daemon restart
+ * that outlived three polls ended four live sessions as `follow_lost`.
+ *
+ * - `definitive` is the CLI's own `session_not_found` answer: the id is not on
+ *   this daemon any more (deleted, or a different Home). Waiting cannot help, so
+ *   the poll floor is the only bound.
+ * - Anything else (unreachable gateway, probe timeout, unknown fault) may be a
+ *   restart. It is tolerated until both `minPolls` failures **and** the grace
+ *   window have elapsed, then reported with the elapsed wait so the operator can
+ *   tell "the daemon never came back" from "the session is gone".
+ *
+ * `firstFailureAtMs` is the first failure of the current run, so a flapping
+ * daemon earns one window per outage rather than one per poll. `waitedMs` is
+ * null when no failure has been observed at all.
+ */
+export function followReadFailure({
+  failures = 0,
+  firstFailureAtMs = null,
+  nowMs = Date.now(),
+  minPolls = DEFAULT_FOLLOW_LOST_POLLS,
+  graceMs = DEFAULT_FOLLOW_UNREADABLE_GRACE_MS,
+  definitive = false,
+} = {}) {
+  const count = Number.isInteger(Number(failures)) && Number(failures) > 0 ? Number(failures) : 0;
+  const polls = positiveInteger(minPolls, DEFAULT_FOLLOW_LOST_POLLS);
+  const grace = positiveInteger(graceMs, DEFAULT_FOLLOW_UNREADABLE_GRACE_MS);
+  const startedMs = Number.isFinite(Number(firstFailureAtMs)) ? Number(firstFailureAtMs) : null;
+  const waitedMs = startedMs == null ? null : Math.max(0, nowMs - startedMs);
+  const graceElapsed = waitedMs != null && waitedMs >= grace;
+  const pollFloorMet = count >= polls;
+  return {
+    failures: count,
+    definitive: definitive === true,
+    waitedMs,
+    graceMs: grace,
+    minPolls: polls,
+    // Kept for the journal and the tests: the reason a follow may be ended.
+    lost: pollFloorMet && (definitive === true || graceElapsed),
+    cause: definitive === true
+      ? SESSION_NOT_FOUND_CODE
+      : 'session_unreadable',
+    waitedFor: waitedMs == null ? null : `${count} failed read(s) in ${Math.round(waitedMs / 1000)}s`,
+  };
+}
+
 
 function positiveInteger(value, fallback) {
   const number = Number(value);
@@ -307,12 +376,29 @@ export function parseSessionShowOutput(stdout) {
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) continue;
     if (payload.error && typeof payload.status !== 'string') {
-      return { ok: false, payload: null, error: String(payload.error).slice(0, 400) };
+      return {
+        ok: false,
+        payload: null,
+        error: String(payload.error).slice(0, 400),
+        // The CLI's own classification of the failure. `session_not_found` is the
+        // only answer that proves the session is gone from this daemon; every
+        // other shape is a transport or unknown fault, which is a different fact
+        // and must never end a follow on its own.
+        errorCode: typeof payload.error_code === 'string' ? payload.error_code : null,
+        // The CLI answered; the failure is its own report, not a missing answer.
+        reported: true,
+      };
     }
     if (typeof payload.status !== 'string' && !payload.execution_snapshot) continue;
-    return { ok: true, payload, error: null };
+    return { ok: true, payload, error: null, errorCode: null, reported: true };
   }
-  return { ok: false, payload: null, error: 'session show did not return a session projection' };
+  return {
+    ok: false,
+    payload: null,
+    error: 'session show did not return a session projection',
+    errorCode: null,
+    reported: false,
+  };
 }
 
 /**

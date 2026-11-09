@@ -42,6 +42,7 @@ export function workerFollowArgs(policy) {
     '--follow-poll-ms', String(policy.pollMs),
     '--follow-deadline-ms', String(policy.deadlineMs),
     '--follow-lost-polls', String(policy.lostAfterPolls),
+    '--follow-unreadable-grace-ms', String(policy.unreadableGraceMs),
     '--follow-probe-timeout-ms', String(policy.probeTimeoutMs),
   ];
 }
