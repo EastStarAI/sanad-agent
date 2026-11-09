@@ -1449,6 +1449,14 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
           as int);
 
   @override
+  int get historySnapshotChars =>
+      (super.noSuchMethod(
+            Invocation.getter(#historySnapshotChars),
+            returnValue: 0,
+          )
+          as int);
+
+  @override
   bool hasHistorySnapshot(String? sessionId) =>
       (super.noSuchMethod(
             Invocation.method(#hasHistorySnapshot, [sessionId]),
@@ -1466,9 +1474,42 @@ class MockSessionManager extends _i1.Mock implements _i5.SessionManager {
   );
 
   @override
+  void appendInFlightDelta({
+    required String? sessionId,
+    required String? runId,
+    required String? turnId,
+    required String? modelStepId,
+    required String? type,
+    required String? delta,
+  }) => super.noSuchMethod(
+    Invocation.method(#appendInFlightDelta, [], {
+      #sessionId: sessionId,
+      #runId: runId,
+      #turnId: turnId,
+      #modelStepId: modelStepId,
+      #type: type,
+      #delta: delta,
+    }),
+    returnValueForMissingStub: null,
+  );
+
+  @override
   Map<String, dynamic>? getInFlightSnapshot(String? sessionId) =>
       (super.noSuchMethod(Invocation.method(#getInFlightSnapshot, [sessionId]))
           as Map<String, dynamic>?);
+
+  @override
+  bool hasInFlightSnapshot(String? sessionId) =>
+      (super.noSuchMethod(
+            Invocation.method(#hasInFlightSnapshot, [sessionId]),
+            returnValue: false,
+          )
+          as bool);
+
+  @override
+  String? inFlightRunId(String? sessionId) =>
+      (super.noSuchMethod(Invocation.method(#inFlightRunId, [sessionId]))
+          as String?);
 
   @override
   void clearInFlightSnapshot(String? sessionId) => super.noSuchMethod(
@@ -2448,6 +2489,33 @@ class MockSessionDB extends _i1.Mock implements _i19.SessionDB {
   Map<String, dynamic>? getScheduledTask(String? id) =>
       (super.noSuchMethod(Invocation.method(#getScheduledTask, [id]))
           as Map<String, dynamic>?);
+
+  @override
+  bool updateScheduleSettings(
+    String? id, {
+    Object? name = const Object(),
+    Object? conversationMode = const Object(),
+    Object? runSessionId = const Object(),
+    Object? workspaceId = const Object(),
+    Object? providerInstanceId = const Object(),
+    Object? model = const Object(),
+  }) =>
+      (super.noSuchMethod(
+            Invocation.method(
+              #updateScheduleSettings,
+              [id],
+              {
+                #name: name,
+                #conversationMode: conversationMode,
+                #runSessionId: runSessionId,
+                #workspaceId: workspaceId,
+                #providerInstanceId: providerInstanceId,
+                #model: model,
+              },
+            ),
+            returnValue: false,
+          )
+          as bool);
 
   @override
   List<Map<String, dynamic>> getAllScheduledTasks() =>

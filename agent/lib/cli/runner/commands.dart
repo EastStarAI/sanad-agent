@@ -15,6 +15,7 @@ export 'commands/session_command.dart';
 export 'commands/setup_command.dart';
 export 'commands/skills_command.dart';
 export 'commands/update_command.dart';
+export 'commands/vault_command.dart';
 export 'commands/version_command.dart';
 export 'commands/workspace_command.dart';
 export 'sanad_command.dart';

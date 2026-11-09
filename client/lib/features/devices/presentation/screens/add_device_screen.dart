@@ -90,9 +90,13 @@ class _AddDeviceScreenState extends State<AddDeviceScreen> {
                       },
                     ),
                     const SizedBox(width: 8),
-                    Text(
-                      'Add Host Device',
-                      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                    Expanded(
+                      child: Text(
+                        'Add Host Device',
+                        style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w700),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
                     ),
                   ],
                 ),

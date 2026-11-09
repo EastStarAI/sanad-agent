@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:sanad_client/core/navigation/account_landing.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -64,7 +65,10 @@ class SettingsNavigation extends StatelessWidget {
                   key: const Key('settings_back_to_conversations_btn'),
                   icon: const Icon(Icons.arrow_back_rounded),
                   tooltip: AppLocalizations.of(context)!.backToConversations,
-                  onPressed: () => context.go(AppRoutes.home),
+                  // Back goes where this account is eligible to be: a zero-device
+                  // account returns to the zero-device surface, not to a
+                  // device-less Home it cannot leave.
+                  onPressed: () => context.go(AccountLanding.forCurrentAccount(context)),
                 ),
                 Text(
                   AppLocalizations.of(context)!.settings,

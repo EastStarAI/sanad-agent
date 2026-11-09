@@ -6,10 +6,15 @@
 // `sessionInvocation` rather than four argument lists that could drift apart. The
 // bounded capture below is the only way the supervisor waits on an auxiliary
 // command, and it never waits forever.
+//
+// `recordTaskSession` owns the other half of the binding: which session a task's
+// attempts belong to. It records the id the run reports and, for an attempt that
+// started without a pin, writes it into the task's own arguments so a later plain
+// `continue` resumes that conversation.
 
 import { basename } from 'node:path';
 
-import { getArgValue } from '../supervisor-core.mjs';
+import { effectiveTaskArgs, getArgValue, sessionPin } from '../supervisor-core.mjs';
 import { SANAD_CLIENT_COMMAND } from '../supervisor-spec.mjs';
 import { STEER_TIMEOUT_MS } from '../supervisor-control.mjs';
 import { spawnCommand, taskEnvironment } from './child-process.mjs';
@@ -170,7 +175,43 @@ export function createSessionSupport(ctx) {
     child.once('exit', complete);
   });
 
+  // The one owner of "this task's daemon session is <id>".
+  //
+  // The id arrives on any lifecycle event and on the terminal `result.json`, and
+  // the manifest records it so stop, steer, retry, and the follow target the
+  // exact session the worker created. An attempt that started without a session
+  // pin also pins the id into the task's own arguments and persists the tasks
+  // file: that attempt opened the conversation, so a later plain `continue` has
+  // to resume it instead of opening yet another session (2026-11-09: `continue
+  // --new-session` ran attempt 2 in session A, and the next plain `continue`
+  // started a third session and lost the context). An attempt that never reports
+  // an id pins nothing, and a task that already pins one is never rewritten.
+  const recordTaskSession = (task, sessionId) => {
+    if (!sessionId) return false;
+    const state = ctx.manifest.tasks[task.id];
+    if (!state) return false;
+    let changed = false;
+    if (state.sessionId !== sessionId) {
+      state.sessionId = sessionId;
+      changed = true;
+    }
+    // Only the Sanad invocation contract is owned here. Another implementer's
+    // relay arguments are opaque to the supervisor, so they are never rewritten
+    // with a flag it cannot validate.
+    if (task.implementer === 'sanad' && !sessionPin(task.args).pinned) {
+      task.args = [...task.args, '--session', sessionId];
+      task.effectiveArgs = effectiveTaskArgs(task.args, task.home);
+      ctx.persistTasks();
+      ctx.notice(task, 'session_pinned', { sessionId, attempt: state.attempt ?? 1 });
+      changed = true;
+    }
+    state.pinnedSessionId = sessionPin(task.args).id;
+    if (changed) ctx.persist();
+    return changed;
+  };
+
   return {
+    recordTaskSession,
     sessionShowInvocation,
     requestSessionStop,
     sessionSteerInvocation,

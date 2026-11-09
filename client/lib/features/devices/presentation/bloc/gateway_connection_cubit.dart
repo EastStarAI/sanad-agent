@@ -1,6 +1,7 @@
 import 'package:logging/logging.dart';
 import 'dart:async';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/core/navigation/account_landing.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
@@ -109,10 +110,17 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
     final cloudSnapshot = await _waitForCloudDeviceSnapshot();
     await refresh(probeLocalService: AppPlatform.isDesktop);
 
-    final devices = cloudSnapshot ?? _devicesFromState(_deviceCubit.state);
-    final hasRegisteredDevices = _hasRegisteredDevices(devices);
+    final devices = cloudSnapshot ?? AccountLanding.registeredDevicesOf(_deviceCubit.state);
+    final hasRegisteredDevices = AccountLanding.hasRegisteredDevices(devices);
     if (!AppPlatform.isDesktop) {
-      final route = hasRegisteredDevices ? _safeRequestedLocation(requestedLocation) : AppRoutes.onboarding;
+      // One eligibility rule for cold start and for every in-app landing (see
+      // [AccountLanding]): a non-desktop account with no registered device
+      // belongs on the zero-device surface, never on a device-less Home.
+      final route = AccountLanding.resolve(
+        isDesktop: false,
+        hasRegisteredDevices: hasRegisteredDevices,
+        requestedLocation: _safeRequestedLocation(requestedLocation),
+      );
       _logBootstrapDecision(
         route,
         devices: devices,
@@ -239,7 +247,7 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
     final expectedIds = devices.map((device) => device.id).toSet();
     if (expectedIds
         .difference(
-          _devicesFromState(
+          AccountLanding.registeredDevicesOf(
             _deviceCubit.state,
           ).map((device) => device.id).toSet(),
         )
@@ -250,7 +258,7 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
     try {
       await _deviceCubit.stream
           .firstWhere((state) {
-            final stateIds = _devicesFromState(
+            final stateIds = AccountLanding.registeredDevicesOf(
               state,
             ).map((device) => device.id).toSet();
             return expectedIds.difference(stateIds).isEmpty;
@@ -369,29 +377,10 @@ class GatewayConnectionCubit extends Cubit<GatewayConnectionStatus> {
   /// True while the device inventory holds no authoritative result yet: the
   /// first load after sign-in, a retained cache while it refreshes, or a retry
   /// surface after a failed fetch.
-  bool get _isInventoryPending {
-    return switch (_deviceCubit.state) {
-      DeviceLoading() || AgentInitial() => true,
-      DeviceNoActive(:final phase) =>
-        phase == DevicesPhase.loading || phase == DevicesPhase.stale || phase == DevicesPhase.error,
-      _ => false,
-    };
-  }
+  bool get _isInventoryPending => AccountLanding.isInventoryPending(_deviceCubit.state);
 
   bool get _hasCloudDevices {
-    return _hasRegisteredDevices(_devicesFromState(_deviceCubit.state));
-  }
-
-  bool _hasRegisteredDevices(List<DeviceConfig> devices) {
-    return devices.any((device) => device.accountDeviceId != null);
-  }
-
-  List<DeviceConfig> _devicesFromState(DeviceState state) {
-    return switch (state) {
-      DeviceActive(:final agents) => agents,
-      DeviceNoActive(:final agents) => agents,
-      _ => const <DeviceConfig>[],
-    };
+    return AccountLanding.hasRegisteredDevices(AccountLanding.registeredDevicesOf(_deviceCubit.state));
   }
 
   void _logBootstrapDecision(

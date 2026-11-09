@@ -127,8 +127,16 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
   approval-authority keys from non-owner turns. Widening workspace policy
   requires `owner`. The remote CLI relay runs under its relay authority.
 - A command's `emitEnvelope` reaches only the requester. Family-wide events
-  that other clients must see (for example `workspace.policy_changed`) go
-  through `GatewayManager.publishFamilyEvent`.
+  that other clients must see (for example `workspace.policy_changed` and
+  `session_deleted`) go through `GatewayManager.publishFamilyEvent`.
+- Session deletion is always a family announcement, never only the requester's
+  reply: the `delete_session` response stays the correlated `origin`
+  acknowledgement of that `request_id`, and the same mutation also publishes
+  one `session_deleted` event with `session_id` alone, so every connected
+  Sanad client drops the conversation whether the delete came from the CLI,
+  another device, or the Client itself. The announcement names no request
+  identity, so it can never release another client's in-flight wait, and a
+  client applying both copies it already received must stay idempotent.
 - Platform-provided tools use canonical platform call/result and remain distinct from daemon-local execution.
 - Permission resolution is first-writer-wins and resumed execution reapplies the persisted decision before invoking the gated tool.
 

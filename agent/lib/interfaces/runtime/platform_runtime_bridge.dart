@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/capabilities/secrets/secret_acquisition.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -88,6 +89,10 @@ class PlatformRuntimeBridge {
   final Map<String, PermissionRequestHandler> _permissionHandlers = {};
   final Map<String, PlatformToolExecutionHandler> _platformToolHandlers = {};
   final Map<String, SessionResponseEmitter> _sessionResponseEmitters = {};
+  /// Channel that registered a session's response emitter, for the transports
+  /// whose emitter closure writes to that socket. Released with the channel so
+  /// a closed socket is never pinned by its own last command closure.
+  final Map<String, PlatformSessionChannel> _emitterChannels = {};
   final Map<String, PendingPermissionEntry> _pendingPermissionRequests = {};
   final Map<String, ResolvedPermissionRecord> _resolvedPermissionRequests = {};
   final Map<String, Completer<Map<String, dynamic>>> _pendingToolCalls = {};
@@ -111,6 +116,7 @@ class PlatformRuntimeBridge {
     PermissionRequestHandler? permissionHandler,
     PlatformToolExecutionHandler? platformToolHandler,
     SessionResponseEmitter? responseEmitter,
+    bool channelScopedEmitter = false,
   }) {
     if (permissionHandler != null) {
       _permissionHandlers[sessionId] = permissionHandler;
@@ -120,6 +126,12 @@ class PlatformRuntimeBridge {
     }
     if (responseEmitter != null) {
       _sessionResponseEmitters[sessionId] = responseEmitter;
+      final channel = channelScopedEmitter ? _sessionChannels[sessionId] : null;
+      if (channel != null) {
+        _emitterChannels[sessionId] = channel;
+      } else {
+        _emitterChannels.remove(sessionId);
+      }
     }
   }
 
@@ -129,6 +141,7 @@ class PlatformRuntimeBridge {
     _permissionHandlers.remove(sessionId);
     _platformToolHandlers.remove(sessionId);
     _sessionResponseEmitters.remove(sessionId);
+    _emitterChannels.remove(sessionId);
     _sessionOrigins.remove(sessionId);
   }
 
@@ -151,8 +164,24 @@ class PlatformRuntimeBridge {
     for (final sessionId in sessionIds) {
       _sessionChannels.remove(sessionId);
       _sessionDeviceIds.remove(sessionId);
+      // Only the emitter that this very channel registered is released, so a
+      // session a reconnecting socket or an in-process CLI still owns keeps its
+      // emitter.
+      if (_emitterChannels[sessionId] == channel) {
+        _emitterChannels.remove(sessionId);
+        _sessionResponseEmitters.remove(sessionId);
+      }
     }
   }
+
+  /// Whether the session still has a response emitter.
+  ///
+  /// A local transport registers an emitter closure that writes to its socket;
+  /// it must be released with that socket so a disconnected Client is never
+  /// pinned by its own last command.
+  @visibleForTesting
+  bool hasSessionResponseEmitter(String sessionId) =>
+      _sessionResponseEmitters.containsKey(sessionId);
 
   Future<Map<String, dynamic>> requestToolPermission({
     required String sessionId,

@@ -26,6 +26,8 @@ This contract applies to `client/lib/features/devices/`.
 
 ## Account-Owned Mutations
 
+- Onboarding is not a navigation authority over a pushed route. `OnboardingSetupScreen` may route to Home only while it is the live top route; a screen underneath `/devices/add` must never move navigation, or the post-create install page is destroyed the moment the created device enters the inventory. `push` does not change the router's reported location, so the hosting route's own currency decides.
+- The post-create install page is the surface a created device lands on, and it owns that screen until the user leaves it. `AddDeviceScreen` keeps showing the install commands and the creation-only pairing token while the device is offline, and it continues to Home only when the authoritative inventory reports that same device online.
 - Device renames must pass through `DeviceCubit` and `IDeviceRepository`, wait for the correlated authoritative gateway response, and update presentation through the inventory stream.
 - A merged local/cloud device must target its `cloudDeviceId` for account mutations; never send its local `hardware_id` to the Backend as account authority.
 - Do not expose account-owned rename controls for a local-only device without a cloud identity.

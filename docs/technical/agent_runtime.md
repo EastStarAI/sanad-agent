@@ -191,7 +191,15 @@ object, provider instance, and normalized model that completed the final LLM
 request. The snapshot removes only the turn-scoped rate-limit/recovery wrapper,
 preventing the background request from retaining the completed turn's
 cancellation token or runtime-notice callbacks. Startup recovery resolves the
-persisted session route because adapter objects cannot be serialized. Requests
+persisted session route because adapter objects cannot be serialized: the route
+is rebuilt from the session's own persisted provider instance and model, never
+from the process default adapter, because a default provider instance does not
+own another session's model and would answer with a model-not-found error. A
+session whose own route cannot be resolved (no persisted provider instance, a
+deleted instance, or a failed adapter build) is skipped without any provider
+request, and its title stays `pending` for a later terminal turn instead of
+being finalized from a failed call.
+ Requests
 use the first 500 characters of the user message plus final assistant response
 and ask for a stable 3–7 word title in the user's language. `TitleService`
 applies a 30-second Future timeout independently of adapter behavior and asks

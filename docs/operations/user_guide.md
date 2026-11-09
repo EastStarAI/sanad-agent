@@ -519,7 +519,18 @@ sanad providers
 # List scheduled tasks of the selected Home (read-only; add --json for scripts)
 sanad schedule list
 sanad schedule list --json --home /path/to/home
+
+# Authorize this Agent for the operating-system credential store. This is the
+# only command that may show a macOS Keychain approval dialog, so run it in a
+# terminal; it prints no secret and leaves the vault closed if it fails.
+sanad vault authorize
 ```
+
+The Agent never starts a credential-store dialog on its own, and the local
+daemon never waits for the store before it serves. If `sanad doctor` reports
+`Agent Vault: unavailable` or `opening`, run `sanad vault authorize` in a
+terminal once; the Agent then reads its provider keys, MCP secrets, user
+secrets, and the Device Credential without asking again.
 
 ## Included skills
 

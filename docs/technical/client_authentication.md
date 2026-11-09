@@ -46,6 +46,16 @@ User credential.
    exact client/redirect, and locally held verifier.
 7. Only then is the User access/refresh pair persisted atomically.
 
+Where that pair survives differs per platform, and the difference decides whether a
+restart keeps the session. Desktop persists it in `<SANAD_HOME>/auth.json` and keeps the
+key material in the OS vault, so the Home is the source of truth. Web has no filesystem
+and no vault: the pair lives only in `localStorage` under the Client's shared-preferences
+prefix, which browsers scope to the profile directory plus the origin. A Web session
+therefore survives a page reload and a Flutter hot restart, and survives a full Client
+restart only when both the origin (stable Web port) and the Chrome profile are unchanged
+— which is why `sanad-dev` pins the port and supplies a Home-scoped `--user-data-dir`
+for Chrome Clients.
+
 Web `postMessage` validates the exact Portal origin, popup source, message type,
 and payload. The Portal success page targets only the registered app origin;
 neither side uses `*`. Desktop binds only IPv4 loopback and rejects any other

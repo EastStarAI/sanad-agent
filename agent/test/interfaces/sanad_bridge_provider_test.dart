@@ -1039,7 +1039,7 @@ OPENROUTER_API_KEY=sk-or-test
   );
 
   test(
-    'Gate B: get_session_history does NOT return persisted waiting notice if not active in-memory',
+    'Gate B: get_session_history returns a persisted waiting notice when it is not active in-memory',
     () async {
       final sessionManager = getIt<SessionManager>();
       final db = getIt<AgentStateDatabase>();
@@ -1070,9 +1070,19 @@ OPENROUTER_API_KEY=sk-or-test
       );
       final payload = envelope['payload'] as Map<String, dynamic>;
 
-      // Waiting notices stay runtime-owned and must not be surfaced from
-      // durable storage alone.
-      expect(payload.containsKey('runtime_notice'), isFalse);
+      // A scheduled wait is the whole recovery state a re-attached turn has
+      // before the daemon hydrates its in-memory notices, so the durable row is
+      // projected: dropping it made `session show` report no recovery while the
+      // Client rendered the live `waiting` notice (2026-11-09). A recovered wait
+      // is also actionable, so the recovery actions are widened.
+      expect(payload['runtime_notice'], isNotNull);
+      final notice = payload['runtime_notice'] as Map<String, dynamic>;
+      expect(notice['status'], equals('waiting'));
+      expect(notice['reason'], equals('rate_limit'));
+      expect(
+        notice['actions'],
+        containsAll(<String>['stop', 'retry', 'changeProvider']),
+      );
     },
   );
 

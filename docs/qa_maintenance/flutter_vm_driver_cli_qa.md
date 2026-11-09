@@ -54,7 +54,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Tap result shape | JSON reports `key`, `x`, `y`, `generation`, and `duration_ms` in addition to the existing fields |
 | Enter-text post-condition | A changed rendered value verifies as `text` without echoing the value; an obscured field verifies as `tree` when the widget tree changes and fails with `--no-verify` offered when it does not |
 | Wall-clock kill | A driver child that overruns the computed cap is killed and the command exits `124` with a bounded diagnostic |
-| Wall-clock budget | The cap includes each action's post-delay and verify window, and a batch recipe adds every step's own timeout, delay, verify window, and sleep |
+| Wall-clock budget | The cap includes each action's post-delay and verify window, a hover's dwell instead of a post-delay, and a batch recipe adds every step's own timeout, delay, verify window, hold, hover dwell, and sleep |
 | Explicit wall clock | `--wall-timeout <sec>` replaces the derived cap for the whole child process, is never forwarded to the driver, and is documented in `sanad-dev ui -h` under `Launcher Options` |
 | Batch deadline source | A step without its own timeout runs under the batch `--timeout`, so the launcher's budget and the driver's enforced deadline are the same value; a step with its own longer timeout keeps it and the transport timeout follows the longest step |
 | Process-tree kill | A killed driver child leaves no live descendant, so the `dart` grandchild behind an `fvm` wrapper cannot keep acting |
@@ -65,6 +65,25 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Artifact disappearance | An artifact that disappears after the cache check falls back to the JIT path instead of failing the action |
 | Launcher argument fidelity | A driver value that equals a launcher flag (for example `enter-text --text --home`) is forwarded verbatim, while launcher flags before the sub-command or after `--` are stripped |
 | Batch action plus wait | One `batch` recipe chains a tap with a `wait_for` step and returns both results from a single connection |
+| Long press | `tap --hold-ms 800` forwards `hold_ms` to `ext.sanad_client.tap`, which holds the press before `PointerUp`; a batch tap step's `hold_ms` does the same |
+| Long-press bound | `--hold-ms` above 5000, negative, or non-numeric fails before connecting with the bound named, and the Client rejects the same range authoritatively without dispatching |
+| Long-press wall clock | The launcher cap includes the requested hold for a single tap and for a batch step, so a hold is never killed by a budget that ignored it |
+| Hover dwell | `hover --key <row> --ms 800` enters the target through `ext.sanad_client.hover`, keeps the pointer there for 800 ms while the tree is observed, then removes it; both phases share one pointer id |
+| Hover bound | `--ms` above 5000, negative, or non-numeric fails before connecting with the bound named, and the Client rejects the same range without dispatching a pointer event |
+| Hover exit guarantee | A hover exits after a failed observation, a failed `--expect`, and a strict verdict; the Client additionally schedules its own exit at the dwell plus 500 ms so a driver killed mid-hover cannot leave a control expanded |
+| Hover-only affordance | `hover --key <row> --expect <row>_menu` reports `verified: true` and `verification: key` when a key that is built only while hovered appears during the dwell; with nothing else observed, the same command without `--expect` exits `0` with `no_observable_change` |
+| Hover on a covered target | A hover is dispatched, never refused, because it cannot click; the result names the blocking key so an unchanged tree cannot be mistaken for a dead row |
+| Hover wall clock | The launcher cap adds the `--ms` dwell (default 2000 ms) for a single hover and a batch step's `hover_ms`, because the dwell is the observation window |
+| Batch hover | A batch `hover` step accepts `hover_ms` and forwards it as the dwell of the same two-phase call |
+| Tooltip projection | A keyed control whose `Tooltip` is a child (for example `IconButton(tooltip: …)`) exposes that message in `snapshot` and `find`, and a descendant tooltip probe stops at its bound |
+| Tooltip bound | A tooltip longer than 200 characters is cut and reported with `tooltip_truncated: true` instead of inflating the snapshot |
+| Generic extension call | `ext --name ext.sanad_client.<name> --args <json>` runs on the isolate that advertises that extension and prints one `{status, extension, result}` document with its arguments flattened to strings |
+| Extension allowlist | Any name outside `ext.sanad_client.` (`ext.flutter.reassemble`), a missing `--name`, and `--args` that is not a flat object of scalars are all refused before a connection is opened |
+| Extension failure | A Client rejection is printed as `{status: error, extension, error}` with exit status `1`, and the failed extension is named |
+| Extension focus | `ext` never activates the owning Client window, because it may be a read-only probe |
+| Obscured target | A keyed target whose hit test does not include it reports `verified: false`, `verification: obscured`, the blocker's bounds and nearest key, and dispatches no pointer event |
+| Obscured evidence bound | `blocker_probe_truncated` is set when the bounded element probe runs out before naming the blocker, so an unnamed blocker is never presented as no blocker |
+| Unobscured target | A target whose hit test reaches its own render subtree taps normally and reports no `obscured` channel |
 
 ## Managed Runtime Coverage
 
@@ -77,7 +96,7 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Windows host | FVM child execution uses shell resolution for the platform wrapper |
 | Help request with no runtime | Help remains available, and `sanad-dev ui -h` documents the launcher-only options (`--wall-timeout`, `--home`, `--activate`, `--no-activate`) together with the `verified`/`verification` contract |
 | Transient missing Client | Discovery is retried once before the missing-Client failure is reported |
-| Owning window not frontmost | The owner bundle is activated before a UI-changing command (tap, enter-text, scroll, batch) and never before snapshot, find, wait-for, or screenshot; activation failure never blocks the action and never raises a system prompt |
+| Owning window not frontmost | The owner bundle is activated before a UI-changing command (tap, enter-text, scroll, batch) and never before snapshot, find, wait-for, screenshot, or hover; activation failure never blocks the action and never raises a system prompt |
 | Owning window liveness | Activation is skipped when the discovered pid has exited, no longer belongs to that bundle, or shares the bundle with a second live instance; `open` is never called and no new Client instance is launched |
 | Activation opt-out | `--no-activate` disables activation for the invocation without changing the forwarded action |
 | Missing Client package configuration | Fails closed with the setup recovery command instead of a compile error |
@@ -108,6 +127,9 @@ description: "Static, managed-runtime, live interaction, and platform compatibil
 | Action during animation/streaming | Tree probes replace Flutter Driver frame synchronization, so a busy Client still answers inspection, waits, and verification inside the deadline. |
 | Wait for presence/absence | Returns success only for the requested terminal condition |
 | Inert widget tap | A `ui tap --key <inert_control>` exits `0` with `verified: false` and `verification: no_observable_change`; the same command with `--verify` exits nonzero with `tap dispatched; no observable change` and the same `verification: no_observable_change` |
+| Sidebar row hover | `ui hover --key <row> --ms 800 --verify` lays the row's hover-only menu out while the pointer rests on the row and collapses it again once the command returns; the menu stays mounted inside `Visibility(maintainState: true)`, so the proof is its layout change (`verification: tree`) rather than its key appearing, and `--expect <key>` alone is not used as the evidence |
+| Hover without a hover state | `ui hover --key <plain_text>` exits `0` with `verification: no_observable_change` and the message names `--verify`/`--expect`; with `--verify` the same command exits nonzero |
+| Hover never takes focus | A hover leaves the foreground application unchanged, because the pointer events are synthesized inside the Client rather than through the operating system |
 | Obscured field entry | `ui enter-text --key <password_field> --text <dummy>` verifies through a tree change when the Client updates the field's visible state, and otherwise fails with the tree-check explanation and no echoed value |
 | Unsupported type wait | `ui wait-for --type CircularProgressIndicator --timeout 5` fails within seconds with `<type> is still rendered (proven by the rendered type census) … is not inspected` and `verification: type_census` |
 | Persisting type absence | `ui wait-for --type CircularProgressIndicator --absent --timeout 10` runs the full deadline and then fails with `<type> is still rendered (proven by the rendered type census) after Nms; absence not observed`, `data.evidence: type_census`, and `data.still_rendered: true`; adding `--no-wait` returns the same failure in one probe |

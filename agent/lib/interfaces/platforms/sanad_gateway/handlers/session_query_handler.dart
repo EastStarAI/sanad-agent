@@ -40,6 +40,7 @@ import 'session_history/session_history_projector.dart';
 class SessionQueryHandler {
   final SessionManager _sessionManager;
   final SanadProtocolBridge _bridge;
+  final void Function(CanonicalEvent event)? _broadcastFamilyEvent;
   final SessionRunOrchestrator? _orchestrator;
   final RuntimeRecoveryService? _runtimeRecovery;
   final PersistedRuntimeStateRepository? _persistedState;
@@ -54,6 +55,7 @@ class SessionQueryHandler {
   SessionQueryHandler({
     required SessionManager sessionManager,
     required SanadProtocolBridge bridge,
+    void Function(CanonicalEvent event)? broadcastFamilyEvent,
     SessionRunOrchestrator? orchestrator,
     RuntimeRecoveryService? runtimeRecovery,
     PersistedRuntimeStateRepository? persistedState,
@@ -65,6 +67,7 @@ class SessionQueryHandler {
     CompactionBoundaryRepository? compactionBoundaries,
   }) : _sessionManager = sessionManager,
        _bridge = bridge,
+       _broadcastFamilyEvent = broadcastFamilyEvent,
        _orchestrator = orchestrator,
        _runtimeRecovery = runtimeRecovery,
        _persistedState = persistedState,
@@ -580,6 +583,13 @@ class SessionQueryHandler {
     return _sessionUpdatedEnvelope(sessionId, requestId: requestId);
   }
 
+  /// Deletes a session and announces the deletion to the client family.
+  ///
+  /// A deletion is not a detail of the requesting transport: a session removed
+  /// by the CLI, by another device, or by any other client must disappear from
+  /// every connected client, so the family announcement is published beside
+  /// the requester's own correlated acknowledgement instead of relying on
+  /// origin delivery.
   Map<String, dynamic>? buildDeleteSessionEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId;
     final requestId = event.payload['request_id'] as String?;
@@ -589,6 +599,13 @@ class SessionQueryHandler {
     }
 
     _sessionManager.deleteSession(sessionId);
+    _broadcastFamilyEvent?.call(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionDeleted,
+        sessionId: sessionId,
+        payload: {'session_id': sessionId},
+      ),
+    );
 
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
@@ -752,7 +769,14 @@ class SessionQueryHandler {
   }
 
   Map<String, dynamic>? _persistedNoticePayload(String sessionId) {
-    final persisted = _orchestrator?.persistedState?.findNotice(sessionId);
+    // The durable row is readable in every composition that answers a history
+    // query, not only one that also holds a run orchestrator: the orchestrator's
+    // store wins when both are wired, and the handler's own store answers
+    // otherwise.
+    final persisted =
+        (_persistedState ?? _orchestrator?.persistedState)?.findNotice(
+          sessionId,
+        );
     if (persisted == null) return null;
     // A non-recovery warning (a failed automatic compaction) is projected as
     // it was stored: it describes a degraded session that kept running, so it
@@ -760,10 +784,18 @@ class SessionQueryHandler {
     if (CompactionFailureNotice.isCompactionWarning(persisted)) {
       return Map<String, dynamic>.from(persisted.toPayload());
     }
-    if (persisted.status != 'blocked') {
+    // Every other non-cleared row is a recovery state an observer must see.
+    // Narrowing this to `blocked` is what made a scheduled retry invisible to
+    // `session show`, `session retry`, the re-attached relay, and the
+    // supervisor while the Client — reading the live broadcast — showed the
+    // truth (2026-11-09). A stored `waiting` row is the whole recovery state a
+    // turn has in the window before in-memory notices are hydrated.
+    if (persisted.status == 'cleared') {
       return null;
     }
     final payload = Map<String, dynamic>.from(persisted.toPayload());
+    // A scheduled wait can be shortened by a manual retry, so the recovery
+    // actions are widened for every projected state, not only `blocked`.
     final actions = <String>{
       ...((payload['actions'] as List?) ?? const []).map((e) => e.toString()),
       'stop',

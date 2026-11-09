@@ -59,7 +59,7 @@ void printUsage() {
     '  inspect [client]          Open Flutter DevTools / Inspector for the client.',
   );
   print(
-    '  ui / driver <command>     Interact with client (snapshot, find, auth-url, tap, enter-text, scroll, wait-for, screenshot, batch).',
+    '  ui / driver <command>     Interact with client (snapshot, find, auth-url, tap, hover, enter-text, scroll, wait-for, screenshot, batch, ext).',
   );
   print('');
   print('Options:');

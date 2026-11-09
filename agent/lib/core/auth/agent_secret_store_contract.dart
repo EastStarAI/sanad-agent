@@ -32,6 +32,10 @@ abstract final class AgentSecretStoreUnavailableReason {
   /// deliberately never opened the vault.
   static const plaintextFallbackBlocked = 'plaintext_fallback_blocked';
 
+  /// The vault is still opening: the operating-system store has not answered
+  /// yet, so a missing value is unknown rather than absent.
+  static const vaultNotReady = 'vault_not_ready';
+
   /// The vault backend failed for another reason; the message carries the code.
   static const backendError = 'backend_error';
 

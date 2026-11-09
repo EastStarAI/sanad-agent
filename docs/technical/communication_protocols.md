@@ -276,6 +276,18 @@ requires transport-derived device-owner authority, and a Client-created schedule
     `schedule.runs`. It is never written to model history and nothing disables the schedule.
 
 
+#### B.5. Session Deletion
+- **Command: `delete_session`** (Client or CLI → Agent)
+  - Deletes the session row and its attachment files, then emits two events.
+  - Response Event (requester only, `delivery.scope = origin`): `session_deleted` with
+    `request_id` and `session_id`, so the requester can correlate its own command.
+  - Family broadcast (`delivery.scope = platform_family`, `sanad_client`): `session_deleted` with
+    `session_id` only. A deletion is not a per-requester detail: a session removed by the `sanad` CLI or by
+    another device must disappear from every connected Client without a restart or a manual refresh.
+  - The announcement carries no request identity, so it cannot release another client's in-flight send,
+    and applying both copies is idempotent for the requesting Client.
+
+
 #### C. Reverse Tool Result
 - **Event: `tool_result` (Client → Backend)**
   - Dispatches execution output of client-side tools back to the backend.
@@ -548,7 +560,7 @@ projection when one is persisted. The client displays `cached_tokens` as
   - `next_cursor`
   - `execution_snapshot` inside every session row
   - per-session workspace metadata (`workspace_id`, `workspace_name`, `workspace_path`) when available
-- `get_session_history` always returns `execution_snapshot`, while still omitting `runtime_notice`, `metadata`, and `request_id` keys when absent. A durable-only blocked notice may be surfaced lazily from persisted recovery state; a durable-only waiting notice must remain hidden until the runtime activates it.
+- `get_session_history` always returns `execution_snapshot`, while still omitting `runtime_notice`, `metadata`, and `request_id` keys when absent. A durable notice is the same recovery state as the live `session.runtime_notice` broadcast: every non-`cleared` persisted row (a `waiting` scheduled wait, a `blocked` park, a `resuming` transition, or a `fatal` rejection) is surfaced from persisted recovery state with the recovery actions widened, and only a `cleared` row is omitted. The compaction `warning` is surfaced exactly as stored. A turn re-attached after a daemon restart therefore reads the wait its dead transport had already received instead of seeing no recovery state (2026-11-09).
 - Canonical `tool_use` events place their body only in `input`, and canonical `tool_result` events place their body only in `output`. This applies to live events and reconstructed history on both transports. The client mapper consumes those structured fields; duplicating either body in `content` unnecessarily inflates payloads.
 - Route fields (`route_revision`, `route_updated_at`) and `provider_instance_id`/`model_provider` are **conditionally emitted** per session row (and in `get_session_history`): they appear together only when the session has a resolved `providerId`. A legacy session with no `provider_id` (e.g. created before routing existed) is returned without any route keys, so legacy clients never receive a partial route snapshot that would force the client to raise a `FormatException`.
 

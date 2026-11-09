@@ -76,7 +76,7 @@
   table session_route_transitions (on session_route_transitions)
     CREATE TABLE session_route_transitions ( session_id TEXT NOT NULL, route_revision INTEGER NOT NULL CHECK (route_revision > 0), event_id TEXT NOT NULL UNIQUE, source TEXT NOT NULL CHECK (source IN ('user', 'recovery', 'auto_failover')), previous_provider_instance_id TEXT, provider_instance_id TEXT NOT NULL, previous_provider_display_name TEXT, provider_display_name TEXT, model TEXT NOT NULL, reason TEXT, request_id TEXT, created_at TEXT NOT NULL, anchor_message_id TEXT, PRIMARY KEY (session_id, route_revision), FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE)
   table session_runtime_notices (on session_runtime_notices)
-    CREATE TABLE session_runtime_notices ( session_id TEXT PRIMARY KEY, request_id TEXT, run_id TEXT, status TEXT NOT NULL, reason TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'warning', title TEXT NOT NULL, message TEXT NOT NULL, provider_instance_id TEXT, provider_display_name TEXT, retry_after_ms INTEGER, resume_at TEXT, limit_rpm INTEGER, actions TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL)
+    CREATE TABLE session_runtime_notices ( session_id TEXT PRIMARY KEY, request_id TEXT, run_id TEXT, status TEXT NOT NULL, reason TEXT NOT NULL, severity TEXT NOT NULL DEFAULT 'warning', title TEXT NOT NULL, message TEXT NOT NULL, provider_instance_id TEXT, provider_display_name TEXT, retry_after_ms INTEGER, resume_at TEXT, limit_rpm INTEGER, actions TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, updated_at TEXT NOT NULL, retry_attempt INTEGER, retry_budget INTEGER)
   table session_stop_recovery_outcomes (on session_stop_recovery_outcomes)
     CREATE TABLE session_stop_recovery_outcomes ( stop_request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, items_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, acknowledged_at TEXT, recovery_reason TEXT NOT NULL DEFAULT 'user_stop', claim_required INTEGER NOT NULL DEFAULT 0, claimed_by TEXT, FOREIGN KEY (session_id) REFERENCES sessions (session_id) ON DELETE CASCADE)
   table session_suspended_runs (on session_suspended_runs)
@@ -339,6 +339,8 @@
   actions|type=TEXT|notnull=1|default='[]'|pk=0
   created_at|type=TEXT|notnull=1|default=<none>|pk=0
   updated_at|type=TEXT|notnull=1|default=<none>|pk=0
+  retry_attempt|type=INTEGER|notnull=0|default=<none>|pk=0
+  retry_budget|type=INTEGER|notnull=0|default=<none>|pk=0
 [index_list] session_runtime_notices
   sqlite_autoindex_session_runtime_notices_1|unique=1|origin=pk|partial=0|columns=session_id
 [table_info] session_stop_recovery_outcomes
