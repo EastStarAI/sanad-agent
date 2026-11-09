@@ -84,28 +84,43 @@ void main() {
       return file;
     }
 
-    test('serves a hosted Portal from 8080 with one sign-in warning', () async {
-      final launch = await prepareSanadDevWebOriginLaunch(
-        configFile: await configFor(environment: 'prod'),
-        cloudEndpoints: const SanadCloudEndpoints(
-          environment: 'prod',
-          gatewayUrl: 'https://api.sanad.eaststarai.com',
-          portalUrl: _hostedPortal,
-        ),
-        sanadHome: directory.path,
-        processEnvironment: const {},
-        portIsFree: (_) async => true,
-        probePortal: (_, __) async => true,
-      );
+    test(
+      'launches a hosted Portal on the derived origin with one warning',
+      () async {
+        final launch = await prepareSanadDevWebOriginLaunch(
+          configFile: await configFor(environment: 'prod'),
+          cloudEndpoints: const SanadCloudEndpoints(
+            environment: 'prod',
+            gatewayUrl: 'https://api.sanad.eaststarai.com',
+            portalUrl: _hostedPortal,
+          ),
+          sanadHome: directory.path,
+          processEnvironment: const {},
+          portIsFree: (_) async => true,
+          probePortal: (_, __) async => true,
+        );
 
-      expect(launch.port, 8080);
-      expect(launch.warnings, hasLength(1));
-      final warning = launch.warnings.single;
-      expect(warning, contains('deployed Web app'));
-      expect(warning, contains('sanad-dev run client -d chrome'));
-      expect(warning, contains('config/local.json'));
-      expect(warning, contains('http://localhost:8080'));
-    });
+        expect(
+          launch.port,
+          deriveSanadDevWebPort(
+            sanadHome: directory.path,
+            clientEnvironment: 'prod',
+          ),
+          reason: 'a hosted Portal no longer changes which port is served',
+        );
+        expect(launch.warnings, hasLength(1));
+        final warning = launch.warnings.single;
+        expect(warning, contains('cannot sign in to or call'));
+        expect(warning, contains('CORS'));
+        expect(warning, contains('config/local.json'));
+        expect(warning, contains('sanad-dev run client -d chrome'));
+        expect(
+          warning,
+          isNot(contains('already allows')),
+          reason: 'hosted CORS no longer mirrors any loopback origin',
+        );
+      },
+    );
 
     test('honours an explicit override on a hosted Portal', () async {
       final launch = await prepareSanadDevWebOriginLaunch(
@@ -122,11 +137,7 @@ void main() {
       );
 
       expect(launch.port, 5173);
-      expect(
-        launch.warnings.single,
-        contains('http://localhost:5173'),
-        reason: 'the warning names the origin this launch actually serves',
-      );
+      expect(launch.warnings, hasLength(1));
     });
 
     test('tells a local Portal exactly which origin to register', () async {

@@ -3,9 +3,8 @@
 ## Goal
 
 A Web Client that is stopped and restarted for the same Home and Client slot returns to the
-same browser origin, so its one-time sign-in persists; a Web Client launched against a hosted
-Portal is served from `http://localhost:8080`, an origin that Portal's credentialed CORS
-allowlist already accepts, instead of an origin the browser would block.
+same browser origin, so its one-time sign-in persists, and every Web Client is served from an
+origin its owning deployment can register instead of an origin the browser would block.
 
 ## Scope and locked decisions
 
@@ -16,16 +15,11 @@ allowlist already accepts, instead of an origin the browser would block.
 - Second defect, measured live: a Web Client added or restarted by the owning launcher re-derived
   the origin from the *requesting* terminal's environment. `SANAD_DEV_WEB_PORT` is a
   launcher-startup variable, so the same slot could be served from two origins.
-- The origin domain follows the resolved Portal endpoint, because that Portal decides which
-  origins may authenticate:
-- Hosted Portal: the only browser-reachable origins are the built-in loopback defaults every
-  `sanad-portal` deployment unions into its credentialed CORS allowlist — `localhost`/`127.0.0.1`
-  on `8080`, `8082`, `5173`, `5174`, `8083`. A primary Client is served from `8080`; a named slot
-  takes a stable hash rotation of the remaining allowlisted ports.
-- Loopback Portal, or no Portal configured: the deployment is owned locally and may register
-  any origin, so the port is derived from `(Home, client slot, ENVIRONMENT)` with the existing
-  stable hash inside `52000-52999`, which stays clear of the Agent (`58085-58185`) and
-  VM-service (`51000-51999`) ranges.
+- One derivation applies in every environment: the port comes from `(Home, client slot,
+  ENVIRONMENT)` with the existing stable hash inside `52000-52999`, which stays clear of the
+  Agent (`58085-58185`) and VM-service (`51000-51999`) ranges. The Portal host never changes it,
+  because a hosted deployment's credentialed CORS allowlist contains only its own hosted origins
+  and cannot serve a `localhost` page at all.
 - The port a slot served last is recorded at `<Home>/dev/web-origin.json` (secure runtime-file
   boundary) and preferred on a restart, so a signed-in session stays attached to its origin. A
   busy origin fails the launch with the origin, the environment, and the override; it is never
@@ -33,12 +27,15 @@ allowlist already accepts, instead of an origin the browser would block.
 - `SANAD_DEV_WEB_PORT` remains the single explicit override, so deployments that already pin an
   origin keep working unchanged.
 - A Web Client is legitimate in every environment, so a hosted Portal launch is allowed and
-  prints exactly one warning: hosted Web sign-in completes only from the deployed Web app, and
-  local Web sign-in uses the local Docker stack (`sanad-dev run client -d chrome --config
-  config/local.json`), whose Portal registers the Home's origin.
+  prints exactly one warning: the page cannot sign in to or call that Portal because its CORS
+  allowlist excludes `localhost`, and Web work with sign-in runs against the local Docker stack
+  (`sanad-dev run client -d chrome --config config/local.json`), whose Portal registers the
+  Home's origin.
 - Owner decision (final): Production keeps its exact `redirect_uri` allowlist, so a localhost
   page can never receive the hosted callback, and no config-level redirect override is offered
-  because any local page could then start a real hosted login. A deployment-owned (loopback)
+  because any local page could then start a real hosted login. A private follow-up removes the
+  remaining loopback origins from the hosted CORS lists; the launcher therefore never assumes a
+  hosted Portal accepts `localhost`. A deployment-owned (loopback)
   Portal is still probed with the browser's own unauthenticated
   `OPTIONS /auth/client/transactions` preflight; a rejection prints the exact registration
   variables while the launch continues, and an unreachable Portal says nothing.
@@ -71,11 +68,11 @@ allowlist already accepts, instead of an origin the browser would block.
       environment.
 
 ### G2 — Launch reporting
-- [x] A hosted Portal launches on `8080` (an origin its CORS allowlist already accepts) and
-      reports nothing beyond `Web origin: <origin>`.
+- [x] A hosted Portal launches on the same derived origin and prints exactly one warning that
+      the page cannot sign in to or call it, naming the local Docker stack command.
 - [x] A loopback Portal rejection prints the exact registration variables and the Web callback;
       an unreachable Portal prints nothing.
-- [x] No hosted launch is refused and no Portal allowlist is echoed back.
+- [x] No hosted launch is refused.
 
 ### G3 — Observability
 - [x] The run prints `Web origin: <origin>` once at launch.

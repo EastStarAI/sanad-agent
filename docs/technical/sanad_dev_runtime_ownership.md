@@ -78,11 +78,14 @@ establishes liveness or ownership.
 
 A Web Client (`chrome` or `web-server`) is always served from a stable browser
 origin, because browser-stored Web credentials are scoped to origin *and* profile.
-The candidate domain follows the Portal the Client will actually talk to, because
-that Portal is what decides which origins may authenticate. Against a hosted
-Portal the only browser-reachable origins are the loopback defaults every
-`sanad-portal` deployment unions into its credentialed CORS allowlist —
-`8080`, `8082`, `5173`, `5174`, `8083` — so the launcher serves `8080` for a\nprimary Client and a stable hash rotation of the remaining allowlisted ports for a\nnamed slot. Against a loopback Portal, or with no Portal configured, the deployment\nis owned locally and may register any origin, so the port is derived inside the\nreserved `52000-52999` range (`lib/src/infrastructure/web_origin.dart`); the ranges\nstay clear of the Agent and VM-service ranges so one runtime can never derive\nanother's port. `SANAD_DEV_WEB_PORT` remains the only override and must parse as a\nTCP port.
+The port is derived the same way in every environment, from Home, client slot, and
+client `ENVIRONMENT`, inside the reserved `52000-52999` range
+(`lib/src/infrastructure/web_origin.dart`); the Portal host never changes it. The
+range stays clear of the Agent and VM-service ranges so one runtime can never derive
+another's port, and it belongs to deployments that register the origin themselves:
+a hosted Portal's credentialed CORS allowlist contains only its own hosted origins,
+so no `localhost` port is reachable there. `SANAD_DEV_WEB_PORT` remains the only
+override and must parse as a TCP port.
 
 The origin a slot actually serves is recorded at `<Home>/dev/web-origin.json`
 through the secure runtime-file boundary, so a restart resumes exactly the origin
@@ -101,14 +104,14 @@ the component control request (`web_port`) rather than re-deriving it, because
 environment can differ. Native launches never receive either argument.
 
 A Web Client is legitimate in every environment, so the launch never refuses a
-Portal that merely happens to be hosted. It prints exactly one warning instead: a
-hosted Web sign-in completes only from the deployed Web app, and local Web sign-in
-uses the local Docker stack (`sanad-dev run client -d chrome --config
-config/local.json`), whose Portal registers this Home's origin. That boundary is
-the owner decision: Production keeps an exact `redirect_uri` allowlist, so a
-`localhost` page can never receive the hosted callback, and no config-level
-redirect override is offered because any local page could then start a real
-hosted sign-in.
+Portal that merely happens to be hosted. It prints exactly one warning instead: the
+page cannot sign in to or call that Portal because its CORS allowlist excludes
+`localhost`, and Web work with sign-in runs against the local Docker stack
+(`sanad-dev run client -d chrome --config config/local.json`), whose Portal
+registers this Home's origin. That boundary is the owner decision: hosted sign-in
+belongs to the deployed Web app, Production keeps an exact `redirect_uri` allowlist,
+and no config-level redirect override is offered because any local page could then
+start a real hosted sign-in.
 
 A deployment-owned (loopback) Portal is additionally probed, with the browser's own
 unauthenticated CORS preflight (`OPTIONS /auth/client/transactions` with the real

@@ -378,9 +378,9 @@ class _SwitchableRuntimeController {
       }
       // The launcher owns the origin of every slot it serves, so a port carried by
       // the request is authoritative. Deriving one is only the fallback for a
-      // request that names none: it still uses this Home's own scheme, never
-      // flutter_tools' random port, and prefers the origin this slot already
-      // used, so a restart cannot move the browser session to a new origin.
+      // request that names none: it still uses this Home and slot's own origin,
+      // never flutter_tools' random port, so a restart cannot move the browser
+      // session to a different origin.
       int? webPort;
       if (isSanadDevWebDevice(requestedDevice)) {
         final endpoints = readSanadCloudEndpointsFromLaunchArguments(
@@ -399,7 +399,6 @@ class _SwitchableRuntimeController {
             await chooseSanadDevWebPort(
               sanadHome: _launcherRecord.sanadHome,
               clientEnvironment: endpoints.environment,
-              portalUrl: endpoints.portalUrl,
               processEnvironment: _clientEnvironment,
               clientInstanceSlot: requestedSlot,
             );

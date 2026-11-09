@@ -81,100 +81,22 @@ void main() {
     });
   });
 
-  group('origin authority', () {
-    test('a loopback Portal is deployment-owned', () {
+  group('hosted Portal detection', () {
+    test('a loopback or absent Portal is not hosted', () {
       for (final url in [
         'http://127.0.0.1:8083',
         'http://localhost:8083',
         'http://[::1]:8083',
+        '',
       ]) {
-        expect(
-          sanadDevWebOriginAuthorityFor(url),
-          SanadDevWebOriginAuthority.deploymentOwned,
-          reason: url,
-        );
+        expect(isSanadDevHostedPortal(url), isFalse, reason: url);
       }
     });
 
-    test('no Portal at all is deployment-owned', () {
-      expect(
-        sanadDevWebOriginAuthorityFor(''),
-        SanadDevWebOriginAuthority.deploymentOwned,
-      );
-    });
-
-    test('a hosted Portal owns its own loopback allowlist', () {
+    test('a remote Portal is hosted', () {
       for (final url in [_hostedPortal, 'https://dev.portal.example.test']) {
-        expect(
-          sanadDevWebOriginAuthorityFor(url),
-          SanadDevWebOriginAuthority.hostedPortal,
-          reason: url,
-        );
+        expect(isSanadDevHostedPortal(url), isTrue, reason: url);
       }
-    });
-  });
-
-  group('origin candidates', () {
-    test('a hosted Portal offers exactly its loopback allowlist', () {
-      final candidates = sanadDevWebPortCandidates(
-        sanadHome: _home,
-        clientEnvironment: 'prod',
-        portalUrl: _hostedPortal,
-        clientInstanceSlot: 'web-primary',
-      );
-
-      expect(candidates, hasLength(sanadDevHostedPortalWebPorts.length));
-      expect(candidates.toSet(), sanadDevHostedPortalWebPorts.toSet());
-      expect(
-        sanadDevHostedPortalWebPorts,
-        unorderedEquals([8080, 8082, 5173, 5174, 8083]),
-        reason: 'these are the loopback origins every portal deployment allows',
-      );
-    });
-
-    test(
-      'a hosted Portal serves a primary Client from 8080 and slots from the rest',
-      () {
-        final primary = sanadDevWebPortCandidates(
-          sanadHome: _home,
-          clientEnvironment: 'prod',
-          portalUrl: _hostedPortal,
-        );
-        final slot = sanadDevWebPortCandidates(
-          sanadHome: _home,
-          clientEnvironment: 'prod',
-          portalUrl: _hostedPortal,
-          clientInstanceSlot: 'web-secondary',
-        );
-
-        expect(primary.first, 8080);
-        expect(primary.toSet(), sanadDevHostedPortalWebPorts.toSet());
-        expect(slot.first, isNot(8080));
-        expect(slot.toSet(), sanadDevHostedPortalWebPorts.toSet());
-        expect(
-          sanadDevHostedPortalWebPorts,
-          unorderedEquals([8080, 8082, 5173, 5174, 8083]),
-          reason: 'these are the loopback origins every portal deployment allows',
-        );
-      },
-    );
-
-    test('a loopback Portal has exactly one derived candidate', () {
-      final candidates = sanadDevWebPortCandidates(
-        sanadHome: _home,
-        clientEnvironment: 'local',
-        portalUrl: 'http://127.0.0.1:8083',
-        clientInstanceSlot: 'web-primary',
-      );
-
-      expect(candidates, [
-        deriveSanadDevWebPort(
-          sanadHome: _home,
-          clientEnvironment: 'local',
-          clientInstanceSlot: 'web-primary',
-        ),
-      ]);
-      expect(candidates.single, inInclusiveRange(52000, 52999));
     });
   });
 
@@ -189,7 +111,6 @@ void main() {
     });
 
     Future<int> choose({
-      String portalUrl = 'http://127.0.0.1:8083',
       String environment = 'local',
       String? slot,
       Map<String, String> environmentVariables = const {},
@@ -197,7 +118,6 @@ void main() {
     }) => chooseSanadDevWebPort(
       sanadHome: home.path,
       clientEnvironment: environment,
-      portalUrl: portalUrl,
       processEnvironment: environmentVariables,
       clientInstanceSlot: slot,
       portIsFree: portIsFree ?? (_) async => true,
@@ -207,10 +127,9 @@ void main() {
       expect(
         await choose(
           environmentVariables: {sanadDevWebPortEnvironmentKey: '55025'},
-          portalUrl: _hostedPortal,
         ),
         55025,
-        reason: 'an existing pinned deployment must not be moved',
+        reason: 'an existing pinned local stack must not be moved',
       );
     });
 
@@ -223,26 +142,30 @@ void main() {
       }
     });
 
-    test('serves a hosted Portal from its own loopback allowlist', () async {
-      final port = await choose(environment: 'prod', portalUrl: _hostedPortal);
+    test('derives the same way for a hosted environment', () async {
+      final port = await choose(environment: 'prod');
 
-      expect(port, 8080);
-      expect(sanadDevHostedPortalWebPorts, contains(port));
+      expect(port, inInclusiveRange(52000, 52999));
+      expect(
+        port,
+        deriveSanadDevWebPort(sanadHome: home.path, clientEnvironment: 'prod'),
+        reason: 'a hosted Portal no longer changes which port is served',
+      );
     });
 
     test('refuses a busy origin instead of moving to another one', () async {
+      final derived = deriveSanadDevWebPort(
+        sanadHome: home.path,
+        clientEnvironment: 'prod',
+      );
       await expectLater(
-        choose(
-          environment: 'prod',
-          portalUrl: _hostedPortal,
-          portIsFree: (_) async => false,
-        ),
+        choose(environment: 'prod', portIsFree: (_) async => false),
         throwsA(
           isA<StateError>().having(
             (error) => error.message,
             'message',
             allOf(
-              contains('http://localhost:8080'),
+              contains('http://localhost:$derived'),
               contains(sanadDevWebPortEnvironmentKey),
               contains('prod'),
             ),
@@ -258,51 +181,48 @@ void main() {
       expect(second, first);
     });
 
-    test('prefers the record over a different free derived port', () async {
-      final first = await choose();
-      // Everything is free and the derivation still points at [first]; the record
-      // only matters when the rotation would move on, which is exactly what a
-      // changed candidate order (new Portal) does.
-      final afterPortalChange = await choose(
-        portalUrl: 'http://localhost:9000',
+    test('records an explicit override so the launcher can carry it', () async {
+      await choose(
+        environmentVariables: {sanadDevWebPortEnvironmentKey: '55025'},
       );
 
-      expect(afterPortalChange, first);
+      final record = await readSanadDevWebOriginRecord(sanadHome: home.path);
+      expect(record?.port, 55025);
+      expect(record?.environment, 'local');
     });
 
-    test('ignores a record written for another environment', () async {
-      await choose(environment: 'local');
-      final port = await choose(environment: 'prod', portalUrl: _hostedPortal);
-
-      expect(sanadDevHostedPortalWebPorts, contains(port));
-    });
-
-    test('ignores a record outside the current candidate set', () async {
+    test('trusts a recorded origin from the same environment', () async {
       await writeSanadDevWebOriginRecord(
         sanadHome: home.path,
         clientInstanceSlot: null,
-        environment: 'prod',
-        port: 3000,
+        environment: 'local',
+        port: 55025,
       );
 
-      final port = await choose(environment: 'prod', portalUrl: _hostedPortal);
-      expect(sanadDevHostedPortalWebPorts, contains(port));
-      expect(port, isNot(3000));
+      expect(await choose(), 55025, reason: 'a restart keeps its origin');
+    });
+
+    test('ignores a record written for another environment', () async {
+      await choose(
+        environmentVariables: {sanadDevWebPortEnvironmentKey: '55025'},
+      );
+
+      final port = await choose(environment: 'prod');
+      expect(
+        port,
+        deriveSanadDevWebPort(sanadHome: home.path, clientEnvironment: 'prod'),
+      );
     });
 
     test('separates the browser origins of two slots', () async {
-      final primary = await choose(
-        environment: 'prod',
-        portalUrl: _hostedPortal,
-      );
+      final primary = await choose(environment: 'prod');
       final secondary = await choose(
         environment: 'prod',
-        portalUrl: _hostedPortal,
         slot: 'web-secondary',
       );
 
       expect(secondary, isNot(primary));
-      expect(sanadDevHostedPortalWebPorts, contains(secondary));
+      expect(secondary, inInclusiveRange(52000, 52999));
     });
 
     test('names the override when the derived origin is busy', () async {
@@ -346,13 +266,13 @@ void main() {
         sanadHome: home.path,
         clientInstanceSlot: null,
         environment: 'prod',
-        port: 8080,
+        port: 52123,
       );
       await writeSanadDevWebOriginRecord(
         sanadHome: home.path,
         clientInstanceSlot: 'web-secondary',
         environment: 'prod',
-        port: 8082,
+        port: 52223,
       );
 
       final primary = await readSanadDevWebOriginRecord(sanadHome: home.path);
@@ -360,8 +280,8 @@ void main() {
         sanadHome: home.path,
         clientInstanceSlot: 'web-secondary',
       );
-      expect(primary?.port, 8080);
-      expect(secondary?.port, 8082);
+      expect(primary?.port, 52123);
+      expect(secondary?.port, 52223);
     });
 
     test('loses only the preference when the file is corrupt', () async {
@@ -387,7 +307,7 @@ void main() {
         sanadHome: home.path,
         clientInstanceSlot: 'web-primary',
         environment: 'prod',
-        port: 5173,
+        port: 52347,
       );
 
       final record = await readSanadDevWebOriginRecord(

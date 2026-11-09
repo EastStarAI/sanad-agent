@@ -37,16 +37,12 @@ use actually accepts. One sign-in per Home + slot + environment is then enough �
 a `stop` + `run client -d chrome` for the same Home and slot returns to the same
 signed-in Client. Signing in again means the origin or the profile changed.
 
-The domain follows the Portal: against a hosted Portal the launcher serves `8080`
-for a primary Client — one of the loopback ports every `sanad-portal` deployment
-already allows in CORS (`8080`, `8082`, `5173`, `5174`, `8083`), with a named slot
-taking a stable hash rotation of the rest; against a loopback Portal, or with no
-Portal configured, it derives one port inside `52000-52999` that the local
-deployment registers. A busy origin fails the launch with the origin and the
-override instead of moving to another one, and the port a slot served last is
-recorded under `<Home>/dev/`, so a restart resumes the existing browser session.
-`SANAD_DEV_WEB_PORT` overrides the choice for both direct and additional Web
-Clients.
+One derivation applies in every environment: a port inside `52000-52999` derived
+from Home, slot, and client environment, which the local deployment registers. A
+busy origin fails the launch with the origin and the override instead of moving to
+another one, and the port a slot served last is recorded under `<Home>/dev/`, so a
+restart resumes the existing browser session. `SANAD_DEV_WEB_PORT` overrides the
+choice for both direct and additional Web Clients.
 
 Verify the origin from `sanad-dev status` (`web_origin=http://localhost:<port>`),
 never from the VM-service port or the requested CLI value, and remember that
@@ -60,13 +56,13 @@ must allow it in `BACKEND_CORS_ORIGINS`; the callback path is
 and prints those exact variables when the origin is rejected; it never blocks the
 launch.
 
-A hosted Portal launch is allowed but prints one warning: hosted Web sign-in
-completes only from the deployed Web app, and local Web sign-in uses the local
-Docker stack (`sanad-dev run client -d chrome --config config/local.json`), whose
-Portal registers this Home's origin. That is the owner decision — Production keeps
-an exact `redirect_uri` allowlist, so a localhost page can never receive the hosted
-callback — so verify hosted Web behavior on the deployed app and use the local
-stack for local Web sign-in.
+A hosted Portal launch is allowed but prints one warning: the page cannot sign in
+to or call that Portal, because its CORS allowlist excludes localhost, and Web work
+with sign-in runs against the local Docker stack
+(`sanad-dev run client -d chrome --config config/local.json`), whose Portal
+registers this Home's origin. That is the owner decision — hosted Web sign-in
+belongs to the deployed Web app — so verify hosted Web behavior there and use the
+local stack for local Web work that signs in.
 
 ## Runtime actions
 
