@@ -199,6 +199,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       // never produces; each one gets its own sentence instead of a generic
       // failure notice.
       'relay_unavailable' => l10n.dictationRelayUnavailable,
+      'relay_invalid_request' => l10n.dictationRelayInvalidRequest,
       'dictation_disabled' => l10n.dictationDisabled,
       'update_required' => l10n.dictationUpdateRequired,
       'invalid_session_identity' => l10n.dictationFailedGeneric,

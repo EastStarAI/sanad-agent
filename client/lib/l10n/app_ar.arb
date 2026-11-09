@@ -533,6 +533,7 @@
   "dictationMicrophoneDenied": "الإملاء يحتاج صلاحية استخدام الميكروفون.",
   "dictationBusy": "هناك جلسة إملاء أخرى قيد التشغيل.",
   "dictationRelayUnavailable": "هذا الجهاز لا يمكنه تمرير الإملاء عبر الاتصال الحالي. حدّث الوكيل أو اعمل على الجهاز نفسه.",
+  "dictationRelayInvalidRequest": "رفض هذا الجهاز طلب الإملاء لأنه غير صالح. حدّث التطبيق ثم حاول مرة أخرى.",
   "dictationDisabled": "الإملاء مغلق على هذا الجهاز.",
   "dictationUpdateRequired": "حدّث الوكيل لاستخدام الإملاء على هذا الجهاز.",
   "dictationUnavailable": "الإملاء غير متاح على هذا الجهاز.",

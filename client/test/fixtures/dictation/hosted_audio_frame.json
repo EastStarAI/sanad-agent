@@ -1,0 +1,35 @@
+{
+  "event": "dictation_audio",
+  "note": "The hosted audio frame, stated once. The Client wire test (client/test/unit/dictation/hosted_dictation_wire_test.dart) and the Gateway's read-only mirror (backend/tests/unit/test_dictation_relay_wire_mirror.py) each assert this table against their own copy of this file, so the two sides of the relay cannot drift apart. Contract: docs/technical/dictation_transport_protocol.md section 6.2.",
+  "fields": [
+    {
+      "name": "version",
+      "type": "string",
+      "const": "v1",
+      "rule": "The contract version, exactly v1."
+    },
+    {
+      "name": "dictation_id",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+      "rule": "The session identity, minted by the Client and immutable for the session."
+    },
+    {
+      "name": "seq",
+      "type": "int",
+      "min": 0,
+      "rule": "Audio-frame index: starts at 0 and increases by exactly 1 per admitted frame."
+    },
+    {
+      "name": "data",
+      "type": "bytes",
+      "rule": "Raw signed 16-bit little-endian samples as a socket.io binary attachment. Never base64, never a JSON string, never a JSON array of integers: an integer array is not raw bytes and the Gateway refuses it with invalid_request."
+    }
+  ],
+  "sample": {
+    "version": "v1",
+    "dictation_id": "dict-fixture-0001",
+    "seq": 0,
+    "data_hex": "00000100ffffe803"
+  }
+}

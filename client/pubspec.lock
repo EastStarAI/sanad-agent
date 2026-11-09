@@ -1270,7 +1270,7 @@ packages:
     source: hosted
     version: "3.1.6"
   socket_io_common:
-    dependency: transitive
+    dependency: "direct dev"
     description:
       name: socket_io_common
       sha256: "162fbaecbf4bf9a9372a62a341b3550b51dcef2f02f3e5830a297fd48203d45b"

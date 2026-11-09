@@ -363,6 +363,27 @@ Payload format is exactly the local channel's: raw signed 16-bit little-endian
 samples, 16 kHz, one channel, no container, no header, no framing header. Frame
 boundaries are transport framing only; the recognizer is agnostic to them.
 
+`data` is a **binary attachment**, never a payload value. Socket.IO encodes the
+frame as a `BINARY_EVENT` with one attachment only when its encoder finds a
+binary buffer inside the packet; anything else falls back to JSON text. The
+producer therefore MUST put a typed byte buffer there (`Uint8List` in Dart) and
+MUST NOT send base64, a JSON string, or a JSON array of integers. An integer
+array is not raw bytes, and the Gateway refuses it with `invalid_request` for
+that session (§8). The container the capture layer hands over is not a wire fact:
+the channel adapter normalizes every frame before emitting it.
+
+Two tests hold this shape from both ends, against one shared field table
+(`client/test/fixtures/dictation/hosted_audio_frame.json`):
+
+- `client/test/unit/dictation/hosted_dictation_wire_test.dart` encodes the frame
+  the Client builds with the real Socket.IO parser and asserts a `BINARY_EVENT`
+  carrying exactly one attachment whose bytes are the PCM samples — and keeps the
+  integer-array shape executable as the recorded failure mode.
+- `backend/tests/unit/test_dictation_relay_wire_mirror.py` is the hosted
+  Gateway's read-only mirror: it asserts the same field table (version,
+  identity, `seq`, data bytes) against its own copy of that fixture and that the
+  forwarded frame carries those bytes unchanged.
+
 ### 6.3 Ordered route control
 
 ```jsonc
@@ -564,7 +585,14 @@ session, cubit, and UI need no new states:
 |---|---|
 | `busy` | `dictation_busy` |
 | `size_limit`, `rate_limited` | `session_limit` |
+| `invalid_request` | `relay_invalid_request` |
 | everything else | `relay_unavailable` |
+
+`relay_invalid_request` exists because "the request this Client just built was
+refused as malformed" is diagnosable and is not a retry-later outcome; folding it
+into `relay_unavailable` hid a wire-encoding defect behind a generic connection
+notice. It is still not a version mismatch, so it is never promoted to
+`update_required`.
 
 Recognition failures keep their daemon codes (`unavailable`, `model_unknown`,
 `model_not_installed`, `dictation_busy`, `session_limit`, `no_speech`,

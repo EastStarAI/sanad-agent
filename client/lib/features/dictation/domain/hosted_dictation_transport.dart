@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:logging/logging.dart';
 
@@ -152,9 +153,12 @@ class HostedDictationTransport implements DictationTransport {
     final mapped = switch (errorCode) {
       'busy' => 'dictation_busy',
       'size_limit' || 'rate_limited' => 'session_limit',
-      // Canonical §8: every other refusal is the same retry-later outcome. A
-      // malformed request is not a version problem, so it must not be promoted
-      // into "update required".
+      // Canonical §8: the frame this Client just built was refused as
+      // malformed, which is diagnosable rather than retry-later, so it keeps its
+      // own code. It is still not a version problem, so it must never be
+      // promoted into "update required".
+      'invalid_request' => 'relay_invalid_request',
+      // Every other refusal is the same retry-later outcome.
       _ => 'relay_unavailable',
     };
     _fail(mapped);
@@ -220,16 +224,23 @@ class HostedDictationTransport implements DictationTransport {
       _fail('session_limit');
       return;
     }
+    // The wire contract is a binary attachment, and the socket.io encoder only
+    // produces one for a typed buffer: a plain `List<int>` is JSON-encoded as an
+    // array of integers, which the Gateway refuses with `invalid_request`. The
+    // container capture hands over is not a wire fact, so normalize once here;
+    // `Uint8List.sublist` then copies each frame into its own typed buffer, so a
+    // reused capture buffer can never rewrite a queued packet.
+    final pcm = pcm16 is Uint8List ? pcm16 : Uint8List.fromList(pcm16);
     var offset = 0;
-    while (offset < pcm16.length) {
-      final end = math.min(offset + _maxFrameBytes, pcm16.length);
-      final slice = pcm16.sublist(offset, end);
+    while (offset < pcm.length) {
+      final end = math.min(offset + _maxFrameBytes, pcm.length);
       _socket.emit('dictation_audio', {
         'version': 'v1',
         'dictation_id': dictationId,
         'seq': _seq++,
-        // Raw signed 16-bit little-endian samples: never base64, never a string.
-        'data': slice,
+        // Raw signed 16-bit little-endian samples: never base64, never a string,
+        // never an int array.
+        'data': pcm.sublist(offset, end),
       });
       offset = end;
     }

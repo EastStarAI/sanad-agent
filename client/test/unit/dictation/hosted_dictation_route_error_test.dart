@@ -47,10 +47,14 @@ void main() {
     expect(await mappedCodeFor('size_limit'), 'session_limit');
     expect(await mappedCodeFor('rate_limited'), 'session_limit');
 
-    // A version mismatch and a malformed request are both retry-later outcomes.
-    // Neither is promoted into an "update required" verdict §8 never declared.
+    // A malformed request is diagnosable and is not "retry later": the frame
+    // this Client just built was refused, so it keeps its own code instead of
+    // collapsing into the generic relay verdict.
+    expect(await mappedCodeFor('invalid_request'), 'relay_invalid_request');
+
+    // A version mismatch is a retry-later outcome; it is not promoted into an
+    // "update required" verdict §8 never declared.
     for (final wireCode in const [
-      'invalid_request',
       'incompatible',
       'offline',
       'forbidden',

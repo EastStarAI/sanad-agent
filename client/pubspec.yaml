@@ -109,6 +109,11 @@ dev_dependencies:
   # approval grammar is certified against that library instead of a copy of its
   # rules. Never import it from `lib/`.
   args: ^2.7.0
+  # Test-only: the dictation wire test encodes the hosted audio frame with the
+  # real socket.io parser the Client ships, so `data` can only pass as a binary
+  # attachment. A hand-rolled JSON check would accept the malformed shape that
+  # the Gateway refuses. Never import it from `lib/`.
+  socket_io_common: ^3.1.1
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is

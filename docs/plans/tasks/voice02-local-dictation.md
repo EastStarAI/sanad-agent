@@ -461,9 +461,10 @@ the explicit settings route.
 
 A second live run (macOS Client on a Test Home plus the Web Client through the
 local stack) found three product defects and two seam gaps. Owner scope for this
-change set: D1, D3, D6, D7, D8 and three documentation contradictions. D2 (the
-hosted relay refusing every Web dictation session) is **documented and paused
-pending owner approval**; the out-of-scope driver items stay with their owner.
+change set: D1, D2, D3, D6, D7, D8 and three documentation contradictions. D2
+(the hosted relay refusing every Web dictation session) was studied and paused
+first, then implemented on owner approval; the out-of-scope driver items stay
+with their owner.
 
 - [x] **D1 — streaming text was duplicated in the composer.** The cubit appended
       every `dictation_final` and never consumed the daemon's `seq`, so a partial
@@ -507,11 +508,26 @@ pending owner approval**; the out-of-scope driver items stay with their owner.
       `native_stt_runtime_platforms.md` "Deferred" section now states the
       whisper-only Linux arm64 build as delivered behavior whose *executed*
       release proof is what remains deferred.
-- [ ] **D2 — the hosted relay refuses every Web dictation session**
-      (`dictation_route_error invalid_request`). Root cause and the proposed
-      Client fix are recorded in the delegate run's `live2-fixes/STUDY-D2.md`
-      (run `voice02-fullstack-20261108-b999`); no code changes until the owner
-      approves.
+- [x] **D2 — the hosted relay refused every Web dictation session**
+      (`dictation_route_error invalid_request`). Root cause was on the Client and
+      is recorded in the delegate run's `live2-fixes/STUDY-D2.md` (run
+      `voice02-fullstack-20261108-b999`). `HostedDictationTransport.sendAudio`
+      forwarded `pcm16.sublist(...)` unchanged, so whenever capture handed over a
+      plain `List<int>` the Socket.IO encoder found no binary in the packet and
+      JSON-encoded the samples as an integer array — which the Gateway's
+      contract-conformant schema refuses as *not raw bytes*. The transport now
+      normalizes to a `Uint8List` and emits each frame as a binary attachment.
+      `invalid_request` gained its own Client outcome, `relay_invalid_request`,
+      localized en+ar, because a malformed request is diagnosable and not
+      retry-later. Pinned by
+      `client/test/unit/dictation/hosted_dictation_wire_test.dart` (encoded
+      packet is a `BINARY_EVENT` with one attachment of the exact PCM bytes, plus
+      the integer-array shape as the recorded failure mode),
+      `client/test/unit/dictation/hosted_dictation_route_error_test.dart`, and the
+      shared field table `client/test/fixtures/dictation/hosted_audio_frame.json`,
+      which the Gateway's read-only mirror
+      `backend/tests/unit/test_dictation_relay_wire_mirror.py` asserts from its
+      own copy.
 
 ## Definition of done
 
