@@ -1,14 +1,18 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/core/navigation/app_routes.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_cubit.dart';
 import 'package:sanad_client/features/auth/presentation/bloc/auth_state.dart';
+import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/conversation_sidebar_scope.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/gateway_connection_cubit.dart';
 import 'package:sanad_client/features/devices/domain/models/gateway_connection_status.dart';
+import 'package:sanad_client/features/home/presentation/widgets/home_shell_scaffold.dart';
+import 'package:sanad_client/features/home/presentation/widgets/sidebar_drawer.dart';
 import 'package:flutter/material.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/installation_terminal_view.dart';
 import 'package:sanad_client/features/devices/presentation/widgets/onboarding_setup_choices.dart';
@@ -97,81 +101,108 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
 
+    final listeners = <BlocListener>[
+      BlocListener<AuthCubit, AuthState>(
+        listener: (context, state) {
+          if (state is AuthAuthenticated) {
+            unawaited(_routeAfterCloudAuth());
+          }
+        },
+      ),
+      BlocListener<GatewayConnectionCubit, GatewayConnectionStatus>(
+        listener: (context, status) {
+          if (status.isDesktop && status.localGateway == LocalGatewayStatus.connected && !_showProviderSetup) {
+            unawaited(_checkProviderReadiness());
+          }
+        },
+      ),
+      BlocListener<DeviceCubit, DeviceState>(
+        listener: (context, state) {
+          // Only the surface the user is actually looking at may move the route:
+          // a screen underneath a pushed route must never steal navigation.
+          if (!_isTopRoute()) return;
+          final devices = _registeredDevicesFromState(state);
+          if (devices.isNotEmpty) {
+            context.go(AppRoutes.home);
+          }
+        },
+      ),
+    ];
+
+    final content = SafeArea(child: Center(child: _buildCard(context, theme)));
+
+    if (AppPlatform.isDesktop) {
+      return MultiBlocListener(
+        listeners: listeners,
+        child: Scaffold(
+          backgroundColor: theme.scaffoldBackgroundColor,
+          body: content,
+        ),
+      );
+    }
+
+    // A phone or tablet has no local install path, so this is the first surface
+    // a new account sees. It carries the same side drawer as Home, which is how
+    // Settings, Profile, and Sign out stay reachable with zero devices.
     return MultiBlocListener(
-      listeners: [
-        BlocListener<AuthCubit, AuthState>(
-          listener: (context, state) {
-            if (state is AuthAuthenticated) {
-              unawaited(_routeAfterCloudAuth());
-            }
-          },
+      listeners: listeners,
+      child: ConversationSidebarScope(
+        child: HomeShellScaffold(
+          showMenuButton: true,
+          drawer: const SidebarDrawer(),
+          body: content,
         ),
-        BlocListener<GatewayConnectionCubit, GatewayConnectionStatus>(
-          listener: (context, status) {
-            if (status.isDesktop && status.localGateway == LocalGatewayStatus.connected && !_showProviderSetup) {
-              unawaited(_checkProviderReadiness());
-            }
-          },
+      ),
+    );
+  }
+
+  Widget _buildCard(BuildContext context, ThemeData theme) {
+    final viewport = MediaQuery.sizeOf(context);
+    final compact = viewport.width < 600;
+    return Container(
+      width: math.min(650, viewport.width - (compact ? 24 : 0)),
+      constraints: const BoxConstraints(maxHeight: 680),
+      padding: EdgeInsets.all(compact ? 20 : 40),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(
+          color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
         ),
-        BlocListener<DeviceCubit, DeviceState>(
-          listener: (context, state) {
-            final devices = _registeredDevicesFromState(state);
-            if (devices.isNotEmpty) {
-              context.go(AppRoutes.home);
-            }
-          },
-        ),
-      ],
-      child: Scaffold(
-        backgroundColor: theme.scaffoldBackgroundColor,
-        body: Center(
-          child: Container(
-            width: 650,
-            constraints: const BoxConstraints(maxHeight: 680),
-            padding: const EdgeInsets.all(40),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.surface.withValues(alpha: 0.05),
-              borderRadius: BorderRadius.circular(24),
-              border: Border.all(
-                color: theme.colorScheme.onSurface.withValues(alpha: 0.08),
-              ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.2),
-                  blurRadius: 30,
-                  spreadRadius: 2,
-                ),
-              ],
-            ),
-            child: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 300),
-              child: _checkingProvider
-                  ? const Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          AppProgressIndicator(),
-                          SizedBox(height: 16),
-                          Text('Checking provider readiness...'),
-                        ],
-                      ),
-                    )
-                  : _showProviderSetup
-                  ? ProviderSetupFlow(
-                      onReady: (_) {
-                        if (mounted) context.go(AppRoutes.home);
-                      },
-                    )
-                  : _showTerminal
-                  ? InstallationTerminalView(
-                      versionTag: _targetVersion,
-                      onComplete: _onInstallSuccess,
-                      onFailure: _onInstallFailure,
-                    )
-                  : _buildSelectionView(),
-            ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.2),
+            blurRadius: 30,
+            spreadRadius: 2,
           ),
-        ),
+        ],
+      ),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: _checkingProvider
+            ? const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    AppProgressIndicator(),
+                    SizedBox(height: 16),
+                    Text('Checking provider readiness...'),
+                  ],
+                ),
+              )
+            : _showProviderSetup
+            ? ProviderSetupFlow(
+                onReady: (_) {
+                  if (mounted && _isTopRoute()) context.go(AppRoutes.home);
+                },
+              )
+            : _showTerminal
+            ? InstallationTerminalView(
+                versionTag: _targetVersion,
+                onComplete: _onInstallSuccess,
+                onFailure: _onInstallFailure,
+              )
+            : _buildSelectionView(),
       ),
     );
   }
@@ -227,11 +258,23 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
   /// fetch path that returns the cached list without a stream event.
   Future<void> _refreshDevices() async {
     await context.read<DeviceCubit>().fetchAgents();
-    if (!mounted) return;
+    if (!mounted || !_isTopRoute()) return;
     final state = context.read<DeviceCubit>().state;
     if (_registeredDevicesFromState(state).isNotEmpty) {
       context.go(AppRoutes.home);
     }
+  }
+
+  /// Whether this screen is the live top route.
+  ///
+  /// A screen underneath a pushed route (for example `/devices/add`) must never
+  /// move navigation on its own: doing so destroyed the post-create install page
+  /// the moment the created device entered the inventory. `push` does not change
+  /// the router's reported location, so the hosting route's own currency is the
+  /// authority for "is the user actually looking at this screen".
+  bool _isTopRoute() {
+    if (ModalRoute.of(context)?.isCurrent != true) return false;
+    return GoRouter.of(context).routeInformationProvider.value.uri.path == AppRoutes.onboarding;
   }
 
   Future<void> _routeAfterCloudAuth() async {
@@ -240,7 +283,7 @@ class _OnboardingSetupScreenState extends State<OnboardingSetupScreen> {
     try {
       fetchedDevices = await deviceCubit.fetchAgents();
     } catch (_) {}
-    if (!mounted) return;
+    if (!mounted || !_isTopRoute()) return;
 
     final state = deviceCubit.state;
     final devices = fetchedDevices.isNotEmpty ? fetchedDevices : _registeredDevicesFromState(state);

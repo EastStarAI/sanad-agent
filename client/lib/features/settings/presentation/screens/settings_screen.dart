@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:go_router/go_router.dart';
 import 'package:sanad_client/core/di/injection.dart';
-import 'package:sanad_client/core/navigation/app_routes.dart';
+import 'package:sanad_client/core/navigation/account_landing.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_conversation_cache_snapshot.dart';
 import 'package:sanad_client/features/conversations/domain/models/device_workspace.dart';
@@ -80,28 +80,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
       if (targetDevice != null) {
         _selectedDeviceId = targetDevice.id;
-
-        if (section == 'providers') {
-          _destination = SettingsDestination.providers;
-        } else if (section == 'device' || section == 'overview') {
-          _destination = SettingsDestination.overview;
-        } else if (section == 'mcp') {
-          _destination = SettingsDestination.mcp;
-        } else if (section == 'skills') {
-          _destination = SettingsDestination.skills;
-        } else if (section != null) {
-          final matchedDest = SettingsDestination.values.where((d) => d.name == section).firstOrNull;
-          if (matchedDest != null) {
-            _destination = matchedDest;
-          }
-        } else {
-          _destination = SettingsDestination.overview;
-        }
-        if (_destination == SettingsDestination.workspace && queryWorkspaceId != null && queryWorkspaceId.isNotEmpty) {
-          _selectedWorkspaceId = queryWorkspaceId;
-          _showAllWorkspaces = true;
-        }
         unawaited(_cache.refreshWorkspaces(targetDevice));
+      }
+
+      // Personal sections resolve without a device: the account owns Profile and
+      // General, and a brand-new account has no device to scope them to. A
+      // device-scoped section without a device keeps the empty-device page.
+      if (section == null) {
+        if (targetDevice != null) {
+          _destination = SettingsDestination.overview;
+        }
+      } else if (section == 'providers') {
+        _destination = SettingsDestination.providers;
+      } else if (section == 'device' || section == 'overview') {
+        _destination = SettingsDestination.overview;
+      } else if (section == 'mcp') {
+        _destination = SettingsDestination.mcp;
+      } else if (section == 'skills') {
+        _destination = SettingsDestination.skills;
+      } else {
+        final matchedDest = SettingsDestination.values.where((d) => d.name == section).firstOrNull;
+        if (matchedDest != null) {
+          _destination = matchedDest;
+        }
+      }
+      if (_destination == SettingsDestination.workspace &&
+          targetDevice != null &&
+          queryWorkspaceId != null &&
+          queryWorkspaceId.isNotEmpty) {
+        _selectedWorkspaceId = queryWorkspaceId;
+        _showAllWorkspaces = true;
       }
     }
   }
@@ -289,7 +297,10 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           key: const Key('settings_back_to_conversations_btn'),
                           icon: const Icon(Icons.arrow_back_rounded),
                           tooltip: 'Back to conversations',
-                          onPressed: () => context.go(AppRoutes.home),
+                          // Same eligibility rule as the wide-layout back action:
+                          // a zero-device account returns to the zero-device
+                          // surface instead of a device-less Home.
+                          onPressed: () => context.go(AccountLanding.forCurrentAccount(context)),
                         ),
                         actions: [
                           Builder(

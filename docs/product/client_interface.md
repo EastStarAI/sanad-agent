@@ -46,6 +46,17 @@ authenticated mobile or web user has no registered devices, onboarding presents
 a `No devices connected` empty state with `Add a Remote Device` as its primary
 action.
 
+That mobile zero-device surface is still part of the application shell: it
+offers the same side menu (the drawer) as Home, so Settings, Profile, and Sign
+out stay reachable for an account that has not connected a device yet. Desktop
+onboarding keeps its own local-first card and shows no drawer.
+
+Creating a device lands on the install page for that device, which shows the
+install commands and the creation-only pairing token and stays on screen while
+the device is still offline. The client continues to Home on its own only when
+the new device actually comes online, and the user can leave earlier through
+`Continue to Home`.
+
 When an empty device inventory is still being requested, the sidebar identifies
 that request as loading rather than claiming that no devices exist. If the
 request settles successfully, times out, or fails without returning a device,
@@ -339,6 +350,15 @@ the canonical target path without exposing write or edit content. Approval grant
 Provider settings are device-scoped. The user can create multiple provider
 instances, including multiple accounts for the same provider, then select an
 instance and model for a conversation.
+
+The composer always offers its model/provider picker, including for a device
+that has no provider configured yet and for a device whose capability snapshot
+has not arrived. An empty catalog is a normal picker state: the picker states
+that no providers are configured and keeps its Settings action, which opens
+provider settings for the selected device. When the selected device is online
+without any provider, Home opens the provider setup window first, and the
+conversation behind it becomes usable once setup completes or the window is
+dismissed.
 
 Instances that support account-usage queries expose a **Usage & limits**
 section. ChatGPT Subscription currently reports its Session and Weekly

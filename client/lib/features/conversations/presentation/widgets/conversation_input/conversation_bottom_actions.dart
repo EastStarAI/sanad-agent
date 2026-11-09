@@ -126,10 +126,10 @@ class _ConversationBottomActionsState extends State<ConversationBottomActions> {
           ),
         ],
         const Spacer(),
-        if (capabilities.supportsModelChange) ...[
-          const SizedBox(width: 12),
-          _buildModelSelector(context),
-        ],
+        // Same rule as the live composer: the picker is always available, even
+        // with no capability snapshot or no configured provider.
+        const SizedBox(width: 12),
+        _buildModelSelector(context),
         if (inputSlice.pendingSuspendedRequest == null) ...[
           const SizedBox(width: 12),
           RouteThinkingModeSelector(
