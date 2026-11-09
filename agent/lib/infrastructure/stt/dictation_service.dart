@@ -10,6 +10,7 @@ import 'package:sanad_release_contract/release_contract.dart';
 import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart'
     show sherpaNativeSourceDirectory;
 
+import 'dictation_audio_buffer.dart';
 import 'dictation_session.dart';
 import 'dictation_status.dart';
 import 'stt_engine.dart';
@@ -635,10 +636,14 @@ class DictationService {
   }
 
   /// `stt_status` payload: readiness, selection, and the catalog rows.
-  Map<String, dynamic> statusPayload() {
-    final readiness = this.readiness();
+  ///
+  /// [readiness] overrides the computed verdict for exactly one event: a session
+  /// whose engine failed to load reports that code as the reason, instead of the
+  /// optimistic `ready` the on-disk probe would keep repeating.
+  Map<String, dynamic> statusPayload({SttReadiness? readiness}) {
+    final verdict = readiness ?? this.readiness();
     return dictationStatusPayload(
-      readiness: readiness,
+      readiness: verdict,
       settings: _settings,
       store: _store,
       availability: _availability,
@@ -885,9 +890,20 @@ class _DictationConnection {
     final SttEngine engine;
     try {
       engine = await service.acquireEngine(files);
-    } on Object {
+    } on SttException catch (error) {
+      // An engine that exists but cannot load is the same class of fact as a
+      // missing one, and it is never a daemon failure: rethrowing here reached
+      // the process top level, exited 255, and killed every client socket
+      // (v1.0.22 on arm64: `libggml.so.0: cannot open shared object file`).
       service.releaseSession(this);
-      rethrow;
+      _publishEngineFailure(error.code, error);
+      return;
+    } on Object catch (error) {
+      // A non-typed failure still must not take the daemon down; it reports the
+      // code the readiness path already uses for "cannot dictate here".
+      service.releaseSession(this);
+      _publishEngineFailure('unavailable', error);
+      return;
     }
     if (_closed || generation != _startGeneration) {
       // The channel closed (or cancelled) while the model was loading. Free the
@@ -923,6 +939,31 @@ class _DictationConnection {
     }
     _logger.info('dictation session started: model=${files.modelId}');
   }
+
+  /// Reports a failed engine acquisition as a typed status, never as a crash.
+  ///
+  /// The two events mirror the missing-runtime path in the same connection: the
+  /// status says why this device cannot dictate right now, and `dictation_error`
+  /// carries the stable code a client renders. The detail (which library the
+  /// loader refused) stays in the local log: a `dictation_error` also travels
+  /// over the hosted relay, and a host filesystem path is never part of a wire
+  /// payload.
+  void _publishEngineFailure(String code, Object error) {
+    _logger.warning('dictation engine load failed: $error');
+    transport.send(
+      'stt_status',
+      service.statusPayload(
+        readiness: SttReadiness.unavailable(code, isSupported: true),
+      ),
+    );
+    transport.send('dictation_error', {
+      'code': code,
+      'reason': code,
+      'message': code == 'engine_load_failed'
+          ? 'the local dictation runtime could not be loaded'
+          : 'the local dictation engine is unavailable',
+    });
+  }
 }
 
 /// Wraps the socket channel so a session consumes the connection's audio
@@ -948,41 +989,4 @@ class _SessionChannel implements DictationChannel {
 
   @override
   Future<void> close() => _inner.close();
-}
-
-/// Bounded FIFO for microphone frames captured before a session exists.
-class DictationAudioBuffer {
-  DictationAudioBuffer({this.maxBytes = 4 * 1024 * 1024});
-
-  /// 4 MiB is ≈2 minutes of 16 kHz mono PCM16; beyond that the buffer would
-  /// cost more than the words it protects.
-  final int maxBytes;
-
-  final List<Uint8List> _chunks = [];
-  int _bytes = 0;
-  int _droppedBytes = 0;
-
-  int get bufferedBytes => _bytes;
-  int get bufferedChunks => _chunks.length;
-  int get droppedBytes => _droppedBytes;
-
-  /// Returns false when the frame did not fit and was dropped instead.
-  bool add(Uint8List chunk) {
-    if (chunk.isEmpty) return true;
-    if (_bytes + chunk.length > maxBytes) {
-      _droppedBytes += chunk.length;
-      return false;
-    }
-    _chunks.add(chunk);
-    _bytes += chunk.length;
-    return true;
-  }
-
-  /// Removes and returns everything buffered, in arrival order.
-  List<Uint8List> drain() {
-    final drained = List<Uint8List>.of(_chunks);
-    _chunks.clear();
-    _bytes = 0;
-    return drained;
-  }
 }

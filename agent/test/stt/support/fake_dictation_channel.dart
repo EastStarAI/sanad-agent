@@ -72,7 +72,7 @@ class FakeDictationChannel implements DictationChannel {
 
 /// [SttEngine] double that records what the session did to it.
 class FakeSttEngine implements SttEngine {
-  FakeSttEngine({this.readyEvent});
+  FakeSttEngine({this.readyEvent, this.startFailure});
 
   final _events = StreamController<SttEvent>.broadcast();
   final audioLengths = <int>[];
@@ -88,6 +88,10 @@ class FakeSttEngine implements SttEngine {
 
   /// Held by a test to keep a drain in flight while it observes the lease.
   Completer<void>? finishGate;
+
+  /// Thrown by [start] instead of loading, so a failed engine load can be
+  /// proven to be a typed status rather than a daemon crash.
+  final SttException? startFailure;
 
   SttReadyEvent? readyEvent;
 
@@ -108,6 +112,8 @@ class FakeSttEngine implements SttEngine {
     started = true;
     final gate = startGate;
     if (gate != null) await gate.future;
+    final failure = startFailure;
+    if (failure != null) throw failure;
   }
 
   @override

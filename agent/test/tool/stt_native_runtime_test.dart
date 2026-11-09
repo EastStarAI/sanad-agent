@@ -274,6 +274,115 @@ void main() {
     });
   });
 
+  group('linux relocatability', () {
+    // glibc resolves a library's DT_NEEDED through that library's own RUNPATH,
+    // not through the search path of the image that loaded it. The first arm64
+    // install shipped `libwhisper.so.1` beside a shim that carried `$ORIGIN` and
+    // still failed with `libggml.so.0 => not found`: the staged bytes were
+    // correct, the recorded search path was not.
+    test('a runtime whose libraries record \$ORIGIN verifies', () async {
+      const linux = SttNativeTarget.linuxArm64;
+      final hashes = writeFakeRuntime(
+        directory: runtimeDirectory(linux),
+        target: linux,
+      );
+
+      final verification = await verifySttRuntime(
+        nativeRoot: nativeRoot,
+        target: linux,
+        manifest: manifestWith(hashes, value: linux),
+      );
+
+      expect(verification.problems, isEmpty);
+      expect(verification.ok, isTrue);
+      expect(verification.runPaths.keys, unorderedEquals(hashes.keys));
+      for (final name in hashes.keys) {
+        expect(verification.runPaths[name], [elfOriginRunPath]);
+      }
+    });
+
+    test('a library without an origin search path fails verification', () async {
+      const linux = SttNativeTarget.linuxX64;
+      final directory = runtimeDirectory(linux);
+      for (final name in linux.requiredLibraries) {
+        // Exactly the shape the cmake build produced before the install rpath
+        // was configured: a real library, the right architecture, no `$ORIGIN`.
+        File('${directory.path}/$name')
+            .writeAsBytesSync(elfLibrary(linux.cpu));
+      }
+
+      final verification = await verifySttRuntime(
+        nativeRoot: nativeRoot,
+        target: linux,
+        manifest: manifestWith(const {}, value: linux),
+      );
+
+      expect(verification.ok, isFalse);
+      for (final name in linux.requiredLibraries) {
+        expect(verification.problems, contains('origin_runpath_missing:$name'));
+      }
+    });
+
+    test('an engine library is reported, never a build this cannot fix', () async {
+      // The sherpa libraries are third-party bytes: this repository cannot
+      // relink them, so a missing `$ORIGIN` there is a stated warning rather
+      // than a failure no change in this tree could clear.
+      if (!sherpaEngineAvailable) {
+        markTestSkipped('this build has no sherpa engine');
+        return;
+      }
+      const linux = SttNativeTarget.linuxX64;
+      final directory = runtimeDirectory(linux);
+      writeFakeRuntime(directory: directory, target: linux);
+      final relative = linux.sherpaLibraries.first;
+      final engineKey = '${linux.sherpaNativeSubdirectory}/$relative';
+      for (final relativePath in linux.sherpaLibraries) {
+        final file = File(
+          '${directory.path}/${linux.sherpaNativeSubdirectory}/$relativePath',
+        );
+        file.parent.createSync(recursive: true);
+        file.writeAsBytesSync(elfLibrary(linux.cpu));
+      }
+
+      final verification = await verifySttRuntime(
+        nativeRoot: nativeRoot,
+        target: linux,
+        manifest: manifestWith(const {}, value: linux),
+      );
+
+      expect(verification.ok, isTrue);
+      expect(
+        verification.warnings,
+        contains('origin_runpath_missing:$engineKey'),
+      );
+    });
+
+    test('the loader gate never passes a folder it could not probe', () async {
+      const linux = SttNativeTarget.linuxX64;
+      final directory = Directory.systemTemp.createTempSync('stt-ldd-');
+      addTearDown(() {
+        if (directory.existsSync()) directory.deleteSync(recursive: true);
+      });
+
+      final check = await checkLoaderResolution(
+        target: linux,
+        directory: directory.path,
+      );
+
+      if (!Platform.isLinux) {
+        expect(
+          check.skipped,
+          isTrue,
+          reason: 'only Linux can answer this question',
+        );
+        return;
+      }
+      expect(check.skipped, isFalse);
+      expect(check.ok, isFalse);
+      expect(check.unresolved, unorderedEquals(linux.requiredLibraries));
+    });
+  });
+
   group('manifest', () {
     test('reads artifact entries and their provenance', () {
       final manifest = SttRuntimeManifest.fromJson({

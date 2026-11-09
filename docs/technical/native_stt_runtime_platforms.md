@@ -118,6 +118,59 @@ The mapping reads `Abi.current()`, never a substring of `Platform.version`. A
 version string is not an architecture: it is a kernel/SDK description, so a
 substring match both misfires and cannot express "this build is x64".
 
+## Relocatable runtime: every member carries its own search path
+
+A packaged runtime is a **folder**, not an installed library: `<home>/bin/native/<tag>/`
+is never on the loader's search path, and the generated service unit sets no
+`LD_LIBRARY_PATH` on purpose — the payload has to work as it was shipped. The
+shim is therefore not the only member that needs a self-relative search path.
+
+| Platform | What makes the folder relocatable |
+|---|---|
+| Linux | `DT_RUNPATH` = `$ORIGIN` on **every** shipped library |
+| macOS | install names `@rpath/…`, resolved through the shim's `LC_RPATH @loader_path` |
+| Windows | the loader preloads each sibling by absolute path before the shim opens |
+
+The Linux rule is not cosmetic. glibc resolves a library's `DT_NEEDED` through
+**that library's own** RUNPATH and does not inherit the search path of the image
+that loaded it, so a shim-only `$ORIGIN` resolves `libwhisper.so.1` and then
+fails on `libwhisper.so.1`'s own `libggml*.so.0`. dyld behaves differently — it
+walks the whole load chain — which is why the macOS dylibs need no change: they
+carry `@rpath` install names and find each other through the shim's
+`@loader_path`.
+
+v1.0.22 shipped exactly the broken shape. Only the shim was linked with
+`-Wl,-rpath,'$ORIGIN'`; the whisper/ggml libraries were copied out of the cmake
+build carrying the absolute build directory as their RUNPATH, and the first
+arm64 install failed with
+`libggml.so.0: cannot open shared object file: No such file or directory`.
+`agent/tool/build_whispercpp.sh` therefore configures the Linux build with
+`-DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON` — the
+second flag is what puts the install value into the build-tree libraries the
+staging step copies — and it discards a restored build tree whose cache does not
+record that contract, because the Makefile generator compares timestamps only
+and would otherwise reuse the stale libraries unchanged. The CI and release
+whisper build-cache keys carry a version token for the same reason.
+
+### What `--verify` proves about relocatability
+
+Two separate checks, because each one alone can pass on a broken payload:
+
+- `origin_runpath_missing:<file>` — every Linux library must record `$ORIGIN`
+  (or a path list containing it). `--verify` also prints
+  `native_stt_runpath_<file>=<paths>` per member as evidence.
+- `native_stt_ldd_<file>=ok|not_found:<names>` — `checkLoaderResolution` asks the
+  real loader, running `ldd` on every shipped library **from another working
+  directory**, and fails when a shipped name is unresolved. A recorded `$ORIGIN`
+  is necessary but not sufficient, and a hash plus an architecture check both
+  pass on the broken shape; only the loader can answer.
+
+The engine libraries under `sherpa/` are third-party prebuilt bytes that this
+repository cannot relink, so a missing `$ORIGIN` there is a stated warning
+(`origin_runpath_missing:<key>`), never a failure no change in this tree could
+clear. Whether the packaged sherpa Linux payload loads the same way is a
+follow-up, not a claim made here.
+
 ## Directory layout and the bounded legacy alias
 
 The daemon looks for the shim in this order (first existing, architecture-matching
@@ -178,6 +231,9 @@ mutates anything, and exits non-zero on any hard failure.
 - every library's header reports the target architecture (Mach-O `cputype`, ELF
   `e_machine`, or PE `Machine`), so a cross-architecture artifact is rejected
   before publication;
+- on Linux, every library records an `$ORIGIN` search path and the loader
+  resolves every shipped member when it is asked from another working directory
+  (see [Relocatable runtime](#relocatable-runtime-every-member-carries-its-own-search-path));
 - on macOS, the recorded minimum OS is not newer than the shipped Client floor
   (see below);
 - the release/CI smoke test opens the shim in a real process of that
@@ -457,7 +513,8 @@ Apple Silicon figure (build 18.3 s in this worktree) is recorded in
 
 | Runner | Proves |
 |---|---|
-| `ubuntu-24.04` | x64 ELF compiles, verifies, loads, stages |
+| `ubuntu-24.04` | x64 ELF compiles, verifies (including the `$ORIGIN` and loader checks), loads, stages |
+| `ubuntu-24.04-arm` | arm64 ELF compiles on its own CPU, verifies (including the `$ORIGIN` and loader checks), loads, stages — the lane that would have caught the v1.0.22 defect |
 | `macos-26` | arm64 Mach-O compiles with Metal, verifies, loads, stages |
 | `macos-15-intel` | **genuine** x64 Mach-O compiles, verifies, loads, stages on Intel hardware |
 | `windows-2025` | x64 PE compiles, verifies, loads, stages |
@@ -478,7 +535,7 @@ live acceptance run on Intel hardware.
 
 | Test | Covers |
 |---|---|
-| `agent/test/stt/stt_native_platform_test.dart` | ABI matrix, Intel platform scope, Metal per architecture, required files, legacy alias bounds, candidate order, Mach-O/ELF/PE inspection |
+| `agent/test/stt/stt_native_platform_test.dart` | ABI matrix, Intel platform scope, Metal per architecture, required files, legacy alias bounds, candidate order, Mach-O/ELF/PE inspection, ELF `$ORIGIN` search-path parsing |
 | `agent/test/stt/native_runtime_readiness_test.dart` | missing/preparing readiness, the native-root marker, foreign-architecture rejection, the recorded install-failure reason, and the packaged retry path |
 | `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh`: a runtime failure, checksum mismatch, or download error still installs the Agent, restores the predecessor runtime, and records the reason; transaction rollback; verified install clears the record |
 | `agent/test/core/update/agent_update_runtime_policy_test.dart` | Agent self-update completes with `restart_required` on a runtime download error or checksum mismatch and records the cause; a verified runtime installs and clears it |
@@ -486,9 +543,9 @@ live acceptance run on Intel hardware.
 | `client/test/unit/services/verified_agent_bootstrap_installer_test.dart` | Client bootstrap: a runtime download/checksum/layout failure never fails the install and records the cause; a verified runtime installs |
 | `scripts/sanad_dev/test/runtime/lifecycle/native_runtime_probe_test.dart` | architecture-qualified probe, one bounded legacy alias, unknown host pair, and a failing installer that never blocks `run` |
 | `agent/test/stt/native_runtime_smoke_test.dart` | real load of the built runtime (skips without one, fails when `SANAD_STT_REQUIRE_NATIVE=1`) |
-| `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
+| `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, Linux `$ORIGIN` relocatability, the loader gate, staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
 | `agent/test/tool/stt_native_archive_test.dart` | reproducible tar.gz bytes, header fields, checksums, entry order |
-| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection |
+| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection, the Linux install-rpath and stale-cache contract |
 | `agent/test/tool/native_runtime_package_contract_test.dart` | release contract ↔ archive layout ↔ installers ↔ workflow agreement, including the 35-minute budget, the pwsh-twin rule, and a scan that fails on any `bash` step in a Windows-capable job |
 | `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh` in a sandbox: a later service failure restores the runtime this run replaced, a failed restore keeps the backup and never reports a clean rollback, symlink and hidden members are refused, a release without a runtime keeps the installed one |
 

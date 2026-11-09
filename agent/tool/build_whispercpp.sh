@@ -6,8 +6,13 @@
 #
 # The daemon loads the result through dart:ffi (see stt_native_platform.dart and
 # whispercpp_bindings.dart). The output directory holds the whisper/ggml
-# libraries beside the shim, and the shim finds them through a self-relative
-# rpath, so the folder is relocatable.
+# libraries beside the shim, and **every** shipped library records a
+# self-relative search path, so the folder is relocatable. On Linux that means
+# an `$ORIGIN` RUNPATH on each member and not only on the shim: glibc resolves a
+# library's DT_NEEDED through that library's own RUNPATH, so a shim-only rpath
+# still leaves `libwhisper.so.1`'s `libggml*.so.0` unfound outside the build
+# tree. macOS reaches the same place through `@rpath` install names, which dyld
+# resolves against the whole load chain.
 #
 # The architecture is explicit because the output directory is
 # architecture-qualified (`native/macos-arm64`, `native/macos-x64`, …): building
@@ -86,11 +91,29 @@ if [ "$os" = macos ]; then
     -DCMAKE_OSX_ARCHITECTURES="$cmake_arch" \
     ${deploy_target:+-DCMAKE_OSX_DEPLOYMENT_TARGET="$deploy_target"} >/dev/null
 else
+  # A restored CI cache, or a developer's earlier build, can leave a CMake tree
+  # whose link flags predate the `$ORIGIN` install rpath. CMake reconfigures,
+  # but the Makefile generator only compares timestamps, so the stale libraries
+  # would be reused unchanged and would ship a runtime that cannot find its own
+  # siblings. The builder therefore discards a tree that does not record this
+  # contract, exactly as the Windows builder discards one configured for another
+  # platform: no workflow cache key can guarantee a developer's tree.
+  if [ -f build/CMakeCache.txt ] &&
+     { ! grep -qF 'CMAKE_INSTALL_RPATH:STRING=$ORIGIN' build/CMakeCache.txt ||
+       ! grep -qF 'CMAKE_BUILD_WITH_INSTALL_RPATH:BOOL=ON' build/CMakeCache.txt; }; then
+    rm -rf build
+  fi
+  # `CMAKE_BUILD_WITH_INSTALL_RPATH=ON` makes the build-tree libraries carry the
+  # install rpath, which is what the staged copy ships. Without it CMake writes
+  # the absolute build directory into every library, and that path never exists
+  # on a user's machine.
   cmake -B build -DCMAKE_BUILD_TYPE=Release \
     -DBUILD_SHARED_LIBS=ON \
     -DGGML_METAL="$metal" \
     -DWHISPER_BUILD_TESTS=OFF \
-    -DWHISPER_BUILD_EXAMPLES=OFF >/dev/null
+    -DWHISPER_BUILD_EXAMPLES=OFF \
+    -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+    -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON >/dev/null
 fi
 cmake --build build -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || sysctl -n hw.ncpu)" >/dev/null
 

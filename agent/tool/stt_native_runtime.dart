@@ -128,6 +128,7 @@ class SttRuntimeVerification {
     required this.missing,
     required this.unpinned,
     required this.hashes,
+    this.runPaths = const {},
   });
 
   final SttNativeTarget target;
@@ -148,6 +149,13 @@ class SttRuntimeVerification {
 
   /// sha256 of every library that was read, keyed by file name.
   final Map<String, String> hashes;
+
+  /// ELF search paths recorded by each library, keyed by manifest name.
+  ///
+  /// Populated for Linux targets only: it is the evidence `--verify` prints for
+  /// the relocatability rule, and it is empty on macOS and Windows, whose
+  /// loaders resolve siblings by install name and by search path respectively.
+  final Map<String, List<String>> runPaths;
 
   bool get ok => problems.isEmpty;
 
@@ -192,6 +200,7 @@ Future<SttRuntimeVerification> verifySttRuntime({
   final missing = <String>[];
   final unpinned = <String>[];
   final hashes = <String, String>{};
+  final runPaths = <String, List<String>>{};
 
   if (entry == null && requireManifestEntry) {
     problems.add('manifest_entry_missing:${target.tag}');
@@ -199,15 +208,25 @@ Future<SttRuntimeVerification> verifySttRuntime({
 
   /// The whisper libraries and the sherpa libraries are verified the same way;
   /// only their directory and their manifest key differ.
-  void verifyLibrary(String path, String manifestKey) {
+  ///
+  /// [requireOriginRunPath] is true for the libraries this repository builds. A
+  /// shipped engine library is third-party bytes that cannot be relinked here,
+  /// so a missing `$ORIGIN` is reported for it instead of failing a build this
+  /// change cannot fix.
+  void verifyLibrary(
+    String path,
+    String manifestKey, {
+    bool requireOriginRunPath = true,
+  }) {
     final file = File(path);
     if (!file.existsSync()) {
       missing.add(manifestKey);
       problems.add('missing_library:$manifestKey');
       return;
     }
-    // The whole file is read so the macOS deployment target can be checked as
-    // well; native libraries are a few megabytes at most.
+    // The whole file is read so the macOS deployment target and the ELF search
+    // path can be checked as well; native libraries are a few megabytes at
+    // most.
     final info = inspectNativeLibraryFile(path);
     if (!info.isRecognized) {
       problems.add('unrecognized_native_binary:$manifestKey');
@@ -215,6 +234,29 @@ Future<SttRuntimeVerification> verifySttRuntime({
     }
     if (!info.supports(target.cpu)) {
       problems.add('architecture_mismatch:$manifestKey');
+    }
+    // glibc resolves a library's DT_NEEDED through that library's own RUNPATH,
+    // so a shim-only `$ORIGIN` still leaves `libwhisper.so.1`'s `libggml*.so.0`
+    // unresolved outside the build tree. That is what failed the first arm64
+    // install, and a hash cannot catch it: only the recorded search path can.
+    if (target.os == SttNativeOs.linux) {
+      final recorded = elfRunPathsOfFile(path);
+      if (recorded == null) {
+        if (requireOriginRunPath) {
+          problems.add('runpath_unreadable:$manifestKey');
+        } else {
+          warnings.add('runpath_unreadable:$manifestKey');
+        }
+      } else {
+        runPaths[manifestKey] = recorded;
+        if (!recorded.contains(elfOriginRunPath)) {
+          if (requireOriginRunPath) {
+            problems.add('origin_runpath_missing:$manifestKey');
+          } else {
+            warnings.add('origin_runpath_missing:$manifestKey');
+          }
+        }
+      }
     }
     final minimum = info.minimumMacOsVersion;
     final ceiling = target.macosDeploymentTarget;
@@ -264,7 +306,7 @@ Future<SttRuntimeVerification> verifySttRuntime({
         // gate that refuses to ship a payload without one.
         continue;
       }
-      verifyLibrary('$sherpaRoot/$relative', key);
+      verifyLibrary('$sherpaRoot/$relative', key, requireOriginRunPath: false);
     }
   }
 
@@ -289,7 +331,128 @@ Future<SttRuntimeVerification> verifySttRuntime({
     missing: List.unmodifiable(missing),
     unpinned: List.unmodifiable(unpinned),
     hashes: Map.unmodifiable(hashes),
+    runPaths: Map.unmodifiable(runPaths),
   );
+}
+
+/// What the real loader answers for one packaged runtime directory.
+class SttLoaderResolution {
+  const SttLoaderResolution({
+    required this.target,
+    required this.directory,
+    required this.unresolved,
+    required this.evidence,
+    this.skipped = false,
+  });
+
+  final SttNativeTarget target;
+  final String directory;
+
+  /// Shipped library names the loader could not resolve.
+  final List<String> unresolved;
+
+  /// One `native_stt_ldd_<name>=…` line per probed library, for the CI log.
+  final List<String> evidence;
+
+  /// True when this host cannot answer: not Linux, or no `ldd` to ask.
+  final bool skipped;
+
+  bool get ok => unresolved.isEmpty;
+}
+
+/// Resolves every shipped library through the real loader, from another folder.
+///
+/// A recorded `$ORIGIN` is necessary but not sufficient: the loader is the only
+/// thing that proves the sibling actually resolves, and it must be asked from a
+/// working directory other than the library folder — that is exactly how the
+/// first arm64 install failed (`libggml.so.0 => not found` from `/tmp` while a
+/// listing of the folder looked complete). A hash cannot answer this question
+/// either, because both sides of the defect are correct bytes.
+///
+/// Only `linux` targets are probed, and only on Linux: macOS resolves siblings
+/// by install name through the load chain, and Windows resolves them from the
+/// process search path, which the loader preload owns. A missing `ldd` is
+/// reported as [SttLoaderResolution.skipped] rather than as a pass.
+Future<SttLoaderResolution> checkLoaderResolution({
+  required SttNativeTarget target,
+  required String directory,
+  String? workingDirectory,
+}) async {
+  final evidence = <String>[];
+  if (target.os != SttNativeOs.linux || !Platform.isLinux) {
+    return SttLoaderResolution(
+      target: target,
+      directory: directory,
+      unresolved: const [],
+      evidence: const [],
+      skipped: true,
+    );
+  }
+  final cwd = workingDirectory ?? Directory.systemTemp.path;
+  final unresolved = <String>[];
+  final systemMissing = <String>{};
+  for (final name in target.requiredLibraries) {
+    final path = File('$directory/$name');
+    if (!path.existsSync()) {
+      unresolved.add(name);
+      evidence.add('native_stt_ldd_$name=missing');
+      continue;
+    }
+    final ProcessResult result;
+    try {
+      result = await Process.run(
+        'ldd',
+        [path.absolute.path],
+        workingDirectory: cwd,
+      );
+    } on ProcessException {
+      return SttLoaderResolution(
+        target: target,
+        directory: directory,
+        unresolved: const [],
+        evidence: const ['native_stt_ldd=unavailable'],
+        skipped: true,
+      );
+    }
+    final missingNames = _unresolvedLibraries('${result.stdout}');
+    final shipped = [
+      for (final missingName in missingNames)
+        if (target.requiredLibraries.contains(missingName)) missingName,
+    ];
+    systemMissing.addAll(
+      missingNames.where((missingName) => !shipped.contains(missingName)),
+    );
+    if (shipped.isEmpty) {
+      evidence.add('native_stt_ldd_$name=ok');
+    } else {
+      unresolved.addAll(
+        shipped.where((shippedName) => !unresolved.contains(shippedName)),
+      );
+      evidence.add('native_stt_ldd_$name=not_found:${shipped.join('+')}');
+    }
+  }
+  if (systemMissing.isNotEmpty) {
+    // Informational only: the runner's own image is not the user's image, and a
+    // missing system library is not something this payload can ship.
+    evidence.add('native_stt_ldd_system_missing=${systemMissing.join('+')}');
+  }
+  return SttLoaderResolution(
+    target: target,
+    directory: directory,
+    unresolved: List.unmodifiable(unresolved),
+    evidence: List.unmodifiable(evidence),
+  );
+}
+
+/// Library names `ldd` printed as `=> not found`.
+List<String> _unresolvedLibraries(String output) {
+  final names = <String>[];
+  final pattern = RegExp(r'^\s*(\S+) => not found\s*$', multiLine: true);
+  for (final match in pattern.allMatches(output)) {
+    final name = match.group(1);
+    if (name != null && !names.contains(name)) names.add(name);
+  }
+  return names;
 }
 
 /// One staged runtime directory ready to ship beside a packaged Agent.

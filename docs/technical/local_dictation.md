@@ -15,6 +15,7 @@ captures PCM and displays the transcript.
 |---|---|
 | Microphone capture, insertion at the caret, draft preservation | `client/lib/features/dictation/` |
 | Transport (WebSocket), command handling, session lifecycle | `agent/lib/infrastructure/stt/dictation_service.dart` |
+| Pre-session microphone buffer (frames captured while the model loads) | `agent/lib/infrastructure/stt/dictation_audio_buffer.dart` |
 | Recognition runtime (native, in-process) | `agent/lib/infrastructure/stt/stt_engine.dart` + worker isolate |
 | Model catalog, download, checksum, activation | `agent/lib/infrastructure/stt/stt_catalog.dart`, `stt_model_store.dart` |
 
@@ -44,7 +45,7 @@ Events (daemon → client):
 | `dictation_partial` | `seq`, `text` | Streaming only: open segment, replaced in place |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of segment `seq` |
 | `dictation_done` | `segments`, `dropped_chunks` | Session drained; nothing follows |
-| `dictation_error` | `code`, `message` | Typed failure; no text is fabricated |
+| `dictation_error` | `code`, `reason`, `message` | Typed failure; no text is fabricated |
 
 `seq` is the replacement key: a partial and its final share the same `seq`, so
 the composer replaces the partial instead of appending, and no text is
@@ -193,6 +194,32 @@ refuse. A `stt.model_path` override that no longer resolves counts as no model.
 
 Readiness order is runtime before model: a missing engine makes every model
 useless, and it is the reason with a build or download action behind it.
+
+### A runtime that exists but cannot load
+
+`engine_load_failed` is a typed status, not a crash. Engine acquisition happens
+inside the session's `start`, and a `SttException` there is caught at the
+dictation connection boundary: the lease is released, the failed engine is
+disposed, `stt_status` is published with `ready: false` and
+`reason: engine_load_failed`, and `dictation_error` carries the same code. The
+daemon keeps running and the connection keeps answering — a `status` command
+right after the failure is served normally.
+
+This is the same contract a missing runtime already had (`native_runtime_missing`,
+`native_runtime_install_failed`): a device that cannot dictate says why. It used
+to be violated — v1.0.22's first arm64 install raised the load failure through
+the command path, the daemon exited `255`, every client socket died, and the
+clip that started the session received neither `dictation_ready` nor
+`dictation_error`.
+
+The wire carries the code and a stable English sentence only. The detail — which
+library the loader refused — is written to the local log, because
+`dictation_error` also travels over the hosted relay and a host filesystem path
+is never part of a wire payload. Readiness keeps describing what is on disk: a
+later `status` request still reports `ready: true` for a runtime that exists,
+which is exactly what makes the next press retry the load instead of hiding the
+button. The cause of such a failure is the shipped runtime itself; see
+[Native Dictation Runtime Platforms](native_stt_runtime_platforms.md#relocatable-runtime-every-member-carries-its-own-search-path).
 
 ### Where the streaming engine is loaded from
 

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_audio_buffer.dart';
 import 'package:test/test.dart';
 
 Uint8List frame(int bytes, [int fill = 1]) =>

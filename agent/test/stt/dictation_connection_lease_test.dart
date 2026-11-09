@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/infrastructure/stt/dictation_session.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 
 import 'support/fake_dictation_channel.dart';
 import 'package:test/test.dart';
@@ -157,6 +158,62 @@ stt:
         reason: 'a cancelled load must not announce a ready session',
       );
       expect(engine.audioLengths, isEmpty);
+
+      await channel.close();
+      await run;
+    });
+
+    test('a failed engine load is a typed status, never a dead daemon', () async {
+      // v1.0.22 shipped a Linux runtime whose ggml siblings did not resolve, and
+      // the resulting `SttException` escaped the connection: the daemon exited
+      // 255, every client socket died, and the clip that started the session got
+      // no `dictation_ready` and no `dictation_error`. An engine that cannot be
+      // loaded is a typed answer, exactly like a missing runtime.
+      final engine = FakeSttEngine(
+        startFailure: const SttException(
+          'engine_load_failed',
+          'Failed to load dynamic library: libggml.so.0',
+        ),
+      );
+      final service = serviceWithEngine(engine);
+      final channel = FakeDictationChannel();
+      final run = service.handleChannel(channel);
+
+      channel.sendCommand(DictationCommand.start);
+      final error = await channel.awaitEvent('dictation_error');
+      expect(error['code'], 'engine_load_failed');
+      expect(error['reason'], 'engine_load_failed');
+      // The wire payload never carries the library path: a dictation_error also
+      // travels over the hosted relay.
+      expect('${error['message']}', isNot(contains('libggml')));
+
+      await until(
+        () => channel.eventsOf('stt_status').last['ready'] == false,
+        reason: 'the failed status is published',
+      );
+      final failedStatus = channel.eventsOf('stt_status').last;
+      expect(failedStatus['reason'], 'engine_load_failed');
+      expect(
+        failedStatus['supported'],
+        isTrue,
+        reason: 'the device still supports dictation; this load failed',
+      );
+      expect(
+        channel.eventsOf('dictation_ready'),
+        isEmpty,
+        reason: 'no session may be announced for an engine that never loaded',
+      );
+      expect(service.isBusy, isFalse, reason: 'the failed load releases the lease');
+      expect(engine.disposed, isTrue);
+
+      // The connection is still serving: a status request is answered instead of
+      // the process being gone.
+      final before = channel.eventsOf('stt_status').length;
+      channel.sendCommand(DictationCommand.status);
+      await until(
+        () => channel.eventsOf('stt_status').length > before,
+        reason: 'status answered after the failure',
+      );
 
       await channel.close();
       await run;

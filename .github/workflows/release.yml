@@ -178,7 +178,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: whisper.cpp/build
-          key: whisper-build-v2-${{ matrix.runner }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+          # `v3` because the libraries are now linked with an `$ORIGIN` install
+          # rpath; see `.github/workflows/ci.yml` for why a restored tree must
+          # not be reused under the old key.
+          key: whisper-build-v3-${{ matrix.runner }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
       - name: Require the runner CPU the matrix label claims
         if: matrix.platform == 'macos'
         shell: bash
