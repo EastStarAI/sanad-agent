@@ -400,10 +400,15 @@ class RunnerStreamCoordinator {
       runtimeSystemPrompt: runtimeSystemPrompt,
     );
 
-    String fullContent = '';
+    // Streamed text is accumulated in growable buffers: a provider may emit
+    // thousands of deltas per answer, and `+=` would copy the whole prefix on
+    // every delta, inflating both the allocation rate and the retained heap.
+    final fullContent = StringBuffer();
     List<ToolCall>? accumulatedToolCalls;
-    String? thought;
-    String? reasoning;
+    final thought = StringBuffer();
+    final reasoning = StringBuffer();
+    var thoughtStarted = false;
+    var reasoningStarted = false;
     LLMProviderState? providerState;
     var finishReason = LLMFinishReason.unknown;
     final accumulatedMessageMetadata = <String, dynamic>{};
@@ -567,14 +572,16 @@ class RunnerStreamCoordinator {
 
             if (response.message.thought != null) {
               final thoughtDelta = response.message.thought!;
-              thought = (thought ?? '') + thoughtDelta;
+              thoughtStarted = true;
+              thought.write(thoughtDelta);
               if (thoughtDelta.isNotEmpty && onThoughtDelta != null) {
                 await onThoughtDelta(thoughtDelta);
               }
             }
             if (response.message.reasoning != null) {
               final reasoningDelta = response.message.reasoning!;
-              reasoning = (reasoning ?? '') + reasoningDelta;
+              reasoningStarted = true;
+              reasoning.write(reasoningDelta);
               if (reasoningDelta.isNotEmpty && onReasoningDelta != null) {
                 await onReasoningDelta(reasoningDelta);
               }
@@ -587,7 +594,7 @@ class RunnerStreamCoordinator {
             }
 
             final chunk = response.message.content ?? '';
-            fullContent += chunk;
+            fullContent.write(chunk);
             if (chunk.isNotEmpty) {
               yield chunk;
             }
@@ -698,10 +705,12 @@ class RunnerStreamCoordinator {
 
       final assistantMessage = Message(
         role: MessageRole.assistant,
-        content: fullContent.isEmpty ? null : fullContent,
+        content: fullContent.isEmpty ? null : fullContent.toString(),
         toolCalls: accumulatedToolCalls ?? lastMessage.toolCalls,
-        thought: thought ?? lastMessage.thought,
-        reasoning: reasoning ?? lastMessage.reasoning,
+        thought: thoughtStarted ? thought.toString() : lastMessage.thought,
+        reasoning: reasoningStarted
+            ? reasoning.toString()
+            : lastMessage.reasoning,
         providerState: providerState ?? lastMessage.providerState,
         finishReason: finishReason == LLMFinishReason.unknown
             ? lastMessage.finishReason
@@ -788,7 +797,7 @@ class RunnerStreamCoordinator {
       _logger.info('🏁 [Agent] Final answer committed');
       final assistantMessage = Message(
         role: MessageRole.assistant,
-        content: fullContent,
+        content: fullContent.toString(),
         metadata: {
           if (host.authoritativeRunId != null)
             'run_id': host.authoritativeRunId,
