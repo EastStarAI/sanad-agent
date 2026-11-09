@@ -74,20 +74,48 @@ its exact VM URI and bind-port arguments map to a matching Flutter runner.
 Flutter Web may generate an external VM authentication code different from the
 upstream DDS URI; the managed Client journal can recover that code only for
 diagnostic attachment after process/profile correlation. Journal text never
-establishes liveness or ownership. When `SANAD_DEV_WEB_PORT` is present,
-`sanad-dev` validates it as a TCP port and adds `--web-port` only to Chrome;
-the owning launcher reapplies it when starting an additional Chrome Client. This
-allows a persistent browser profile to retain origin-scoped Web Storage across
-stops without leaking the setting into native platform launches. That profile is
-not left to the browser: a Chrome Client always receives
+establishes liveness or ownership.
+
+A Web Client (`chrome` or `web-server`) is always served from a deterministic
+browser origin, because browser-stored Web credentials are scoped to origin *and*
+profile. The port is derived from the Sanad Home, the client slot, and the client
+`ENVIRONMENT` value inside the reserved range `52000-52999`
+(`lib/src/infrastructure/web_origin.dart`); `SANAD_DEV_WEB_PORT` remains the only
+override and must parse as a TCP port. flutter_tools' own fallback is
+`findFreePort()`, which would mint a new origin on every restart and orphan the
+stored session, so there is no fallback: an occupied derived port refuses the
+launch with that origin and the override command. The port is pinned as
+`--web-port` plus `--web-hostname=localhost` — the loopback host keeps the origin
+at `http://localhost:<port>` and stops the dev server from binding every
+interface, which Flutter's own `any` default would do. The owning launcher
+reapplies both when starting an additional Web Client, and native launches never
+receive them.
+
+The origin is only useful if the Portal that the Client will actually talk to can
+authenticate it, so the launch preflight owns that decision before anything is
+spawned. The authority is the resolved Portal endpoint, not the environment
+label: a loopback Portal is deployment-owned and is asked with the browser's own
+unauthenticated CORS preflight (`OPTIONS /auth/client/transactions` with the real
+`Origin`), where a rejection refuses the launch with the exact registration
+variables (`SANAD_PORTAL_WEB_CLIENT_ORIGIN`, `SANAD_PORTAL_CORS_ORIGINS`,
+`BACKEND_CORS_ORIGINS`) and an unreachable Portal only warns. A hosted Portal
+registers exactly one HTTPS Web app origin, so a loopback origin can never
+complete sign-in — its CORS preflight is blocked and the callback is rejected as
+`invalid_redirect_uri` — and the launch is refused with the learning cost removed
+from the operator. `--no-cloud` launches pin the origin without promising a
+sign-in. `status` reports `web_origin=` from the live Client's own argument
+vector, which is evidence rather than a recorded claim.
+
+That profile is not left to the browser: a Chrome Client always receives
 `--web-browser-flag=--user-data-dir=<Home>/dev/chrome-web/<slot|primary>`, so
 flutter_tools stops creating its throwaway temporary profile. The directory is
 Home-scoped runtime state created through the secure runtime-file boundary
 (`0700`), it is excluded from Home fixtures like the rest of `dev/`, and an
 inherited profile flag is replaced rather than duplicated. Web storage is keyed
 by the browser profile and the origin, so port and profile together are what let
-a restarted Web Client resume its signed-in session; a source-handoff switch
-still builds its own client vector and therefore does not carry either one.
+a restarted Web Client resume its signed-in session; the source-handoff switch
+reapplies both instead of inheriting them.
+
 `sanad-dev ui`
 narrows the exact owned set
 again to launch profiles targeting `lib/driver_main.dart`; a regular managed

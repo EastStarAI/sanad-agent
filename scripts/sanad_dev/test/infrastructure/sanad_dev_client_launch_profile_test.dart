@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:test/test.dart';
 
 import 'package:sanad_dev/src/infrastructure/client_launch_profile.dart';
+import 'package:sanad_dev/src/infrastructure/web_origin.dart';
 import 'package:sanad_dev/sanad_dev_cli.dart' as sanad_dev;
 
 void main() {
@@ -25,14 +26,21 @@ void main() {
   ];
 
   group('stable Flutter Web origin', () {
-    test('applies the configured port to Chrome only', () {
+    test('pins the port and loopback host for Web devices only', () {
       final chromeArguments = <String>['flutter', 'run', '-d', 'chrome'];
-      sanad_dev.applySanadDevWebPort(
-        chromeArguments,
-        device: 'chrome',
-        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
-      );
-      expect(chromeArguments, contains('--web-port=58880'));
+      applySanadDevWebPort(chromeArguments, device: 'chrome', port: 58880);
+      expect(chromeArguments, [
+        'flutter',
+        'run',
+        '-d',
+        'chrome',
+        '--web-port=58880',
+        '--web-hostname=localhost',
+      ]);
+
+      final webServerArguments = <String>['flutter', 'run', '-d', 'web-server'];
+      applySanadDevWebPort(webServerArguments, device: 'web-server', port: 58880);
+      expect(webServerArguments, contains('--web-port=58880'));
 
       final macosArguments = <String>[
         'flutter',
@@ -40,33 +48,42 @@ void main() {
         '-d',
         'macos',
         '--web-port=12345',
+        '--web-hostname=0.0.0.0',
       ];
-      sanad_dev.applySanadDevWebPort(
-        macosArguments,
-        device: 'macos',
-        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
-      );
-      expect(macosArguments, isNot(contains(startsWith('--web-port='))));
+      applySanadDevWebPort(macosArguments, device: 'macos', port: 58880);
+      expect(macosArguments, ['flutter', 'run', '-d', 'macos']);
     });
 
-    test('replaces inherited Web ports for additional Chrome clients', () {
-      final arguments = <String>['--web-port=12345'];
-      sanad_dev.applySanadDevWebPort(
-        arguments,
-        device: 'chrome',
-        environment: const {'SANAD_DEV_WEB_PORT': '58880'},
-      );
-      expect(arguments, ['--web-port=58880']);
+    test('replaces inherited Web origin arguments for extra Clients', () {
+      final arguments = <String>['--web-port=12345', '--web-hostname=0.0.0.0'];
+      applySanadDevWebPort(arguments, device: 'chrome', port: 58880);
+      expect(arguments, ['--web-port=58880', '--web-hostname=localhost']);
     });
 
-    test('rejects an invalid configured Web port', () {
+    test('replaces space-separated Web origin arguments', () {
+      final arguments = <String>[
+        'flutter',
+        'run',
+        '--web-port',
+        '12345',
+        '--web-hostname',
+        '0.0.0.0',
+        '--dart-define=ENVIRONMENT=local',
+      ];
+      applySanadDevWebPort(arguments, device: 'chrome', port: 58880);
+      expect(arguments, [
+        'flutter',
+        'run',
+        '--dart-define=ENVIRONMENT=local',
+        '--web-port=58880',
+        '--web-hostname=localhost',
+      ]);
+    });
+
+    test('refuses a Web Client without a resolved origin', () {
       expect(
-        () => sanad_dev.applySanadDevWebPort(
-          <String>[],
-          device: 'chrome',
-          environment: const {'SANAD_DEV_WEB_PORT': '70000'},
-        ),
-        throwsFormatException,
+        () => applySanadDevWebPort(<String>[], device: 'chrome', port: null),
+        throwsStateError,
       );
     });
   });

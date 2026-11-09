@@ -35,12 +35,30 @@ class ClientLaunchProfile {
     required this.defines,
     this.target,
     this.deviceId,
+    this.webPort,
+    this.webHostname,
   });
 
   final List<String> compileArguments;
   final Map<String, String> defines;
   final String? target;
   final String? deviceId;
+
+  /// Web dev server port this Client was launched with, when it has one.
+  final int? webPort;
+
+  /// Web dev server host this Client was launched with, when it has one.
+  final String? webHostname;
+
+  /// Browser origin the Web Client is served from, when it is a Web Client.
+  ///
+  /// It comes from the Client's own command line, so `status` reports the
+  /// origin that is actually served instead of a recorded claim.
+  String? get webOrigin {
+    final port = webPort;
+    if (port == null) return null;
+    return 'http://${webHostname ?? 'localhost'}:$port';
+  }
 
   String? define(String name) => defines[name];
   bool hasDefine(String name) => defines.containsKey(name);
@@ -61,6 +79,8 @@ ClientLaunchProfile withImplicitPrimaryClientDefaults(
     defines: Map.unmodifiable(defines),
     target: profile.target,
     deviceId: profile.deviceId,
+    webPort: profile.webPort,
+    webHostname: profile.webHostname,
   );
 }
 
@@ -69,6 +89,8 @@ ClientLaunchProfile extractClientLaunchProfile(List<String> arguments) {
   final defines = <String, String>{};
   String? target;
   String? deviceId;
+  int? webPort;
+  String? webHostname;
 
   for (var index = 0; index < arguments.length; index++) {
     final token = arguments[index];
@@ -111,6 +133,22 @@ ClientLaunchProfile extractClientLaunchProfile(List<String> arguments) {
     }
     if (token.startsWith('--device-id=')) {
       deviceId = token.substring('--device-id='.length);
+      continue;
+    }
+    if (token == '--web-port' && index + 1 < arguments.length) {
+      webPort = int.tryParse(arguments[++index]);
+      continue;
+    }
+    if (token.startsWith('--web-port=')) {
+      webPort = int.tryParse(token.substring('--web-port='.length));
+      continue;
+    }
+    if (token == '--web-hostname' && index + 1 < arguments.length) {
+      webHostname = arguments[++index];
+      continue;
+    }
+    if (token.startsWith('--web-hostname=')) {
+      webHostname = token.substring('--web-hostname='.length);
     }
   }
 
@@ -119,6 +157,8 @@ ClientLaunchProfile extractClientLaunchProfile(List<String> arguments) {
     defines: Map.unmodifiable(defines),
     target: target,
     deviceId: deviceId,
+    webPort: webPort,
+    webHostname: webHostname,
   );
 }
 

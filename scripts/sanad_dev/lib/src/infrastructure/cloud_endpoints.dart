@@ -5,10 +5,12 @@ import 'package:sanad_public_service_endpoints/public_service_endpoints.dart';
 
 class SanadCloudEndpoints {
   const SanadCloudEndpoints({
+    required this.environment,
     required this.gatewayUrl,
     required this.portalUrl,
   });
 
+  final String environment;
   final String gatewayUrl;
   final String portalUrl;
 
@@ -19,15 +21,9 @@ class SanadCloudEndpoints {
 }
 
 SanadCloudEndpoints readSanadCloudEndpoints(File configFile) {
-  final decoded = jsonDecode(configFile.readAsStringSync());
-  if (decoded is! Map<String, dynamic>) {
-    throw const FormatException('Client configuration must be a JSON object.');
-  }
+  final decoded = _decodeClientConfiguration(configFile);
 
-  final environment = decoded['ENVIRONMENT'];
-  if (environment is! String || environment.trim().isEmpty) {
-    throw const FormatException('Client configuration requires ENVIRONMENT.');
-  }
+  final environment = readSanadClientEnvironment(configFile, decoded: decoded);
 
   String configuredUrl(String key, String fallback) {
     final value = decoded[key];
@@ -45,6 +41,7 @@ SanadCloudEndpoints readSanadCloudEndpoints(File configFile) {
   }
 
   return SanadCloudEndpoints(
+    environment: environment,
     gatewayUrl: configuredUrl(
       'BACKEND_URL',
       PublicServiceEndpoints.backendFor(environment),
@@ -54,4 +51,63 @@ SanadCloudEndpoints readSanadCloudEndpoints(File configFile) {
       PublicServiceEndpoints.portalFor(environment),
     ),
   );
+}
+
+/// Client `ENVIRONMENT` of a launch configuration.
+///
+/// It decides the deterministic Web Client origin, so it is required even when
+/// the cloud gateway is disabled and no endpoint is resolved.
+String readSanadClientEnvironment(
+  File configFile, {
+  Map<String, dynamic>? decoded,
+}) {
+  final config = decoded ?? _decodeClientConfiguration(configFile);
+  final environment = config['ENVIRONMENT'];
+  if (environment is! String || environment.trim().isEmpty) {
+    throw const FormatException('Client configuration requires ENVIRONMENT.');
+  }
+  return environment.trim();
+}
+
+/// Client `ENVIRONMENT` reached through a live launch argument vector.
+///
+/// The launcher's additional-Client path replays a recorded command line instead
+/// of the parsed CLI options, so the configuration file is recovered from the
+/// `--dart-define-from-file` argument. Returns `null` when it cannot be resolved,
+/// which callers treat as a failure rather than guessing an origin.
+String? readSanadClientEnvironmentFromLaunchArguments({
+  required List<String> arguments,
+  required String clientDirectory,
+}) {
+  const flag = '--dart-define-from-file=';
+  final argument = arguments.firstWhere(
+    (value) => value.startsWith(flag),
+    orElse: () => '',
+  );
+  if (argument.isEmpty) return null;
+  final value = argument.substring(flag.length).trim();
+  if (value.isEmpty) return null;
+  final direct = File(value);
+  final candidate = direct.isAbsolute
+      ? direct
+      : File('$clientDirectory${Platform.pathSeparator}$value');
+  final configFile = candidate.existsSync()
+      ? candidate
+      : direct.existsSync()
+      ? direct
+      : null;
+  if (configFile == null) return null;
+  try {
+    return readSanadClientEnvironment(configFile);
+  } on FormatException {
+    return null;
+  }
+}
+
+Map<String, dynamic> _decodeClientConfiguration(File configFile) {
+  final decoded = jsonDecode(configFile.readAsStringSync());
+  if (decoded is! Map<String, dynamic>) {
+    throw const FormatException('Client configuration must be a JSON object.');
+  }
+  return decoded;
 }

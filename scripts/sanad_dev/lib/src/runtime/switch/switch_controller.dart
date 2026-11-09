@@ -342,10 +342,10 @@ class _SwitchableRuntimeController {
         throw StateError('VM-service port $port is already active.');
       }
       final arguments = _clientArguments.toList();
+      final requestedDevice = request.deviceId ?? _defaultDesktopDevice();
       final deviceIndex = arguments.indexOf('-d');
       if (deviceIndex >= 0 && deviceIndex + 1 < arguments.length) {
-        arguments[deviceIndex + 1] =
-            request.deviceId ?? _defaultDesktopDevice();
+        arguments[deviceIndex + 1] = requestedDevice;
       }
       final vmIndex = arguments.indexWhere(
         (argument) => argument.startsWith('--host-vmservice-port='),
@@ -376,14 +376,41 @@ class _SwitchableRuntimeController {
       } else {
         arguments.add(slotArgument);
       }
+      // The additional Client must reuse the same browser origin rule as a fresh
+      // launch: the port is derived from the same Home, slot, and environment, so
+      // one Home can never show two origins or silently drop a stored session.
+      int? webPort;
+      if (isSanadDevWebDevice(requestedDevice)) {
+        final clientEnvironment = readSanadClientEnvironmentFromLaunchArguments(
+          arguments: _clientArguments,
+          clientDirectory: _clientDirectory,
+        );
+        if (clientEnvironment == null) {
+          throw StateError(
+            'A Web Client needs the configuration environment of its recorded '
+            'launch to derive a stable Web origin, and that launch names no '
+            'readable client configuration.',
+          );
+        }
+        webPort = resolveSanadDevWebPort(
+          sanadHome: _launcherRecord.sanadHome,
+          clientEnvironment: clientEnvironment,
+          processEnvironment: _clientEnvironment,
+          clientInstanceSlot: requestedSlot,
+        );
+        await assertSanadDevWebPortAvailable(
+          port: webPort,
+          clientEnvironment: clientEnvironment,
+        );
+      }
       applySanadDevWebPort(
         arguments,
-        device: request.deviceId ?? _defaultDesktopDevice(),
-        environment: _clientEnvironment,
+        device: requestedDevice,
+        port: webPort,
       );
       await applySanadDevWebBrowserProfile(
         arguments,
-        device: request.deviceId ?? _defaultDesktopDevice(),
+        device: requestedDevice,
         sanadHome: _launcherRecord.sanadHome,
         clientInstanceSlot: requestedSlot,
       );

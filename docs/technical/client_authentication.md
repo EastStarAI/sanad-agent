@@ -53,8 +53,16 @@ and no vault: the pair lives only in `localStorage` under the Client's shared-pr
 prefix, which browsers scope to the profile directory plus the origin. A Web session
 therefore survives a page reload and a Flutter hot restart, and survives a full Client
 restart only when both the origin (stable Web port) and the Chrome profile are unchanged
-— which is why `sanad-dev` pins the port and supplies a Home-scoped `--user-data-dir`
-for Chrome Clients.
+— which is why `sanad-dev` pins a deterministic origin per Home, Client slot, and
+`ENVIRONMENT`, supplies a Home-scoped `--user-data-dir` for Chrome Clients, and refuses a
+launch whose origin the Portal in use cannot register.
+
+A loopback Web origin can only authenticate against a Portal that registers it: the
+Portal accepts exactly one `SANAD_PORTAL_WEB_CLIENT_ORIGIN` and mirrors it in
+`SANAD_PORTAL_CORS_ORIGINS`, so a local deployment registers its pinned
+`http://localhost:<port>` while each hosted deployment registers only its HTTPS Web app
+origin. A locally served Web Client therefore signs in against the local stack, and
+hosted Web sign-in belongs to the deployed Web app.
 
 Web `postMessage` validates the exact Portal origin, popup source, message type,
 and payload. The Portal success page targets only the registered app origin;

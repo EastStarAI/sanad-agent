@@ -27,6 +27,32 @@ If launch used `--home <absolute>`, later commands from the same workspace norma
 
 Before acting, `sanad-dev status` must prove that the current worktree owns the expected Agent, Client, Home, and endpoints. If status reports a managed Client but a Client command rejects it, use the status-reported VM endpoint with the standalone driver CLI as a diagnostic fallback; do not infer that the Client is stopped and do not repair or stop it automatically.
 
+## Web Client sign-in and origin
+
+A Web Client stores its signed-in session only in browser `localStorage`, which is
+scoped to the Chrome profile **and** the page origin. `sanad-dev` therefore pins
+both: the persistent profile at `<Home>/dev/chrome-web/<slot|primary>` and a
+deterministic origin derived from the Home, the client slot, and the client
+`ENVIRONMENT` inside `52000-52999`. One sign-in per Home + slot + environment is
+then enough — a `stop` + `run client -d chrome` for the same Home and slot
+returns to the same signed-in Client. Signing in again means the origin or the
+profile changed.
+
+Verify the origin from `sanad-dev status` (`web_origin=http://localhost:<port>`),
+never from the VM-service port or the requested CLI value, and remember that
+`localhost` and `127.0.0.1` are different origins.
+
+A loopback Web origin can authenticate only against a Portal that registers it.
+That is the local deployment: its Portal must carry the exact origin in
+`SANAD_PORTAL_WEB_CLIENT_ORIGIN` and `SANAD_PORTAL_CORS_ORIGINS`, and the Backend
+must allow it in `BACKEND_CORS_ORIGINS`; the callback path is
+`<origin>/oauth/callback`. The launcher probes the local Portal's CORS preflight,
+refuses an origin it rejects, and warns when the Portal is unreachable. A hosted
+`ENVIRONMENT` (`prod`, `dev`, `staging`) registers exactly one HTTPS Web app
+origin, so a loopback Web Client can never sign in there and the launcher refuses
+it before spawning: verify hosted Web behavior on a native device (`-d macos`) or
+through the deployed Web app, and use `--no-cloud` only for pre-login UI work.
+
 ## Runtime actions
 
 Use bounded log reads; never use follow mode from an agent tool call:
