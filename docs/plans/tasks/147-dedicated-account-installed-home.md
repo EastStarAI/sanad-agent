@@ -43,8 +43,9 @@ A Sanad CLI invocation that names no Home (`--home` absent, `SANAD_HOME` unset) 
 - [x] `fvm dart run scripts/lint_wiki.dart` from the repository root: `SUCCESS: All documentation files are valid, indexed, and healthy!`.
 
 ### G5 — Delivery
-- [ ] One commit in `.agent/worktrees/lt-issue353`, PR against `main` whose body carries `Fixes #353`, mandatory `type/*` and `comp/*` labels, `platform/linux`, and CI green.
-- [ ] No merge; the maintainer decides.
+- [x] One commit in `.agent/worktrees/lt-issue353`, PR #365 against `main` whose body carries `Fixes #353`, and the mandatory non-protected labels `type/bug`, `comp/agent`, `comp/install-update`, `platform/linux`, `size/small`. No protected label is required: no changed path matches the maintainer, security, or release patterns.
+- [x] CI green, including all four Agent shards, the analyzer, CLI automation on Linux/macOS/Windows, `sanad-dev` bootstrap on three platforms, docs and governance, and the aggregate required check.
+- [x] No merge; the maintainer decides.
 
 ## Acceptance criteria
 - [x] Given `SANAD_HOME` unset and no `--home`, when this process's executable is `<home>/bin/sanad` and `<home>/service.json` exists, then the resolved Home is `<home>`.
@@ -63,7 +64,7 @@ A Sanad CLI invocation that names no Home (`--home` absent, `SANAD_HOME` unset) 
 - [x] Live Linux verification listed with exact commands for the coordinator.
 
 ## Current status
-G4 is closed: analyzer, focused suites, the full fast Agent suite through the CI shards, and the documentation lint all pass. Remaining work is G5 delivery (commit, pull request, labels, CI) and the coordinator-owned live Linux check.
+G0–G5 are closed; PR #365 is green and awaiting the maintainer's merge decision. The only open item is the coordinator-owned live Linux check (QA gate 3d).
 
 ## Implementation record
 
