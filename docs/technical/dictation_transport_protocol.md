@@ -115,8 +115,11 @@ Validation rules:
   non-integer is malformed, so the Client falls back to the contract maximum
   instead of throwing or truncating: one bad advertisement can never break
   capability parsing for the whole device list.
-- Capabilities never carry transient state. Model install progress and native
-  runtime preparation are reported only through live events.
+- Capabilities never carry transient state. Readiness and a running model install
+  are transient, so they live on the live `stt_status` path (§3, §6.6) and never
+  on this envelope: a device that is merely not ready — or downloading — still
+  advertises plain support, and a missing model can never fail
+  `register_device`.
 
 ## 3. Canonical daemon vocabulary
 
@@ -131,7 +134,8 @@ Commands (Client → daemon):
 | `stop` | — | Drain the session; final transcripts then `dictation_done`. |
 | `cancel` | — | Abandon the session and drop its transcript. |
 | `status` | — | Emit a fresh `stt_status`. |
-| `install` | `model_id` | Download and verify one catalog model, streaming progress. |
+| `install` | `model_id` | Download and verify one catalog model, streaming progress. A second `install` for a model already downloading **joins** the running install; a different model is refused with `install_in_progress`. |
+| `cancelInstall` | — | Abandon the running install. It is the **only** thing that stops one, and it is not the session `cancel`. |
 | `select` | `model_id` | Persist the selected model and emit `stt_status`. |
 | `prepareRuntime` | — | Start native runtime preparation, then emit `stt_status`. |
 
@@ -139,8 +143,8 @@ Events (daemon → Client):
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]` | Catalog, install state, readiness. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
-| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes` | Install progress |
+| `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]`, `install?` | Catalog, install truth, readiness. `install` is present exactly while an install is in flight — `{model_id, received_bytes, total_bytes, phase, bytes_per_second}` — so any client rebuilds the same bar after a sheet reopen, a device switch, or a reconnect. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
+| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. |
 | `dictation_ready` | `model_id`, `load_ms` | Recognizer loaded; audio is accepted from now on |
 | `dictation_partial` | `seq`, `text` | Streaming only: mutable segment text, replacing its own range |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of that segment |
@@ -284,12 +288,12 @@ it can never overwrite the active recipient.
    channel, session identity, or client tag.
 2. Parse `op` with the same parser the local channel uses. An unknown `op` is a
    typed `dictation_error`, never a silent drop.
-3. Serve `status`, `install`, `select`, and `prepareRuntime` from the shared
-   service path, so the local and hosted channels cannot diverge in catalog,
-   install, selection, or preparation behavior. These four commands are
-   stateless and create no per-`dictation_id` context: at most one install is in
-   flight per device, `status` and `select` answer synchronously, and
-   `prepareRuntime` keeps its existing single-flight guard.
+3. Serve `status`, `install`, `cancelInstall`, `select`, and `prepareRuntime`
+   from the shared service path, so the local and hosted channels cannot diverge
+   in catalog, install, selection, or preparation behavior. These commands create
+   no per-`dictation_id` context: at most one install is in flight per device,
+   `status` and `select` answer synchronously, and `prepareRuntime` keeps its
+   existing single-flight guard.
 4. `prepareRuntime` remains the owner-only fixed action it is on the local
    channel: the daemon runs its own preparation entry point and accepts no
    caller-supplied path, command, or argument of any kind.
@@ -516,16 +520,27 @@ hosted sessions on socket disconnect and on its own session caps.
 
 ### 6.6 Control-only lifecycle
 
-`status`, `install`, `select`, and `prepareRuntime` can run with no route at all,
-so their lifecycle is bounded without route cleanup:
+`status`, `install`, `cancelInstall`, `select`, and `prepareRuntime` can run with
+no route at all, so their lifecycle is bounded without route cleanup:
 
 - they create no per-`dictation_id` state in the daemon and no listener that
   outlives the operation; replies are addressed by the origin claim alone;
-- at most one install is in flight per device; progress streams to the claim
-  owner and nowhere else;
-- when the owner's socket disconnects or its claim expires, an in-flight install
-  is abandoned with its partial artifacts discarded and the daemon keeps no
-  pending operation, so a later session starts clean;
+- at most one install is in flight per **device**, and it is daemon-scoped: a
+  repeated `install` for that model joins it, a different model is refused with
+  `install_in_progress`, and progress streams to whichever channels are attached;
+- an install outlives the connection that asked for it. A socket close, a claim
+  expiry, a `dictation_abort`, a device switch, and a Client restart all detach a
+  listener and leave the download running, because its bytes belong to the device
+  rather than to the session. Only `cancelInstall` stops it;
+- because of that, an install is **reported by the daemon, not reconstructed by
+  the Client**: `stt_status.install` is the in-flight truth, and the terminal
+  `stt_status` after it settles carries no `install`;
+- the partial artifact is preserved across every interruption — a dropped
+  connection, a cancel, a daemon restart — and resumed with an HTTP `Range`
+  request, then verified against the pinned size and SHA-256 before the atomic
+  rename. Bounded retries (three) run before a transport failure is reported, and
+  a volume that cannot hold the artifact plus a safety margin is refused as
+  `storage_full` before the first byte;
 - after claim retirement the Gateway rejects further events for that `request_id`;
   the daemon's operation finishes or aborts within the producer deadline of §5.1,
   with cancellation signalled even when no audio route was opened;
@@ -628,8 +643,8 @@ retry-later outcomes.
 
 Recognition failures keep their daemon codes (`unavailable`, `model_unknown`,
 `model_not_installed`, `dictation_busy`, `session_limit`, `no_speech`,
-`install_in_progress`, `prepare_unavailable`, `internal`, `audio_gap`, plus the
-readiness reasons `dictation_disabled`, `unsupported_platform`,
+`install_in_progress`, `storage_full`, `prepare_unavailable`, `internal`,
+`audio_gap`, plus the readiness reasons `dictation_disabled`, `unsupported_platform`,
 `native_runtime_missing`, `native_runtime_preparing`,
 `native_runtime_install_failed`).
 
@@ -779,9 +794,12 @@ identical:
   is never delivered to any client.
 - **D10** No log line, metric, or stored route record contains audio bytes or
   transcript text.
-- **D11** Model `status`, `install`, `select`, and `prepareRuntime` behave
-  identically over both channels, including progress events, and every reply is
-  origin-only.
+- **D11** Model `status`, `install`, `cancelInstall`, `select`, and
+  `prepareRuntime` behave identically over both channels, including progress
+  events, and every reply is origin-only. A second `install` for a model already
+  downloading joins it instead of starting a second writer, an install survives
+  the disconnect of the channel that requested it, and `stt_status.install`
+  reports the same bytes the progress stream last delivered.
 - **D12** A dictation command creates no conversation session channel, session
   identity, or client tag in the daemon.
 - **D13** Origin takeover is impossible: a second authenticated app socket of the

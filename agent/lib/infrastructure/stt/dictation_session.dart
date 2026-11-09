@@ -21,6 +21,12 @@ enum DictationCommand {
   cancel,
   status,
   install,
+
+  /// Explicitly abandon a running model install.
+  ///
+  /// It is distinct from [cancel] on purpose: a client that stops a session must
+  /// never stop a download, and this is the only command that does.
+  cancelInstall,
   select,
   prepareRuntime;
 

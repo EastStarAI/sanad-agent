@@ -213,7 +213,7 @@ void main() {
       );
     });
 
-    test('cancelling a download leaves nothing behind', () async {
+    test('cancelling never activates the file and keeps the partial', () async {
       final payload = utf8.encode('cancel me');
       final entry = entryFor(payload, url: urlFor(payload));
 
@@ -226,6 +226,13 @@ void main() {
       expect(
         File('${store.modelDir(entry.id)}/test-encoder.int8.onnx').existsSync(),
         isFalse,
+      );
+      // A cancel is not a corruption: the bytes already received stay, so the
+      // next press resumes instead of restarting a multi-minute download.
+      expect(
+        store.statusOf(entry).installed,
+        isFalse,
+        reason: 'an unverified partial is never reported as installed',
       );
     });
 

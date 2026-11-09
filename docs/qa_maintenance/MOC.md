@@ -34,6 +34,7 @@ This directory owns the specifications of test cases, manual validation flows, t
 - [Desktop Authentication Exchange QA](desktop_authentication_exchange_qa.md): Bidirectional login, refresh, logout, reconnect, and credential-free Local Gateway exchange coverage.
 - [Account Sessions and Devices QA](account_sessions_devices_qa.md): Account Client-session and Agent inventory presentation, hardware/account identity boundaries, cancellation, revocation, compact layout, and restart coverage.
 - [Device Name Editing QA](device_name_editing_qa.md): Device rename validation, synchronization, and failure coverage.
+- [Dictation Model Download Acceptance](dictation_download_acceptance.md): Bounded heap during a model install, install truth across a sheet reopen and a device switch, an interrupted Range resume, a joined second press, and a refused full volume.
 - [Provider Account Usage Limits QA](provider_account_usage_limits_qa.md): Regression coverage for instance isolation, capability discovery, freshness, stale responses, and usage-card presentation.
 - [Provider-Aware Thinking Mode QA](provider_aware_thinking_mode_qa.md): Model-scoped thinking controls, fail-closed unknown routes, payload parity, and composer selector states (Task 43).
 - [LM Studio Native Reasoning Discovery QA](lm_studio_native_reasoning_discovery_qa.md): Exact native `GET /api/v1/models` reasoning discovery, declared-descriptor delivery, unchanged Chat `reasoning_effort` bodies, and fail-closed absent/malformed/ambiguous evidence.

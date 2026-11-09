@@ -11,6 +11,7 @@ import 'package:sanad_stt_sherpa/sanad_stt_sherpa.dart'
     show sherpaNativeSourceDirectory;
 
 import 'dictation_audio_buffer.dart';
+import 'dictation_control.dart';
 import 'dictation_session.dart';
 import 'dictation_status.dart';
 import 'stt_engine.dart';
@@ -21,149 +22,12 @@ import 'stt_settings.dart';
 import 'stt_types.dart';
 import 'whispercpp_bindings.dart';
 
-/// One event a control command asks the caller's channel to deliver.
-///
-/// The service never knows which transport carries it: the local channel writes
-/// a text frame, the hosted adapter attaches an origin delivery envelope.
-class DictationControlEvent {
-  const DictationControlEvent(this.event, this.payload);
-
-  final String event;
-  final Map<String, dynamic> payload;
-}
-
-typedef DictationEmit = void Function(String event, Map<String, dynamic> payload);
-
-/// Catalog, install, selection, and preparation commands — shared by both
-/// channels so local and hosted behavior cannot diverge.
-///
-/// These commands are stateless: they create no per-`dictation_id` context, and
-/// at most one install runs per device. Session commands (`start`, `stop`,
-/// `cancel`) stay with [DictationSession] and one dictation lease.
-class DictationControl {
-  DictationControl(this._service);
-
-  final DictationService _service;
-  final Logger _logger = Logger('DictationControl');
-
-  bool _installing = false;
-  bool _installCancelled = false;
-  Object? _installOwner;
-  String? _installingModelId;
-
-  bool get isInstalling => _installing;
-  String? get installingModelId => _installingModelId;
-
-  /// Abandons [owner]'s in-flight install; another channel's install is never
-  /// cancelled by a peer's disconnect, deadline, or abort.
-  void cancelInstall(Object owner) {
-    if (!_installing) return;
-    if (!identical(_installOwner, owner)) return;
-    _installCancelled = true;
-  }
-
-  bool isInstallingFor(Object owner) =>
-      _installing && identical(_installOwner, owner);
-
-  /// Runs one stateless command, reporting every outcome through [emit].
-  Future<void> handle(
-    DictationMessage message, {
-    required Object owner,
-    required DictationEmit emit,
-  }) async {
-    try {
-      switch (message.command) {
-        case DictationCommand.status:
-          emit('stt_status', _service.statusPayload());
-        case DictationCommand.install:
-          await _install(
-            message.modelId ?? _service.selectedModelId,
-            owner: owner,
-            emit: emit,
-          );
-        case DictationCommand.select:
-          final modelId = message.modelId;
-          if (modelId == null) {
-            emit('dictation_error', {
-              'code': 'model_unknown',
-              'message': 'stt_select needs model_id',
-            });
-            return;
-          }
-          await _service.selectModel(modelId);
-          emit('stt_status', _service.statusPayload());
-        case DictationCommand.prepareRuntime:
-          final started = _service.prepareNativeRuntime();
-          emit('stt_status', _service.statusPayload());
-          if (!started) {
-            emit('dictation_error', {
-              'code': 'prepare_unavailable',
-              'reason': 'prepare_unavailable',
-              'message':
-                  'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
-            });
-          }
-        default:
-          // start/stop/cancel belong to the session that owns the lease.
-          return;
-      }
-    } on SttException catch (error) {
-      _logger.warning('dictation command failed: code=${error.code}');
-      emit('dictation_error', {
-        'code': error.code,
-        'message': error.message,
-      });
-    } on Object catch (error) {
-      emit('dictation_error', {
-        'code': 'internal',
-        'message': '$error',
-      });
-    }
-  }
-
-  Future<void> _install(
-    String modelId, {
-    required Object owner,
-    required DictationEmit emit,
-  }) async {
-    if (_installing) {
-      emit('dictation_error', {
-        'code': 'install_in_progress',
-        'message': 'another model install is running',
-      });
-      return;
-    }
-    _installing = true;
-    _installCancelled = false;
-    _installOwner = owner;
-    _installingModelId = modelId;
-    try {
-      await _service.install(
-        modelId,
-        isCancelled: () => _installCancelled || !identical(_installOwner, owner),
-        onProgress: (id, received, total) {
-          emit('stt_download_progress', {
-            'model_id': id,
-            'received_bytes': received,
-            'total_bytes': total,
-          });
-        },
-      );
-      emit('stt_status', _service.statusPayload());
-    } finally {
-      _installing = false;
-      _installOwner = null;
-      _installingModelId = null;
-    }
-  }
-}
-
 /// Readiness/installation/model-selection surface for local dictation.
 ///
 /// `supports_dictation` is true when the device can run the runtime at all
 /// (enabled in config, supported platform). Whether a model is installed is a
 /// separate status flag, because the first mic press is what installs it.
-class DictationService {
+class DictationService implements DictationControlHost {
   DictationService({
     required this.sanadHome,
     SttEngine Function()? engineFactory,
@@ -340,6 +204,7 @@ class DictationService {
   /// Returns false when this checkout can neither build nor re-install the
   /// runtime, so the caller reports the manual instruction instead of pretending
   /// a retry started.
+  @override
   bool prepareNativeRuntime() {
     final workingDirectory = Directory.current.path;
     final tool = File('$workingDirectory/tool/ensure_native_stt.dart');
@@ -427,6 +292,7 @@ class DictationService {
 
   /// Persists the selected model — the same owner the `select` command uses, so
   /// the model sheet and the Device settings page can never disagree.
+  @override
   Future<void> selectModel(String modelId) async {
     await _writeSelection(modelId);
     await unloadWarmEngine();
@@ -457,6 +323,7 @@ class DictationService {
   /// Every answer is filtered through this build's engine availability: a
   /// selection that names a model whose engine was not compiled in falls back to
   /// the default usable entry instead of failing at load time.
+  @override
   String get selectedModelId {
     if (_settings.modelPath?.trim().isNotEmpty ?? false) return 'path-override';
     if (_settings.modelId.isNotEmpty) return _usableIdOrFallback(_settings.modelId);
@@ -640,6 +507,7 @@ class DictationService {
   /// [readiness] overrides the computed verdict for exactly one event: a session
   /// whose engine failed to load reports that code as the reason, instead of the
   /// optimistic `ready` the on-disk probe would keep repeating.
+  @override
   Map<String, dynamic> statusPayload({SttReadiness? readiness}) {
     final verdict = readiness ?? this.readiness();
     return dictationStatusPayload(
@@ -651,6 +519,10 @@ class DictationService {
       busy: isBusy,
       hasOverridePath: _installedOverridePath != null,
       overrideReady: _resolveOverrideExists(),
+      // The in-flight install is daemon-owned truth, so every client — a sheet
+      // that just reopened, a device that just became active, a reconnect —
+      // rebuilds the same bar instead of relying on a continuous event stream.
+      install: _control.installPayload,
     );
   }
 
@@ -673,9 +545,11 @@ class DictationService {
   }
 
 
+  @override
   Future<void> install(
     String modelId, {
     SttProgressCallback? onProgress,
+    void Function(SttInstallPhase phase)? onPhase,
     bool Function()? isCancelled,
   }) async {
     final entry = sttEntryById(modelId);
@@ -685,6 +559,7 @@ class DictationService {
     await _store.install(
       entry,
       onProgress: onProgress,
+      onPhase: onPhase,
       isCancelled: isCancelled,
     );
     _logger.info('dictation model installed: $modelId');
@@ -790,7 +665,10 @@ class _DictationConnection {
     // the lease is released; teardown waits for it so the engine is disposed
     // first and a new session never overlaps the old one.
     _startGeneration++;
-    service.control.cancelInstall(this);
+    // The install is daemon-scoped: this connection only stops listening to it.
+    // Cancelling here is what used to delete a half-downloaded model merely
+    // because a client closed its socket.
+    service.control.detachInstallChannel(this);
     await _commands?.cancel();
     _commands = null;
     await _audio?.cancel();
@@ -829,6 +707,7 @@ class _DictationConnection {
         }
       case DictationCommand.status:
       case DictationCommand.install:
+      case DictationCommand.cancelInstall:
       case DictationCommand.select:
       case DictationCommand.prepareRuntime:
         await service.control.handle(

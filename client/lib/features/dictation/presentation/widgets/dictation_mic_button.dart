@@ -231,6 +231,7 @@ class _DictationMicButtonState extends State<DictationMicButton> {
       // failure: the same sheet the readiness path opens is offered right here.
       'model_not_installed' => l10n.dictationModelNotInstalled,
       'sherpa_runtime_missing' => l10n.dictationSherpaRuntimeMissing,
+      'storage_full' => l10n.dictationStorageFull,
       'audio_gap' => l10n.dictationFailedGeneric,
       'prepare_unavailable' => l10n.dictationFailedGeneric,
       // Unknown refusals are still a refusal: one localized generic notice, never

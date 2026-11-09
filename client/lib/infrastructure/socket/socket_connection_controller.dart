@@ -629,6 +629,18 @@ class SocketConnectionController {
     _logOutgoingSocketEvent(event, data);
   }
 
+  /// Events that may arrive hundreds of times per second.
+  ///
+  /// A streamed answer is deltas; a dictation install is progress. Logging every
+  /// one of them produced 150-250 INFO lines/s during a model download, which
+  /// buries every other line and violates the project's clean-logging law, so
+  /// these log the first of each run instead of each event.
+  static const Set<String> _rateLimitedEventNames = {
+    'thought_stream',
+    'reasoning_stream',
+    'dictation_event',
+  };
+
   void _logIncomingSocketEvent(String event, dynamic data) {
     if (!kDebugMode) return;
 
@@ -642,7 +654,7 @@ class SocketConnectionController {
         currentEventName = eventName.toString();
       }
 
-      if (currentEventName == 'thought_stream' || currentEventName == 'reasoning_stream') {
+      if (_rateLimitedEventNames.contains(currentEventName)) {
         if (_lastIncomingEventName == currentEventName) {
           return;
         }

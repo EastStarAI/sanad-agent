@@ -722,6 +722,26 @@
       }
     }
   },
+  "dictationDownloadEtaMinutes": "{minutes} min left",
+  "@dictationDownloadEtaMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationDownloadEtaSeconds": "{seconds} s left",
+  "@dictationDownloadEtaSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationDownloadVerifying": "Verifying\u2026",
+  "dictationDownloadFinishing": "Finishing\u2026",
+  "dictationCancelDownload": "Cancel",
+  "dictationStorageFull": "Not enough free disk space to install this model.",
   "voiceUpdateRequired": "Update the Agent or the Client to use voice on this device.",
   "voiceUnavailable": "Voice is unavailable for this device right now.",
   "deviceSettingsDictationTitle": "Dictation",

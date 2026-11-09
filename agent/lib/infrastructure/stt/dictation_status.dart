@@ -17,6 +17,12 @@ import 'stt_settings.dart';
 import 'stt_types.dart';
 
 /// `stt_status` payload: readiness, the selected model, and the catalog rows.
+///
+/// [install] is the one transient fact this payload carries, and it is here
+/// because the install is daemon-owned: a client that opens its sheet, switches
+/// to this device, or reconnects has no event stream to rebuild a running
+/// download from, so the status must state it. Absent means nothing is in
+/// flight — the install finished, failed, or was cancelled.
 Map<String, dynamic> dictationStatusPayload({
   required SttReadiness readiness,
   required SttSettings settings,
@@ -26,6 +32,7 @@ Map<String, dynamic> dictationStatusPayload({
   required bool busy,
   required bool hasOverridePath,
   required bool overrideReady,
+  Map<String, dynamic>? install,
 }) {
   return {
     'supported': readiness.isSupported,
@@ -33,6 +40,7 @@ Map<String, dynamic> dictationStatusPayload({
     if (readiness.reason != null) 'reason': readiness.reason,
     'busy': busy,
     'selected': selectedModelId,
+    'install': ?install,
     // Host filesystem layout is never part of a status payload. A local or
     // hosted reader only needs to know that an override exists.
     'has_model_path': hasOverridePath,
