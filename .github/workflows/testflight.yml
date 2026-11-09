@@ -34,7 +34,7 @@ jobs:
         name: Validate release contract
         working-directory: agent
         run: |
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
           echo "version=$(jq -r '.version' ../release/release-contract.json)" \
             >> "$GITHUB_OUTPUT"

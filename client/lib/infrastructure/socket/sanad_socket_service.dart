@@ -277,6 +277,28 @@ class SanadSocketService implements ISocketService, ISocketGateway {
           _safeAdd(data);
         }
         break;
+      case 'dictation_event':
+      case 'dictation_route_ack':
+      case 'dictation_route_error':
+        // Hosted dictation envelopes are origin-scoped: they carry a
+        // `dictation_id`, never device authority, so they go only to the
+        // dictation transport listener and never through the command router.
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          payload['event'] = event;
+          _safeAdd(payload);
+        }
+        break;
+      case 'voice_relay_error':
+        // A voice claim violation (missing identity, foreign claim, expired
+        // route) is delivered to the originating socket only; the voice cubit
+        // turns it into an update-required state.
+        if (data is Map) {
+          final payload = Map<String, dynamic>.from(data);
+          payload['event'] = event;
+          _safeAdd(payload);
+        }
+        break;
       case 'execute_tool':
         _handleExecuteTool(data);
         break;

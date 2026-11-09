@@ -210,6 +210,17 @@ Future<void> handleRuntimeStop({
     exitCode = 1;
     return;
   }
+  if (target != SanadDevComponentTarget.agent) {
+    final stoppedClients = selectedClient == null
+        ? ownership.state.ownedClients
+        : <ClientInstance>[selectedClient];
+    for (final client in stoppedClients) {
+      await removeVmServiceOutFile(
+        sanadHome: activeHome,
+        vmServicePort: client.port,
+      );
+    }
+  }
   print('Stopped ${target.name} for ${runtime.worktreeId}.');
 }
 

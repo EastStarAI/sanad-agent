@@ -143,6 +143,32 @@ class AgentCapabilities {
   final bool supportsLocalToolRuntime;
   final bool supportsSlashCommands;
 
+  /// Local (daemon-side) dictation is enabled and valid for this agent.
+  ///
+  /// This is a configuration/platform fact, not "ready right now": it stays
+  /// true while the native runtime is still being prepared, and false only when
+  /// the owner disabled dictation, the `stt` block is invalid, or this build
+  /// ships no runtime for the host architecture. Transient readiness lives in
+  /// the live `stt_status` event, because capabilities are computed once at
+  /// connect and would otherwise go stale.
+  final bool supportsDictation;
+
+  /// The stable refusal code for a device that cannot dictate at all.
+  ///
+  /// The Gateway accepts this only beside `supports_dictation: false` and only
+  /// as a machine code (`^[a-z][a-z0-9_]{0,63}$`). A supported-but-not-ready
+  /// device keeps its typed reason on the live `stt_status` event instead.
+  final String? dictationUnavailableReason;
+
+  /// Additive hosted-relay metadata: `dictation_relay_v1` (§2 of the transport
+  /// protocol). Present only when this Agent can dictate at all. The Gateway
+  /// validates it strictly; unknown additive keys never fail registration.
+  final Map<String, dynamic>? dictationRelay;
+
+  /// Additive flag: this Agent produces origin-correlated voice output, so the
+  /// Gateway may relay its voice audio, transcript, and interruption events.
+  final bool voiceOrigin;
+
   final String modelSelectionScope;
   final String thinkingModeScope;
   final String thinkingStreamMode;
@@ -153,6 +179,20 @@ class AgentCapabilities {
   final List<String> approvalScopes;
   final List<SlashCommandOption> slashCommands;
   final Map<String, dynamic>? appearance;
+
+  /// The Gateway's only accepted shape for a refusal code.
+  static final _machineReason = RegExp(r'^[a-z][a-z0-9_]{0,63}$');
+
+  /// The refusal code exactly when a capability envelope may carry one.
+  ///
+  /// A supported device never advertises one: a missing model or native runtime
+  /// is transient readiness, reported on the live dictation status path so the
+  /// mic stays visible and the reason stays typed and localized.
+  String? get _advertisedDictationReason {
+    final reason = dictationUnavailableReason;
+    if (supportsDictation || reason == null) return null;
+    return _machineReason.hasMatch(reason) ? reason : null;
+  }
 
   AgentCapabilities({
     required this.displayName,
@@ -171,6 +211,10 @@ class AgentCapabilities {
     this.supportsToolPermissions = true,
     this.supportsLocalToolRuntime = true,
     this.supportsSlashCommands = true,
+    this.supportsDictation = false,
+    this.dictationUnavailableReason,
+    this.dictationRelay,
+    this.voiceOrigin = true,
     this.modelSelectionScope = 'session',
     this.thinkingModeScope = 'session',
     this.thinkingStreamMode = 'delta',
@@ -201,6 +245,11 @@ class AgentCapabilities {
       'supports_tool_permissions': supportsToolPermissions,
       'supports_local_tool_runtime': supportsLocalToolRuntime,
       'supports_slash_commands': supportsSlashCommands,
+      'supports_dictation': supportsDictation,
+      if (_advertisedDictationReason != null)
+        'dictation_unavailable_reason': _advertisedDictationReason,
+      if (dictationRelay != null) 'dictation_relay_v1': dictationRelay,
+      'voice_origin_v1': voiceOrigin,
       'delivery_presence_v1': true,
       'supports_attachments': true,
       'attachment_media_v1': {

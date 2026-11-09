@@ -113,7 +113,7 @@ jobs:
       - name: Validate release contract
         working-directory: agent
         run: |
-          fvm dart pub get
+          fvm flutter pub get
           fvm dart run tool/release_tool.dart validate-contract --repo-root ..
           fvm dart run tool/release_tool.dart check-preparation --repo-root ..
           version="$(jq -r '.version' ../release/release-contract.json)"
@@ -171,6 +171,16 @@ jobs:
       - name: Analyze agent
         working-directory: agent
         run: fvm dart analyze
+      - name: Analyze the dictation engine package
+        working-directory: agent
+        # The engine is a swappable local package excluded from the package-wide
+        # analysis (only one of the two can resolve), so the lane that selected it
+        # analyzes it explicitly.
+        run: |
+          set -o pipefail
+          engine=packages/stt_sherpa
+          if [ -f pubspec_overrides.yaml ]; then engine=packages/stt_sherpa_stub; fi
+          fvm dart analyze "$engine"
       - name: Test CWD-sensitive suites in isolation
         working-directory: agent
         run: |
@@ -242,6 +252,14 @@ jobs:
         if: matrix.os == 'ubuntu-24.04-arm'
       - uses: ./.github/actions/setup-fvm
         if: matrix.os != 'ubuntu-24.04-arm'
+      - name: Select the whisper-only dictation engine
+        if: matrix.os == 'ubuntu-24.04-arm'
+        working-directory: agent
+        # `sherpa_onnx` requires the Flutter SDK and this lane installs the
+        # standalone Dart SDK, so the overlay swaps the engine for a stand-in
+        # with the same package name. The Agent still compiles and dictates
+        # through whisper.cpp; only streaming and VAD are absent.
+        run: cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml
       - name: Resolve agent dependencies
         working-directory: agent
         run: ${{ env.DART }} pub get
@@ -279,6 +297,157 @@ jobs:
           if (-not (Test-Path .dart_tool/cli-aot-smoke-success)) {
             throw 'AOT smoke did not complete successfully.'
           }
+
+  native-stt:
+    name: Native dictation (${{ matrix.os }})
+    needs: classify
+    if: needs.classify.outputs.agent == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        # `macos-15-intel` is the only genuine Intel evidence: cross-building
+        # x86_64 on Apple Silicon would produce an untested slice, so the Intel
+        # slice is compiled, loaded, and staged on Intel hardware. The arm64
+        # Linux lane builds on its own CPU for the same reason, and the release
+        # matrix publishes exactly the slices proven here.
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-26, macos-15-intel, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      # This job builds the runtime, so a missing or foreign-architecture one is
+      # a defect: the smoke test fails instead of skipping.
+      SANAD_STT_REQUIRE_NATIVE: '1'
+      # The pinned Flutter SDK publishes no Linux arm64 archive, so that lane
+      # installs the standalone Dart SDK at exactly the same version.
+      DART: ${{ matrix.os == 'ubuntu-24.04-arm' && 'dart' || 'fvm dart' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-dart
+        if: matrix.os == 'ubuntu-24.04-arm'
+      - uses: ./.github/actions/setup-fvm
+        if: matrix.os != 'ubuntu-24.04-arm'
+      # The whisper shim is built from source on every desktop OS. The pinned tag
+      # is the same one recorded in agent/native/checksums.json.
+      - name: Fetch whisper.cpp
+        uses: actions/checkout@v6
+        with:
+          repository: ggerganov/whisper.cpp
+          ref: v1.9.5
+          path: whisper.cpp
+      - name: Cache whisper build
+        uses: actions/cache@v4
+        with:
+          path: whisper.cpp/build
+          key: whisper-build-v2-${{ matrix.os }}-whispercpp-v1.9.5-${{ hashFiles('agent/native/whispercpp/sanad_whisper.c') }}
+      - name: Require the runner CPU the matrix label claims
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=arm64
+          if [ "${{ matrix.os }}" = "macos-15-intel" ]; then expected=x86_64; fi
+          actual="$(uname -m)"
+          if [ "$actual" != "$expected" ]; then
+            echo "::error::${{ matrix.os }} reported $actual, expected $expected"
+            exit 1
+          fi
+      - name: Set up MSVC
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+      - name: Select the whisper-only dictation engine
+        if: matrix.os == 'ubuntu-24.04-arm'
+        working-directory: agent
+        run: cp tool/pubspec_overrides.no_sherpa.yaml pubspec_overrides.yaml
+      - name: Resolve agent dependencies
+        working-directory: agent
+        run: ${{ env.DART }} pub get
+      # The tool owns the platform tag, the required files, Metal per
+      # architecture, and the CMake architecture/deployment target, so CI never
+      # restates the layout. Every `bash` step here excludes Windows and has a
+      # `pwsh` twin: the runner's fvm entry point is a `.bat` shim, and this
+      # lane has no verified Git-Bash semantics.
+      - name: Build the native runtime for this runner
+        if: runner.os != 'Windows'
+        working-directory: agent
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+        shell: bash
+        run: ${{ env.DART }} run tool/ensure_native_stt.dart
+      - name: Build the native runtime for this runner
+        if: runner.os == 'Windows'
+        working-directory: agent
+        env:
+          WHISPER_CPP_SRC: ${{ github.workspace }}/whisper.cpp
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart
+      - name: Verify the installed runtime and its manifest entry
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: ${{ env.DART }} run tool/ensure_native_stt.dart --verify
+      - name: Verify the installed runtime and its manifest entry
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --verify
+      - name: Load the built runtime in a real process
+        working-directory: agent
+        run: ${{ env.DART }} test test/stt/native_runtime_smoke_test.dart
+      # Exercises the packaged-release producing path without publishing
+      # anything: a staged runtime directory plus a reproducible archive whose
+      # recorded sha256 is derived from the produced bytes. Member naming and
+      # the no-model invariant are owned by agent/test/tool/stt_native_archive_test.dart
+      # and the staging allowlist by agent/test/tool/stt_native_runtime_test.dart,
+      # so no shell pipeline restates them here.
+      - name: Stage and archive the runtime for packaging
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: |
+          set -euo pipefail
+          ${{ env.DART }} run tool/ensure_native_stt.dart \
+            --stage ../dist-native \
+            --archive ../dist-native
+          test "$(ls ../dist-native/sanad-stt-*.tar.gz | wc -l | tr -d ' ')" = 1
+      - name: Stage and archive the runtime for packaging
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart run tool/ensure_native_stt.dart --stage ../dist-native --archive ../dist-native
+          $archives = @(Get-ChildItem -LiteralPath ../dist-native -Filter 'sanad-stt-*.tar.gz')
+          if ($archives.Count -ne 1) {
+            throw "Expected exactly one staged runtime archive."
+          }
+      # The archive above is what a released Agent installs. This loads the
+      # engine out of that staged payload, so a layout the loader cannot read
+      # fails here instead of in the field. The linux-arm64 lane links the
+      # whisper-only stand-in and asserts that instead.
+      - name: Load the packaged sherpa runtime in a real process
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+        run: ${{ env.DART }} test test/stt/sherpa_runtime_smoke_test.dart
+      - name: Load the packaged sherpa runtime in a real process
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        env:
+          SANAD_SHERPA_REQUIRE_NATIVE: '1'
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/sherpa_runtime_smoke_test.dart
 
   client-analyze:
     name: Analyze client
@@ -642,7 +811,7 @@ jobs:
   all-required:
     name: All required checks pass
     if: always()
-    needs: [classify, history, agent-checks, agent-tests, cli-automation, client-analyze, client-tests, client-web, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
+    needs: [classify, history, agent-checks, agent-tests, cli-automation, native-stt, client-analyze, client-tests, client-web, sanad-dev-platforms, docs-governance, release-security, sensitive-review]
     runs-on: ubuntu-24.04
     steps:
       - env:
@@ -651,6 +820,7 @@ jobs:
           AGENT_CHECKS: ${{ needs.agent-checks.result }}
           AGENT_TESTS: ${{ needs.agent-tests.result }}
           CLI_AUTOMATION: ${{ needs.cli-automation.result }}
+          NATIVE_STT: ${{ needs.native-stt.result }}
           CLIENT_ANALYZE: ${{ needs.client-analyze.result }}
           CLIENT_TESTS: ${{ needs.client-tests.result }}
           CLIENT_WEB: ${{ needs.client-web.result }}
@@ -662,7 +832,7 @@ jobs:
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$CLI_AUTOMATION" \
+          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$CLI_AUTOMATION" "$NATIVE_STT" \
             "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" \
             "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
             [[ "$result" == success || "$result" == skipped ]]

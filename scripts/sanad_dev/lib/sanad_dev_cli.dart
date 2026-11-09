@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' show Abi;
 import 'dart:io';
 import 'dart:math';
 
@@ -23,6 +24,7 @@ import 'src/infrastructure/secure_runtime_file.dart';
 import 'src/infrastructure/startup_attempt.dart';
 import 'src/infrastructure/startup_probe.dart';
 import 'src/infrastructure/terminal_launcher.dart';
+import 'src/infrastructure/vm_service_out_file.dart';
 import 'src/infrastructure/web_chrome_profile.dart';
 import 'src/runtime/ownership/runtime_ownership.dart';
 import 'src/runtime/switch/runtime_switch.dart';
@@ -49,6 +51,7 @@ part 'src/runtime/ownership/runtime_state.dart';
 part 'src/runtime/lifecycle/runtime_wait_helpers.dart';
 part 'src/runtime/lifecycle/runtime_background.dart';
 part 'src/runtime/lifecycle/runtime_run.dart';
+part 'src/runtime/lifecycle/native_runtime_probe.dart';
 part 'src/runtime/lifecycle/runtime_status.dart';
 part 'src/runtime/lifecycle/runtime_inventory.dart';
 part 'src/runtime/lifecycle/runtime_inventory_health.dart';

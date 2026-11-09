@@ -653,6 +653,82 @@
   "fullAccessDialogWarning": "Commands run with your operating-system account and may access sensitive files or credentials available to that account. Malicious instructions or prompt injection could cause data loss or exposure.",
   "fullAccessDialogReversible": "You can turn Full Access off at any time.",
   "fullAccessDialogConfirm": "Turn On",
+  "dictationSheetTitle": "Dictation models",
+  "dictationSheetIntro": "Speech is transcribed on this device by the Agent. Audio never leaves the machine and is never stored.",
+  "dictationStartTooltip": "Press to start dictation.\nLong-press for dictation settings.",
+  "dictationStopTooltip": "Press to stop dictation.\nLong-press for dictation settings.",
+  "dictationAwaitingTranscriptTooltip": "Press to stop",
+  "dictationPreparingTooltip": "Preparing dictation…",
+  "dictationCancelTooltip": "Cancel dictation",
+  "dictationDownload": "Download",
+  "dictationDownloading": "Downloading…",
+  "dictationUse": "Use",
+  "dictationInstalled": "Installed",
+  "dictationSelected": "Selected",
+  "dictationModeStreaming": "Live",
+  "dictationNotHosted": "Not hosted yet",
+  "dictationUnavailableTitle": "Dictation is not available on this device",
+  "dictationRuntimePreparing": "Preparing the dictation engine (download or build in progress)…",
+  "dictationRuntimeMissing": "The dictation engine is not installed yet. Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.",
+  "dictationRuntimeInstallFailed": "The dictation engine could not be installed with this Agent. The Agent itself is installed and running; use Set up now to retry the download.",
+  "dictationUnsupportedPlatform": "This platform is not supported yet.",
+  "dictationNotReadyTooltip": "Dictation is not ready · press for details",
+  "dictationPrepareNow": "Set up now",
+  "dictationModelRequired": "Install a dictation model to start.",
+  "dictationModelNotInstalled": "No dictation model is installed yet. Choose one to start.",
+  "dictationSherpaRuntimeMissing": "The live-transcription engine is not available on this device. Choose a Whisper model instead.",
+  "dictationBadgeRecommended": "Recommended",
+  "dictationBadgeFaster": "Faster",
+  "dictationBadgeMoreAccurate": "More accurate",
+  "dictationBadgeCustom": "Custom",
+  "dictationSpeedSemantics": "Relative speed {tier} of 4",
+  "@dictationSpeedSemantics": {
+    "placeholders": {
+      "tier": {
+        "type": "int"
+      }
+    }
+  },
+  "deviceSettingsDictationManage": "Manage models",
+  "dictationNoSpeechDetected": "No speech detected. Try again.",
+  "dictationLimitReached": "Dictation stopped at the 5-minute limit.",
+  "dictationMicrophoneDenied": "Microphone access is required for dictation.",
+  "dictationBusy": "Another dictation session is already running.",
+  "dictationRelayUnavailable": "This device cannot relay dictation on the current connection. Update the Agent, or work on the same machine.",
+  "dictationRelayInvalidRequest": "This device rejected the dictation request as malformed. Update the app, then try again.",
+  "dictationRelayForbidden": "This dictation request was not authorized for this device. Try again.",
+  "dictationDisabled": "Dictation is turned off on this device.",
+  "dictationUpdateRequired": "Update the Agent to use dictation on this device.",
+  "dictationUnavailable": "Dictation is not available on this device.",
+  "dictationFailedGeneric": "Dictation could not start. Try again.",
+  "dictationPathOverrideModel": "Model file set in Agent settings",
+  "dictationModelSizeMb": "{size} MB",
+  "@dictationModelSizeMb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationModelSizeGb": "{size} GB",
+  "@dictationModelSizeGb": {
+    "placeholders": {
+      "size": {
+        "type": "String"
+      }
+    }
+  },
+  "voiceUpdateRequired": "Update the Agent or the Client to use voice on this device.",
+  "voiceUnavailable": "Voice is unavailable for this device right now.",
+  "deviceSettingsDictationTitle": "Dictation",
+  "deviceSettingsDictationEnabled": "Local dictation",
+  "deviceSettingsDictationEnabledHint": "Speech is transcribed on this device by the Agent. Audio never leaves the machine.",
+  "deviceSettingsDictationManagedExternally": "Managed by the Agent's config.yaml.",
+  "deviceSettingsDictationModel": "Model",
+  "deviceSettingsDictationNoModel": "No model installed yet. Press the mic in the composer to set one up.",
+  "deviceSettingsDictationReady": "Ready",
+  "deviceSettingsDictationNotReady": "Not ready",
+  "deviceSettingsDictationBusy": "In use",
   "workspaceSecurityTitle": "Execution and discovery",
   "workspaceSecuritySubtitle": "Stored by the Agent on this device. Files inside the workspace cannot change these settings.",
   "workspaceExecutionModeLabel": "Execution",

@@ -25,7 +25,7 @@ write_file client/release/windows/sanad_client_installer.iss $'AppVersion=1.0.6\
 write_file client/windows/runner/Runner.rc $'#define VERSION_AS_NUMBER 1,0,6,7\n#define VERSION_AS_STRING "1.0.6"'
 write_file docs/operations/release_and_signing.md 'canonical installer sources. The current patch release uses marketing version `1.0.6` and build number `7`.'
 write_file release/contract/pubspec.yaml 'version: 1.0.6'
-write_file release/release-contract.json $'{\n  "version": "1.0.6",\n  "build_number": 7,\n  "tag": "v1.0.6",\n  "filename": "sanad-agent-1.0.6-linux-x64"\n}'
+write_file release/release-contract.json $'{\n  "version": "1.0.6",\n  "build_number": 7,\n  "tag": "v1.0.6",\n  "artifacts": [\n    {\n      "component": "agent",\n      "platform": "linux",\n      "architecture": "x64",\n      "filename": "sanad-agent-1.0.6-linux-x64"\n    },\n    {\n      "component": "agent-runtime",\n      "platform": "macos",\n      "architecture": "arm64",\n      "filename": "sanad-agent-runtime-1.0.6-macos-arm64.tar.gz"\n    }\n  ]\n}'
 write_file release/release-notes.md '# Sanad 1.0.6'
 git add .
 git commit -qm baseline
@@ -74,6 +74,16 @@ git add .
 git commit -qm extra-version-file-line
 if "$validator" "$base" HEAD >/dev/null 2>&1; then
   echo "Validator accepted an extra line in the sanad-client CLI version file." >&2
+  exit 1
+fi
+
+git reset --hard -q "$head"
+sed -i.bak 's|sanad-agent-runtime-1\.0\.7-macos-arm64\.tar\.gz|sanad-agent-runtime-macos-arm64.tar.gz|' release/release-contract.json
+find . -name '*.bak' -delete
+git add .
+git commit -qm unversioned-runtime-filename
+if "$validator" "$base" HEAD >/dev/null 2>&1; then
+  echo "Validator accepted an agent-runtime filename without the release identity." >&2
   exit 1
 fi
 

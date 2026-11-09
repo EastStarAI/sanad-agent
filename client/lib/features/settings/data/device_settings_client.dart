@@ -23,6 +23,7 @@ class DeviceSettingsSnapshot {
     required this.webSearchProviderManagedExternally,
     required this.serperKeyManagedExternally,
     required this.providerAutoFailover,
+    this.dictation,
     this.restartRequired = false,
   });
 
@@ -34,6 +35,12 @@ class DeviceSettingsSnapshot {
   final bool webSearchProviderManagedExternally;
   final bool serperKeyManagedExternally;
   final ManagedToggleSetting providerAutoFailover;
+
+  /// Daemon-owned dictation runtime projection.
+  ///
+  /// Null when the Agent does not serve this block at all (older Agent), which
+  /// is why the section is hidden rather than shown empty.
+  final DictationSettingsSetting? dictation;
   final bool restartRequired;
 
   factory DeviceSettingsSnapshot.fromJson(Map<String, dynamic> json) {
@@ -53,7 +60,110 @@ class DeviceSettingsSnapshot {
       providerAutoFailover: ManagedToggleSetting.fromJson(
         Map<String, dynamic>.from(json['provider_auto_failover'] as Map? ?? const {}),
       ),
+      dictation: json['dictation'] is Map
+          ? DictationSettingsSetting.fromJson(
+              Map<String, dynamic>.from(json['dictation'] as Map),
+            )
+          : null,
       restartRequired: json['restart_required'] == true,
+    );
+  }
+}
+
+/// Dictation runtime state as the settings page renders it.
+///
+/// The page never reads agent configuration itself: enabled, the selected model,
+/// readiness, the catalog and the busy flag all come from the daemon, so the
+/// page cannot disagree with the mic button.
+class DictationSettingsSetting {
+  const DictationSettingsSetting({
+    required this.enabled,
+    required this.managedExternally,
+    required this.supported,
+    required this.ready,
+    required this.busy,
+    this.selectedModelId,
+    this.reason,
+    this.hasModelPath = false,
+    this.models = const [],
+  });
+
+  final bool enabled;
+
+  /// `stt.enabled` is named by the owner's `config.yaml`, so the page can only
+  /// explain the setting instead of changing it.
+  final bool managedExternally;
+  final bool supported;
+  final bool ready;
+  final bool busy;
+  final String? selectedModelId;
+  final String? reason;
+
+  /// True when the Agent's owner pinned `stt.model_path`. The path itself never
+  /// leaves the Agent host, so no surface can render or store it.
+  final bool hasModelPath;
+  final List<DictationModelSizeSetting> models;
+
+  DictationModelSizeSetting? get selectedModel {
+    for (final model in models) {
+      if (model.id == selectedModelId) return model;
+    }
+    return null;
+  }
+
+  factory DictationSettingsSetting.fromJson(Map<String, dynamic> json) {
+    final rawModels = json['models'];
+    final models = <DictationModelSizeSetting>[];
+    if (rawModels is List) {
+      for (final entry in rawModels) {
+        if (entry is! Map) continue;
+        models.add(
+          DictationModelSizeSetting.fromJson(Map<String, dynamic>.from(entry)),
+        );
+      }
+    }
+    return DictationSettingsSetting(
+      enabled: json['enabled'] == true,
+      managedExternally: json['managed_externally'] == true,
+      supported: json['supported'] != false,
+      ready: json['ready'] == true,
+      busy: json['busy'] == true,
+      selectedModelId: json['selected_model_id'] as String?,
+      reason: json['reason'] as String?,
+      hasModelPath: json['has_model_path'] == true,
+      models: models,
+    );
+  }
+}
+
+/// One catalog row as the settings page needs it: identity, label code, size.
+class DictationModelSizeSetting {
+  const DictationModelSizeSetting({
+    required this.id,
+    this.name,
+    this.labelCode,
+    this.sizeBytes,
+    this.installed = false,
+  });
+
+  final String id;
+
+  /// The model's real name, a proper noun the daemon never translates.
+  final String? name;
+
+  /// Identity of a daemon-owned row that is not a catalog model.
+  final String? labelCode;
+
+  final int? sizeBytes;
+  final bool installed;
+
+  factory DictationModelSizeSetting.fromJson(Map<String, dynamic> json) {
+    return DictationModelSizeSetting(
+      id: json['id']?.toString() ?? '',
+      name: json['name'] as String?,
+      labelCode: json['label_code'] as String?,
+      sizeBytes: (json['size_bytes'] as num?)?.toInt(),
+      installed: json['installed'] == true,
     );
   }
 }

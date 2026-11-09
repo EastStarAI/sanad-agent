@@ -43,8 +43,8 @@ Do not introduce convenience code that weakens these boundaries.
 ### Platform Boundaries
 - `AppPlatform` (`client/lib/utils/app_platform.dart`) is the canonical platform discriminator. Shared startup (bootstrap, dependency registration, provider mounting) must never execute a native `dart:io` platform API; native implementations stay behind desktop-only registration and consumption boundaries.
 - Client CLI is desktop-only: Web and mobile never register, construct, or read its host, settings cubit, ownership record, or Sanad Home.
-- `client/lib/driver_main.dart` is the canonical test-driver entry point (`-t lib/driver_main.dart`). It enables Flutter Driver with operating system text-entry emulation preserved and registers all development VM service extensions in documented order: `auth_url`, `inspect_ui`, `enter_text`, `scroll`, `tap`, `reveal`, and `hover`.
-- Modular driver capabilities reside in `client/lib/driver/`: `driver_widget_filters.dart` (layout noise and key filtering, scope root resolution), `inspect_ui_extension.dart` (interactive UI tree snapshots and bounded type census), `interaction_extensions.dart` (gestures, tap target location, scrolling, text entry, element reveal, bounded long press, in-app synthetic hover), `ui_bounds.dart` (global bounds projection shared by snapshot, reveal, and obstruction reporting), `ui_inspection_state.dart` (widget enabled resolution), `ui_inspection_text.dart` (rendered text and bounded tooltip extraction), and `ui_type_census.dart` (bounded type walks).
+- `client/lib/driver_main.dart` is the canonical test-driver entry point (`-t lib/driver_main.dart`). It enables Flutter Driver with operating system text-entry emulation preserved, installs the dictation capture seam before `main.dart` builds its providers, and registers all development VM service extensions in documented order: `auth_url`, `inspect_ui`, `enter_text`, `scroll`, `tap`, `reveal`, `hover`, then the dictation capture/probe/control group.
+- Modular driver capabilities reside in `client/lib/driver/`: `driver_widget_filters.dart` (layout noise and key filtering, scope root resolution), `inspect_ui_extension.dart` (interactive UI tree snapshots and bounded type census), `interaction_extensions.dart` (gestures, tap target location, scrolling, text entry, element reveal, bounded long press, in-app synthetic hover), `ui_bounds.dart` (global bounds projection shared by snapshot, reveal, and obstruction reporting), `ui_inspection_state.dart` (widget enabled resolution), `ui_inspection_text.dart` (rendered text and bounded tooltip extraction), `ui_type_census.dart` (bounded type walks), and `dictation_capture_fixture.dart`/`dictation_probe.dart`/`dictation_driver_extensions.dart` (bounded PCM fixture capture, origin counters, and cubit phase/cancel; driver-only, never installed by production `main.dart`).
 
 ### Conversation Ownership
 - `ConversationCacheStore` is the single client-side owner of conversation cache, device destinations, drafts, pagination resources, and workspace expansion.
@@ -55,6 +55,11 @@ Do not introduce convenience code that weakens these boundaries.
 - One gate, `ComposerPermissionGate.shouldShow`, decides whether the composer offers the permission-mode picker: the Agent's tool-permission capability, no pending approval, and a bound workspace. A session whose targeting resolves to no path keeps the picker hidden rather than borrowing another workspace's policy, and no other widget re-derives that condition. The picker always renders the mode the Agent enforces — a session's own `allow_all_tools`/`permission_mode` metadata outranks the workspace policy — so a mode change is sent to the Agent (`workspace.set_permission_mode` plus `set_session_permission_mode` for the selected session) and never kept as a display-only downgrade. Its tooltip names the session's execution path, which is how an owner reads a session's working directory.
 - `session_updated` applies only the keys the Client owns: `workspace_id`, `workspace_path`, `workspace_name`, `workspace_trust_state`, and the permission keys `metadata.execution_root`, `metadata.allow_all_tools`, `metadata.permission_mode`. Every other metadata key stays Client-owned, and a partial update never clears an owned key.
 - Raw request id is transport identity. Display ids, timestamps, and optimistic UI rows cannot replace it.
+
+### Dictation Ownership
+- `client/lib/features/dictation/` owns dictation end to end: identity minting (`DictationIdentity`), the transport boundary, the resolver, the cubit/state, the composer mic, and the model sheet. `DictationTransportResolver` is the only place that chooses between the local socket channel and the hosted relay; nothing above the transport boundary may branch on connection scope, and a hosted selection that lacks `dictation_relay_v1`, an account device id, or an authenticated socket fails closed instead of degrading.
+- Both channels must produce the same `{"event", ...fields}` vocabulary, because the session, insertion helper, and widgets are shared. A daemon-owned catalog row is identified by `label_code` and localized by the Client; the daemon never ships user-facing copy.
+- Readiness is two facts: `supported` is the platform verdict, while `ready` plus `reason` is the current state. A supported-but-not-ready device keeps its reason so the setup action stays reachable, and the mic stays discoverable instead of hidden.
 
 ### Localization Ownership
 - The client UI is multilingual (`en` + `ar` RTL). Translations live in `client/lib/l10n/app_en.arb` (English source of truth) and `app_ar.arb` (Arabic). Generated `app_localizations*.dart` files are build output and remain git-ignored; run `fvm flutter gen-l10n` after editing ARBs.
@@ -102,6 +107,11 @@ When interface or runtime ownership changes affect the local daemon contract, pr
 4. Targeted tests covering the changed behavior pass.
 5. Full fast-suite and E2E results are provided only when the change scope requires them under the testing requirements above.
 6. A new or grown non-generated `lib/` file stays inside the size ratchet: over 1000 lines it fails `test/guards/file_size_ratchet_guard_test.dart`, and an allowlisted file never exceeds its recorded count; split the file instead of raising the number.
+
+## User-visible feedback
+- Transient feedback goes through `ToastUtils` (`showInfo` / `showSuccess` / `showError`), which owns placement, duration, RTL and the close button.
+- A `SnackBar` is acceptable only where a toast would be hidden (for example behind a full-screen modal barrier), and the call site must state that reason.
+- Tests assert the message through `ToastUtils.debugOnShowError` / `debugOnShowInfo`, never by finding `SnackBar` widgets.
 
 ## Boundary Ownership
 - Keep infrastructure-specific transport laws in the infrastructure domain.

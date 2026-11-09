@@ -59,6 +59,13 @@ class VoiceEngine {
           if (eventName == 'interrupt') {
             _logger.info('User manually interrupted agent playback');
             _flushAssistantTurn(interrupted: true);
+          } else if (eventName == 'stop_voice') {
+            // The origin client is gone (or ended the call): the Gateway can no
+            // longer deliver this session's output, so the producer stops here
+            // instead of emitting into a dead route. Identity was already
+            // filtered by the transport, so this can only be our own session.
+            _logger.info('Voice origin ended the session; closing engine');
+            unawaited(close());
           }
         },
         onError: (err) =>

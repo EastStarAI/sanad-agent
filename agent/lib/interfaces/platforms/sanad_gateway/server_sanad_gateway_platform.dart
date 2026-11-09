@@ -17,15 +17,16 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
 import 'capabilities_loader.dart';
+import 'cloud_voice_session_controller.dart';
 import 'delivery_presence_controller.dart';
+import 'hosted_dictation_relay.dart';
+import 'identity_time_calibration.dart';
 import 'sanad_protocol_bridge.dart';
 import 'protocol/authenticated_command_origin.dart';
 import 'protocol/canonical_events.dart';
 import 'channels/cloud_session_channel.dart';
 import 'sanad_gateway_behavior.dart';
-import 'package:sanad_agent/infrastructure/voice/gemini_voice_provider.dart';
-import 'package:sanad_agent/infrastructure/voice/voice_engine.dart';
-import 'package:sanad_agent/infrastructure/voice/voice_transport_channel.dart';
+import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/interfaces/models/device_control.dart';
 import 'package:sanad_agent/interfaces/runtime/device_command_admission.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -105,8 +106,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
   @override
   CommandAuthority get ingressAuthority => CommandAuthority.owner;
   final _eventController = StreamController<GatewayEvent>.broadcast();
-  final _voiceEngines = <String, VoiceEngine>{};
+  late final CloudVoiceSessionController _voiceSessions =
+      CloudVoiceSessionController(
+        logger: _logger,
+        emitCommandReply: _emitCommandReply,
+        emitDeviceEvent: (envelope) =>
+            _emitAgentEvent(envelope, egressClaimed: true),
+      );
   final _sessionClientTags = <String, String>{};
+  HostedDictationRelay? _hostedDictation;
 
   io.Socket? _socket;
   String? _registeredDeviceId;
@@ -201,6 +209,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _socket!.onDisconnect((_) {
       _registeredDeviceId = null;
       deliveryPresence?.clearInterest();
+      // Every hosted dictation route died with this socket: cancel the session
+      // and any control-only operation so no producer outlives its claim.
+      unawaited(_dictationRelay.closeAll());
       _logger.info('🔌 Disconnected from Sanad Gateway');
     });
 
@@ -271,6 +282,15 @@ class ServerSanadGatewayPlatform extends BasePlatform
           '';
       final origin = AuthenticatedCommandOrigin.fromEnvelope(envelope);
       final clientTag = origin.displayTag;
+
+      // Dictation is dispatched before the conversation-session fall-through:
+      // its identity is a transport session, never a conversation, so it must
+      // create no session channel, session identity, or client tag.
+      if (command == HostedDictationRelay.commandName) {
+        await _dictationRelay.handleCommand(envelope, clientTag: clientTag);
+        return;
+      }
+
       _rememberSessionClientTag(sessionId, clientTag);
 
       if (command == 'authentication_exchange') {
@@ -372,11 +392,18 @@ class ServerSanadGatewayPlatform extends BasePlatform
 
       if (command == 'start_voice') {
         _logger.info('Starting cloud voice session');
-        await _startVoiceSession(sessionId, deviceId);
+        await _voiceSessions.start(
+          sessionId,
+          deviceId,
+          requestId:
+              envelope['request_id']?.toString() ??
+              payload['request_id']?.toString() ??
+              '',
+        );
         return;
       } else if (command == 'stop_voice') {
         _logger.info('Stopping cloud voice session');
-        await _stopVoiceSession(sessionId);
+        await _voiceSessions.stop(sessionId);
         return;
       }
 
@@ -398,6 +425,20 @@ class ServerSanadGatewayPlatform extends BasePlatform
         return;
       }
       _eventController.add(gatewayEvent);
+    });
+
+    // Hosted dictation relay frames. These are registered once on the shared
+    // socket and forwarded to the single live relay; the relay owns no socket
+    // listener of its own, so closing a dictation session can never detach
+    // another feature's handler.
+    _socket!.on('dictation_audio', (data) {
+      _dictationRelay.onAudioFrame(toMap(data));
+    });
+    _socket!.on('dictation_end', (data) {
+      _dictationRelay.onOrderedControl(toMap(data));
+    });
+    _socket!.on('dictation_abort', (data) {
+      _dictationRelay.onAbort(toMap(data));
     });
 
     _socket!.on('protocol_event', (data) async {
@@ -716,73 +757,21 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }, clientTag: clientTag);
   }
 
-  Future<void> _startVoiceSession(String sessionId, String deviceId) async {
-    await _stopVoiceSession(sessionId);
-
-    try {
-      final channel = CloudSocketIoTransportChannel(deviceId);
-      final provider = GeminiRealtimeVoiceProvider();
-      final engine = VoiceEngine(
-        channel: channel,
-        provider: provider,
-        sessionId: sessionId,
+  /// The one hosted dictation relay of this device.
+  ///
+  /// It shares the single [DictationService] the local channel uses, so the
+  /// lease, engine, residency, and vocabulary are one implementation. It is
+  /// created lazily so a daemon that never receives a hosted dictation command
+  /// pays nothing. The relay always correlates by request id, so the
+  /// delivery-presence interest gate must not suppress its events.
+  HostedDictationRelay get _dictationRelay =>
+      _hostedDictation ??= HostedDictationRelay(
+        service: getIt<DictationService>(),
+        registeredDeviceId: () => _registeredDeviceId ?? '',
+        emitDeviceEvent: (envelope, {clientTag}) => unawaited(
+          _emitAgentEvent(envelope, egressClaimed: true, clientTag: clientTag),
+        ),
       );
-      _voiceEngines[sessionId] = engine;
-
-      unawaited(
-        engine
-            .start({'session_id': sessionId, 'device_id': deviceId})
-            .catchError((Object _) {
-              _logger.severe('Failed to start cloud VoiceEngine');
-              if (_voiceEngines[sessionId] == engine) {
-                _voiceEngines.remove(sessionId);
-              }
-            }),
-      );
-
-      await _emitCommandReply({
-        'device_id': deviceId,
-        'type': 'event',
-        'event': 'voice_session_started',
-        'payload': {'session_id': sessionId},
-      });
-    } catch (_) {
-      _logger.severe('Error starting cloud voice session');
-    }
-  }
-
-  Future<void> _stopVoiceSession(String sessionId) async {
-    final engine = _voiceEngines.remove(sessionId);
-    if (engine != null) {
-      _logger.info('Closing active voice engine');
-      await engine.close();
-    }
-  }
-
-  Future<void> _calibrateIdentityTime(DeviceKeyIdentity identity) async {
-    final portalUri = Uri.parse(getIt<Config>().portalUrl);
-    if (portalUri.scheme != 'https') return;
-    try {
-      final response = await _httpClient
-          .head(portalUri)
-          .timeout(const Duration(seconds: 5));
-      if (response.statusCode < 200 || response.statusCode >= 500) return;
-      final offset = DeviceAuthorizationClient.trustedServerTimeOffset(
-        portalUri,
-        response.headers['date'],
-      );
-      await identity.rememberServerTimeOffset(offset);
-      if (offset.inSeconds.abs() > 300) {
-        _logger.warning(
-          'Local clock differs from the Portal; Gateway proofs will use the '
-          'authenticated Portal time.',
-        );
-      }
-    } on Object {
-      // A missing calibration response does not replace the normal signed
-      // registration failure path or authorize an untrusted time source.
-    }
-  }
 
   Future<void> _requestRegistration({String? challengeNonce}) {
     final active = _registrationFuture;
@@ -855,7 +844,12 @@ class ServerSanadGatewayPlatform extends BasePlatform
     }
     final identity = requiresKeyProof ? await identityLoader() : null;
     if (identity != null) {
-      await _calibrateIdentityTime(identity);
+      await calibrateIdentityTime(
+        logger: _logger,
+        httpClient: _httpClient,
+        identity: identity,
+        portalUrl: getIt<Config>().portalUrl,
+      );
     }
     final deviceProof = identity != null
         ? await identity.gatewayProof(challengeNonce!)
@@ -960,7 +954,11 @@ class ServerSanadGatewayPlatform extends BasePlatform
       'origin' => correlatedClientTag ?? transportName,
       _ => correlatedClientTag ?? transportName,
     };
-    if (eventType == 'thought_stream' || eventType == 'reasoning_stream') {
+    if (eventType == 'thought_stream' ||
+        eventType == 'reasoning_stream' ||
+        // Dictation rides origin delivery only, and a streaming transcript emits
+        // many events per session: type-level detail stays out of the info log.
+        eventType == HostedDictationRelay.eventName) {
       _logger.fine('⬆️ [$resolvedClientTag] Emitting device_event: $eventType');
     } else {
       _logger.info('⬆️ [$resolvedClientTag] Emitting device_event: $eventType');
@@ -999,11 +997,10 @@ class ServerSanadGatewayPlatform extends BasePlatform
   Future<void> dispose() async {
     await _authChangeSubscription?.cancel();
     _authChangeSubscription = null;
+    await _hostedDictation?.closeAll();
+    _hostedDictation = null;
     await _eventController.close();
-    for (final engine in _voiceEngines.values.toList()) {
-      await engine.close();
-    }
-    _voiceEngines.clear();
+    await _voiceSessions.closeAll();
     _socket?.dispose();
     _binaryRelaySocket = null;
   }

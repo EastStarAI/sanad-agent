@@ -5,6 +5,8 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:sanad_release_contract/release_contract.dart';
 
+import 'agent_runtime_bundle.dart';
+
 const _defaultReleaseManifestUrl = String.fromEnvironment(
   'SANAD_RELEASE_MANIFEST_URL',
   defaultValue:
@@ -45,9 +47,11 @@ class AgentUpdateResult {
     required this.currentVersion,
     this.availableVersion,
     this.message,
-    this.stagedPath,
     this.manifestTag,
     this.manifestCommit,
+    this.stagedPath,
+    this.runtimeStatus,
+    this.runtimeStagedPath,
   });
 
   final AgentUpdateStatus status;
@@ -57,6 +61,12 @@ class AgentUpdateResult {
   final String? stagedPath;
   final String? manifestTag;
   final String? manifestCommit;
+
+  /// Runtime bundle outcome for this update, when the release publishes one.
+  final AgentRuntimeBundleStatus? runtimeStatus;
+
+  /// Windows restart-time runtime directory the replacement script must move.
+  final String? runtimeStagedPath;
 
   bool get isSuccess => switch (status) {
     AgentUpdateStatus.upToDate ||
@@ -78,6 +88,8 @@ class AgentUpdateResult {
     stagedPath: stagedPath ?? this.stagedPath,
     manifestTag: manifestTag,
     manifestCommit: manifestCommit,
+    runtimeStatus: runtimeStatus,
+    runtimeStagedPath: runtimeStagedPath,
   );
 
   Map<String, dynamic> toJson() => {
@@ -88,6 +100,7 @@ class AgentUpdateResult {
     if (message != null) 'message': message,
     if (manifestTag != null) 'manifest_revision': manifestTag,
     if (manifestCommit != null) 'manifest_fingerprint': manifestCommit,
+    if (runtimeStatus != null) 'runtime_status': runtimeStatus!.name,
   };
 }
 
@@ -106,6 +119,7 @@ class AgentUpdateService {
     PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Future<bool> Function(String script)? replacementScheduler,
     Uri? artifactMirrorUri,
+    AgentRuntimeBundle? runtimeBundle,
   }) : _client = client ?? http.Client(),
        manifestUri = manifestUri ?? Uri.parse(_defaultReleaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
@@ -113,6 +127,16 @@ class AgentUpdateService {
        _platformVerifier = platformVerifier,
        _detailedPlatformVerifier = detailedPlatformVerifier,
        _replacementScheduler = replacementScheduler,
+       _runtimeBundle =
+           runtimeBundle ??
+           AgentRuntimeBundle(
+             client: client,
+             artifactMirrorUri: artifactMirrorUri,
+             platformVerifier: platformVerifier,
+             detailedPlatformVerifier: detailedPlatformVerifier,
+             operatingSystem: operatingSystem,
+             architecture: architecture,
+           ),
        _artifactMirrorUri =
            artifactMirrorUri ??
            (_defaultReleaseArtifactMirrorUrl.trim().isEmpty
@@ -129,6 +153,7 @@ class AgentUpdateService {
   final PlatformArtifactVerifier? _platformVerifier;
   final PlatformArtifactDetailedVerifier? _detailedPlatformVerifier;
   final Future<bool> Function(String script)? _replacementScheduler;
+  final AgentRuntimeBundle _runtimeBundle;
   final Uri? _artifactMirrorUri;
 
   Future<AgentUpdateResult> check({String? targetVersion}) async {
@@ -281,14 +306,37 @@ class AgentUpdateService {
 
       if (operatingSystem == 'windows') {
         preserveStagedFile = true;
+        // The runtime cannot be swapped in-process on Windows: a loaded DLL
+        // stays locked, so the verified directory is staged and the restart
+        // script moves it next to the replaced executable. A runtime failure
+        // here never blocks the Agent update: it disables dictation only, and
+        // the outcome is recorded beside the runtime for readiness to report.
+        final runtime = await _runtimeBundle.refresh(
+          manifest: manifest,
+          executablePath: executablePath,
+        );
         return AgentUpdateResult(
           status: AgentUpdateStatus.restartRequired,
           currentVersion: currentVersion,
           availableVersion: available,
-          message: 'Verified update staged for replacement during restart.',
+          message:
+              'Verified update staged for replacement during restart.'
+              '${_runtimeNote(runtime)}',
           stagedPath: staged.path,
+          runtimeStatus: runtime.status,
+          runtimeStagedPath: runtime.stagedPath,
         );
       }
+
+      // Runtime first: a new executable must never sit next to an unverified or
+      // stale runtime. The tag carries no version, so the directory is refreshed
+      // from this same release before the binary is replaced. A runtime that
+      // cannot be downloaded or verified is not an update failure: the Agent
+      // replaces itself and dictation reports the recorded reason.
+      final runtime = await _runtimeBundle.refresh(
+        manifest: manifest,
+        executablePath: executablePath,
+      );
 
       final backup = File('$executablePath.rollback');
       if (backup.existsSync()) await backup.delete();
@@ -314,10 +362,14 @@ class AgentUpdateService {
         );
       }
 
-      return _result(
-        AgentUpdateStatus.restartRequired,
-        available,
-        message: 'Verified update installed. Restart the Sanad service.',
+      return AgentUpdateResult(
+        status: AgentUpdateStatus.restartRequired,
+        currentVersion: currentVersion,
+        availableVersion: available,
+        message:
+            'Verified update installed. Restart the Sanad service.'
+            '${_runtimeNote(runtime)}',
+        runtimeStatus: runtime.status,
       );
     } on FormatException catch (error) {
       return _error(AgentUpdateStatus.manifestInvalid, error.message);
@@ -339,6 +391,35 @@ class AgentUpdateService {
       }
     }
   }
+
+  /// Re-attempts the packaged runtime install for the release this Agent runs.
+  ///
+  /// This is the retry path behind the dictation readiness reason: a failed
+  /// `agent-runtime` download, verification, or extraction disables dictation
+  /// only, and the owner can retry it without reinstalling or updating the
+  /// Agent. It never touches the executable and never relaxes verification.
+  Future<AgentRuntimeBundleResult> refreshRuntime() async {
+    if (isSourceManaged) {
+      return const AgentRuntimeBundleResult(
+        AgentRuntimeBundleStatus.notPublished,
+        message:
+            'This agent runs from source; its runtime is developer-managed.',
+      );
+    }
+    final manifest = await _fetchManifest();
+    return _runtimeBundle.refresh(
+      manifest: manifest,
+      executablePath: executablePath,
+    );
+  }
+
+  /// Appends the dictation consequence of a runtime outcome to a success
+  /// message. A runtime failure is a status detail, never a failed update.
+  static String _runtimeNote(AgentRuntimeBundleResult runtime) =>
+      runtime.status.isFailure
+      ? ' Dictation stays unavailable until the runtime installs: '
+            '${runtime.message ?? runtime.status.name}'
+      : '';
 
   AgentUpdateResult? _targetGate(String? targetVersion) {
     if (targetVersion == null) return null;
@@ -432,9 +513,18 @@ class AgentUpdateService {
     if (stagedPath == null || operatingSystem != 'windows') return false;
     final escapedExecutable = executablePath.replaceAll("'", "''");
     final escapedStaged = stagedPath.replaceAll("'", "''");
+    final runtimeStaged = result.runtimeStagedPath;
+    final escapedRuntimeStaged = (runtimeStaged ?? '').replaceAll("'", "''");
+    // The staged directory is `<exe dir>/native/<tag>.staged`; the installed
+    // target is the same path without the suffix, so the pair moves together.
+    final escapedRuntimeTarget = runtimeStaged == null
+        ? ''
+        : runtimeStaged.replaceAll(RegExp(r'\.staged$'), '').replaceAll("'", "''");
     final script = buildWindowsReplacementScript(
       target: escapedExecutable,
       staged: escapedStaged,
+      runtimeStaged: escapedRuntimeStaged,
+      runtimeTarget: escapedRuntimeTarget,
     );
     final scheduler = _replacementScheduler;
     if (scheduler != null) {
@@ -517,14 +607,25 @@ class AgentUpdateService {
   /// be PowerShell single-quote escaped. On start failure the previous
   /// executable is restored AND started before the script exits, so the
   /// machine never ends up without a working agent after a failed update.
+  ///
+  /// The native runtime is moved in the same transaction: a loaded DLL cannot be
+  /// replaced while the old process runs, so the verified directory is staged on
+  /// disk and swapped here, after the executable is gone and before the service
+  /// starts. A runtime failure rolls the executable back, so the pair is never
+  /// left half-updated.
   static String buildWindowsReplacementScript({
     required String target,
     required String staged,
+    String runtimeStaged = '',
+    String runtimeTarget = '',
   }) =>
       r'''
 $ErrorActionPreference = 'Stop'
 $target = '__TARGET__'
 $staged = '__STAGED__'
+$runtimeStaged = '__RUNTIME_STAGED__'
+$runtimeTarget = '__RUNTIME_TARGET__'
+$runtimeRollback = "$runtimeTarget.rollback"
 $backup = "$target.rollback"
 $readyMarker = "$staged.replacement-ready"
 $resultPath = "$target.update-result.json"
@@ -561,12 +662,27 @@ if (-not $ready) {
 }
 try {
   Move-Item -LiteralPath $staged -Destination $target -Force
+  if ($runtimeStaged -ne '' -and (Test-Path $runtimeStaged)) {
+    if (Test-Path $runtimeRollback) { Remove-Item -LiteralPath $runtimeRollback -Recurse -Force }
+    if (Test-Path $runtimeTarget) { Move-Item -LiteralPath $runtimeTarget -Destination $runtimeRollback -Force }
+    try {
+      Move-Item -LiteralPath $runtimeStaged -Destination $runtimeTarget -Force
+    } catch {
+      if (Test-Path $runtimeTarget) { Remove-Item -LiteralPath $runtimeTarget -Recurse -Force }
+      if (Test-Path $runtimeRollback) { Move-Item -LiteralPath $runtimeRollback -Destination $runtimeTarget -Force }
+      throw 'Native runtime replacement failed.'
+    }
+  }
   & $target service install | Out-Null
   if ($LASTEXITCODE -ne 0) { throw 'Service registration or restart failed.' }
   Write-UpdateResult 'started' 'The replacement and its background launcher were installed and the Scheduled Task was started.'
   Exit-Replacement 0
 } catch {
   if (Test-Path $target) { Remove-Item -LiteralPath $target -Force }
+  if ($runtimeStaged -ne '' -and (Test-Path $runtimeRollback)) {
+    if (Test-Path $runtimeTarget) { Remove-Item -LiteralPath $runtimeTarget -Recurse -Force }
+    Move-Item -LiteralPath $runtimeRollback -Destination $runtimeTarget -Force
+  }
   $rollbackStarted = $false
   if (Test-Path $backup) {
     Move-Item -LiteralPath $backup -Destination $target -Force
@@ -583,7 +699,9 @@ try {
 }
 '''
           .replaceFirst('__TARGET__', target)
-          .replaceFirst('__STAGED__', staged);
+          .replaceFirst('__STAGED__', staged)
+          .replaceFirst('__RUNTIME_STAGED__', runtimeStaged)
+          .replaceFirst('__RUNTIME_TARGET__', runtimeTarget);
 
   Future<ReleaseManifest> _fetchManifest() async {
     final response = await _client.get(

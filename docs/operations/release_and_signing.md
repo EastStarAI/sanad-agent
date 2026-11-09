@@ -24,7 +24,12 @@ source surface before writing, and updates Agent/Client package metadata, the
 Windows version resources, the canonical contract/tag/artifact filenames,
 release-note identity, changelog slot, and this current-release statement.
 `check-preparation` then rejects stale or unfinished release identity before a
-pull request can pass CI. Release prose remains derived from merged Git history
+pull request can pass CI. The artifact filenames it owns include the
+`agent-runtime` archives (`sanad-agent-runtime-<version>-<platform>-<arch>.tar.gz`),
+which are published by the native-runtime workflow rather than the Agent
+installer: they are renamed with every other versioned artifact, and a stale
+literal is rejected by name instead of surfacing later as a duplicate-filename
+contract error. Release prose remains derived from merged Git history
 by the skill rather than invented by the mechanical command.
 
 A release-preparation pull request may pass without `release-reviewed` only when
@@ -77,6 +82,17 @@ action, and the action fails unless `dart --version` reports the pin. The pin an
 the Dart SDK bundled with `.fvmrc`'s Flutter must match, and
 `agent/test/guards/dart_sdk_pin_test.dart` fails on the ordinary lanes as soon as
 they diverge. No lane may install an unpinned or architecture-mismatched SDK.
+
+That lane produces the whole Agent payload, not just the executable: it builds
+and verifies the whisper runtime with its own Dart, stages it into the same
+`dist/`, archives `sanad-agent-runtime-<release>-linux-arm64.tar.gz`, and loads
+the packaged library in a real process before the artifact is uploaded. Every
+runtime step in that job therefore selects the executable through the job's
+`DART` variable instead of naming `fvm dart`, and the whisper build cache is
+keyed by the runner label so an arm64 slice is never restored from an x64 build.
+The contract row for that archive is `linux`/`arm64`, and
+`agent/test/tool/native_runtime_package_contract_test.dart` fails when a
+published Agent target has no matching `agent-runtime` row.
 
 The official Agent target list is a build-matrix statement, not a statement
 about packaging. A Linux arm64 **Client** package (`.deb` and portable `tar.gz`)
