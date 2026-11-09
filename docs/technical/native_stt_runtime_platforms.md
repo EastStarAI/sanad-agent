@@ -1,6 +1,6 @@
 ---
 title: "Native Dictation Runtime Platforms"
-description: "Platform tag, directory layout, verification rules, and release staging for the in-process whisper.cpp and sherpa-onnx dictation runtimes, including macOS Intel (x64) and the whisper-only Linux arm64 build."
+description: "Platform tag, directory layout, portable instruction-set baseline, verification rules, and release staging for the in-process whisper.cpp and sherpa-onnx dictation runtimes, including macOS Intel (x64) and the whisper-only Linux arm64 build."
 ---
 
 # Native Dictation Runtime Platforms
@@ -60,6 +60,56 @@ accepted on Intel; whisper.cpp simply has no GPU backend to bind.
 running ABI (`defaultSttUseGpuFor`, so the carve-out is testable from any host).
 An absent `use_gpu` — whether the whole `config.yaml` is missing or only the key
 is — resolves through it; a literal constructor default must never decide it.
+
+## Portable instruction-set baseline
+
+Every shipped runtime is built for the **declared floor of its target**, never
+for the machine that produced it. ggml defaults to `GGML_NATIVE=ON`, which
+compiles `-march=native` / `-mcpu=native`: ggml's feature questions then become
+compile-time constants, so the kernels that run are the ones the build runner's
+CPU can execute. v1.0.22 shipped exactly that. The arm64 runtime was compiled on
+a runner with SVE2/i8mm/BF16 and the first install on an Ampere Neoverse-N1
+(`fp asimd … asimddp`, no `sve`/`i8mm`/`bf16`) died with `SIGILL`
+(`ILL_ILLOPC` at `ggml_cpu_init+0x238`) before any audio was read.
+
+Both builders therefore configure `-DGGML_NATIVE=OFF`, and the stale-tree guards
+discard a tree whose `CMakeCache.txt` does not record it. What each target then
+requires is a contract, not an accident of the runner's toolchain:
+
+| Tag | Producer | Configured baseline | Instruction sets the payload requires |
+|---|---|---|---|
+| `linux-arm64` | `ubuntu-24.04-arm` | `-DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+fp16` | Armv8.2-A with NEON/ASIMD, `dotprod` and `fp16` vector arithmetic. **No** SVE/SVE2, I8MM or BF16 |
+| `linux-x64` | `ubuntu-24.04` | `-DGGML_NATIVE=OFF`, ggml non-native defaults | SSE4.2, AVX, AVX2, FMA, F16C, BMI2. **No** AVX-512 |
+| `macos-arm64` | `macos-26` | `-DGGML_NATIVE=OFF`, no `-march` | The Apple clang arm64 baseline: dotprod, FP16 vector arithmetic, FMA. **No** I8MM, SVE or BF16 |
+| `macos-x64` | `macos-15-intel` | `-DGGML_NATIVE=OFF`, ggml non-native defaults | SSE4.2, AVX, AVX2, FMA, F16C, BMI2. **No** AVX-512 |
+| `windows-x64` | `windows-2025` | `-DGGML_NATIVE=OFF`, MSVC `/arch:AVX2` | AVX2 (FMA/F16C are implied by that switch) |
+| `windows-arm64` | *no producing lane* | native only — MSVC has no portable ggml mode on ARM | Whatever CPU built it; **not** a portable artifact |
+
+Two consequences are recorded rather than hidden:
+
+- **Owner note (support matrix).** ggml's non-native x64 default turns
+  `GGML_AVX2`/`FMA`/`F16C`/`BMI2` **on** (`INS_ENB` is `ON` whenever
+  `GGML_NATIVE=OFF` and the build is not cross-compiling), so every x64 payload —
+  Linux, macOS and Windows — requires AVX2. AVX-512 stays off. A CPU without
+  AVX2 (pre-2013 x64) cannot run local dictation on those targets. **Decided by
+  the owner on 2026-11-09: the AVX2/FMA/F16C/BMI2 floor is kept because
+  performance is the priority on x64, and lowering it is not planned.** Lowering
+  it would be a one-line change (`-DGGML_AVX2=OFF`, then `-DGGML_AVX=OFF` and
+  friends to match), but it trades dictation speed for pre-2013 hardware, so
+  reviving it requires a new owner decision recorded here rather than a build
+  detail.
+- **`windows-arm64` is a declared row without a producer.** ggml aborts the
+  configure when `GGML_NATIVE=OFF` is combined with MSVC on ARM ("use clang for
+  `GGML_CPU_ARM_ARCH`"), so the Windows builder keeps native compilation for
+  that architecture alone and no lane publishes it. Adding the lane requires a
+  clang toolchain first; until then an arm64 Windows runtime must not be
+  described as portable.
+
+The Linux arm64 floor is pinned explicitly instead of inheriting the compiler's
+default. A non-native build appends no `-march` when `GGML_CPU_ARM_ARCH` is
+empty, so "portable" would then mean "whatever this `gcc` defaults to" — not a
+contract, and it also drops the dot-product kernels that Q8 decoding spends its
+time in. `armv8.2-a+dotprod+fp16` is the widest floor the release host proves.
 
 ### The engine subtree
 
@@ -149,8 +199,11 @@ arm64 install failed with
 second flag is what puts the install value into the build-tree libraries the
 staging step copies — and it discards a restored build tree whose cache does not
 record that contract, because the Makefile generator compares timestamps only
-and would otherwise reuse the stale libraries unchanged. The CI and release
-whisper build-cache keys carry a version token for the same reason.
+and would otherwise reuse the stale libraries unchanged. The same guard also
+requires `GGML_NATIVE:BOOL=OFF` (see
+[Portable instruction-set baseline](#portable-instruction-set-baseline)), and the
+CI and release whisper build-cache keys carry a version token for the same
+reason: they are at `whisper-build-v4-…`, naming both contracts.
 
 ### What `--verify` proves about relocatability
 
@@ -170,6 +223,33 @@ repository cannot relink, so a missing `$ORIGIN` there is a stated warning
 (`origin_runpath_missing:<key>`), never a failure no change in this tree could
 clear. Whether the packaged sherpa Linux payload loads the same way is a
 follow-up, not a claim made here.
+
+### What `--verify` proves about the instruction set
+
+`native_stt_isa_<file>=ok|forbidden:<mnemonic>` — on Linux, `--verify`
+disassembles every shipped library with `objdump -d` and fails when any
+instruction is above the target's declared baseline: SVE/SVE2 (`z` vector and
+`p` predicate operands, `ptrue`, `whilelt`, `whilelo`, …), I8MM
+(`smmla`/`ummla`/`usmmla`/`usdot`/`sudot`) or BF16 (`bfdot`/`bfmmla`/`bfcvt*`) on
+arm64, and AVX-512 (`%zmm` / `%k` mask registers, `{z}`, `{1toN}`) on x64.
+Mnemonics alone would miss the case that actually faulted: SVE reaches a binary
+as a `z`/`p` operand on an ordinary `fadd`/`ld1w`, so operand shapes are matched
+too. `sdot`/`udot` are inside the arm64 baseline and stay allowed, or the guard
+would reject the runtime this repository builds on purpose.
+
+No other gate can see this. A hash, a machine-architecture header and `ldd` all
+pass on a `-march=native` build, which is why v1.0.22 printed
+`native_stt_ldd_*=ok` for five libraries that could not execute a single
+instruction on the target host.
+
+Where the check cannot apply it says so rather than passing quietly: a non-Linux
+host prints `native_stt_isa=skipped`, and its payload is pinned by the builder
+contract plus the real load smoke. A lane that declares itself the proof lane
+(`SANAD_STT_REQUIRE_NATIVE=1`, set by every `native-stt` CI job and by the
+release Agent job) turns a missing disassembler into `isa_guard_unavailable:objdump`
+instead, so the guard cannot skip silently in CI; the lanes install `binutils`
+when the image lacks it. `sherpa/` libraries are not disassembled: they are
+third-party bytes this repository does not build.
 
 ## Directory layout and the bounded legacy alias
 
@@ -234,6 +314,8 @@ mutates anything, and exits non-zero on any hard failure.
 - on Linux, every library records an `$ORIGIN` search path and the loader
   resolves every shipped member when it is asked from another working directory
   (see [Relocatable runtime](#relocatable-runtime-every-member-carries-its-own-search-path));
+- on Linux, no library contains an instruction above the target's declared
+  baseline (see [the instruction-set guard](#what---verify-proves-about-the-instruction-set));
 - on macOS, the recorded minimum OS is not newer than the shipped Client floor
   (see below);
 - the release/CI smoke test opens the shim in a real process of that
@@ -513,19 +595,24 @@ Apple Silicon figure (build 18.3 s in this worktree) is recorded in
 
 | Runner | Proves |
 |---|---|
-| `ubuntu-24.04` | x64 ELF compiles, verifies (including the `$ORIGIN` and loader checks), loads, stages |
-| `ubuntu-24.04-arm` | arm64 ELF compiles on its own CPU, verifies (including the `$ORIGIN` and loader checks), loads, stages — the lane that would have caught the v1.0.22 defect |
+| `ubuntu-24.04` | x64 ELF compiles portably, verifies (including the `$ORIGIN`, loader, and instruction-set checks), loads, stages |
+| `ubuntu-24.04-arm` | arm64 ELF compiles on its own CPU against the declared baseline, verifies (the same three checks), loads, stages — the lane that would have caught the v1.0.22 defect |
 | `macos-26` | arm64 Mach-O compiles with Metal, verifies, loads, stages |
 | `macos-15-intel` | **genuine** x64 Mach-O compiles, verifies, loads, stages on Intel hardware |
 | `windows-2025` | x64 PE compiles, verifies, loads, stages |
 
 Each job asserts the runner CPU the matrix label claims, sets
-`SANAD_STT_REQUIRE_NATIVE=1` so the smoke test fails instead of skipping, and
-runs the installer, `--verify`, the load smoke test, and the stage/archive path.
-Every step that can execute on a Windows runner runs under `pwsh`; each `bash`
-step in a Windows-capable job carries an explicit non-Windows guard and a `pwsh`
-twin with the same tool command, and a guard test fails when either property is
-missing.
+`SANAD_STT_REQUIRE_NATIVE=1` so the smoke test and the instruction-set guard fail
+instead of skipping, installs `binutils` on Linux when the image lacks
+`objdump`, and runs the installer, `--verify`, the load smoke test, and the
+stage/archive path. The two Linux lanes then publish the staged folder they just
+verified as `native-stt-runtime-linux-<arch>` (three-day retention), so the
+payload can be exercised on hardware **older than the runner** — the one proof CI
+cannot make about itself, and the exact gap that let v1.0.22 ship with
+`native_stt_ldd_*=ok` on libraries no Neoverse-N1 could execute. Every step that
+can execute on a Windows runner runs under `pwsh`; each `bash` step in a
+Windows-capable job carries an explicit non-Windows guard and a `pwsh` twin with
+the same tool command, and a guard test fails when either property is missing.
 
 Genuine Intel **decode** (audio through a real model) is not part of CI: models
 are never bundled, so a decode proof needs a model download and belongs to a
@@ -543,9 +630,9 @@ live acceptance run on Intel hardware.
 | `client/test/unit/services/verified_agent_bootstrap_installer_test.dart` | Client bootstrap: a runtime download/checksum/layout failure never fails the install and records the cause; a verified runtime installs |
 | `scripts/sanad_dev/test/runtime/lifecycle/native_runtime_probe_test.dart` | architecture-qualified probe, one bounded legacy alias, unknown host pair, and a failing installer that never blocks `run` |
 | `agent/test/stt/native_runtime_smoke_test.dart` | real load of the built runtime (skips without one, fails when `SANAD_STT_REQUIRE_NATIVE=1`) |
-| `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, Linux `$ORIGIN` relocatability, the loader gate, staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
+| `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, Linux `$ORIGIN` relocatability, the loader gate, the instruction-set guard (SVE/I8MM/BF16 and AVX-512 listings rejected, dotprod and AVX2 accepted, mangled names ignored, missing disassembler stated), staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
 | `agent/test/tool/stt_native_archive_test.dart` | reproducible tar.gz bytes, header fields, checksums, entry order |
-| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection, the Linux install-rpath and stale-cache contract |
+| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection, the Linux install-rpath and stale-cache contract, the portable `GGML_NATIVE=OFF` baseline and the arm64 floor resolved through a fake `uname`, the v4 build-cache key, and the Windows `-DGGML_NATIVE` contract |
 | `agent/test/tool/native_runtime_package_contract_test.dart` | release contract ↔ archive layout ↔ installers ↔ workflow agreement, including the 35-minute budget, the pwsh-twin rule, and a scan that fails on any `bash` step in a Windows-capable job |
 | `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh` in a sandbox: a later service failure restores the runtime this run replaced, a failed restore keeps the backup and never reports a clean rollback, symlink and hidden members are refused, a release without a runtime keeps the installed one |
 
@@ -555,6 +642,18 @@ The narrowed closure ships local and cloud dictation on the platforms below with
 the failure policy above. These items are explicitly **not** done and must not be
 read as delivered:
 
+- **A re-validation of dictation on the release host.** This change makes the
+  runtime portable and adds the guard that proves it; it does not by itself
+  re-run the arm64 acceptance session that failed with `SIGILL`. That is a
+  separate, explicitly scheduled validation.
+- **CPU-variant runtime dispatch.** There is no `GGML_CPU_ALL_VARIANTS` /
+  `GGML_BACKEND_DL` build that ships several CPU baselines and picks one at load
+  time. One portable baseline per target is shipped; a host below the floor
+  declared in
+  [Portable instruction-set baseline](#portable-instruction-set-baseline) cannot
+  run dictation, and macOS/Windows payloads are not disassembled by the guard.
+- **A `windows-arm64` producer.** Still a declared row with no lane, and now
+  documented as impossible to produce portably with MSVC.
 - **Executed install, update, and dictation proof on Windows and Linux.** The
   installers, the updater, and the Client bootstrap implement the same policy on
   all three platforms, and the Windows staged-restart transaction has unit

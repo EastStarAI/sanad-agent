@@ -47,6 +47,14 @@ import 'stt_native_runtime.dart';
 const String _defaultWhisperCppVersion = '1.9.5';
 const String _nativeRoot = 'native';
 
+/// Declares that this process is a runtime proof lane, not a developer install.
+///
+/// CI sets it on every `native-stt` job so a missing runtime, a foreign
+/// architecture, or an unavailable disassembler fails the job instead of
+/// skipping a gate. The smoke test reads the same variable, so one switch means
+/// "this host must prove the payload" everywhere.
+const String _requireNativeVariable = 'SANAD_STT_REQUIRE_NATIVE';
+
 Future<void> main(List<String> args) async {
   final options = _Options.parse(args);
   if (options.error != null) {
@@ -108,6 +116,7 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
     _printVerification(verification, version);
     if (!verification.ok) return 1;
     if (!await _printLoaderResolution(target, directory)) return 1;
+    if (!await _printInstructionSets(target, directory)) return 1;
     if (options.stageDirectory == null && options.archiveDirectory == null) {
       return 0;
     }
@@ -449,6 +458,57 @@ Future<bool> _printLoaderResolution(
       'native stt runtime is not relocatable for ${check.target.tag}: '
       '${check.unresolved.join(', ')} did not resolve from outside $directory',
     );
+  }
+  return check.ok;
+}
+
+/// Prints the instructions the staged libraries actually require, and reports
+/// whether the payload stays inside the baseline its target declares.
+///
+/// None of the other gates can answer this. A hash, a machine-architecture
+/// header, and `ldd` all pass on a `-march=native` build, and that build then
+/// dies with `SIGILL` on the first older CPU that runs it — v1.0.22 shipped
+/// exactly that (`ggml_cpu_init+0x238`, `ILL_ILLOPC`, no `sve`/`i8mm` on the
+/// host) and every gate stayed green. Only the disassembly names the
+/// instructions, so the payload is disassembled instead of trusted.
+///
+/// The check is skipped — and says so — on hosts where it cannot apply. A lane
+/// that declares itself the proof lane (`SANAD_STT_REQUIRE_NATIVE=1`, the CI
+/// native-runtime jobs) turns a missing disassembler into a failure instead:
+/// a guard that silently skips in CI is not a guard.
+Future<bool> _printInstructionSets(
+  SttNativeTarget target,
+  String directory,
+) async {
+  final check = await checkInstructionSets(
+    target: target,
+    directory: directory,
+    requireDisassembler: Platform.environment[_requireNativeVariable] == '1',
+  );
+  if (check.skipped) {
+    stdout.writeln('native_stt_isa=skipped');
+    return true;
+  }
+  for (final line in check.evidence) {
+    stdout.writeln(line);
+  }
+  if (!check.ok) {
+    if (check.forbidden.isNotEmpty) {
+      final names = check.forbidden.entries
+          .map((entry) => '${entry.key}=${entry.value}')
+          .join(', ');
+      stderr.writeln(
+        'native stt runtime is not portable for ${check.target.tag}: '
+        '$names is above the declared instruction-set baseline; rebuild with '
+        'GGML_NATIVE=OFF so ggml uses its portable baseline',
+      );
+    }
+    if (check.problems.isNotEmpty) {
+      stderr.writeln(
+        'native stt instruction-set guard could not run for '
+        '${check.target.tag}: ${check.problems.join(', ')}',
+      );
+    }
   }
   return check.ok;
 }
