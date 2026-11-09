@@ -14,6 +14,47 @@ import 'agent_secret_store.dart';
 
 export 'secret_vault_policy.dart';
 
+/// How long a startup path waits for the operating-system credential store to
+/// answer before it treats the vault as not ready.
+///
+/// A daemon opens its vault without waiting, so the first consumer that needs a
+/// secret gives the store this bounded window and then reports `vault_not_ready`
+/// instead of blocking a listener or a turn behind a locked keyring or a dialog
+/// nobody answered.
+const secretVaultStartupReadyDeadline = Duration(seconds: 5);
+
+/// How far an open of the Agent vault has got.
+///
+/// A daemon opens its vault without waiting for the operating-system store, so
+/// "the vault is not available" and "the vault has not answered yet" are
+/// different answers. `/health` reports this state and the credential resolver
+/// refuses to call an unread value absent.
+enum SecretVaultStatus {
+  /// The open started and the operating-system store has not answered yet.
+  opening,
+
+  /// The store answered; cached values are the vault's real contents.
+  available,
+
+  /// The store refused or failed; the vault stays closed.
+  unavailable,
+}
+
+/// The readiness of the Agent vault as another owner observes it.
+///
+/// A caller that can wait (a resolver, a health probe, an admin route) takes
+/// this narrow view instead of the vault itself, so it never reaches into a
+/// vault's cache and never blocks on an operating-system call.
+abstract interface class SecretVaultReadiness {
+  /// Whether the open has settled, successfully or not.
+  bool get isReady;
+
+  /// Completes when the open settles, or at [deadline]; never throws.
+  ///
+  /// Returns whether the vault is ready.
+  Future<bool> readyWithin(Duration deadline);
+}
+
 /// One owner's entries inside the Agent vault, cached for synchronous reads.
 class SecretVaultNamespace {
   SecretVaultNamespace._(this.prefix, this.indexKey, this.legacyFile);
@@ -54,7 +95,7 @@ class SecretVaultNamespace {
 /// place and its values readable; the next open retries. A value already in
 /// the vault always wins over a legacy value. An older Agent on the same Home
 /// no longer finds these secrets after a successful migration.
-class SecretVaults {
+class SecretVaults implements SecretVaultReadiness {
   SecretVaults._(this.store, this._home)
     : providers = SecretVaultNamespace._(
         AgentSecretNamespaces.providerPrefix,
@@ -79,13 +120,19 @@ class SecretVaults {
   static const _generationFile = 'secret_vault.generation';
   static const _eventsFile = 'secret_vault_events.jsonl';
 
-  /// Replays vault lifecycle events (migration results, an unavailable
-  /// vault) into the agent log and clears them.
+  /// Replays recorded vault lifecycle history into the agent log and clears it.
   ///
-  /// The vault can open in a process without an agent log listener (the CLI,
-  /// or the daemon before logging starts), so these events are kept in an
-  /// owner-only Sanad Home file instead of being lost. They carry counts and
-  /// namespaces only, never secret values. Call after logging is initialized.
+  /// The vault can open in a process without an agent log listener (the CLI, or
+  /// the daemon before logging starts), so outcomes that will not be observed
+  /// again are kept in an owner-only Sanad Home file: a completed migration, a
+  /// migration whose verification failed, and an unreadable legacy file. A
+  /// closed vault is deliberately not recorded, because every start observes
+  /// that condition itself and reports it as one current-state line.
+  ///
+  /// Recorded attempts are history, never current state: they are logged at
+  /// INFO, deduplicated, and carry the timestamp of the earliest occurrence.
+  /// They carry counts and namespaces only, never secret values. Call after
+  /// logging is initialized.
   static void drainStartupEvents() {
     final home = SanadHomeBootstrap.identity();
     if (!home.fileExists(_eventsFile)) return;
@@ -93,14 +140,29 @@ class SecretVaults {
       final lines = const LineSplitter().convert(
         utf8.decode(home.readSecretBytes(_eventsFile)),
       );
+      final history = <String, ({String at, int count})>{};
       for (final line in lines) {
         if (line.trim().isEmpty) continue;
         final event = jsonDecode(line) as Map<String, dynamic>;
-        final level = event['level'] == 'warning' ? Level.WARNING : Level.INFO;
-        _logger.log(level, '${event['message']} (recorded ${event['at']})');
+        final message = event['message']?.toString();
+        if (message == null || message.isEmpty) continue;
+        final at = event['at']?.toString() ?? '';
+        final seen = history[message];
+        history[message] = seen == null
+            ? (at: at, count: 1)
+            : (at: seen.at, count: seen.count + 1);
+      }
+      for (final entry in history.entries) {
+        final repeats = entry.value.count > 1
+            ? ', repeated ${entry.value.count} times'
+            : '';
+        _logger.info(
+          'Recorded vault history: ${entry.key} '
+          '(recorded ${entry.value.at}$repeats)',
+        );
       }
     } catch (_) {
-      _logger.warning('Secret vault event log was unreadable and was cleared.');
+      _logger.info('Secret vault event log was unreadable and was cleared.');
     }
     home.deleteFileSync(_eventsFile);
   }
@@ -117,8 +179,9 @@ class SecretVaults {
           : '';
       _home.writeSecretBytesSync(_eventsFile, utf8.encode('$existing$line\n'));
     } catch (_) {
-      // The event is still logged below when a listener exists.
-      _logger.log(level, message);
+      // The event is still logged below when a listener exists; it is history,
+      // so it never competes with the one current-state line.
+      _logger.info(message);
     }
   }
 
@@ -131,14 +194,95 @@ class SecretVaults {
   /// in the vault only; there is no plaintext file to migrate from.
   final SecretVaultNamespace custom;
 
-  bool _available = true;
   String? _unavailableReason;
   String? _unavailableMessage;
   String? _seenGeneration;
   Timer? _watch;
+  final Completer<void> _ready = Completer<void>();
+  bool _stateReported = false;
 
   /// Whether the platform vault answered when this instance opened.
-  bool get available => _available;
+  bool get available => _status == SecretVaultStatus.available;
+
+  /// How far this instance's open has got.
+  SecretVaultStatus get status => _status;
+
+  /// Whether the open settled, successfully or not.
+  @override
+  bool get isReady => _ready.isCompleted;
+
+  /// Completes when this instance's open settles; never completes on a store
+  /// that never answers.
+  Future<void> get ready => _ready.future;
+
+  /// Waits for the open to settle, but never longer than [deadline].
+  ///
+  /// Returns whether the vault is ready. It never throws, so a caller on a
+  /// startup or turn path cannot be turned into an unbounded wait by an
+  /// operating-system store that never answers.
+  @override
+  Future<bool> readyWithin(Duration deadline) async {
+    if (isReady) return true;
+    try {
+      await _ready.future.timeout(deadline);
+    } on TimeoutException {
+      return false;
+    }
+    return true;
+  }
+
+  SecretVaultStatus _status = SecretVaultStatus.available;
+
+  /// Logs this process's one Agent vault state line.
+  ///
+  /// Exactly one line per process describes the current state: a WARNING naming
+  /// what is unreadable and how to recover when the vault is closed, and an INFO
+  /// line when it is available or still opening. Repeated calls log nothing, so
+  /// a start can never print the same condition twice.
+  void logStartupState() {
+    if (_stateReported) return;
+    _stateReported = true;
+    switch (_status) {
+      case SecretVaultStatus.available:
+        _logger.info('Agent vault available.');
+      case SecretVaultStatus.opening:
+        _logger.info(
+          'Agent vault is still opening; provider keys, MCP secrets, user '
+          'secrets and the Device Credential become readable when the '
+          'operating-system credential store answers.',
+        );
+      case SecretVaultStatus.unavailable:
+        _logger.warning(unavailableStateMessage);
+    }
+  }
+
+  /// The one actionable line a closed vault produces.
+  ///
+  /// It states what is unreadable, why, and how to recover without leaving the
+  /// terminal, so an operator who upgraded the Agent never has to discover a
+  /// silent loss of provider keys and the Device Credential from a single line.
+  /// It never carries a secret value.
+  String get unavailableStateMessage {
+    final reason =
+        _unavailableReason ?? AgentSecretStoreUnavailableReason.unavailable;
+    final diagnostic = _unavailableMessage;
+    final recovery = Platform.isMacOS
+        ? 'Recovery: run `sanad vault authorize` in a terminal and approve the '
+              'one-time macOS Keychain authorization for '
+              '$agentVaultKeychainService; if no dialog appears, open Keychain '
+              'Access, select those items under the login keychain, and add the '
+              'Agent binary to Access Control.'
+        : 'Recovery: run `sanad vault authorize` in a session where the '
+              'operating-system credential store is unlocked (Windows DPAPI or '
+              'the Linux Secret Service).';
+    return [
+      'The Agent vault is closed ($reason); provider keys, MCP secrets, user '
+          'secrets and the Device Credential cannot be read.',
+      if (diagnostic != null && diagnostic.isNotEmpty) diagnostic,
+      recovery,
+      'No secret is deleted while the vault is closed.',
+    ].join(' ');
+  }
 
   /// Non-secret reason code when [available] is false, one of
   /// [AgentSecretStoreUnavailableReason].
@@ -148,7 +292,11 @@ class SecretVaults {
   String? get unavailableMessage => _unavailableMessage;
 
   /// The non-secret label the local gateway `/health` payload reports.
-  String get statusLabel => _available ? 'available' : 'unavailable';
+  String get statusLabel => switch (_status) {
+    SecretVaultStatus.opening => 'opening',
+    SecretVaultStatus.available => 'available',
+    SecretVaultStatus.unavailable => 'unavailable',
+  };
 
   List<SecretVaultNamespace> get _namespaces => [providers, mcp, custom];
 
@@ -160,50 +308,96 @@ class SecretVaults {
   static SecretVaults? get current => forHome(getSanadHome());
 
   /// Opens (once per process) the vault for the active Home, migrating
-  /// legacy files. Never throws: an unavailable vault keeps legacy values
-  /// readable and rejects writes.
+  /// legacy files, and waits for it. Never throws: an unavailable vault keeps
+  /// legacy values readable and rejects writes.
   ///
   /// Opening clears `SecretVaultPolicy.vaultSkipped`, because a process with an
   /// open vault does have credential access even when its entry point deferred
   /// the open — `run` is the command that does so.
   static Future<SecretVaults> open({AgentSecretStore? store}) async {
+    final vaults = beginOpen(store: store);
+    await vaults.ready;
+    return vaults;
+  }
+
+  /// Starts opening the vault for the active Home and returns it immediately.
+  ///
+  /// A daemon uses this so its listener, banner and `/health` come up while the
+  /// operating-system store is still answering — or never answers at all. The
+  /// instance reports [SecretVaultStatus.opening] until [ready] completes, and a
+  /// secret read or write in that window fails with
+  /// [AgentSecretStoreUnavailableReason.vaultNotReady] instead of reporting a
+  /// value as absent. A process that already opened the vault gets that
+  /// instance back unchanged.
+  static SecretVaults beginOpen({AgentSecretStore? store}) {
     _rejectUnisolatedTestOpen();
     SecretVaultPolicy.markVaultOpened();
     final key = _canonical(getSanadHome());
     final existing = _opened[key];
     if (existing != null) return existing;
-    final vaults = await openDetached(store: store);
+    final backend = _createBackend(store);
+    final vaults = SecretVaults._(
+      backend.store ?? const _UnavailableSecretStore(),
+      SanadHomeBootstrap.identity(),
+    );
+    if (backend.store == null) {
+      vaults._status = SecretVaultStatus.unavailable;
+      vaults._unavailableReason = backend.failure?.reasonCode;
+      vaults._unavailableMessage = backend.failure?.message;
+      vaults._ready.complete();
+    } else {
+      vaults._status = SecretVaultStatus.opening;
+      unawaited(vaults._start());
+    }
     _opened[key] = vaults;
     return vaults;
   }
 
+  /// Creates this process's backend, or the failure that replaced it.
+  static ({AgentSecretStore? store, AgentSecretStoreUnavailable? failure})
+  _createBackend(AgentSecretStore? provided) {
+    if (provided != null) return (store: provided, failure: null);
+    try {
+      return (store: createAgentSecretStore(), failure: null);
+    } on AgentSecretStoreUnavailable catch (error) {
+      return (store: null, failure: error);
+    }
+  }
+
+  /// Runs the open without ever leaving an unhandled asynchronous error.
+  Future<void> _start() async {
+    try {
+      await _initialize();
+    } on AgentSecretStoreUnavailable catch (error) {
+      _close(error.reasonCode, error.message);
+    } catch (error) {
+      _close(
+        AgentSecretStoreUnavailableReason.backendError,
+        'The Agent vault could not be opened (${error.runtimeType}).',
+      );
+    } finally {
+      if (!_ready.isCompleted) _ready.complete();
+    }
+  }
+
   /// Opens an instance that is not registered for this process (another
-  /// process's view in tests). Also clears
+  /// process's view in tests), and waits for it. Also clears
   /// `SecretVaultPolicy.vaultSkipped`, for the same reason as [open].
   static Future<SecretVaults> openDetached({AgentSecretStore? store}) async {
     _rejectUnisolatedTestOpen();
     SecretVaultPolicy.markVaultOpened();
-    final home = SanadHomeBootstrap.identity();
-    AgentSecretStore? backend = store;
-    AgentSecretStoreUnavailable? creationFailure;
-    if (backend == null) {
-      try {
-        backend = createAgentSecretStore();
-      } on AgentSecretStoreUnavailable catch (error) {
-        creationFailure = error;
-        backend = null;
-      }
-    }
+    final backend = _createBackend(store);
     final vaults = SecretVaults._(
-      backend ?? const _UnavailableSecretStore(),
-      home,
+      backend.store ?? const _UnavailableSecretStore(),
+      SanadHomeBootstrap.identity(),
     );
-    vaults._available = backend != null;
-    if (creationFailure != null) {
-      vaults._unavailableReason = creationFailure.reasonCode;
-      vaults._unavailableMessage = creationFailure.message;
-    }
+    vaults._status = backend.store == null
+        ? SecretVaultStatus.unavailable
+        : SecretVaultStatus.available;
+    vaults._unavailableReason = backend.failure?.reasonCode;
+    vaults._unavailableMessage = backend.failure?.message;
     await vaults._initialize();
+    if (!vaults._ready.isCompleted) vaults._ready.complete();
     return vaults;
   }
 
@@ -240,19 +434,32 @@ class SecretVaults {
         }
       });
       await _reload();
+      _status = SecretVaultStatus.available;
     } on AgentSecretStoreUnavailable catch (error) {
-      _available = false;
-      _unavailableReason = error.reasonCode;
-      _unavailableMessage = error.message;
-      _event(
-        Level.WARNING,
-        'Agent vault unavailable (${error.reasonCode}): ${error.message}',
-      );
-      for (final namespace in _namespaces) {
-        namespace._legacy = _readLegacy(namespace) ?? const {};
-      }
+      // A closed vault is current state, not history: every start observes it
+      // itself and reports it through one state line, so it is not recorded in
+      // the replay file.
+      _close(error.reasonCode, error.message);
     }
     _seenGeneration = _readGeneration();
+  }
+
+  /// Marks the vault closed and keeps whatever legacy values stay readable.
+  ///
+  /// It never throws: it also runs from the deferred open, where an unhandled
+  /// error would surface as an asynchronous failure in a process that is already
+  /// serving.
+  void _close(String reasonCode, String message) {
+    _status = SecretVaultStatus.unavailable;
+    _unavailableReason = reasonCode;
+    _unavailableMessage = message;
+    for (final namespace in _namespaces) {
+      try {
+        namespace._legacy = _readLegacy(namespace) ?? const {};
+      } on Object {
+        namespace._legacy = const {};
+      }
+    }
   }
 
   /// Polls the generation marker so writes from another process become
@@ -270,6 +477,9 @@ class SecretVaults {
 
   /// Reloads the cache when another process committed a change.
   Future<void> refreshIfStale() async {
+    // An opening vault has no committed generation yet; the open itself loads
+    // the cache, so a poll during that window must not race it.
+    if (!isReady) return;
     final generation = _readGeneration();
     if (generation == _seenGeneration) return;
     await _reload();
@@ -314,15 +524,21 @@ class SecretVaults {
   }
 
   void _requireAvailable() {
-    if (!_available) {
-      throw AgentSecretStoreUnavailable(
-        'The Agent credential vault is unavailable'
-        '${_unavailableReason == null ? '' : ' ($_unavailableReason)'}; '
-        'the secret was not saved.',
-        reasonCode:
-            _unavailableReason ?? AgentSecretStoreUnavailableReason.unavailable,
+    if (_status == SecretVaultStatus.available) return;
+    if (_status == SecretVaultStatus.opening) {
+      throw const AgentSecretStoreUnavailable(
+        'The Agent vault is still opening, so the operating-system credential '
+        'store has not answered yet and this secret was not saved.',
+        reasonCode: AgentSecretStoreUnavailableReason.vaultNotReady,
       );
     }
+    throw AgentSecretStoreUnavailable(
+      'The Agent credential vault is unavailable'
+      '${_unavailableReason == null ? '' : ' ($_unavailableReason)'}; '
+      'the secret was not saved.',
+      reasonCode:
+          _unavailableReason ?? AgentSecretStoreUnavailableReason.unavailable,
+    );
   }
 
   Future<void> _reload() async {

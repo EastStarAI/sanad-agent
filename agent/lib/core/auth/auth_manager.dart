@@ -11,9 +11,13 @@ import '../sanad_home/sanad_home_bootstrap.dart';
 import 'agent_secret_store.dart';
 
 class AuthManager {
-  AuthManager({NativeAuthFileLock? authFileLock, AgentSecretStore? secretStore})
-    : _authFileLock = authFileLock,
-      _secretStore = secretStore ?? createAgentSecretStore();
+  AuthManager({
+    NativeAuthFileLock? authFileLock,
+    AgentSecretStore? secretStore,
+    Future<bool> Function()? awaitVaultReady,
+  }) : _authFileLock = authFileLock,
+       _secretStore = secretStore ?? createAgentSecretStore(),
+       _awaitVaultReady = awaitVaultReady;
 
   static const deviceCredentialKey = 'device_credential';
   static const pendingDeviceCredentialKey = 'pending_device_credential';
@@ -25,6 +29,18 @@ class AuthManager {
   final _logger = Logger('AuthManager');
   final NativeAuthFileLock? _authFileLock;
   final AgentSecretStore _secretStore;
+
+  /// Bounded readiness gate for the Agent vault, when this process opens it
+  /// without waiting.
+  ///
+  /// A daemon starts its vault off the startup path, so the operating-system
+  /// store may not have answered yet. Without this gate `initialize()` would sit
+  /// inside the store call and delay every transport. The gate answers within a
+  /// fixed deadline and the pass then treats the Device Credential as unknown
+  /// rather than absent, which is exactly the degradation the vault already
+  /// defines. A process whose store answers synchronously (every CLI) leaves it
+  /// unset.
+  final Future<bool> Function()? _awaitVaultReady;
   String? _accessToken;
   String? _refreshToken;
   String? _hardwareId;
@@ -83,6 +99,16 @@ class AuthManager {
     }
 
     try {
+      // A vault that has not answered yet makes the credential unknown, not
+      // absent, so this pass keeps the daemon available without cloud authority
+      // instead of waiting on the operating-system store.
+      if (!await _vaultReady()) {
+        throw const AgentSecretStoreUnavailable(
+          'The Agent vault has not answered yet, so the Device Credential cannot '
+          'be read in this pass.',
+          reasonCode: AgentSecretStoreUnavailableReason.vaultNotReady,
+        );
+      }
       if (data?[pendingAgentLogoutKey] == true) {
         await _deleteAgentCredentials();
         _pairingToken = null;
@@ -174,6 +200,12 @@ class AuthManager {
 
   bool get isAuthenticated =>
       _accessToken != null || _deviceToken != null || hasPendingDevicePairing;
+
+  /// Whether this process's Agent vault has answered, within its deadline.
+  Future<bool> _vaultReady() async {
+    final gate = _awaitVaultReady;
+    return gate == null ? true : await gate();
+  }
 
   /// Whether this process has Agent authority suitable for cloud Gateway
   /// registration. A `sanad_client` User session is intentionally excluded.

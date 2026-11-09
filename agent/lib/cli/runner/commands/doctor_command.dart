@@ -66,6 +66,11 @@ class DoctorCommand extends SanadCommand {
       );
     } else if (vault.available) {
       stdoutSink.writeln('[✓] Agent Vault: available ($interaction)');
+    } else if (!vault.isReady) {
+      stdoutSink.writeln(
+        '[!] Agent Vault: opening (the operating-system credential store has '
+        'not answered yet; $interaction)',
+      );
     } else {
       stdoutSink.writeln(
         '[✗] Agent Vault: unavailable '

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/auth/secret_vault.dart';
@@ -32,11 +31,12 @@ import 'package:sanad_agent/core/utils/logger.dart';
 SanadHomeFileLockLease? _runtimeOwnership;
 
 Future<void> main(List<String> args) async {
-  // The daemon keeps the normal macOS Keychain prompt at every entry point: it
-  // is the process that migrates legacy secret files, an operator starts it, and
-  // its authorization dialog is the intended way to grant access. It therefore
-  // never inherits the CLI's stdio-shaped detection, and a vault that closes
-  // here is reported through the log and the local gateway `/health` payload.
+  // A daemon never starts an operating-system authorization dialog. It runs
+  // behind the desktop app, a service manager, or a pipe, so nobody is
+  // guaranteed to be in front of it, and a dialog it cannot show blocks the
+  // reading thread before the listener, the banner, or `/health` exists. Access
+  // is granted only by an explicit user action (`sanad vault authorize`), and a
+  // vault that stays closed is reported through one state line and `/health`.
   SecretVaultPolicy.apply(
     SecretVaultPolicy.daemonEntryDecision,
     vaultSkipped: false,
@@ -54,13 +54,17 @@ Future<void> main(List<String> args) async {
 
   // Plan 83: open the Agent vault (migrating legacy secret files) after
   // logging starts and before any service resolves a secret, replay vault
-  // events a CLI recorded without a log, and follow other processes' writes.
-  final vaults = await SecretVaults.open();
+  // history a CLI recorded without a log, and follow other processes' writes.
+  //
+  // The open is deliberately not awaited: an operating-system store that
+  // demands an authorization dialog, a locked Secret Service collection, or a
+  // competing lock holder must never delay the listener, the banner, or the
+  // readiness signal. The vault reports `opening` until it settles, and the one
+  // state line is logged when it does.
+  final vaults = SecretVaults.beginOpen();
   vaults.startWatching();
   SecretVaults.drainStartupEvents();
-  if (!vaults.available) {
-    Logger('DaemonStartup').warning(_agentVaultUnavailableMessage(vaults));
-  }
+  unawaited(vaults.ready.then((_) => vaults.logStartupState()));
 
   print('--- Sanad Agent Daemon ---');
 
@@ -268,30 +272,4 @@ Future<void> _restoreDurableStateSafely(
       stack,
     );
   }
-}
-
-/// The actionable message the daemon logs when the Agent vault is closed.
-///
-/// It states what is unreadable, why, and how to recover, so an operator who
-/// upgraded the Agent never has to discover a silent loss of provider keys and
-/// the Device Credential from a single line. It never carries a secret value.
-String _agentVaultUnavailableMessage(SecretVaults vaults) {
-  final reason = vaults.unavailableReason ?? 'unavailable';
-  final diagnostic = vaults.unavailableMessage;
-  final recovery = Platform.isMacOS
-      ? 'Recovery: quit the Agent, then start it again from a desktop session so '
-            'macOS can show the one-time Keychain authorization dialog and you '
-            'can approve it; if no dialog appears, open Keychain Access, select '
-            'the $agentVaultKeychainService items under the login keychain, and '
-            'add the running Agent binary to Access Control.'
-      : 'Recovery: quit the Agent, then start it again in a session where the '
-            'operating-system credential store is unlocked (Windows DPAPI or the '
-            'Linux Secret Service).';
-  return [
-    'The Agent vault is closed ($reason); provider keys, MCP secrets, user '
-        'secrets and the Device Credential cannot be read.',
-    if (diagnostic != null && diagnostic.isNotEmpty) diagnostic,
-    recovery,
-    'No secret is deleted while the vault is closed.',
-  ].join(' ');
 }
