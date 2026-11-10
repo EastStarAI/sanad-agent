@@ -10,6 +10,8 @@ import 'dart:isolate';
 import 'dart:math' as math;
 import 'dart:typed_data';
 
+import 'stt_decode_params.dart';
+import 'stt_repetition_guard.dart';
 import 'stt_speech_gate.dart';
 import 'stt_types.dart';
 import 'whispercpp_bindings.dart';
@@ -46,6 +48,12 @@ class _WhisperCppWorker {
   /// travels with `init`; hardcoding one language silently mistranscribed every
   /// other catalog entry.
   String _language = 'ar';
+
+  /// Encoder window of the loaded model, in mel frames, or 0 when unknown.
+  ///
+  /// Read once at load: a computed window is clamped to it because whisper
+  /// rejects a window larger than the model's own.
+  int _modelAudioCtx = 0;
   int _seq = 0;
   bool _disposed = false;
 
@@ -121,6 +129,7 @@ class _WhisperCppWorker {
       _context = library.loadModel(modelPath, useGpu: false);
     }
     stopwatch.stop();
+    _modelAudioCtx = _context == nullptr ? 0 : library.modelAudioCtx(_context);
     _out.send({
       'evt': 'ready',
       'modelId': _modelId,
@@ -247,6 +256,7 @@ class _WhisperCppWorker {
 
     void decodeGroup() {
       if (group.isEmpty) return;
+      final speechSamples = groupSamples;
       final total = groupSamples + _tailPadSamples;
       final samples = Float32List(total);
       var offset = 0;
@@ -256,13 +266,37 @@ class _WhisperCppWorker {
       }
       group = <Float32List>[];
       groupSamples = 0;
-      final result = library.run(
-        _context,
-        samples,
-        language: _language,
-        threads: threads,
+      final audioCtx = audioCtxForSamples(
+        total,
+        modelAudioCtx: _modelAudioCtx > 0
+            ? _modelAudioCtx
+            : kWhisperAudioCtxCeiling,
       );
-      if (result.text.isNotEmpty) parts.add(result.text);
+      // A loop is evidence that the window ended too close to the audio, so the
+      // retry asks for the full window instead of a smaller one. One INFO line
+      // per decode, plus one recovery line when it fires: numbers only, never
+      // audio or transcript text.
+      final text = decodeGroupGuarded(
+        audioCtx: audioCtx,
+        audioSeconds: speechSamples / 16000,
+        decode: (window) {
+          _log(
+            'dictation decode: samples=$total audio_ctx=$window '
+            'threads=$threads',
+          );
+          return library
+              .run(
+                _context,
+                samples,
+                language: _language,
+                threads: threads,
+                audioCtx: window,
+              )
+              .text;
+        },
+        log: _log,
+      );
+      if (text.isNotEmpty) parts.add(text);
     }
 
     for (final segment in _speech) {

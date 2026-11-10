@@ -346,6 +346,7 @@ void main() {
     for (final symbol in [
       'sanad_whisper_load',
       'sanad_whisper_free',
+      'sanad_whisper_audio_ctx',
       'sanad_whisper_run',
       'sanad_whisper_system_info',
     ]) {
@@ -355,5 +356,27 @@ void main() {
         reason: '$symbol must be exported explicitly',
       );
     }
+  });
+
+  test('the shim applies the decode window and the greedy candidate bound', () {
+    // The C is compiled only in the native lanes, which do no decode, so this is
+    // where the two measured decode parameters are kept wired: the utterance
+    // window the daemon computes (with 0 meaning "whisper's own") and one
+    // candidate per temperature tier.
+    final source = File('native/whispercpp/sanad_whisper.c').readAsStringSync();
+    expect(
+      RegExp(
+        r'if \(audio_ctx > 0\)[\s\S]*?params\.audio_ctx = ',
+      ).hasMatch(source),
+      isTrue,
+      reason: 'a positive window must reach whisper_full_params',
+    );
+    expect(source, contains('params.audio_ctx = 0;'));
+    expect(source, contains('params.greedy.best_of = 1;'));
+    expect(
+      source,
+      contains('whisper_n_audio_ctx(ctx)'),
+      reason: 'the shim must clamp to the loaded model, not a constant',
+    );
   });
 }
