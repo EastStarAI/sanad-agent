@@ -52,21 +52,23 @@ platform — including Windows, which refuses both while any handle is open.
       `/proc/self/fd`, macOS `lsof`.
 
 ### G3 — Delivery
-- [ ] Commit, push, open a non-draft PR with `type/bug` and `comp/agent`, and wait
-      with `gh run watch --exit-status --compact` until the exact-head run
-      settles.
+- [x] Commit, push, open a non-draft PR with `type/bug`, `comp/agent`,
+      `platform/windows`, and `size/small`, and wait with
+      `gh run watch --exit-status --compact` until the exact-head run settles:
+      run `42915706865` on `06965aeb` is `success` (23 pass, 4 skipped by path
+      classification, 0 failing).
 
 ## Acceptance Criteria
 
-- [ ] Given a pipeline whose writer already ended, when `close()` is called, then
+- [x] Given a pipeline whose writer already ended, when `close()` is called, then
       it rethrows the recorded `SttWriteFailure`, runs the teardown once, and a
       second `close()` is a no-op.
-- [ ] Given a completed artifact, when `close()` returns, then the artifact can be
+- [x] Given a completed artifact, when `close()` returns, then the artifact can be
       renamed and deleted immediately and this process holds no descriptor on it.
-- [ ] Given a refused write through the in-process seam, when the caller closes
+- [x] Given a refused write through the in-process seam, when the caller closes
       the pipeline, then the sink is closed even though the write failed, and the
       typed failure reaches the caller through `close()` as well.
-- [ ] Automated coverage proves all three on macOS and Linux locally, and asserts
+- [x] Automated coverage proves all three on macOS and Linux locally, and asserts
       the same properties on the Windows lane, where the rename/delete probe is
       the decisive form of the check.
 
@@ -75,10 +77,11 @@ platform — including Windows, which refuses both while any handle is open.
 - [x] Contracts updated: `docs/technical/local_dictation.md` owns the close
       contract; the pipeline's own doc comments state the handle guarantee.
 - [x] `docs/llms.txt` indexes this task.
-- [ ] Public CI green on the exact head SHA.
-- [ ] `graphify update .` after the code change.
+- [x] Public CI green on the exact head SHA `06965aeb`.
+- [x] `graphify update .` after the code change.
 
 ## Current status
 
-G0–G2 closed. G3 in progress: PR open, waiting on the exact-head CI run.
-Remaining work: one CI run, no code anticipated.
+All gates closed on PR [#406](https://github.com/EastStarAI/sanad-agent/pull/406)
+(head `06965aeb`, CI `success`). Remaining work: review and merge, both outside
+this task's authorization.
