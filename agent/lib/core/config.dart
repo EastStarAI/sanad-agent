@@ -5,11 +5,14 @@ import 'package:dotenv/dotenv.dart';
 import '../engine/adapters/provider_profile.dart';
 import '../engine/adapters/provider_registry.dart';
 import 'config/compaction_policy.dart';
+import 'config/context_window_policy.dart';
 import 'config/model_aware_runtime_policy.dart';
 import 'config/request_dump_retention_policy.dart';
 import 'constants.dart';
 
+export 'config/builtin_policy_defaults.dart';
 export 'config/compaction_policy.dart';
+export 'config/context_window_policy.dart';
 export 'config/model_aware_runtime_policy.dart';
 export 'config/request_dump_retention_policy.dart';
 export 'config/thinking_control_override.dart';
@@ -282,10 +285,33 @@ class Config {
   String get portalUrl =>
       _readString('PORTAL_URL', defaultValue: _defaultPortalUrl);
 
+  /// The user's exact `context.modelLimits` entry for [modelId], if any.
+  ///
+  /// This is the raw user override only: a built-in default, provider evidence
+  /// and the global cap are not part of it. Runtime consumers must use
+  /// [resolveContextWindow] instead of reading this.
   int? contextModelLimit(String modelId) {
     final key = ModelAwareRuntimePolicy.normalizeModelId(modelId);
     return _modelAwarePolicy.contextModelLimits[key];
   }
+
+  /// The global context-window cap in force (`context.maxLimit`), with the
+  /// project built-in when the user set none. `0` means no cap.
+  int get contextMaxLimit => _modelAwarePolicy.effectiveContextMaxLimit;
+
+  /// The one place a model's effective context window is decided; see
+  /// [ModelAwareRuntimePolicy.resolveContextWindow].
+  ContextWindowResolution resolveContextWindow({
+    required String modelId,
+    ProviderContextWindow? providerEvidence,
+    required int unknownCloudFallback,
+    bool localProvider = false,
+  }) => _modelAwarePolicy.resolveContextWindow(
+    modelId: modelId,
+    providerEvidence: providerEvidence,
+    unknownCloudFallback: unknownCloudFallback,
+    localProvider: localProvider,
+  );
 
   /// Bound for one compaction provider pass to return its whole response.
   Duration get compactionPassTimeout =>

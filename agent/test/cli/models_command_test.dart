@@ -213,6 +213,84 @@ void main() {
     });
   });
 
+  group('sanad models context window', () {
+    test('the listing shows one effective window for every model', () async {
+      expect(await runModels(['--provider', 'opencode-go']), 0);
+      final text = out.toString();
+      expect(text, contains('kimi-k3'));
+      expect(text, contains('ctx 358000'));
+    });
+
+    test('a single-model inspection names the built-in default', () async {
+      expect(
+        await runModels([
+          '--provider',
+          'opencode-go',
+          '--model',
+          'deepseek-v4.1-flash',
+        ]),
+        0,
+      );
+      expect(
+        out.toString(),
+        contains('context window: 358000 tokens (built-in)'),
+      );
+    });
+
+    test('an unknown window names the global cap', () async {
+      expect(
+        await runModels(['--provider', 'opencode-go', '--model', 'kimi-k3']),
+        0,
+      );
+      expect(
+        out.toString(),
+        contains('context window: 358000 tokens (unknown-cloud-cap)'),
+      );
+    });
+
+    test('a capped catalog value names its layer and the raw value', () async {
+      final db = AgentStateDatabase.atPath(getSanadStateHome());
+      try {
+        ProviderInstanceRepository(db).upsertModelCache(
+          instanceId: openCode.id,
+          cacheKey: 'models',
+          models: [
+            {'value': 'deepseek-v4.1-flash', 'label': 'Deepseek V4.1 Flash'},
+            {'value': 'kimi-k3', 'label': 'Kimi K3'},
+            {
+              'value': 'big-window-model',
+              'label': 'Big Window Model',
+              'context_window': 358000,
+              'context_window_raw': 1000000,
+            },
+          ],
+          fetchedAt: DateTime.utc(2026, 10, 22),
+          source: 'live',
+          configRevision: 1,
+          credentialRevision: 1,
+        );
+      } finally {
+        db.dispose();
+      }
+
+      expect(
+        await runModels([
+          '--provider',
+          'opencode-go',
+          '--model',
+          'big-window-model',
+        ]),
+        0,
+      );
+      expect(
+        out.toString(),
+        contains(
+          'context window: 358000 tokens (catalog; capped from 1000000)',
+        ),
+      );
+    });
+  });
+
   group('sanad models thinking capability', () {
     test('--json carries the resolved thinking levels per route', () async {
       expect(
@@ -261,7 +339,36 @@ void main() {
               as List<dynamic>;
       final entry = models.single as Map<String, dynamic>;
       expect(entry.containsKey('thinking_control'), isFalse);
-      expect(entry.keys, ['value', 'label', 'supports_reasoning', 'is_default']);
+      expect(entry.keys, [
+        'value',
+        'label',
+        'supports_reasoning',
+        'is_default',
+        'context_window',
+        'context_window_source',
+      ]);
+    });
+
+    test('the resolved context window and its source are always reported', () async {
+      expect(
+        await runModels([
+          '--provider',
+          'opencode-go',
+          '--model',
+          'kimi-k3',
+          '--json',
+        ]),
+        0,
+      );
+      final decoded = jsonDecode(out.toString()) as Map<String, dynamic>;
+      final entry =
+          ((decoded['providers'] as List<dynamic>).single['models']
+                  as List<dynamic>)
+              .single
+              as Map<String, dynamic>;
+      expect(entry['context_window'], 358000);
+      expect(entry['context_window_source'], 'unknown-cloud-cap');
+      expect(entry.containsKey('context_window_capped_from'), isFalse);
     });
 
     test('an unknown descriptor is shown honestly with no invented levels', () async {

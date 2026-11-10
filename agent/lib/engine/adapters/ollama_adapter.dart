@@ -5,6 +5,7 @@ import 'package:logging/logging.dart';
 import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/capabilities.dart';
 
+import '../../core/config.dart';
 import '../../core/di.dart';
 import '../../core/models/message.dart';
 import '../../core/models/agent_response.dart';
@@ -56,8 +57,7 @@ class OllamaAdapter extends BaseOpenAIAdapter {
             final supportsReasoning =
                 OllamaThinkingProbe.hasThinkingCapability(metadata) ?? false;
 
-            final contextLimit =
-                config.contextModelLimit(name) ??
+            final rawContextWindow =
                 _probedContextLimits[name] ??
                 ModelMetadata.getLimitForModel(name);
 
@@ -66,7 +66,16 @@ class OllamaAdapter extends BaseOpenAIAdapter {
                 value: name,
                 label: label,
                 provider: profile.name,
-                contextWindow: contextLimit,
+                contextWindow: _resolveContextWindowLimit(
+                  name,
+                  rawContextWindow == null
+                      ? null
+                      : ProviderContextWindow(
+                          tokens: rawContextWindow,
+                          source: ContextWindowSource.providerMetadata,
+                        ),
+                ),
+                contextWindowRaw: rawContextWindow,
                 supportsReasoning: supportsReasoning,
                 modelMetadata: metadata,
               ),
@@ -111,16 +120,23 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       setLastModelsException(e);
     }
 
-    final contextLimit =
-        config.contextModelLimit(config.llmModel) ??
-        ModelMetadata.getLimitForModel(config.llmModel);
+    final rawContextWindow = ModelMetadata.getLimitForModel(config.llmModel);
     final metadata = await _probeModelMetadata(config.llmModel);
     return [
       ModelOption(
         value: config.llmModel,
         label: _formatOllamaModelLabel(config.llmModel),
         provider: profile.name,
-        contextWindow: contextLimit,
+        contextWindow: _resolveContextWindowLimit(
+          config.llmModel,
+          rawContextWindow == null
+              ? null
+              : ProviderContextWindow(
+                  tokens: rawContextWindow,
+                  source: ContextWindowSource.providerMetadata,
+                ),
+        ),
+        contextWindowRaw: rawContextWindow,
         supportsReasoning:
             OllamaThinkingProbe.hasThinkingCapability(metadata) ?? false,
         modelMetadata: metadata,
@@ -181,16 +197,18 @@ class OllamaAdapter extends BaseOpenAIAdapter {
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = super.resolveModel(modelOverride);
 
-    // 1. Explicit configuration takes top priority
-    final configuredLimit = config.contextModelLimit(resolvedModel);
-    if (configuredLimit != null) return configuredLimit;
-
-    // 2. Return previously probed live limit if cached in memory
+    // 1. Return previously probed live limit if cached in memory
     if (_probedContextLimits.containsKey(resolvedModel)) {
-      return _probedContextLimits[resolvedModel]!;
+      return _resolveContextWindowLimit(
+        resolvedModel,
+        ProviderContextWindow(
+          tokens: _probedContextLimits[resolvedModel]!,
+          source: ContextWindowSource.providerMetadata,
+        ),
+      );
     }
 
-    // 3. Probe Ollama live via /api/show to read the exact GGUF context_length
+    // 2. Probe Ollama live via /api/show to read the exact GGUF context_length
     try {
       final url = Uri.parse('${super.baseUrl}/api/show');
       final response = await (client ?? http.Client()).post(
@@ -208,7 +226,13 @@ class OllamaAdapter extends BaseOpenAIAdapter {
               final parsed = int.tryParse(entry.value.toString());
               if (parsed != null && parsed > 0) {
                 _probedContextLimits[resolvedModel] = parsed;
-                return parsed;
+                return _resolveContextWindowLimit(
+                  resolvedModel,
+                  ProviderContextWindow(
+                    tokens: parsed,
+                    source: ContextWindowSource.providerMetadata,
+                  ),
+                );
               }
             }
           }
@@ -218,16 +242,47 @@ class OllamaAdapter extends BaseOpenAIAdapter {
       _logger.warning('Failed to probe Ollama context limit: $e');
     }
 
-    // 4. Fallback to catalog lookup (from model cache DB)
+    // 3. Fallback to catalog lookup (from model cache DB)
     final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
-    if (catalogLimit != null) return catalogLimit;
+    if (catalogLimit != null && catalogLimit > 0) {
+      return _resolveContextWindowLimit(
+        resolvedModel,
+        ProviderContextWindow(
+          tokens: catalogLimit,
+          source: ContextWindowSource.providerCatalog,
+        ),
+      );
+    }
 
-    // 5. Fallback to known static model metadata
+    // 4. Fallback to known static model metadata
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
-    if (metadataLimit != null) return metadataLimit;
+    if (metadataLimit != null) {
+      return _resolveContextWindowLimit(
+        resolvedModel,
+        ProviderContextWindow(
+          tokens: metadataLimit,
+          source: ContextWindowSource.providerMetadata,
+        ),
+      );
+    }
 
-    return ModelMetadata.unknownContextLimit;
+    // 5. A local engine with no evidence uses the local fallback, never a cloud
+    //    catalog window.
+    return _resolveContextWindowLimit(resolvedModel, null);
   }
+
+  /// The one effective window for a local Ollama route.
+  int _resolveContextWindowLimit(
+    String modelId,
+    ProviderContextWindow? evidence,
+  ) => config
+      .resolveContextWindow(
+        modelId: modelId,
+        providerEvidence: evidence,
+        localProvider: true,
+        unknownCloudFallback: ModelMetadata.unknownContextLimit,
+      )
+      .tokens;
 
   @override
   Future<Map<String, dynamic>> buildRequestBody(

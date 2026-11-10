@@ -1,4 +1,5 @@
 import 'package:sanad_agent/core/config.dart';
+import 'package:sanad_agent/core/provider_runtime/local_provider_routes.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_credential_resolver.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
@@ -359,6 +360,44 @@ class AgentRuntimeService {
     }
   }
 
+  /// The window to use when no adapter evidence resolved at all (the adapter
+  /// threw, or no adapter exists): the global cap for a cloud route, the local
+  /// fallback for a local/self-hosted route, and [unknownCloudFallback] only
+  /// when the cap is disabled.
+  ///
+  /// This keeps manual compaction and overflow recovery inside the same window
+  /// decision as normal turns instead of falling back to a literal.
+  ///
+  /// It runs on failure paths, so it never throws: a route that cannot even be
+  /// resolved still gets the policy decision without route-local knowledge.
+  ContextWindowResolution resolveUnresolvedContextWindow({
+    required String? providerId,
+    required String? modelId,
+    required int unknownCloudFallback,
+  }) {
+    try {
+      final signature = resolveSignature(
+        providerId: providerId,
+        modelId: modelId,
+      );
+      return _config.resolveContextWindow(
+        modelId: signature.modelId,
+        providerEvidence: null,
+        localProvider: LocalProviderRoutes.isLocalRoute(
+          templateId: signature.templateId,
+          baseUrl: signature.normalizedBaseUrl,
+        ),
+        unknownCloudFallback: unknownCloudFallback,
+      );
+    } catch (_) {
+      return _config.resolveContextWindow(
+        modelId: modelId ?? '',
+        providerEvidence: null,
+        unknownCloudFallback: unknownCloudFallback,
+      );
+    }
+  }
+
   int? _catalogContextLimit(RouteSignature signature, String rawModelId) {
     final cached = _instanceRepo.readModelCache(
       signature.providerInstanceId,
@@ -387,6 +426,13 @@ class AgentRuntimeService {
       ).toLowerCase();
       if (cachedModel != requestedModel) continue;
 
+      // The catalog stores the effective window plus the provider's raw value as
+      // internal evidence. Evidence must be the raw value: resolving an already
+      // capped number is how a second, competing window would appear.
+      final rawWindow = entry['context_window_raw'];
+      if (rawWindow is num && rawWindow > 0) {
+        return rawWindow.toInt();
+      }
       final contextWindow = entry['context_window'];
       if (contextWindow is num && contextWindow > 0) {
         return contextWindow.toInt();

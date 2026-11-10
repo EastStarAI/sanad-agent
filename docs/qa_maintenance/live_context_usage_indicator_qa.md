@@ -30,8 +30,8 @@ description: "Regression matrix for latest provider usage, cached-input visibili
 
 ## Presentation and accessibility
 
-- The circular progress value reflects input tokens divided by the active model context window.
+- The circular progress value reflects input tokens divided by the active model's **resolved** context window (the effective value after the global `context.maxLimit` cap and the shipped per-model defaults; `docs/technical/context_window_resolution.md`).
 - Hovering on desktop and tapping the indicator reveal the same English tooltip.
 - `Cached input` appears only when the provider supplied a cached-token value.
-- The tooltip exposes input usage, context-window size, and any available output, total, reasoning, model, and update-time values.
+- The tooltip exposes input usage, context-window size, and any available output, total, reasoning, model, and update-time values. A historical message keeps the window that was in force when it was written, so one conversation may legitimately show two denominators.
 - The indicator provides an accessible semantic label and remains keyboard discoverable.

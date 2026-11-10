@@ -2,6 +2,7 @@ import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/core/provider_runtime/local_provider_routes.dart';
 import 'package:sanad_agent/capabilities/models/tool_schema.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
@@ -79,10 +80,24 @@ abstract final class CompactionRequestFactory {
         .estimatedRequestTokens;
     final window = await resolveContextWindowTokens(
       explicitOverride: contextWindowTokens,
-      configuredOverride: config?.contextModelLimit(route.modelId),
       resolveProviderLimit: () =>
           runtime.adapterFor(route).getContextLimit(route.modelId),
       estimatedRequestTokens: estimatedRequestTokens,
+      unresolvedWindow: (legacyFallback) {
+        final policy = config;
+        if (policy == null) return legacyFallback;
+        return policy
+            .resolveContextWindow(
+              modelId: route.modelId,
+              providerEvidence: null,
+              localProvider: LocalProviderRoutes.isLocalRoute(
+                templateId: route.templateId,
+                baseUrl: route.normalizedBaseUrl,
+              ),
+              unknownCloudFallback: legacyFallback,
+            )
+            .tokens;
+      },
     );
 
     return CompactionEngineRequest(
@@ -207,14 +222,21 @@ abstract final class CompactionRequestFactory {
       ? getIt<Config>().compactionPassTimeout
       : ModelAwareCompactionPolicy.defaultPassTimeout;
 
+  /// Resolves the window one compaction request is planned against.
+  ///
+  /// Precedence: an explicit caller override, then the adapter's own fully
+  /// resolved window (which already applies the user override, built-in
+  /// defaults, provider evidence and the global cap), then — only when no
+  /// adapter can answer at all — [unresolvedWindow] with the bounded estimate as
+  /// its cap-disabled fallback. Never apply the cap here: the adapter value is
+  /// already final.
   static Future<int> resolveContextWindowTokens({
     required int? explicitOverride,
-    required int? configuredOverride,
     required Future<int> Function() resolveProviderLimit,
     required int estimatedRequestTokens,
+    required int Function(int legacyFallback) unresolvedWindow,
   }) async {
     if (explicitOverride != null) return explicitOverride;
-    if (configuredOverride != null) return configuredOverride;
     try {
       final providerLimit = await resolveProviderLimit();
       if (providerLimit > 0) return providerLimit;
@@ -222,6 +244,8 @@ abstract final class CompactionRequestFactory {
       // Keep manual compaction available if provider metadata cannot be
       // resolved; the bounded estimate below remains the last resort.
     }
-    return (estimatedRequestTokens * 1.4).round().clamp(4_096, 128_000);
+    return unresolvedWindow(
+      (estimatedRequestTokens * 1.4).round().clamp(4_096, 128_000),
+    );
   }
 }

@@ -416,7 +416,17 @@ class RunnerCompactionOrchestrator {
       host.sessionId,
     );
     final routing = host.turnRoute.resolveTurnRouting();
-    final contextWindow = await host.getContextTokens() ?? 128_000;
+    final contextWindow =
+        await host.getContextTokens() ??
+        (getIt.isRegistered<AgentRuntimeService>()
+            ? getIt<AgentRuntimeService>()
+                  .resolveUnresolvedContextWindow(
+                    providerId: routing.providerId,
+                    modelId: routing.model,
+                    unknownCloudFallback: 128_000,
+                  )
+                  .tokens
+            : 128_000);
     final policy = getIt.isRegistered<Config>()
         ? getIt<Config>().compactionPolicyForModel(routing.model ?? '')
         : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);

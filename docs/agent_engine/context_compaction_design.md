@@ -280,11 +280,15 @@ run can repeat compaction work; manual compaction and a new run remain eligible.
 ## Model-aware startup configuration (53g)
 
 `SANAD_HOME/config.yaml` is the canonical non-secret source and is read once at
-daemon startup. Changes require restart. `context.modelLimits` resolves model
-windows independently from `compaction` trigger/tail policy:
+daemon startup. Changes require restart. `context` resolves model windows
+independently from `compaction` trigger/tail policy:
 
 ```yaml
 context:
+  # Global ceiling for every resolved window. Default 358000; 0 disables it.
+  maxLimit: 358000
+  # Strongest layer, applied as written and never capped. Merged key by key with
+  # the shipped per-model defaults.
   modelLimits:
     gpt-5.6-sol: 258000
 compaction:
@@ -299,9 +303,13 @@ compaction:
 
 Absent sections use `{}`, `0.90`, `0.10` and `600`. `passTimeoutSeconds` is
 global (not per model) and must be a positive integer. Per-model keys inherit global
-values independently. Unknown keys, non-positive model limits, and ratios outside
-`(0, 1)` fail startup safely. `thresholdTokens`, `modelThresholds`, wildcards,
-and legacy `.env` `CONTEXT_LIMIT` are not supported.
+values independently. Unknown keys, non-positive model limits, a `maxLimit`
+between 1 and 8191, and ratios outside `(0, 1)` fail startup safely.
+`thresholdTokens`, `modelThresholds`, wildcards, and legacy `.env`
+`CONTEXT_LIMIT` are not supported.
+
+`docs/technical/context_window_resolution.md` owns the window precedence, the
+global cap, the shipped defaults, and the local-route fallback.
 
 ## Verification fixtures
 

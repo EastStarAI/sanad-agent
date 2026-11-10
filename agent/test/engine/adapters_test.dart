@@ -28,6 +28,10 @@ import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/core/provider_runtime/route_capability_resolver.dart';
 
 class MockConfig extends Config {
+  /// Pins the context-window policy so an adapter test never reads the
+  /// developer's real Sanad Home or depends on it.
+  MockConfig({super.modelAwarePolicy});
+
   @override
   String get llmApiKey => 'test-key';
   @override
@@ -136,8 +140,26 @@ void main() {
       },
     );
 
-    test('keeps unknown model context fallback conservative', () async {
+    test('uses the global cap for a cloud model unknown everywhere', () async {
       final adapter = BaseOpenAIAdapter(config, profile);
+
+      for (final model in [
+        'unknown-small-local-model',
+        'gpt-6-unlisted-small-variant',
+      ]) {
+        expect(await adapter.getContextLimit(model), 358000);
+      }
+    });
+
+    test('keeps the conservative fallback when the cap is disabled', () async {
+      final uncapped = MockConfig(
+        modelAwarePolicy: ModelAwareRuntimePolicy(
+          contextModelLimits: const {},
+          maxLimit: 0,
+          compaction: ModelAwareRuntimePolicy.defaults.compaction,
+        ),
+      );
+      final adapter = BaseOpenAIAdapter(uncapped, profile);
 
       for (final model in [
         'unknown-small-local-model',
@@ -1338,11 +1360,40 @@ void main() {
           ),
         );
 
+        // A local engine that reports nothing usable gets the local fallback,
+        // never a cloud catalog window.
         expect(
           await adapter.getContextLimit('unknown-small-local-model'),
-          ModelMetadata.unknownContextLimit,
+          ContextWindowPolicy.localFallbackLimit,
         );
       }
+    });
+
+    test('keeps the local fallback when the global cap is disabled', () async {
+      final uncapped = MockConfig(
+        modelAwarePolicy: ModelAwareRuntimePolicy(
+          contextModelLimits: const {},
+          maxLimit: 0,
+          compaction: ModelAwareRuntimePolicy.defaults.compaction,
+        ),
+      );
+      final adapter = OllamaAdapter(
+        uncapped,
+        profile,
+        client: MockClient(
+          (_) async => http.Response(
+            jsonEncode({
+              'model_info': {'llama.context_length': 'invalid'},
+            }),
+            200,
+          ),
+        ),
+      );
+
+      expect(
+        await adapter.getContextLimit('unknown-small-local-model'),
+        ContextWindowPolicy.localFallbackLimit,
+      );
     });
 
     test(

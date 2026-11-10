@@ -1,5 +1,6 @@
 import '../../../../core/config.dart';
 import '../../../../core/models/model_metadata.dart';
+import '../../../../core/provider_runtime/local_provider_routes.dart';
 import '../../../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../../../core/provider_runtime/provider_model_id.dart';
 import '../../../../interfaces/platforms/sanad_gateway/capabilities.dart';
@@ -41,6 +42,7 @@ class OpenAiCompatibleModelDiscovery {
     required Config config,
     required ProviderProfile profile,
     String? defaultModelOverride,
+    String? baseUrl,
   }) {
     final merged = <String>[];
     final selected = fallbackModelId(
@@ -64,11 +66,29 @@ class OpenAiCompatibleModelDiscovery {
     return merged
         .map((modelId) {
           final lowered = modelId.toLowerCase();
+          final rawContextWindow = ModelMetadata.getLimitForModel(modelId);
+          final contextWindow = config
+              .resolveContextWindow(
+                modelId: modelId,
+                providerEvidence: rawContextWindow == null
+                    ? null
+                    : ProviderContextWindow(
+                        tokens: rawContextWindow,
+                        source: ContextWindowSource.providerMetadata,
+                      ),
+                localProvider: LocalProviderRoutes.isLocalRoute(
+                  templateId: profile.name,
+                  baseUrl: baseUrl ?? profile.defaultBaseUrl,
+                ),
+                unknownCloudFallback: ModelMetadata.unknownContextLimit,
+              )
+              .tokens;
           return ModelOption(
             value: modelId,
             label: formatModelLabel(modelId),
             provider: profile.name,
-            contextWindow: ModelMetadata.getLimitForModel(modelId),
+            contextWindow: contextWindow,
+            contextWindowRaw: rawContextWindow,
             supportsReasoning:
                 lowered.contains('o1') ||
                 lowered.contains('o3') ||

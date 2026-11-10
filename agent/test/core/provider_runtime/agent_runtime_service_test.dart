@@ -13,7 +13,6 @@ import 'package:sanad_agent/core/provider_runtime/provider_endpoint_resolver.dar
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_runtime/secure_file_secret_store.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
-import 'package:sanad_agent/core/models/model_metadata.dart';
 import 'package:sanad_agent/engine/adapters/base_anthropic_adapter.dart';
 import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
 import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
@@ -530,10 +529,78 @@ context:
         runtime.resolveSignature(providerId: 'instance-stale'),
       );
 
-      expect(
-        await adapter.getContextLimit(),
-        ModelMetadata.unknownContextLimit,
+      // A window unknown from every source is the global cap, not the legacy
+      // conservative fallback.
+      expect(await adapter.getContextLimit(), 358000);
+    });
+
+    test('maxLimit 0 restores the pre-cap fallbacks verbatim', () async {
+      File('${tempSanadHome.path}/config.yaml').writeAsStringSync('''
+context:
+  maxLimit: 0
+''');
+      repo.createInstance(
+        ProviderInstance(
+          id: 'instance-uncapped',
+          templateId: 'openai-codex',
+          displayName: 'Uncapped',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.deviceCode,
+          baseUrl: 'https://chatgpt.com/backend-api/codex',
+          defaultModel: 'gpt-6-astra',
+          status: InstanceStatus.ready,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
       );
+      final uncappedRuntime = AgentRuntimeService(
+        Config(environment: const {}),
+        repo,
+        modelsDevService: _StubModelsDevService(const {'gpt-6-astra': 1050000}),
+        credService: credService,
+      );
+      final adapter = uncappedRuntime.adapterFor(
+        uncappedRuntime.resolveSignature(providerId: 'instance-uncapped'),
+      );
+
+      expect(await adapter.getContextLimit(), 1050000);
+      expect(await adapter.getContextLimit('unknown-futuristic-model'), 4000);
+    });
+
+    test('a built-in default outranks provider metadata and is capped', () async {
+      repo.createInstance(
+        ProviderInstance(
+          id: 'instance-builtin',
+          templateId: 'opencode-go',
+          displayName: 'OpenCode Go',
+          protocol: ProviderProtocol.openaiCompatible,
+          authMethod: ProviderAuthMethod.apiKey,
+          baseUrl: 'https://opencode.ai/zen/go',
+          defaultModel: 'deepseek-v4.1-flash',
+          status: InstanceStatus.ready,
+          configRevision: 1,
+          credentialRevision: 1,
+          createdAt: DateTime.now(),
+          updatedAt: DateTime.now(),
+        ),
+      );
+      final builtInRuntime = AgentRuntimeService(
+        Config(environment: const {}),
+        repo,
+        modelsDevService: _StubModelsDevService(const {
+          'deepseek-v4.1-flash': 1000000,
+        }),
+        credService: credService,
+      );
+      final adapter = builtInRuntime.adapterFor(
+        builtInRuntime.resolveSignature(providerId: 'instance-builtin'),
+      );
+
+      // The provider advertises 1000000; the shipped default wins, then the cap
+      // applies to it.
+      expect(await adapter.getContextLimit(), 358000);
     });
 
     test(
@@ -570,13 +637,11 @@ context:
         );
 
         expect(adapter, isA<CodexResponsesAdapter>());
-        expect(await adapter.getContextLimit(), 1050000);
-        expect(await adapter.getContextLimit('gpt-6-astra'), 1050000);
-        expect(await adapter.getContextLimit('gpt-6-luna'), 1050000);
-        expect(
-          await adapter.getContextLimit('unknown-futuristic-model'),
-          ModelMetadata.unknownContextLimit,
-        );
+        // Provider metadata is capped, and an unknown model uses the cap.
+        expect(await adapter.getContextLimit(), 358000);
+        expect(await adapter.getContextLimit('gpt-6-astra'), 358000);
+        expect(await adapter.getContextLimit('gpt-6-luna'), 358000);
+        expect(await adapter.getContextLimit('unknown-futuristic-model'), 358000);
       },
     );
 

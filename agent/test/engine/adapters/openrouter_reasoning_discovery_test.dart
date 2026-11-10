@@ -427,7 +427,9 @@ void main() {
         expect(model, isNotNull);
         expect(model!.label, 'Relay Mystery 9');
         expect(model.provider, 'openrouter');
-        expect(model.contextWindow, 400000);
+        // Discovery reports the effective window: the advertised 400000 is
+        // lowered by the project's global context cap.
+        expect(model.contextWindow, 358000);
         expect(model.supportsReasoningOutput, isFalse);
         expect(
           h.cachedModel(_siblingModelId)!.contextWindow,
@@ -1501,7 +1503,9 @@ void main() {
           'reasoning',
         ]);
         expect(model.modelMetadata['object'], 'model');
-        expect(model.contextWindow, 400000);
+        // Discovery reports the effective window: the advertised 400000 is
+        // lowered by the project's global context cap.
+        expect(model.contextWindow, 358000);
         expect(model.supportsReasoningOutput, isTrue);
         expect(model.label, isNotEmpty);
 

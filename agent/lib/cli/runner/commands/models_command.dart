@@ -3,7 +3,10 @@ import 'dart:convert' hide json;
 import 'dart:io';
 
 import 'package:path/path.dart' as p;
+import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/constants.dart';
+import 'package:sanad_agent/core/models/model_metadata.dart';
+import 'package:sanad_agent/core/provider_runtime/local_provider_routes.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.dart';
 import 'package:sanad_agent/core/provider_thinking/thinking_control_models.dart';
@@ -65,8 +68,15 @@ class ModelsCommand extends SanadCommand {
       final selected = _selectInstances(configuredInstances);
       if (selected == null) return 2;
 
+      // The same strict `config.yaml` policy owner the daemon uses, so the list
+      // reports the window the runtime would actually resolve.
+      final policy = ModelAwareRuntimePolicy.load(
+        File('${getSanadHome()}/config.yaml'),
+      );
+
       final catalog = <_ProviderCatalog>[
-        for (final instance in selected) _buildCatalog(repo, instance),
+        for (final instance in selected)
+          _buildCatalog(repo, instance, policy),
       ];
 
       final modelQuery = model?.trim() ?? '';
@@ -173,6 +183,7 @@ class ModelsCommand extends SanadCommand {
   _ProviderCatalog _buildCatalog(
     ProviderInstanceRepository repo,
     ProviderInstance instance,
+    ModelAwareRuntimePolicy policy,
   ) {
     final cache =
         repo.readModelCache(instance.id, 'models') ??
@@ -184,7 +195,8 @@ class ModelsCommand extends SanadCommand {
       return _ProviderCatalog(
         instance: instance,
         models: [
-          for (final raw in rawModels) _ModelEntry.fromRaw(raw, instance),
+          for (final raw in rawModels)
+            _ModelEntry.fromRaw(raw, instance, policy),
         ],
         source: cache?['source']?.toString(),
         fetchedAt: cache?['fetched_at']?.toString(),
@@ -196,11 +208,10 @@ class ModelsCommand extends SanadCommand {
       instance: instance,
       models: [
         if (defaultModel != null && defaultModel.isNotEmpty)
-          _ModelEntry(
-            value: defaultModel,
-            label: '',
-            supportsReasoning: false,
-            isDefault: true,
+          _ModelEntry.fromRaw(
+            {'value': defaultModel},
+            instance,
+            policy,
           ),
       ],
       source: cache?['source']?.toString(),
@@ -226,12 +237,15 @@ class ModelsCommand extends SanadCommand {
     for (final model in entry.models) {
       final reasoning = model.supportsReasoning ? ' [reasoning]' : '';
       final active = model.isDefault ? ' (active default)' : '';
+      final contextWindow = ' · ctx ${model.contextWindow.tokens}';
       if (model.label.isNotEmpty && model.label != model.value) {
         stdoutSink.writeln(
-          '    - ${model.value} (${model.label})$reasoning$active',
+          '    - ${model.value} (${model.label})$reasoning$active$contextWindow',
         );
       } else {
-        stdoutSink.writeln('    - ${model.value}$reasoning$active');
+        stdoutSink.writeln(
+          '    - ${model.value}$reasoning$active$contextWindow',
+        );
       }
       final thinking = _thinkingSummary(model.thinkingControl);
       if (thinking != null) {
@@ -241,6 +255,7 @@ class ModelsCommand extends SanadCommand {
         for (final line in _thinkingAuthorityLines(model.thinkingControl)) {
           stdoutSink.writeln('      $line');
         }
+        stdoutSink.writeln('      ${model.contextWindowProvenance}');
       }
     }
   }
@@ -329,22 +344,32 @@ class _ProviderCatalog {
 /// This entry surfaces it instead of dropping it: [thinkingControl] is the
 /// stored descriptor, so the CLI reports the same record the Client snapshot
 /// does and never re-derives or re-orders any authority layer.
+///
+/// It also carries the resolved context window and its provenance, computed
+/// through the same policy owner the runtime uses, so the listing can never
+/// advertise a window that differs from the one a turn is planned against.
 class _ModelEntry {
   final String value;
   final String label;
   final bool supportsReasoning;
   final bool isDefault;
   final ThinkingControlDescriptor? thinkingControl;
+  final ContextWindowResolution contextWindow;
 
   const _ModelEntry({
     required this.value,
     required this.label,
     required this.supportsReasoning,
     required this.isDefault,
+    required this.contextWindow,
     this.thinkingControl,
   });
 
-  factory _ModelEntry.fromRaw(Object? raw, ProviderInstance instance) {
+  factory _ModelEntry.fromRaw(
+    Object? raw,
+    ProviderInstance instance,
+    ModelAwareRuntimePolicy policy,
+  ) {
     if (raw is Map) {
       final value = (raw['value'] ?? raw['id'] ?? raw['name'] ?? '').toString();
       final label = (raw['label'] ?? raw['display_name'] ?? '').toString();
@@ -354,6 +379,7 @@ class _ModelEntry {
         supportsReasoning: raw['supports_reasoning'] == true,
         isDefault: value == instance.defaultModel,
         thinkingControl: _parseThinkingControl(raw['thinking_control']),
+        contextWindow: _resolveContextWindow(raw, value, instance, policy),
       );
     }
     final value = raw?.toString() ?? '';
@@ -362,8 +388,43 @@ class _ModelEntry {
       label: '',
       supportsReasoning: false,
       isDefault: value == instance.defaultModel,
+      contextWindow: _resolveContextWindow(const {}, value, instance, policy),
     );
   }
+
+  /// The resolved window for one cached row.
+  ///
+  /// The catalog stores the provider's own value as internal evidence
+  /// (`context_window_raw`); rows written before the global cap existed kept
+  /// that value in `context_window`, which is why both keys are read here.
+  static ContextWindowResolution _resolveContextWindow(
+    Map<dynamic, dynamic> raw,
+    String modelId,
+    ProviderInstance instance,
+    ModelAwareRuntimePolicy policy,
+  ) {
+    final candidate = raw['context_window_raw'] ?? raw['context_window'];
+    final evidence = candidate is num && candidate > 0
+        ? ProviderContextWindow(
+            tokens: candidate.toInt(),
+            source: ContextWindowSource.providerCatalog,
+          )
+        : null;
+    return policy.resolveContextWindow(
+      modelId: modelId,
+      providerEvidence: evidence,
+      localProvider: LocalProviderRoutes.isLocalRoute(
+        templateId: instance.templateId,
+        baseUrl: instance.baseUrl,
+      ),
+      unknownCloudFallback: ModelMetadata.unknownContextLimit,
+    );
+  }
+
+  /// One diagnostic line naming the layer that answered and whether the cap
+  /// lowered the value.
+  String get contextWindowProvenance =>
+      'context window: ${contextWindow.describe()}';
 
   /// Parses a cached `thinking_control` member, tolerating a malformed record.
   ///
@@ -386,6 +447,10 @@ class _ModelEntry {
     'label': label,
     'supports_reasoning': supportsReasoning,
     'is_default': isDefault,
+    'context_window': contextWindow.tokens,
+    'context_window_source': contextWindow.source.label,
+    if (contextWindow.cappedFrom != null)
+      'context_window_capped_from': contextWindow.cappedFrom,
     if (thinkingControl != null) 'thinking_control': thinkingControl!.toMap(),
   };
 }

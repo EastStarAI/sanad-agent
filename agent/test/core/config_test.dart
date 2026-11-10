@@ -1109,4 +1109,71 @@ model_capabilities:
       expect(google.defaultOption, 'low');
     });
   });
+
+  group('context.maxLimit global cap', () {
+    void writeConfig(String yaml) =>
+        File('${tempSanadHome.path}/config.yaml').writeAsStringSync(yaml);
+
+    test('an absent key keeps the built-in cap', () {
+      final config = Config(environment: const {});
+      expect(config.contextMaxLimit, 358000);
+      expect(config.modelAwarePolicy.maxLimit, isNull);
+    });
+
+    test('a user value replaces the built-in cap', () {
+      writeConfig('context:\n  maxLimit: 200000\n');
+      expect(Config(environment: const {}).contextMaxLimit, 200000);
+    });
+
+    test('0 disables the cap', () {
+      writeConfig('context:\n  maxLimit: 0\n');
+      final config = Config(environment: const {});
+      expect(config.contextMaxLimit, 0);
+    });
+
+    test('the smallest accepted value is the documented floor', () {
+      writeConfig('context:\n  maxLimit: 8192\n');
+      expect(Config(environment: const {}).contextMaxLimit, 8192);
+    });
+
+    test('the built-in per-model defaults resolve without any YAML', () {
+      final config = Config(environment: const {});
+      expect(config.contextModelLimit('gpt-6.1-sol'), isNull);
+      expect(config.resolveContextWindow(
+        modelId: 'gpt-6.1-sol',
+        unknownCloudFallback: 4000,
+      ).tokens, 258000);
+      expect(config.resolveContextWindow(
+        modelId: 'deepseek-v4.1-flash',
+        unknownCloudFallback: 4000,
+      ).tokens, 358000);
+    });
+
+    test('user model limits merge key by key with the built-in defaults', () {
+      writeConfig('context:\n  modelLimits:\n    gpt-6.1-sol: 300000\n');
+      final config = Config(environment: const {});
+      expect(config.modelAwarePolicy.mergedContextModelLimits, {
+        'gpt-6.1-sol': 300000,
+        'deepseek-v4.1-flash': 358000,
+      });
+    });
+
+    test('rejects invalid maxLimit values and unknown context keys', () {
+      for (final yaml in [
+        'context:\n  maxLimit: -1\n',
+        'context:\n  maxLimit: 1.5\n',
+        'context:\n  maxLimit: "358000"\n',
+        'context:\n  maxLimit: true\n',
+        'context:\n  maxLimit: 4096\n',
+        'context:\n  maxLimit: 358000\n  bogus: 1\n',
+      ]) {
+        writeConfig(yaml);
+        expect(
+          () => Config(environment: const {}),
+          throwsA(isA<FormatException>()),
+          reason: yaml,
+        );
+      }
+    });
+  });
 }

@@ -24,6 +24,7 @@ import '../../core/provider_runtime/provider_instance.dart';
 import '../../core/provider_runtime/provider_protocol_constants.dart';
 import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
+import '../../core/provider_runtime/local_provider_routes.dart';
 import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import 'provider_profile.dart';
@@ -272,13 +273,30 @@ class BaseOpenAIAdapter
                 profile,
                 normalizedId,
               );
+          // Discovery reports one effective window: policy (user override,
+          // built-in default, global cap) is applied here so the cached catalog
+          // and every later reader share the same number. The raw provider
+          // value is kept only as internal evidence for diagnostics.
+          final rawContextWindow = contextLimit;
+          final resolvedContextWindow = config.resolveContextWindow(
+            modelId: normalizedId,
+            providerEvidence: rawContextWindow == null
+                ? null
+                : ProviderContextWindow(
+                    tokens: rawContextWindow,
+                    source: ContextWindowSource.providerMetadata,
+                  ),
+            localProvider: isLocalRoute,
+            unknownCloudFallback: ModelMetadata.unknownContextLimit,
+          );
 
           options.add(
             ModelOption(
               value: normalizedId,
               label: label,
               provider: profile.name,
-              contextWindow: contextLimit,
+              contextWindow: resolvedContextWindow.tokens,
+              contextWindowRaw: rawContextWindow,
               supportsReasoning: supportsReasoning,
               modelMetadata: item is Map
                   ? Map<String, Object?>.from(
@@ -343,17 +361,43 @@ class BaseOpenAIAdapter
       config: config,
       profile: profile,
       defaultModelOverride: defaultModelOverride,
+      baseUrl: baseUrl,
     );
   }
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
-    final configuredLimit = config.contextModelLimit(resolvedModel);
-    if (configuredLimit != null) return configuredLimit;
+    return config
+        .resolveContextWindow(
+          modelId: resolvedModel,
+          providerEvidence: await providerContextWindow(resolvedModel),
+          localProvider: isLocalRoute,
+          unknownCloudFallback: ModelMetadata.unknownContextLimit,
+        )
+        .tokens;
+  }
 
+  /// Whether this route serves a model the user runs locally.
+  bool get isLocalRoute => LocalProviderRoutes.isLocalRoute(
+    templateId: profile.name,
+    baseUrl: baseUrl,
+  );
+
+  /// What the provider itself reports for [resolvedModel]'s window, or `null`
+  /// when nothing is known. Policy (user override, built-in default, cap) is
+  /// never applied here: [Config.resolveContextWindow] owns it.
+  @protected
+  Future<ProviderContextWindow?> providerContextWindow(
+    String resolvedModel,
+  ) async {
     final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
-    if (catalogLimit != null) return catalogLimit;
+    if (catalogLimit != null && catalogLimit > 0) {
+      return ProviderContextWindow(
+        tokens: catalogLimit,
+        source: ContextWindowSource.providerCatalog,
+      );
+    }
 
     // 1. LM Studio local probe (reference-style)
     if (profile.name == 'lm-studio') {
@@ -375,7 +419,10 @@ class BaseOpenAIAdapter
                     if (config is Map) {
                       final ctxLen = config['context_length'];
                       if (ctxLen is num && ctxLen > 0) {
-                        return ctxLen.toInt();
+                        return ProviderContextWindow(
+                          tokens: ctxLen.toInt(),
+                          source: ContextWindowSource.providerMetadata,
+                        );
                       }
                     }
                   }
@@ -408,7 +455,10 @@ class BaseOpenAIAdapter
               final data = jsonDecode(response.body);
               final nCtx = data['default_generation_settings']?['n_ctx'];
               if (nCtx is num && nCtx > 0) {
-                return nCtx.toInt();
+                return ProviderContextWindow(
+                  tokens: nCtx.toInt(),
+                  source: ContextWindowSource.providerMetadata,
+                );
               }
             }
           } catch (_) {}
@@ -423,13 +473,23 @@ class BaseOpenAIAdapter
         profile.name,
         resolvedModel,
       );
-      if (limit != null) return limit;
+      if (limit != null && limit > 0) {
+        return ProviderContextWindow(
+          tokens: limit,
+          source: ContextWindowSource.providerMetadata,
+        );
+      }
     }
 
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
-    if (metadataLimit != null) return metadataLimit;
+    if (metadataLimit != null) {
+      return ProviderContextWindow(
+        tokens: metadataLimit,
+        source: ContextWindowSource.providerMetadata,
+      );
+    }
 
-    return ModelMetadata.unknownContextLimit;
+    return null;
   }
 
   /// Retained test-facing entry point; the rules live in

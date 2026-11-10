@@ -13,7 +13,17 @@ class ModelOption {
   final String value;
   final String label;
   final String? provider;
+
+  /// The effective context window every consumer uses (user override, built-in
+  /// default or provider value after the global cap).
   final int? contextWindow;
+
+  /// The provider's own value before policy, kept as internal evidence so a
+  /// diagnostic can say which layer applied and whether the cap lowered it.
+  /// It is stripped from the model snapshot projection and never rendered as a
+  /// second user-facing window.
+  final int? contextWindowRaw;
+
   final bool supportsReasoning;
   final ThinkingControlDescriptor? thinkingControl;
   final Map<String, Object?> modelMetadata;
@@ -23,6 +33,7 @@ class ModelOption {
     required this.label,
     this.provider,
     this.contextWindow,
+    this.contextWindowRaw,
     this.supportsReasoning = false,
     this.thinkingControl,
     this.modelMetadata = const {},
@@ -36,6 +47,7 @@ class ModelOption {
     String? label,
     String? provider,
     int? contextWindow,
+    int? contextWindowRaw,
     bool? supportsReasoning,
     ThinkingControlDescriptor? thinkingControl,
     Map<String, Object?>? modelMetadata,
@@ -45,6 +57,7 @@ class ModelOption {
       label: label ?? this.label,
       provider: provider ?? this.provider,
       contextWindow: contextWindow ?? this.contextWindow,
+      contextWindowRaw: contextWindowRaw ?? this.contextWindowRaw,
       supportsReasoning: supportsReasoning ?? this.supportsReasoning,
       thinkingControl: thinkingControl ?? this.thinkingControl,
       modelMetadata: modelMetadata ?? this.modelMetadata,
@@ -56,6 +69,7 @@ class ModelOption {
     'label': label,
     if (provider != null) 'provider': provider,
     if (contextWindow != null) 'context_window': contextWindow,
+    if (contextWindowRaw != null) 'context_window_raw': contextWindowRaw,
     'supports_reasoning': supportsReasoning,
     'supports_reasoning_output': supportsReasoningOutput,
     if (modelMetadata.isNotEmpty) 'model_metadata': modelMetadata,
@@ -78,6 +92,7 @@ class ModelOption {
       label: label,
       provider: json['provider'] as String?,
       contextWindow: json['context_window'] as int?,
+      contextWindowRaw: json['context_window_raw'] as int?,
       supportsReasoning:
           json['supports_reasoning_output'] as bool? ??
           json['supports_reasoning'] as bool? ??
