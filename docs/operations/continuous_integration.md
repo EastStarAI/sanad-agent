@@ -62,6 +62,12 @@ guard, and the lingering watcher — so a change that reintroduces one of them
 fails here instead of in a coordinator round. The rest of `test/` is the
 mechanism suite; both run in the same command.
 
+Those files run concurrently, so a teardown may only sweep the fixture families
+its own file creates (`sweepOrphanedFixtures({ prefixes })`): a broad prefix can
+signal a live fixture that another running file still owns. A scenario that reads
+a multi-write composition also awaits the exact record it asserts rather than the
+transition before it, so a preempted worker cannot be mistaken for a wrong cause.
+
 `CLI automation (ubuntu-24.04-arm)` runs the Agent AOT smoke on GitHub's arm64
 runner, so a native arm64 executable is proved at pull-request time on the same
 runner family the release matrix uses for the official Linux arm64 Agent

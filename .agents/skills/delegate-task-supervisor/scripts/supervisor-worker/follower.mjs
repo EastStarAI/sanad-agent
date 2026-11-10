@@ -499,7 +499,14 @@ export function createFollower(ctx) {
       pid: null,
       kind: 'following',
       reason: state.follow.reason,
-      cause: state.workerCause ?? state.follow.workerExit?.cause ?? null,
+      // The durable cause the probe just read, not the transport's own terminal
+      // cause. A parked turn's `sanad run` exits with `cause: blocked` while the
+      // daemon states the real reason, so naming the transport's value here made
+      // one park carry two causes: the entry record and the mirror applied on the
+      // next line disagreed for as long as it took to write two files, and a
+      // reader between them saw a cause the mirror then replaced (2026-11-10,
+      // merge queue). One parked turn, one cause, whichever record is read first.
+      cause: snapshot.cause ?? state.workerCause ?? state.follow.workerExit?.cause ?? null,
       workerExit: state.follow.workerExit,
       follow: state.follow,
       lastProgressAt: state.follow.confirmedAt,
