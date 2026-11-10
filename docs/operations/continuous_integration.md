@@ -245,7 +245,10 @@ lane. Both holes are closed by the declaration above.
    resolves the Dart import closure of every declared `native-stt` entrypoint
    through the package configuration and fails when any file in it matches none of
    that lane's globs. A new `lib/` file a smoke test imports therefore fails in the
-   ordinary Agent shard, on the pull request that introduced it.
+   ordinary Agent shard, on the pull request that introduced it. The suite also
+   reads the `Native dictation` job in `ci.yml` and fails when a Dart file the job
+   runs is not declared as an `entry`, so a suite added to the lane cannot run
+   outside the closure check.
 2. **The same suite asserts the always-run triggers**, so narrowing a lane cannot
    quietly drop one.
 3. **The complement run covers the merged commit.** A lane a pull request skipped

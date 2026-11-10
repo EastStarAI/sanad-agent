@@ -152,6 +152,30 @@ void main() {
   });
 
   group('native-stt closure', () {
+    test('every Dart file the Native dictation job runs is an entrypoint', () {
+      final workflow = File(
+        p.join(_repoRootPath, '.github/workflows/ci.yml'),
+      ).readAsStringSync();
+      final job = RegExp(
+        r'^  native-stt:\n(.*?)(?=^  [\w-]+:\n)',
+        multiLine: true,
+        dotAll: true,
+      ).firstMatch(workflow)?.group(1);
+      expect(job, isNotNull, reason: 'ci.yml has no `native-stt` job.');
+      final steps = job!.replaceAll(RegExp(r'^\s*#.*$', multiLine: true), '');
+      final executed = <String>{
+        for (final match
+            in RegExp(r'\b((?:test|tool)/[\w/]+\.dart)\b').allMatches(steps))
+          'agent/${match.group(1)}',
+      };
+      expect(executed, isNotEmpty);
+      expect(
+        entries['native-stt'],
+        containsAll(executed),
+        reason: 'Declare every Dart file the job runs as `entry native-stt`.',
+      );
+    });
+
     test('the Dart import closure of the entrypoints is fully covered', () {
       final packages = _packageRoots();
       expect(
