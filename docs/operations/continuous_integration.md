@@ -180,7 +180,8 @@ post-merge:
 
 - `Verify branch history` — the pushed range is the merge itself.
 - `Verify protected review labels` — the label check belongs to the merge
-  decision, and a `push` run re-reads it on the merged diff.
+  decision; on `push` the job still runs, but its label step is limited to
+  `pull_request` and `merge_group`, so it is a no-op there rather than a re-check.
 - `Validate release and security boundaries` — its credential scan is bounded to
   `BEFORE..AFTER` on a push and to `BASE...HEAD` on a pull request, so it is the
   one lane that scans the merged commit as pushed.
