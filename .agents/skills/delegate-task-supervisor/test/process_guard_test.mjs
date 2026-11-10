@@ -4,7 +4,7 @@
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, realpathSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -75,4 +75,36 @@ test('the abandoned-fixture sweep only signals pids whose command line names the
   // the machine cannot be reached by a test sweep.
   const outside = sweepOrphanedFixtures({ root: tmpdir(), prefix: 'delegate-guard-test-', dryRun: true });
   assert.equal(outside.reaped.length, 0);
+});
+
+test('the sweep stays inside the fixture families its caller declares', () => {
+  // Two fixture families under one root, both with a live pid named by a manifest.
+  // A caller that owns only the first must not even scan the second: `node --test
+  // test/*_test.mjs` runs test files concurrently, so a broad sweep can signal a
+  // fixture a running file still owns (2026-11-10).
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'delegate-guard-scope-')));
+  const own = join(root, 'delegate-guard-scope-own-');
+  const foreign = join(root, 'delegate-guard-scope-foreign-');
+  const spawnLive = (needle) => spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)', needle], { stdio: 'ignore' });
+  mkdirSync(join(own, 'run'), { recursive: true });
+  mkdirSync(join(foreign, 'run'), { recursive: true });
+  const ownPid = spawnLive(own);
+  const foreignPid = spawnLive(foreign);
+  try {
+    // The sweep reads a task's run manifest one level below the fixture root.
+    for (const [directory, pid] of [[own, ownPid.pid], [foreign, foreignPid.pid]]) {
+      writeFileSync(join(directory, 'run', 'manifest.json'), JSON.stringify({ supervisorPid: pid, tasks: {} }), 'utf8');
+    }
+    const scoped = sweepOrphanedFixtures({ root, prefixes: ['delegate-guard-scope-own-'], dryRun: true });
+    assert.deepEqual(scoped.reaped.map((entry) => entry.pid), [ownPid.pid]);
+    // A single prefix keeps working for the one-family caller.
+    const single = sweepOrphanedFixtures({ root, prefix: 'delegate-guard-scope-foreign-', dryRun: true });
+    assert.deepEqual(single.reaped.map((entry) => entry.pid), [foreignPid.pid]);
+    // Nothing was signalled: a dry run only reports.
+    assert.equal(processIsAlive(ownPid.pid), true);
+    assert.equal(processIsAlive(foreignPid.pid), true);
+  } finally {
+    ownPid.kill('SIGKILL');
+    foreignPid.kill('SIGKILL');
+  }
 });

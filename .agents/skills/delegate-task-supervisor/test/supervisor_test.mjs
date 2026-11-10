@@ -20,7 +20,7 @@ const WATCH_ONCE = join(SKILL, 'scripts', 'watch-once.mjs');
 // assert what a coordinator would consider actionable.
 const { isActionableEvent, TERMINAL_STATUSES } = await import(join(SKILL, 'scripts', 'supervisor-events.mjs'));
 
-// ---------------------------------------------------------------------------
+// -------------------------------------------------------------------------
 // Bounded teardown (W10).
 //
 // A supervisor worker is detached on purpose: it must outlive the CLI call that
@@ -31,12 +31,127 @@ const { isActionableEvent, TERMINAL_STATUSES } = await import(join(SKILL, 'scrip
 // name is never allowed here, because it reaches the coordinator's live
 // supervisors.
 // -------------------------------------------------------------------------
+
+// Every fixture family this file creates, and nothing else. The sweep proves
+// ownership from the command line and the fixture manifest, so naming another
+// file's family would let this teardown signal a live fixture that a
+// concurrently running test file still owns (`node --test test/*_test.mjs` runs
+// files in parallel). A new fixture in this file must be registered here; the
+// guard below fails loudly when one is not.
+const FIXTURE_PREFIXES = [
+  'delegate-add-enqueue-test-',
+  'delegate-auto-retry-auth-test-',
+  'delegate-auto-retry-spec-test-',
+  'delegate-auto-retry-test-',
+  'delegate-brief-test-',
+  'delegate-cancel-queued-test-',
+  'delegate-cancel-running-test-',
+  'delegate-collision-test-',
+  'delegate-concurrency-test-',
+  'delegate-continue-keep-log-',
+  'delegate-continue-keep-test-',
+  'delegate-continue-pin-log-',
+  'delegate-continue-pin-test-',
+  'delegate-continue-result-pin-log-',
+  'delegate-continue-result-pin-test-',
+  'delegate-continue-resume-log-',
+  'delegate-continue-resume-test-',
+  'delegate-continue-test-',
+  'delegate-continue-unpinned-log-',
+  'delegate-continue-unpinned-test-',
+  'delegate-follow-completed-test-',
+  'delegate-follow-exhausted-test-',
+  'delegate-follow-input-test-',
+  'delegate-follow-interrupted-exit-test-',
+  'delegate-follow-interrupted-test-',
+  'delegate-follow-lost-test-',
+  'delegate-follow-retry-test-',
+  'delegate-follow-retrying-test-',
+  'delegate-follow-slot-test-',
+  'delegate-follow-stopped-test-',
+  'delegate-follow-verdict-test-',
+  'delegate-follow-watch-test-',
+  'delegate-group-cancel-test-',
+  'delegate-group-follow-test-',
+  'delegate-home-test-',
+  'delegate-homeval-test-',
+  'delegate-idle-test-',
+  'delegate-late-result-test-',
+  'delegate-launch-retry-test-',
+  'delegate-longlived-test-',
+  'delegate-progress-resume-test-',
+  'delegate-progress-signal-test-',
+  'delegate-progress-stall-test-',
+  'delegate-queue-report-test-',
+  'delegate-queued-stall-test-',
+  'delegate-remote-exit-test-',
+  'delegate-remote-run-test-',
+  'delegate-remote-val-test-',
+  'delegate-retry-manual-test-',
+  'delegate-retry-refused-by-daemon-test-',
+  'delegate-retry-refused-test-',
+  'delegate-rootonly-test-',
+  'delegate-sanad-fixture-test-',
+  'delegate-sourceroot-test-',
+  'delegate-sourceval-test-',
+  'delegate-steer-test-',
+  'delegate-supervisor-dead-test-',
+  'delegate-supervisor-stale-test-',
+  'delegate-supervisor-test-',
+  'delegate-val-test-',
+  'delegate-verify-test-',
+  'delegate-watch-cursor-test-',
+  'delegate-watch-replay-test-',
+  'delegate-worker-lost-test-',
+];
+
 test.after(() => {
-  const { reaped } = sweepOrphanedFixtures({ root: tmpdir(), prefix: 'delegate-' });
+  const { reaped } = sweepOrphanedFixtures({ root: tmpdir(), prefixes: FIXTURE_PREFIXES });
   if (reaped.length > 0) {
     const detail = reaped.map((entry) => `${entry.pid}@${basename(entry.needle)}`).join(', ');
     process.stderr.write(`[teardown] reaped ${reaped.length} leftover supervisor process(es): ${detail}\n`);
   }
+});
+
+// The list above is the only scope this teardown may signal, so a fixture created
+// without being registered would silently stop being reaped. This guard reads the
+// file's own fixture creation sites, and the sibling test files' ones, instead of
+// trusting the list to be maintained.
+test('the teardown sweep names every fixture family this file creates and no other', () => {
+  const here = fileURLToPath(import.meta.url);
+  // A fixture family is created either inline or through a helper that takes the
+  // prefix as its first argument. Helpers are named here on purpose: a new one has
+  // to be added, which keeps the guard from silently covering nothing.
+  const prefixesIn = (source) => {
+    const found = [...source.matchAll(/mkdtempSync\(\s*\n?\s*join\(\s*tmpdir\(\),\s*\n?\s*'([^']+)'/g)]
+      .map((match) => match[1]);
+    for (const match of source.matchAll(/(?:startPinnedTaskFixture|incidentRoot)\(\s*'([^']+)'/g)) {
+      found.push(match[1]);
+    }
+    return new Set(found);
+  };
+
+  const own = prefixesIn(readFileSync(here, 'utf8'));
+  const unregistered = [...own]
+    .filter((prefix) => prefix.startsWith('delegate-') && !FIXTURE_PREFIXES.includes(prefix))
+    .sort();
+  assert.deepEqual(unregistered, [], 'register the new fixture prefix in FIXTURE_PREFIXES');
+  assert.equal(new Set(FIXTURE_PREFIXES).size, FIXTURE_PREFIXES.length, 'FIXTURE_PREFIXES has no duplicates');
+
+  // A prefix another file also creates is the 2026-11-10 hazard: the sweep proves
+  // ownership from the command line, not from the process that started the
+  // fixture, so this teardown could signal a live fixture of a file that is still
+  // running. `node --test test/*_test.mjs` runs those files in parallel.
+  const siblings = readdirSync(HERE)
+    .filter((entry) => entry.endsWith('_test.mjs') && join(HERE, entry) !== here);
+  const shared = [];
+  for (const sibling of siblings) {
+    const foreign = prefixesIn(readFileSync(join(HERE, sibling), 'utf8'));
+    for (const prefix of FIXTURE_PREFIXES) {
+      if (foreign.has(prefix)) shared.push(`${prefix} (${sibling})`);
+    }
+  }
+  assert.deepEqual(shared, [], 'a fixture prefix must belong to one test file only');
 });
 
 function waitForFileChange(directory, predicate, timeoutMs = 8_000) {
@@ -309,7 +424,16 @@ test('one open run stays alive after initial tasks settle and later enqueue laun
   assert.equal(event1.taskId, 'initial-1');
   assert.equal(event1.to, 'completed');
 
-  // Verify run is still running even though all tasks have settled
+  // Verify run is still running even though all tasks have settled. A transition
+  // appends the journal record before it persists the manifest, and `watch` reads
+  // the journal while `status` reads the manifest, so the projection the status
+  // command reports is awaited here instead of assumed: two CLI processes start
+  // between the two reads, and a preempted worker in that window is what reported
+  // `running` for a settled task on the merge queue (2026-11-10).
+  await waitForFileChange(runDir, () => {
+    const manifest = JSON.parse(readFileSync(join(runDir, 'manifest.json'), 'utf8'));
+    return manifest.tasks['initial-1']?.status === 'completed' ? manifest : null;
+  });
   const statusMid = JSON.parse(runNode(SUPERVISOR, ['status', '--run', runDir, '--json']));
   assert.equal(statusMid.status, 'running');
   assert.equal(statusMid.tasks['initial-1'].status, 'completed');
@@ -2734,6 +2858,10 @@ test('the watch cursor is written atomically and never observed half-written', a
   assert.deepEqual(leftovers, []);
   const finalCursor = readJsonFile(cursorPath);
   assert.ok(finalCursor.runs[runDir].seq >= 1);
+  // The `start` above owns a supervisor process that outlives the watcher this
+  // test kills. Without closing it the run leaks one live supervisor into every
+  // later test in the suite (2026-11-10: reaped by another file's teardown).
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
 
 test('progress_stall is journaled once per stall and progress_resumed clears it', async () => {
@@ -2804,6 +2932,10 @@ test('progress_stall is journaled once per stall and progress_resumed clears it'
     .map((event) => event.kind);
   assert.equal(stalledKinds[0], 'progress_stall');
   assert.equal(stalledKinds[1], 'progress_resumed');
+  // The run's supervisor is not the task: it stays alive after the last task
+  // settles. Closing it here is what keeps one started supervisor from outliving
+  // this test and loading every test that runs after it.
+  runNode(SUPERVISOR, ['close', '--run', runDir, '--wait'], env);
 });
 
 test('a streaming task that publishes no timeline record is never reported as a progress stall', async () => {

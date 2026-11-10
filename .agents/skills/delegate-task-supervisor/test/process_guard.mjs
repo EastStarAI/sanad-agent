@@ -223,11 +223,24 @@ function collectManifests(directory, depth = 0) {
  * this test root, and the pid's command line must name that same directory. A
  * supervisor is found through its `--run <dir>`, a task through its fixture
  * paths. A reused pid that merely happens to match is never signalled.
+ *
+ * `prefixes` is how a caller states which fixture families it owns. A sweep must
+ * never name a prefix another test file creates: `node --test test/*_test.mjs`
+ * runs files concurrently, so a broad sweep can signal a live fixture that is
+ * still owned by a running test (2026-11-10). `prefix` stays supported for a
+ * single-family caller and for the dry-run probes.
  */
-export function sweepOrphanedFixtures({ root = tmpdir(), prefix = 'delegate-', dryRun = false } = {}) {
+export function sweepOrphanedFixtures({
+  root = tmpdir(),
+  prefix = 'delegate-',
+  prefixes = null,
+  dryRun = false,
+} = {}) {
+  const selectors = (Array.isArray(prefixes) ? prefixes : prefixes ? [prefixes] : [prefix])
+    .filter((entry) => typeof entry === 'string' && entry.length > 0);
   let candidates = [];
   try {
-    candidates = readdirSync(root).filter((entry) => entry.startsWith(prefix));
+    candidates = readdirSync(root).filter((entry) => selectors.some((selector) => entry.startsWith(selector)));
   } catch {
     return { reaped: [], scanned: 0 };
   }

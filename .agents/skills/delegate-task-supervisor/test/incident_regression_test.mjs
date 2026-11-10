@@ -48,7 +48,10 @@ const { isActionableEvent, TERMINAL_STATUSES } = await import(join(SKILL, 'scrip
 // directory name before anything is signalled.
 // ---------------------------------------------------------------------------
 test.after(() => {
-  const { reaped } = sweepOrphanedFixtures({ root: tmpdir(), prefix: 'delegate-incident-' });
+  // Only this file's fixtures. A sweep that names a family this file does not
+  // create can signal a live fixture of a test file that is still running, which
+  // `node --test test/*_test.mjs` does concurrently (2026-11-10).
+  const { reaped } = sweepOrphanedFixtures({ root: tmpdir(), prefixes: ['delegate-incident-'] });
   if (reaped.length > 0) {
     const detail = reaped.map((entry) => `${entry.pid}@${dirname(entry.needle)}`).join(', ');
     process.stderr.write(`[teardown] reaped ${reaped.length} leftover supervisor process(es): ${detail}\n`);
@@ -852,16 +855,32 @@ test('2026-11-09/block-reaches-the-journal-early: a block is journaled before th
   const printed = runNode(SUPERVISOR, ['watch', '--run', runDir, '--cursor', cursor, '--once'], env);
   assert.match(printed, /parked\s+retrying -> blocked/);
 
-  // Once the worker exits, the follow mirrors the same block. The mirrored record
-  // repeats the cause it already had, so a reader sees one consistent claim even
-  // though the entry transition (`following`) sits between the two: the early
-  // record is what a coordinator acts on, and everything after it says the same
-  // thing about the same parked turn.
+  // Once the worker exits, the follow mirrors the same block. The entry record
+  // carries the durable cause the probe just read — never the transport's own
+  // terminal `blocked` — so the entry transition (`following`) sits between two
+  // records that make one claim about the same parked turn, and the early record
+  // is what a coordinator acts on.
   const following = await waitForCondition(
     () => readJournal(runDir).find((event) => event.taskId === 'parked' && event.kind === 'following'),
     20_000,
     'the follow of the parked turn',
   );
+  assert.equal(following.cause, 'network_error', 'the entry record names the durable cause');
+
+  // The mirror is a second write of the same composition, so its record and the
+  // manifest it persists are awaited rather than assumed: reading between the two
+  // writes is what a preempted worker turned into a `blocked` cause on the merge
+  // queue (2026-11-10, 1 of 134). A transition journals before it persists, so a
+  // manifest that already says `network_error` proves the mirrored record is on
+  // disk too.
+  await waitForCondition(() => {
+    const mirrored = readJournal(runDir)
+      .filter((event) => event.taskId === 'parked' && event.to === 'blocked')
+      .find((event) => event.seq > following.seq);
+    const manifestCause = readJsonFile(join(runDir, 'manifest.json')).tasks.parked.cause;
+    return mirrored && manifestCause === 'network_error' ? mirrored : null;
+  }, 20_000, 'the mirrored block the follow applies after its entry record');
+
   const blockedRecords = readJournal(runDir).filter((event) => event.taskId === 'parked' && event.to === 'blocked');
   assert.ok(blockedRecords.length >= 1, 'the block must stay journaled');
   assert.ok(
