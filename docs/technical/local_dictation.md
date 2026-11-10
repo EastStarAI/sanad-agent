@@ -366,6 +366,20 @@ origin:
   (`agent/lib/infrastructure/stt/stt_write_bounds.dart`), shared by the isolate
   pipeline and the in-process seam so the rule has a single owner and neither
   file outgrows the 1000-line ratchet.
+- **Every handle is closed by the isolate that opened it, and `close()` waits for
+  both.** A dictation install deletes or renames the `.partial` in the statement
+  after `close()` returns, and Windows refuses either while any handle is open —
+  including one this same process holds. Neither ending an isolate nor dropping
+  the last reference releases its descriptor (measured: `Isolate.kill` leaves the
+  file open after the isolate's own `exit` event), so the writer closes its own
+  handle on every path it can take, the flusher does the same on `exit` and after
+  a refused flush, and `close()` asks the flusher directly over a parent-facing
+  channel — it reports `gone` only after its `closeSync()` — then awaits both
+  isolate exits. `close()` never short-circuits: a pipeline whose writer or
+  flusher already ended still tears down and still rethrows its typed failure,
+  because the alternative is a `.partial` that can never be repaired, activated,
+  or removed until the daemon exits. Killing an isolate remains only as the net
+  for a flusher that never opened a handle at all.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s

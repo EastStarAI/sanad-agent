@@ -43,6 +43,11 @@ export 'stt_write_bounds.dart'
 ///   and closes the destination, and is idempotent. It is the right call from a
 ///   `finally`: on cancel the bytes already accepted still land, which is what
 ///   makes a resumed install continue from a real prefix.
+/// * [close] is also the **handle** boundary: when it returns, every descriptor
+///   this artifact opened is closed — including on a failure path — so the caller
+///   may delete or rename the `.partial` immediately. Windows refuses both while
+///   any handle is open, and neither killing an isolate nor dropping a reference
+///   releases one, so the handles are closed by their own isolates and awaited.
 /// * Page cache is forced out every [kSttFlushWindowBytes] of written bytes
 ///   *without* stopping the writer, so the kernel cannot defer the whole
 ///   artifact to the close flush and the disk still overlaps the socket.
@@ -102,11 +107,27 @@ class IsolateWritePipeline implements SttWritePipeline {
   final Completer<void> _closed;
   final Logger _logger = Logger('SttWritePipeline');
   final SttWriteWindow _window = SttWriteWindow();
+
+  /// The flusher's command channel, once it has a handle.
+  ///
+  /// It is sent to this pipeline as well as to the writer so the artifact can be
+  /// closed from here: a killed isolate releases nothing (Dart closes a file only
+  /// from inside the isolate that opened it), so `close()` has to be able to ask
+  /// the flusher, not only end it.
+  SendPort? _flusherCommands;
+
+  /// The flusher closed its own handle (`'gone'`), or is gone entirely.
+  final Completer<void> _flusherClosed = Completer<void>();
+
+  /// The writer isolate has ended, whatever the reason.
+  final Completer<void> _writerExited = Completer<void>();
+
   SttWriteFailure? _failure;
   Isolate? _isolate;
   Isolate? _flusher;
   bool _closing = false;
   bool _done = false;
+  bool _torndown = false;
   bool _writebackUnavailable = false;
 
   /// [writeback] is `false` only for the seam that proves a platform refusing
@@ -124,7 +145,14 @@ class IsolateWritePipeline implements SttWritePipeline {
     late IsolateWritePipeline pipeline;
     inbox.listen((Object? message) {
       if (message is SendPort) {
-        if (!ready.isCompleted) ready.complete(message);
+        // The writer hands over its command channel, then the flusher hands over
+        // its own: the first one completes the open, every later one is the
+        // flusher (spawned after this pipeline exists).
+        if (!ready.isCompleted) {
+          ready.complete(message);
+        } else {
+          pipeline._flusherCommands = message;
+        }
         return;
       }
       pipeline._onMessage(message);
@@ -146,6 +174,9 @@ class IsolateWritePipeline implements SttWritePipeline {
         );
       }
       pipeline._finishClosing();
+      if (!pipeline._writerExited.isCompleted) {
+        pipeline._writerExited.complete();
+      }
     });
     final commands = await ready.future;
     pipeline = IsolateWritePipeline._(commands, inbox, closed);
@@ -158,15 +189,17 @@ class IsolateWritePipeline implements SttWritePipeline {
   ///
   /// It is spawned from here rather than from the writer so this pipeline owns
   /// both isolates and can end either of them: a nested isolate would outlive a
-  /// killed writer. It acks to the writer's own channel, so a completion never
-  /// travels through the reader's isolate.
+  /// killed writer. It acks a completion to the writer's own channel, so a
+  /// completion never travels through the reader's isolate, and hands its command
+  /// channel to this pipeline as well, which is what lets [close] ask it to close
+  /// its handle instead of only killing it.
   Future<void> _startFlusher(String path, {bool refuseOpen = false}) async {
     final exit = ReceivePort();
     final Isolate flusher;
     try {
       flusher = await Isolate.spawn(
         _flusherMain,
-        <Object>[_commands, path, refuseOpen],
+        <Object>[_commands, path, refuseOpen, _inbox.sendPort],
         onExit: exit.sendPort,
         errorsAreFatal: true,
       );
@@ -180,6 +213,8 @@ class IsolateWritePipeline implements SttWritePipeline {
     _flusher = flusher;
     exit.listen((Object? _) {
       exit.close();
+      // No handle can outlive a flusher that ended.
+      if (!_flusherClosed.isCompleted) _flusherClosed.complete();
       if (_done || _closing || _writebackUnavailable) return;
       // Writeback stopped while the artifact was still being written: the page
       // cache is no longer bounded by anything, so this is a failed install.
@@ -194,7 +229,12 @@ class IsolateWritePipeline implements SttWritePipeline {
       return;
     }
     if (message is String) {
-      if (message == 'closed') _finishClosing();
+      if (message == 'closed') {
+        _finishClosing();
+      } else if (message == 'gone') {
+        // The flusher closed its own handle: no kill can do that for it.
+        if (!_flusherClosed.isCompleted) _flusherClosed.complete();
+      }
       return;
     }
     if (message is List) {
@@ -284,15 +324,31 @@ class IsolateWritePipeline implements SttWritePipeline {
 
   @override
   Future<void> close() async {
-    if (_done && _closed.isCompleted) return;
+    // Idempotent, and never a no-op after a failure. Every handle this artifact
+    // opened has to be gone before this returns: the store deletes or renames the
+    // `.partial` immediately after it, and on Windows neither is possible while a
+    // handle is open — not even one this very process holds.
+    if (_torndown) return;
+    _torndown = true;
     _closing = true;
-    if (!_done) _commands.send('close');
+    // A writer that already ended closes its own handle on its way out (see
+    // `_stop`/`_maybeFinish`); one that is still running is asked to finish.
+    if (!_writerExited.isCompleted) _commands.send('close');
     await _closed.future;
+    // The flusher's handle is its own. It closes on the writer's `exit`, but that
+    // message may never be sent (the handshake is asynchronous) and a killed
+    // isolate releases nothing, so ask it directly and wait for the confirmation.
+    final flusher = _flusherCommands;
+    if (flusher != null && !_flusherClosed.isCompleted) {
+      flusher.send('exit');
+      await _flusherClosed.future;
+    }
+    await _writerExited.future;
     _inbox.close();
     _isolate?.kill(priority: Isolate.immediate);
     _isolate = null;
-    // The flusher ends on the writer's `exit`; this is the net for the paths
-    // where the writer never got that far.
+    // The net for a flusher that never opened a channel — a refused background
+    // handle. It holds no file, so ending the isolate is all that is left.
     _flusher?.kill(priority: Isolate.immediate);
     _flusher = null;
     _throwIfFailed();
@@ -502,10 +558,16 @@ class _IsolateWriter {
 /// async file call is serviced by the same IO isolate a synchronous write waits
 /// on, so the two would still queue behind each other. Two isolates are two OS
 /// threads.
+///
+/// Its handle is closed here, on every path it can take: nothing outside this
+/// isolate can close it — not even killing the isolate, which leaves the
+/// descriptor open — so a flush failure closes it before exiting and an `exit`
+/// closes it before reporting back to the pipeline that asked.
 void _flusherMain(List<Object> args) {
   final writer = args[0] as SendPort;
   final path = args[1] as String;
   final refuseOpen = args.length > 2 && args[2] == true;
+  final owner = args.length > 3 ? args[3] as SendPort? : null;
   final commands = ReceivePort();
   RandomAccessFile? file;
   try {
@@ -530,7 +592,23 @@ void _flusherMain(List<Object> args) {
     ]);
   }
   final handle = file;
-  if (handle != null) writer.send(commands.sendPort);
+  if (handle != null) {
+    writer.send(commands.sendPort);
+    // The same channel to the pipeline that owns this isolate, so it can ask for
+    // the handle to be closed rather than only ending the isolate.
+    owner?.send(commands.sendPort);
+  }
+
+  /// Closes the writeback handle once and tells the owner it is gone.
+  void release() {
+    try {
+      handle?.closeSync();
+    } on FileSystemException {
+      // A handle that will not close is already unusable.
+    }
+    owner?.send('gone');
+  }
+
   commands.listen((Object? message) {
     if (message == 'flush') {
       if (handle == null) return;
@@ -544,16 +622,15 @@ void _flusherMain(List<Object> args) {
           error.osError?.errorCode,
           error.osError?.message,
         ]);
+        // The disk is gone, so nothing will be written back again, and this
+        // isolate must not take its handle with it.
+        release();
         commands.close();
       }
       return;
     }
     if (message == 'exit') {
-      try {
-        handle?.closeSync();
-      } on FileSystemException {
-        // A handle that will not close is already unusable.
-      }
+      release();
       commands.close();
     }
   });
