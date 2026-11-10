@@ -123,6 +123,38 @@ which is pure and unit-tested (`agent/test/stt/stt_decode_params_test.dart`), an
 applied by the shim in `agent/native/whispercpp/sanad_whisper.c`. `audio_ctx = 0`
 stays callable and means whisper's own window.
 
+#### Decode-state isolation
+
+The warm model context retains weights only. Every `sanad_whisper_run` allocates
+a fresh `whisper_state`, calls `whisper_full_with_state`, reads results through
+the `_from_state` accessors, and frees the state before returning — on success
+and failure. No encoder, decoder, mel, prompt, or graph state crosses a decode.
+The exported C ABI and Dart bindings do not change.
+
+This is a correctness boundary for the pinned whisper.cpp v1.9.5. Its flash
+attention views padded encoder and cross-attention K/V regions without masking
+every padded position. A reused state therefore made a 448-frame decode after a
+544- or 1500-frame decode read bytes from the preceding larger layout; the q8
+fixture returned a deterministic corrupted tail until the model was reloaded.
+`no_context = true` clears prompt text only and cannot reset those native
+buffers. Keeping the weights in a no-state context and making the state
+per-decode preserves warm-model residency while removing the carry-over.
+
+`sanad_whisper_load` also allocates and frees one probe state right after the
+model opens. A state the host cannot allocate (memory pressure, a backend fault)
+therefore fails the load, where the worker's existing CPU fallback still applies,
+instead of failing every utterance with `decode_failed` afterwards.
+
+Fresh state is not free. On the Mac reference host (q8, Metal/flash), the
+warm mean over ten calls went from 274.8 to 285.5 ms at 448 frames (+3.9 %) and
+from 383.3 to 393.2 ms at 544 frames (+2.6 %). That is about +10 ms per decode
+for state construction. First-call peak RSS is unchanged; repeated runs retain
+6–14 MiB more through the allocator. The baseline is the old shim decoding the
+same window repeatedly, which the stale-padding defect does not affect. The
+zero-cost root fix is upstream whisper.cpp PR #4127, which is not yet in a tagged
+release. Follow-up: adopt the first whisper.cpp tag that contains it, then
+reconsider state reuse behind the same q8 regression.
+
 #### The repetition guard
 
 No fixed window is provably safe — one window value (512 frames) still looped on

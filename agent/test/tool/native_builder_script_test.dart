@@ -358,6 +358,34 @@ void main() {
     }
   });
 
+  test('every decode owns a fresh whisper state over shared weights', () {
+    final source = File('native/whispercpp/sanad_whisper.c').readAsStringSync();
+    expect(source, contains('whisper_init_from_file_with_params_no_state'));
+    expect(source, contains('whisper_init_state(ctx)'));
+    expect(source, contains('whisper_full_with_state(ctx, state'));
+    expect(source, contains('whisper_full_n_segments_from_state(state)'));
+    expect(
+      source,
+      contains('whisper_full_get_segment_text_from_state(state, i)'),
+    );
+    expect(source, contains('cleanup:\n  whisper_free_state(state);'));
+    // A state the model cannot allocate must fail at load, where the worker
+    // still falls back to the CPU, not on every utterance afterwards.
+    final load = source.substring(
+      source.indexOf('sanad_whisper_load('),
+      source.indexOf('sanad_whisper_free('),
+    );
+    expect(load, contains('whisper_init_state(ctx)'));
+    expect(load, contains('whisper_free_state(probe)'));
+    expect(load, contains('whisper_free(ctx)'));
+    expect(load, contains('return NULL;'));
+    expect(
+      RegExp(r'\bwhisper_full\(ctx').hasMatch(source),
+      isFalse,
+      reason: 'the context must not retain an implicit decode state',
+    );
+  });
+
   test('the shim applies the decode window and the greedy candidate bound', () {
     // The C is compiled only in the native lanes, which do no decode, so this is
     // where the two measured decode parameters are kept wired: the utterance
