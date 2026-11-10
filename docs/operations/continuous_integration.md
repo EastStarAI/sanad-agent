@@ -18,11 +18,12 @@ component, because a component and a lane are not the same set: the client
 component feeds four lanes and the post-merge complement run has to be able to
 skip exactly the lanes the merge queue already proved.
 
-A classification failure, a `workflow_dispatch` run, or a changed path that
-matches no class enables every lane, so a broken classifier can never silently
-skip validation. A `push` to `main` also enables every lane — and then reduces
-that set to the complement described in the next section, which is the only
-reduction a `push` ever applies.
+A classification failure, a `workflow_dispatch` run, a changed path that matches
+no class at all, or a changed path that matches one of the always-run triggers in
+[`scripts/ci/lane_inputs.txt`](../../scripts/ci/lane_inputs.txt) enables every
+lane, so a broken classifier can never silently skip validation. A `push` to
+`main` also enables every lane — and then reduces that set to the complement
+described in the next section, which is the only reduction a `push` ever applies.
 
 Every lane is an independent job. The client and agent test lanes are matrices
 with one job per shard, so the critical path is the setup cost plus the
@@ -179,6 +180,77 @@ lane a pull request skipped still executes on the merged commit, and the release
 workflow additionally refuses to publish without a green `macOS full suite` run on
 the release commit (see
 [Release, Signing, and Deployment Architecture](release_and_signing.md#release-gate-on-the-macos-full-suite)).
+
+## Lane Input Sets
+
+Two lanes do not follow a component. `Native dictation` builds, verifies, loads,
+and stages the whisper and sherpa runtimes on five runners, and it consumes a
+small slice of the Agent rather than the Agent. `sanad-dev bootstrap` exercises
+the `sanad_dev` package and the Windows installer scripts, and it consumes a
+developer tool that no component class names. Both used to be gated by a
+component — `agent/**` and `client` or `docs` respectively — which cost real
+money: across the 48 merged pull requests of the reviewed population, Native
+dictation ran on 38 and `sanad-dev bootstrap` on 47, while their actual inputs
+changed far less often.
+
+`scripts/ci/lane_inputs.txt` is the single declaration of what each of them
+consumes. The `classify` job reads the `glob` lines with bash `case` semantics;
+the guard suite reads the `entry` lines. Nothing else may restate them.
+
+| Lane | Real inputs |
+| --- | --- |
+| `native-stt` | `agent/lib/infrastructure/stt/`, `agent/packages/stt_sherpa/`, `agent/packages/stt_sherpa_stub/`, `agent/test/stt/`, `agent/tool/ensure_native_stt.dart`, `agent/tool/stt_native_archive.dart`, `agent/tool/stt_native_runtime.dart`, `agent/tool/pubspec_overrides.no_sherpa.yaml` |
+| `sanad-dev` | `scripts/sanad_dev/`, `scripts/install.ps1`, `client/release/windows/` |
+
+Everything else keeps its component gate. `CLI automation` is deliberately **not**
+gated by an input set: the import closure of `bin/sanad_agent.dart` plus
+`tool/cli_aot_smoke.dart` is 575 of 585 `agent/lib` files, so a narrower trigger
+would save nothing while adding a way to miss a change. The Linux agent and
+client suites are not gated either — they are the coverage everything else
+assumes.
+
+### Always-run triggers
+
+A path that can change the meaning of a lane it does not touch enables every
+lane. Declared in the `all` section of the same file:
+
+| Trigger | Why every lane |
+| --- | --- |
+| `.github/workflows/*`, `.github/actions/*` | the workflow graph and the composite actions every lane runs |
+| `scripts/ci/*` | the shard listing, the event counters, the SDK pin, and this declaration itself |
+| `.fvmrc`, any `pubspec.yaml`, any `pubspec.lock` | toolchain and dependency resolution |
+| `agent/native/*` | the shipped native sources and their checksums |
+| `shared/*` | the runtime packages the Agent, the Client, and `sanad_dev` all consume |
+
+The previous classifier named only `.github/workflows/*`, and only as a
+`release` path, so a pull request that edited a lane in `ci.yml` did not run that
+lane before merge. `shared/windows_path/`, `shared/public_service_endpoints/`,
+and `scripts/sanad_dev/` matched no class at all, so alone they fell back to
+running everything while mixed with an Agent change they skipped the `sanad-dev`
+lane. Both holes are closed by the declaration above.
+
+### Why this cannot lose coverage
+
+1. **The guard fails the build, not the reviewer.** `agent/test/tool/ci_lane_inputs_test.dart`
+   resolves the Dart import closure of every declared `native-stt` entrypoint
+   through the package configuration and fails when any file in it matches none of
+   that lane's globs. A new `lib/` file a smoke test imports therefore fails in the
+   ordinary Agent shard, on the pull request that introduced it.
+2. **The same suite asserts the always-run triggers**, so narrowing a lane cannot
+   quietly drop one.
+3. **The complement run covers the merged commit.** A lane a pull request skipped
+   still runs on `push` to `main` unless a proof run executed and passed it on the
+   same tree.
+4. **The release gate covers the release commit.** `release.yml` refuses to build
+   or publish without a green `macOS full suite` on that exact commit, and the
+   macOS suite's definition comes from `list_test_shard.sh`, not from this
+   classifier.
+
+What this relaxation does **not** protect against is a dependency no import graph
+shows: a suite that reads a fixture by path, an FFI library loaded by name, or a
+runner-image change with no repository diff. Those are caught after merge by the
+complement run and before release by the gate — not before merge. That is the
+accepted trade: two lanes stop running on pull requests that cannot affect them.
 
 ## Test Sharding
 

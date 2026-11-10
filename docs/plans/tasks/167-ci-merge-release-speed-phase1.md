@@ -74,16 +74,16 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G4 — Narrow change-based gating and classifier holes
 
-- [ ] Declare one input set per gated lane in `scripts/ci/lane_inputs.txt`.
-- [ ] Gate `Native dictation` and `sanad-dev bootstrap` by their declared inputs.
-- [ ] Close the listed classifier holes (workflow edits, `shared/**`,
+- [x] Declare one input set per gated lane in `scripts/ci/lane_inputs.txt`.
+- [x] Gate `Native dictation` and `sanad-dev bootstrap` by their declared inputs.
+- [x] Close the listed classifier holes (workflow edits, `shared/**`,
       `scripts/sanad_dev/**`, `shared/public_service_endpoints/**`).
-- [ ] Keep every always-run trigger (workflows, actions, `scripts/ci`, `.fvmrc`,
+- [x] Keep every always-run trigger (workflows, actions, `scripts/ci`, `.fvmrc`,
       pubspecs, `agent/native/**`, `shared/**`, release) and the fail-closed
       fallback.
-- [ ] Add the guard test that fails when the Dart closure outgrows a lane's
+- [x] Add the guard test that fails when the Dart closure outgrows a lane's
       declared inputs.
-- [ ] Do not gate `CLI automation`.
+- [x] Do not gate `CLI automation`.
 
 ### G5 — Dictation tests on the native lane
 
@@ -141,5 +141,5 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ## Current status
 
-G0–G3 complete. G4–G7 are open; delivery stays on hold until the timing
+G0–G4 complete. G5–G7 are open; delivery stays on hold until the timing
 constraint is lifted.
