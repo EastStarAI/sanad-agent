@@ -69,6 +69,48 @@ relying on the default 30-second test timeout:
 - A larger budget changes no assertion: exceeding a deadline still fails the
   case on its original expectations.
 
+### Native dictation lane additions
+
+`Native dictation` also runs `test/stt/stt_digest_test.dart` and
+`test/stt/stt_download_pipeline_test.dart`, because those two files own the
+operating-system half of the download path: the digest selects a per-OS SHA-256
+(CommonCrypto on macOS, OpenSSL EVP on Linux, BCrypt on Windows) and the write
+pipeline opens a second file handle for writeback. Running them on one Linux
+shard proves neither.
+
+Measured on macOS arm64 (M-series), warm, `SANAD_STT_REQUIRE_NATIVE=1`, one file
+per `dart test` process and then the two together with `--concurrency 1`:
+
+| Invocation | Wall time | Reported case time |
+| --- | --- | --- |
+| `test/stt/stt_digest_test.dart` | 1.8–1.9 s | < 1 s |
+| `test/stt/stt_download_pipeline_test.dart` | 2.5–2.6 s | ~1 s |
+| both, `--concurrency 1` | 3.6–3.9 s | ~1 s |
+
+The wall time is `dart test` bootstrap plus compilation; the cases themselves are
+about a second. Estimated per lane, using the measured 2.4–3.0× per-unit factor
+of `macos-15-intel` against arm64 and allowing for JIT/process overhead on
+Windows:
+
+| Lane | Estimated added wall |
+| --- | --- |
+| `ubuntu-24.04`, `ubuntu-24.04-arm` | 4–5 s |
+| `macos-26` | 4 s (measured) |
+| `macos-15-intel` | 9–11 s |
+| `windows-2025` | 6–8 s |
+
+About 27–32 seconds of runner time across the five lanes, in exchange for proving
+the shipped OS crypto backend and the real write pipeline on every operating
+system the Agent is published for.
+
+**Concurrency is part of the contract.** `production pipeline costs little against
+the same sink in-process` compares the isolate hop against an in-process sink and
+requires the isolate path to cost less than 2× the in-process path. Run
+concurrently with the digest file it measured 2.18× and failed once in four
+attempts on an idle machine; run alone with `--concurrency 1` it passed 5/5 with
+the same assertions. The step therefore always passes `--concurrency 1`, and a
+failure there is a real cost regression rather than CPU contention.
+
 ## Performance regression gates
 
 For a changed hotspot, compare like-for-like warm runs. It passes when median

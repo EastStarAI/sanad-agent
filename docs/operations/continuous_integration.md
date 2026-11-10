@@ -99,6 +99,16 @@ whisper runtime on arm64 Linux for the same reason: the release matrix publishes
 from an x64 host. It uses the same per-lane `DART` selector and a whisper build
 cache keyed by the runner label.
 
+`Native dictation` also runs `test/stt/stt_digest_test.dart` and
+`test/stt/stt_download_pipeline_test.dart` on every operating system, because the
+SHA-256 the download verifies is a per-OS native binding and the write pipeline
+opens a second file handle for writeback; both fall back silently where the
+binding is missing, so a single Linux lane would prove neither. The two files run
+with `--concurrency 1` because the pipeline suite asserts a cost ratio against an
+in-process sink, and
+[Test Suite Performance and Ownership QA](../qa_maintenance/test_suite_performance_qa.md#native-dictation-lane-additions)
+owns the measured cost.
+
 Both arm64 lanes first copy `agent/tool/pubspec_overrides.no_sherpa.yaml` to
 `agent/pubspec_overrides.yaml`: `sherpa_onnx` requires the Flutter SDK, which
 those lanes do not install, so the Agent links the whisper-only engine stand-in.

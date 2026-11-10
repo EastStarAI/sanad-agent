@@ -87,11 +87,11 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G5 — Dictation tests on the native lane
 
-- [ ] Add `test/stt/stt_digest_test.dart` and
+- [x] Add `test/stt/stt_digest_test.dart` and
       `test/stt/stt_download_pipeline_test.dart` to `Native dictation`.
-- [ ] Run them sequentially so the in-process timing ratio is not measured under
+- [x] Run them sequentially so the in-process timing ratio is not measured under
       CPU contention.
-- [ ] Record the measured cost locally and estimate it per OS.
+- [x] Record the measured cost locally and estimate it per OS.
 
 ### G6 — Protected release concurrency
 
@@ -141,5 +141,5 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ## Current status
 
-G0–G4 complete. G5–G7 are open; delivery stays on hold until the timing
+G0–G5 complete. G6–G7 are open; delivery stays on hold until the timing
 constraint is lifted.

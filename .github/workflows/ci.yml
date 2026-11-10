@@ -787,6 +787,33 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           fvm dart test test/stt/sherpa_runtime_smoke_test.dart
+      # The two suites that own the operating-system half of the download path:
+      # the digest selects a per-OS SHA-256 (CommonCrypto, OpenSSL EVP, or
+      # BCrypt) and the write pipeline opens a second file handle for writeback.
+      # Both fall back to a pure-Dart answer silently when a binding cannot load,
+      # so they belong on the lanes that actually build the runtime for each
+      # shipped operating system instead of on one Linux shard. They skip - not
+      # fail - where the host genuinely has no OS implementation.
+      #
+      # `--concurrency 1` runs the two files one after the other: the pipeline
+      # suite times its isolate hop against an in-process sink, and a second file
+      # holding a CPU would be charged to that ratio.
+      - name: Verify the OS digest and the download write pipeline
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: |-
+          ${{ env.DART }} test --concurrency 1 \
+            test/stt/stt_digest_test.dart \
+            test/stt/stt_download_pipeline_test.dart
+      - name: Verify the OS digest and the download write pipeline
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test --concurrency 1 test/stt/stt_digest_test.dart test/stt/stt_download_pipeline_test.dart
 
   client-analyze:
     name: Analyze client
