@@ -140,7 +140,10 @@ jobs:
         run: |
           set -euo pipefail
           runs_url="repos/$GITHUB_REPOSITORY/actions/workflows/macos-full-suite.yml/runs?head_sha=$HEAD_SHA&per_page=100"
-          if ! runs_json="$(gh api "$runs_url" 2>"$RUNNER_TEMP/macos-suite.err")"; then
+          # An unreadable API and a reply that is not a run list are the same
+          # missing evidence: reported for validation_only, refused otherwise.
+          if ! runs_json="$(gh api "$runs_url" 2>"$RUNNER_TEMP/macos-suite.err")" ||
+            ! jq -e '.workflow_runs | type == "array"' >/dev/null 2>>"$RUNNER_TEMP/macos-suite.err" <<< "$runs_json"; then
             cat "$RUNNER_TEMP/macos-suite.err" >&2 || true
             if [[ "$VALIDATION_ONLY" == true ]]; then
               echo "::warning::Could not read the macOS full suite runs for $HEAD_SHA; a validation_only run reports this instead of failing."

@@ -107,7 +107,7 @@ artifact is built. It refuses on every state that is not proof:
 | No run for this commit | **fails** | warning only |
 | Run still queued or in progress | **fails** | warning only |
 | Run concluded `failure`, `cancelled`, or `timed_out` | **fails** | warning only |
-| Actions API unreadable | **fails** | warning only |
+| Actions API unreadable, or a reply that is not a run list | **fails** | warning only |
 
 Two details matter for reading the failure:
 
