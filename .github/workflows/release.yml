@@ -39,6 +39,10 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # The release gate reads the `macOS full suite` runs for this commit.
+      actions: read
     outputs:
       version: ${{ steps.contract.outputs.version }}
       artifact_version: ${{ steps.contract.outputs.artifact_version }}
@@ -108,6 +112,65 @@ jobs:
             echo "Release already exists; published and Draft releases are immutable candidates." >&2
             exit 1
           fi
+      # The release boundary must prove macOS, not inherit it. PR385 moved the
+      # complete Agent suite off the release path onto `macOS full suite`, which
+      # runs on every push to `main`, is deliberately not a required check, and
+      # cancels superseded runs. So a red, cancelled, or never-started suite
+      # blocked nothing, and "the release is green" only ever proved the macOS
+      # platform subset. This gate closes that hole: publication requires a
+      # successful run of that workflow on this exact commit.
+      #
+      # `draft` and `publish` both need this job, so a failure here stops the
+      # release before any artifact is built. A `validation_only` run publishes
+      # nothing, so for it the same evidence is reported and not enforced - that
+      # is the one path where a missing suite is a warning.
+      - name: Require a green macOS full suite on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          VALIDATION_ONLY: ${{ steps.contract.outputs.validation_only }}
+        run: |
+          set -euo pipefail
+          runs_url="repos/$GITHUB_REPOSITORY/actions/workflows/macos-full-suite.yml/runs?head_sha=$HEAD_SHA&per_page=100"
+          if ! runs_json="$(gh api "$runs_url" 2>"$RUNNER_TEMP/macos-suite.err")"; then
+            cat "$RUNNER_TEMP/macos-suite.err" >&2 || true
+            if [[ "$VALIDATION_ONLY" == true ]]; then
+              echo "::warning::Could not read the macOS full suite runs for $HEAD_SHA; a validation_only run reports this instead of failing."
+              exit 0
+            fi
+            echo "::error::Could not read the macOS full suite runs for $HEAD_SHA; refusing to publish on unproven macOS coverage."
+            exit 1
+          fi
+          # Any successful run on this exact commit is the evidence, even when a
+          # later run on the same commit was cancelled by a newer push: cancelling
+          # a `main` run only removes a duplicate, it does not un-prove the commit.
+          green="$(jq -r --arg sha "$HEAD_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+            | sort_by(.created_at) | reverse | (.[0].html_url // empty)' <<< "$runs_json")"
+          if [[ -n "$green" ]]; then
+            echo "macOS full suite is green on $HEAD_SHA: $green"
+            exit 0
+          fi
+          read -r status conclusion url event <<< "$(jq -r --arg sha "$HEAD_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha)]
+            | sort_by(.created_at) | reverse | (.[0] // {})
+            | "\(.status // "missing") \(.conclusion // "none") \(.html_url // "none") \(.event // "none")"' <<< "$runs_json")"
+          if [[ "$status" == missing ]]; then
+            reason="no macOS full suite run exists for $HEAD_SHA"
+          elif [[ "$status" != completed ]]; then
+            reason="the macOS full suite run for $HEAD_SHA is still $status ($event, $url)"
+          else
+            reason="the newest macOS full suite run for $HEAD_SHA concluded $conclusion ($event, $url)"
+          fi
+          if [[ "$VALIDATION_ONLY" == true ]]; then
+            echo "::warning::macOS full suite evidence is not satisfied: $reason. This run publishes nothing, so it is reported and not enforced."
+            exit 0
+          fi
+          {
+            echo "::error::Refusing to release: $reason."
+            echo "Wait for a green macOS full suite run on this exact commit, then re-run this workflow."
+          }
+          exit 1
 
   agent:
     needs: validate

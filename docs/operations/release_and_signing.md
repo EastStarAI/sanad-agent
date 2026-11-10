@@ -86,8 +86,46 @@ wrong:
 - "The release is green" is never evidence that the whole macOS suite is green.
   Only the subset ran there.
 - A macOS-only regression must be caught by the post-merge workflow before a
-  release tag is cut. Cutting a release while that workflow is red turns the
-  release lanes into the first place the regression could be observed.
+  release tag is cut. The release workflow enforces exactly that, rather than
+  relying on the operator to check it.
+
+### Release gate on the macOS full suite
+
+`validate` refuses to let a release proceed unless `.github/workflows/macos-full-suite.yml`
+has a **successful run on the exact commit** being released. The check queries
+the Actions API by `head_sha`, so a green suite on a nearby commit, on `main`
+after a later merge, or on the candidate's own release lanes is not accepted as
+evidence for this commit.
+
+The gate runs in `validate`, which `draft`, `publish`, `client-download-aliases`,
+and `production-assets` all depend on, so a failure stops the release before any
+artifact is built. It refuses on every state that is not proof:
+
+| Observed state | Tagged / publishing run | `validation_only` run |
+| --- | --- | --- |
+| Successful run on this commit | passes | passes |
+| No run for this commit | **fails** | warning only |
+| Run still queued or in progress | **fails** | warning only |
+| Run concluded `failure`, `cancelled`, or `timed_out` | **fails** | warning only |
+| Actions API unreadable | **fails** | warning only |
+
+Two details matter for reading the failure:
+
+- **A cancelled newer run does not un-prove the commit.** `macos-full-suite.yml`
+  cancels a superseded `main` run, so the newest run for a commit can be
+  `cancelled` while an earlier run on the same commit succeeded. Any successful
+  run on that commit is accepted; the failure message names the newest run so the
+  operator can see what happened.
+- **"Still running" is a refusal, not a wait.** The gate does not poll, because a
+  release candidate's macOS jobs compete with that suite for the same five-job
+  account cap. Wait for the suite to finish, then re-run the workflow: the same
+  refusal is what keeps a candidate from being dispatched on top of a running
+  suite.
+
+`validation_only` dispatches publish nothing and are the normal way to build the
+matrix before a tag exists, so for them the same evidence is reported as a
+warning. Publication from a dispatch (`request_publication`) and any tagged run
+are the two paths the gate enforces.
 
 The suite a release lane *does* run must stay priced: a fixed per-case
 `dart run` compilation is the largest avoidable cost on the slowest runner, so

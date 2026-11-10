@@ -66,11 +66,11 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G3 — Release gate on the macOS full suite
 
-- [ ] Query `macOS full suite` by `head_sha` in `release.yml` `validate`.
-- [ ] Fail closed for tagged and publishing runs when the suite is missing,
+- [x] Query `macOS full suite` by `head_sha` in `release.yml` `validate`.
+- [x] Fail closed for tagged and publishing runs when the suite is missing,
       failed, cancelled, or still running.
-- [ ] Report without failing for `validation_only` runs.
-- [ ] Document the gate in the release doc and the CI doc.
+- [x] Report without failing for `validation_only` runs.
+- [x] Document the gate in the release doc and the CI doc.
 
 ### G4 — Narrow change-based gating and classifier holes
 
@@ -141,5 +141,5 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ## Current status
 
-G0–G2 complete. G3–G7 are open; delivery stays on hold until the timing
+G0–G3 complete. G4–G7 are open; delivery stays on hold until the timing
 constraint is lifted.
