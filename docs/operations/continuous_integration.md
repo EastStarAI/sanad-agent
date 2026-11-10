@@ -55,8 +55,11 @@ pushed range.
 
 `All required checks pass` depends on every lane and on every shard of a
 matrix, and it fails unless each dependency succeeded or was skipped by
-classification. A new lane that is not added to its `needs` and to its result
-check is a coverage hole, so both edits belong to the same change.
+classification. It reads the classifier's per-lane outputs alongside the results:
+a lane the classifier marked `true` must end `success`, so a required lane that
+ends `skipped` (or a missing output) fails the aggregate instead of passing. A new
+lane that is not added to its `needs`, its result list, and the matching `REQUIRED`
+position is a coverage hole, so all three edits belong to the same change.
 
 ### Supervisor Skill Tests
 

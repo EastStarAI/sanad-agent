@@ -1219,13 +1219,27 @@ jobs:
           DOCS: ${{ needs.docs-governance.result }}
           RELEASE_SECURITY: ${{ needs.release-security.result }}
           SENSITIVE_REVIEW: ${{ needs.sensitive-review.result }}
+          # What the classifier required, lane for lane, in the same order as the
+          # results below: a lane it required must have succeeded, not skipped.
+          REQUIRED: >-
+            ${{ needs.classify.outputs.agent_checks }} ${{ needs.classify.outputs.agent_tests }}
+            ${{ needs.classify.outputs.supervisor_skill }} ${{ needs.classify.outputs.cli_automation }}
+            ${{ needs.classify.outputs.native_stt }} ${{ needs.classify.outputs.client_analyze }}
+            ${{ needs.classify.outputs.client_tests }} ${{ needs.classify.outputs.client_web }}
+            ${{ needs.classify.outputs.sanad_dev }} ${{ needs.classify.outputs.docs_governance }}
+            ${{ needs.classify.outputs.release_security }}
         run: |
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$SUPERVISOR_SKILL" "$CLI_AUTOMATION" "$NATIVE_STT" \
-            "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" \
-            "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
-            [[ "$result" == success || "$result" == skipped ]]
+          results=("$AGENT_CHECKS" "$AGENT_TESTS" "$SUPERVISOR_SKILL" "$CLI_AUTOMATION" "$NATIVE_STT"
+            "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY")
+          read -r -a required <<< "$REQUIRED"
+          test "${#required[@]}" -eq "${#results[@]}"
+          for i in "${!results[@]}"; do
+            case "${required[$i]}:${results[$i]}" in
+              true:success|false:success|false:skipped) ;;
+              *) echo "::error::Lane $((i + 1)) was required=${required[$i]} but ended ${results[$i]}."; exit 1 ;;
+            esac
           done
           test "$SENSITIVE_REVIEW" = success
