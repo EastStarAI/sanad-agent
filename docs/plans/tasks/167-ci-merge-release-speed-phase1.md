@@ -58,8 +58,11 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 ### G2 — Post-merge complement run
 
 - [x] Classify per lane instead of per component on `push` to `main`.
-- [x] Find the successful `merge_group` run for the identical commit and skip
-      exactly the lanes it proved; run everything when no such run exists.
+- [x] Find a proof run for the identical tree and skip exactly the lanes it
+      proved: (A) a successful `merge_group` run for this commit, else (B) the
+      merged pull request's own successful `pull_request` run when its head tree
+      equals this commit's tree and the head contains this commit's parent; run
+      everything when neither exists.
 - [x] Keep the post-merge-only work (branch history, credential scan, protected
       labels) always running.
 - [x] Document the rule in the workflow comments and the CI doc.
@@ -136,10 +139,14 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
       `ruby scripts/community/simulate_workflows.rb`.
 - [x] `fvm dart analyze` in `agent/` and the new guard test.
 - [x] CI doc, release doc, and the QA measurement record updated.
-- [x] Six commits with their guardrail statements; worktree removed after the
-      branch is delivered.
+- [x] Six commits with their guardrail statements.
+- [ ] Worktree removed after the branch is delivered.
 
 ## Current status
 
-G0–G6 complete. G7 (verification and delivery) is open; delivery stays on hold until the timing
-constraint is lifted.
+G0–G6 complete. G7 local verification is complete; delivery (push, pull
+request, first GitHub run) stays on hold until the timing constraint is lifted.
+Independent review added `review:` commits that declare the hidden `sanad-dev`
+inputs (`scripts/sanad-dev`, `scripts/sanad-dev.ps1`, `client/config/`), declare
+the two new native suites as entries, extend the guard to catch both classes, and
+correct three documentation statements.
