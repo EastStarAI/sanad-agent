@@ -227,12 +227,21 @@ measured defect before it existed:
   refused with `install_in_progress`, and the refusal also carries the running
   install so the sheet can show it. Two writers could never share one partial
   file, and a second press used to reach a code path that discarded it.
-- **Bounded memory.** Bytes are written through
-  `RandomAccessFile.writeFrom` and awaited, so at most one chunk is in flight.
-  An `IOSink.add` returns `void`, which let a fast producer — a fast link, or a
-  nearly-full volume whose writes stall — queue the whole artifact in the Dart
-  heap: measured at 723 MB retained for the 823 MB English entry, and 187 MB with
-  the await.
+- **Bounded memory, unpaced read.** Bytes cross a bounded write pipeline: the
+  reader hands each chunk to a writer isolate and waits only when
+  `kSttWriteWindowBytes` (4 MiB) of accepted bytes are already queued ahead of
+  the disk. The window is what keeps the bound that PR391 established — an
+  `IOSink.add` returns `void`, which let a fast producer queue the whole
+  artifact in the Dart heap (measured at 723 MB retained for the 823 MB English
+  entry), and a 4 MiB window is 21× the socket buffer the bound test observes
+  while staying two orders of magnitude under that defect. Awaiting the write
+  inside the reader's isolate bounded the heap too, but it also made the socket
+  idle for the whole write: on the reference 4-core host reading alone ran at
+  66.1 MB/s and the read-then-await-write loop at 29.1 MB/s, so the pipeline is
+  what recovers the difference (61.2 MB/s, 19 CPU-s/GB instead of 43.5). The
+  window is also the *only* admission rule: a chunk wider than it — a socket
+  hands over whatever it has buffered, megabytes after a pause — is split into
+  window-sized pieces and waited for piece by piece, never accepted whole.
 - **Resume, not restart.** A `.partial` file is preserved across every
   interruption and continued with `Range: bytes=<n>-`; a prefix is re-read into
   the same SHA-256 hasher, so the final comparison still covers the whole
@@ -263,6 +272,41 @@ measured defect before it existed:
   first tick, every phase change, and the terminal 100 %. The ~160 000 per-chunk
   events of one install become ~100, and the same tick carries the observed rate
   the sheet turns into a remaining-time estimate.
+
+#### What one artifact costs
+
+Two costs sit on the per-byte path besides the socket, and both were measured
+rather than assumed — on a 4-core ARM host against the real catalog URL, and on
+an Apple M4 against a loopback origin:
+
+- **The digest is a native call.** SHA-256 is computed while the bytes are
+  written, so it is a term in every second of every download. Pure Dart ran at
+  196 MB/s and 5.25 CPU-s/GB — 42 % of the per-byte cost, and the one stage a
+  slow core could cap. The OS already ships a hardware-accelerated
+  implementation, so `stt_digest.dart` calls CommonCrypto (macOS),
+  `libcrypto` (Linux) or `bcrypt` (Windows) through `dart:ffi`: 2 578 MB/s and
+  0.41 CPU-s/GB, 13× the throughput for 13× less CPU, with nothing bundled or
+  signed because the library belongs to the OS. A host without one falls back to
+  the pure-Dart path silently; both paths are pinned against `package:crypto`
+  across every chunking, including chunks wider than the 64 KiB native window.
+  What is cached is the availability *answer*, never a context: each digest owns
+  its own native state and its owner closes it in a `finally`, because native
+  memory has no finalizer and a cancelled or refused transfer never reaches
+  `finish()` — a shared context would corrupt two concurrent checksums and be
+  freed under the survivor.
+- **One connection, not many parallel ranges.** Splitting the artifact into
+  concurrent `Range` requests is the obvious way to use an idle link, and it did
+  not survive measurement: 1/2/3/4 workers ran at 29.4/31.0/30.1/28.4 MB/s on
+  the reference host, because the pacing term is per-byte CPU rather than
+  request latency, and the extra connections only added CPU and complexity. What
+  did work was removing the pacing terms: HTTP-only read 66.1 MB/s, and the
+  pipeline above 61.2 MB/s.
+
+The two changes together, measured on an Apple M4 against a loopback origin
+serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s
+before, 1 137.6 MB/s after** (7.17 s → 0.90 s per GiB), with the same workload
+falling from 40.3 s to 13.6 s of process CPU. The loopback origin removes the
+network, which is the point: what is left is the cost this change removed.
 
 Pin the size and the digest from the hosting provider's own metadata — the
 Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and

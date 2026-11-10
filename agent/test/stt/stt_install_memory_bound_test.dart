@@ -134,11 +134,14 @@ void main() {
 
   /// The envelope a healthy transfer stays inside: half the artifact.
   ///
-  /// Sized from measurement, not from a hunch: a healthy transfer carries
-  /// 1.2-14 MiB of in-flight bytes depending on the consumer and the host,
-  /// while the `IOSink` defect carries ~the whole artifact (29-30 MiB measured
-  /// for this 32 MiB file). The exact bound is the seam assertion; this one
-  /// only has to separate those two bands.
+  /// Sized from measurement, not from a hunch: the reader may run up to
+  /// [kSttWriteWindowBytes] ahead of the disk before it waits, and the socket
+  /// then adds buffers that belong to the host — 1 856 KiB idle on macOS and
+  /// close to 10 MiB on a Linux CI runner (measured 14 811 136 B in total, the
+  /// window plus loopback buffers). The `IOSink` defect this file was written
+  /// for carries ~the whole artifact (29-30 MiB measured for this 32 MiB file),
+  /// so this bound still separates the two bands, and the exact bound is the
+  /// seam assertion below rather than this one.
   const int transferGapLimit = fileSize ~/ 2;
 
   late Directory home;
@@ -233,11 +236,11 @@ void main() {
     final opened = Completer<_StalledSink>();
     final store = SttModelStore(
       sanadHome: home.path,
-      openWrite: (file, mode) async {
+      createPipeline: inProcessPipeline((file, mode) async {
         final sink = _StalledSink(await file.open(mode: mode));
         opened.complete(sink);
         return sink;
-      },
+      }),
     );
     final entry = entryFor('stalled-probe');
     final install = store.install(entry);
@@ -251,19 +254,20 @@ void main() {
     }
     expect(stalled.writtenLengths, hasLength(1));
 
-    // The socket buffers fill and stop; their size belongs to the host, so the
-    // contract asserted here is that the pipeline is *sealed* — a download that
-    // kept reading would add tens of MB in the next window, far beyond the one
-    // chunk of slack a settling socket may still hand over.
+    // The socket buffers and the byte window fill and stop; their size belongs
+    // to the host and to `kSttWriteWindowBytes`, so the contract asserted here
+    // is that the pipeline is *sealed*: a download that kept reading would add
+    // tens of MB (the whole artifact) rather than the window it is allowed.
     await _waitUntilStable(() => sent);
     final sealed = sent;
     await Future<void>.delayed(const Duration(milliseconds: 300));
     expect(
       sent - sealed,
-      lessThanOrEqualTo(_blockBytes),
+      lessThanOrEqualTo(kSttWriteWindowBytes),
       reason:
           'the download read ${(sent - sealed) ~/ 1024} KB while the file write '
-          'was blocked; the sink must apply backpressure',
+          'was blocked; the window must cap it at ${kSttWriteWindowBytes ~/ 1024}'
+          ' KB',
     );
     expect(
       sent,
@@ -283,17 +287,20 @@ void main() {
       File('${store.modelDir(entry.id)}/probe.bin').lengthSync(),
       fileSize,
     );
-  });
+    // Two structural waits (the first write, then a settled socket) plus a
+    // 32 MiB transfer: the runner's default 30 s is a latency budget, not a
+    // bound, and every assertion above still fails immediately when broken.
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('the real file sink never holds a share of the artifact', () async {
     _CountingSink? writer;
     final store = SttModelStore(
       sanadHome: home.path,
-      openWrite: (file, mode) async {
+      createPipeline: inProcessPipeline((file, mode) async {
         final sink = _CountingSink(await file.open(mode: mode));
         writer = sink;
         return sink;
-      },
+      }),
     );
     final entry = entryFor('envelope-probe');
     final partial = File('${store.modelDir(entry.id)}/probe.bin.partial');
@@ -338,7 +345,7 @@ void main() {
           'the transfer queued ${maxGap ~/ 1024} KB ahead of the disk for a '
           '${fileSize ~/ (1024 * 1024)} MB artifact',
     );
-  });
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('a retried transfer is not charged the bytes it replaced', () async {
     // A dropped connection is transient: the store keeps the bytes it wrote and
@@ -351,11 +358,11 @@ void main() {
     _CountingSink? writer;
     final store = SttModelStore(
       sanadHome: home.path,
-      openWrite: (file, mode) async {
+      createPipeline: inProcessPipeline((file, mode) async {
         final sink = _CountingSink(await file.open(mode: mode));
         writer = sink;
         return sink;
-      },
+      }),
     );
     final entry = entryFor('retry-probe');
     final partial = File('${store.modelDir(entry.id)}/probe.bin.partial');
@@ -398,5 +405,5 @@ void main() {
           'the retried transfer queued ${maxGap ~/ 1024} KB ahead of the disk '
           'for a ${fileSize ~/ (1024 * 1024)} MB artifact',
     );
-  });
+  }, timeout: const Timeout(Duration(seconds: 90)));
 }
