@@ -91,11 +91,9 @@ class IsolateWritePipeline implements SttWritePipeline {
   final SendPort _commands;
   final ReceivePort _inbox;
   final Completer<void> _closed;
-  final List<_RoomWaiter> _room = <_RoomWaiter>[];
-  Completer<void>? _drained;
+  final _WriteWindow _window = _WriteWindow();
   SttWriteFailure? _failure;
   Isolate? _isolate;
-  int _queued = 0;
   bool _closing = false;
   bool _done = false;
 
@@ -137,9 +135,7 @@ class IsolateWritePipeline implements SttWritePipeline {
 
   void _onMessage(Object? message) {
     if (message is int) {
-      _queued -= message;
-      if (_queued < 0) _queued = 0;
-      _release();
+      _window.release(message);
       return;
     }
     if (message is String) {
@@ -157,29 +153,9 @@ class IsolateWritePipeline implements SttWritePipeline {
     }
   }
 
-  void _release() {
-    while (_room.isNotEmpty) {
-      final waiter = _room.first;
-      if (_queued + waiter.size > kSttWriteWindowBytes) break;
-      _room.removeAt(0);
-      if (!waiter.completer.isCompleted) waiter.completer.complete();
-    }
-    if (_queued == 0) {
-      final drained = _drained;
-      _drained = null;
-      if (drained != null && !drained.isCompleted) drained.complete();
-    }
-  }
-
   void _fail(SttWriteFailure failure) {
     _failure ??= failure;
-    for (final waiter in _room) {
-      if (!waiter.completer.isCompleted) waiter.completer.complete();
-    }
-    _room.clear();
-    final drained = _drained;
-    _drained = null;
-    if (drained != null && !drained.isCompleted) drained.complete();
+    _window.wakeAll();
   }
 
   void _finishClosing() {
@@ -197,25 +173,28 @@ class IsolateWritePipeline implements SttWritePipeline {
   Future<void> add(List<int> chunk) async {
     _throwIfFailed();
     if (chunk.isEmpty) return;
-    if (_queued + chunk.length > kSttWriteWindowBytes) {
-      final waiter = _RoomWaiter(chunk.length);
-      _room.add(waiter);
-      await waiter.completer.future;
+    final source = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+    for (var offset = 0; offset < source.length;) {
+      final take = source.length - offset < kSttWriteWindowBytes
+          ? source.length - offset
+          : kSttWriteWindowBytes;
+      await _window.reserve(take);
       _throwIfFailed();
+      if (_done) return;
+      _window.accept(take);
+      // A copy: the caller may reuse its buffer as soon as this returns, and the
+      // writer isolate gets its own memory either way.
+      _commands.send(
+        Uint8List.fromList(Uint8List.sublistView(source, offset, offset + take)),
+      );
+      offset += take;
     }
-    if (_done) return;
-    _queued += chunk.length;
-    // A copy: the caller may reuse its buffer as soon as this returns.
-    _commands.send(Uint8List.fromList(chunk));
   }
 
   @override
   Future<void> drain() async {
     _throwIfFailed();
-    if (_queued == 0) return;
-    final drained = Completer<void>();
-    _drained = drained;
-    await drained.future;
+    await _window.idle();
     _throwIfFailed();
   }
 
@@ -237,6 +216,76 @@ class _RoomWaiter {
 
   final int size;
   final Completer<void> completer = Completer<void>();
+}
+
+/// The byte window both pipelines share.
+///
+/// One rule, in one place: the reader may run at most [kSttWriteWindowBytes]
+/// ahead of the disk. Callers **reserve** room before accepting bytes and
+/// **release** it when the write completes, and a chunk is split into
+/// window-sized pieces first — a socket hands over whatever it has buffered,
+/// which after a pause is megabytes, so checking `queued + chunk.length` once
+/// per call both over-admits such a chunk and deadlocks on one bigger than the
+/// window itself, since no completion could ever make room for it.
+class _WriteWindow {
+  final List<_RoomWaiter> _room = <_RoomWaiter>[];
+  Completer<void>? _idle;
+  int _queued = 0;
+
+  /// Bytes accepted but not yet written.
+  int get queuedBytes => _queued;
+
+  /// Waits until [size] bytes fit; [size] never exceeds the window.
+  Future<void> reserve(int size) async {
+    assert(size <= kSttWriteWindowBytes, 'a piece larger than the window');
+    while (_queued + size > kSttWriteWindowBytes) {
+      final waiter = _RoomWaiter(size);
+      _room.add(waiter);
+      await waiter.completer.future;
+    }
+  }
+
+  /// Accounts [size] accepted bytes.
+  void accept(int size) => _queued += size;
+
+  /// Accounts [size] written bytes and wakes whatever now fits.
+  void release(int size) {
+    _queued -= size;
+    if (_queued < 0) _queued = 0;
+    _wake();
+  }
+
+  /// Completes when nothing is queued.
+  Future<void> idle() async {
+    if (_queued == 0) return;
+    final idle = Completer<void>();
+    _idle = idle;
+    await idle.future;
+  }
+
+  /// Wakes every waiter: the transfer failed, so nobody should keep waiting.
+  void wakeAll() {
+    for (final waiter in _room) {
+      if (!waiter.completer.isCompleted) waiter.completer.complete();
+    }
+    _room.clear();
+    final idle = _idle;
+    _idle = null;
+    if (idle != null && !idle.isCompleted) idle.complete();
+  }
+
+  void _wake() {
+    while (_room.isNotEmpty &&
+        _queued + _room.first.size <= kSttWriteWindowBytes) {
+      final waiter = _room.removeAt(0);
+      if (!waiter.completer.isCompleted) waiter.completer.complete();
+    }
+    if (_queued == 0) {
+      final idle = _idle;
+      _idle = null;
+      if (idle != null && !idle.isCompleted) idle.complete();
+    }
+  }
 }
 
 /// The writer isolate: one destination, every write awaited, one ack each.
@@ -297,30 +346,14 @@ class InProcessWritePipeline implements SttWritePipeline {
   InProcessWritePipeline(this._sink);
 
   final SttWriteSink _sink;
-  final List<_RoomWaiter> _room = <_RoomWaiter>[];
+  final _WriteWindow _window = _WriteWindow();
   final List<Uint8List> _pending = <Uint8List>[];
   Object? _failure;
-  int _queued = 0;
   bool _closed = false;
   bool _pumping = false;
-  Completer<void>? _idle;
 
   /// Bytes accepted but not yet written; the test's window probe.
-  int get queuedBytes => _queued;
-
-  void _release() {
-    while (_room.isNotEmpty) {
-      final waiter = _room.first;
-      if (_queued + waiter.size > kSttWriteWindowBytes) break;
-      _room.removeAt(0);
-      if (!waiter.completer.isCompleted) waiter.completer.complete();
-    }
-    if (_queued == 0) {
-      final idle = _idle;
-      _idle = null;
-      if (idle != null && !idle.isCompleted) idle.complete();
-    }
-  }
+  int get queuedBytes => _window.queuedBytes;
 
   void _throwIfFailed() {
     final failure = _failure;
@@ -349,47 +382,54 @@ class InProcessWritePipeline implements SttWritePipeline {
   Future<void> _pump() async {
     if (_pumping) return;
     _pumping = true;
-    while (_pending.isNotEmpty) {
-      final bytes = _pending.removeAt(0);
-      try {
-        if (_failure == null) await _sink.writeFrom(bytes);
-      } on Object catch (error) {
-        _failure ??= _asFailure(error);
-      } finally {
-        _queued -= bytes.length;
-        _release();
+    try {
+      while (_pending.isNotEmpty) {
+        final bytes = _pending.removeAt(0);
+        try {
+          if (_failure == null) await _sink.writeFrom(bytes);
+        } on Object catch (error) {
+          _failure ??= _asFailure(error);
+          _window.wakeAll();
+        } finally {
+          _window.release(bytes.length);
+        }
       }
+    } finally {
+      // Also on an unexpected throw: a pump left marked as running would never
+      // restart, and every later `add` would queue bytes nobody writes.
+      _pumping = false;
     }
-    _pumping = false;
   }
 
   @override
   Future<void> add(List<int> chunk) async {
     _throwIfFailed();
     if (chunk.isEmpty || _closed) return;
-    if (_queued + chunk.length > kSttWriteWindowBytes) {
-      final waiter = _RoomWaiter(chunk.length);
-      _room.add(waiter);
-      await waiter.completer.future;
+    final source = chunk is Uint8List ? chunk : Uint8List.fromList(chunk);
+    for (var offset = 0; offset < source.length;) {
+      final take = source.length - offset < kSttWriteWindowBytes
+          ? source.length - offset
+          : kSttWriteWindowBytes;
+      await _window.reserve(take);
       _throwIfFailed();
       if (_closed) return;
+      _window.accept(take);
+      // Copied because the caller may reuse its buffer as soon as `add` returns
+      // and the write happens after that.
+      _pending.add(
+        Uint8List.fromList(
+          Uint8List.sublistView(source, offset, offset + take),
+        ),
+      );
+      unawaited(_pump());
+      offset += take;
     }
-    // Copied because the caller may reuse its buffer as soon as `add` returns
-    // and the write happens after that.
-    final bytes = Uint8List.fromList(chunk);
-    _queued += bytes.length;
-    _pending.add(bytes);
-    unawaited(_pump());
   }
 
   @override
   Future<void> drain() async {
     _throwIfFailed();
-    if (_queued > 0) {
-      final idle = Completer<void>();
-      _idle = idle;
-      await idle.future;
-    }
+    await _window.idle();
     _throwIfFailed();
   }
 
@@ -397,11 +437,7 @@ class InProcessWritePipeline implements SttWritePipeline {
   Future<void> close() async {
     if (_closed) return;
     _closed = true;
-    if (_queued > 0) {
-      final idle = Completer<void>();
-      _idle = idle;
-      await idle.future;
-    }
+    await _window.idle();
     try {
       // The sink is closed even when a write already failed: a refused write
       // must not leak the handle the next attempt resumes from.

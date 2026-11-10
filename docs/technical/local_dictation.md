@@ -238,7 +238,10 @@ measured defect before it existed:
   inside the reader's isolate bounded the heap too, but it also made the socket
   idle for the whole write: on the reference 4-core host reading alone ran at
   66.1 MB/s and the read-then-await-write loop at 29.1 MB/s, so the pipeline is
-  what recovers the difference (61.2 MB/s, 19 CPU-s/GB instead of 43.5).
+  what recovers the difference (61.2 MB/s, 19 CPU-s/GB instead of 43.5). The
+  window is also the *only* admission rule: a chunk wider than it — a socket
+  hands over whatever it has buffered, megabytes after a pause — is split into
+  window-sized pieces and waited for piece by piece, never accepted whole.
 - **Resume, not restart.** A `.partial` file is preserved across every
   interruption and continued with `Range: bytes=<n>-`; a prefix is re-read into
   the same SHA-256 hasher, so the final comparison still covers the whole

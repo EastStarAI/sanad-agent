@@ -207,6 +207,54 @@ void main() {
       expect(sink.bytes, 48 * _chunk);
       expect(file.lengthSync(), 48 * _chunk);
     });
+
+    test('splits a chunk bigger than the window instead of taking it whole', () async {
+      // The reader does not choose its chunk size. A socket hands over whatever
+      // it has buffered — megabytes after a pause, and more on a Linux loopback
+      // stack than on macOS — so a single `add` larger than the window must be
+      // split. Taking it whole breaks the bound; waiting for room that can never
+      // exist for it deadlocks the download, which is what a 4 MiB window and a
+      // 13 MiB chunk did on CI.
+      final file = File('${dir.path}/oversize.bin');
+      final sink = _GatedSink(await file.open(mode: FileMode.write));
+      final pipeline = InProcessWritePipeline(sink);
+      final big = Uint8List(kSttWriteWindowBytes * 5 ~/ 2);
+      for (var i = 0; i < big.length; i++) {
+        big[i] = (i * 13) & 0xFF;
+      }
+
+      var peak = pipeline.queuedBytes;
+      final sampler = Timer.periodic(const Duration(milliseconds: 2), (_) {
+        if (pipeline.queuedBytes > peak) peak = pipeline.queuedBytes;
+      });
+      try {
+        final adding = pipeline.add(big);
+        await sink.startedWrites(1);
+        // Long enough for a bad implementation to accept the rest of the chunk.
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+        expect(
+          peak,
+          lessThanOrEqualTo(kSttWriteWindowBytes),
+          reason: 'the pipeline admitted ${peak ~/ 1024} KB of one '
+              '${big.length ~/ 1024} KB chunk past a '
+              '${kSttWriteWindowBytes ~/ 1024} KB window',
+        );
+
+        sink.release();
+        await adding.timeout(const Duration(seconds: 30));
+        await pipeline.drain();
+        await pipeline.close();
+      } finally {
+        sampler.cancel();
+      }
+
+      expect(file.lengthSync(), big.length);
+      expect(
+        file.readAsBytesSync(),
+        big,
+        reason: 'the split pieces must land whole and in order',
+      );
+    });
   });
 
   group('failures', () {
@@ -373,6 +421,26 @@ void main() {
       final expected = <int>[...blocks[0], ...blocks[1], ...blocks[2]];
       expect(file.lengthSync(), expected.length);
       expect(file.readAsBytesSync(), expected);
+    });
+
+    test('splits one chunk bigger than the window', () async {
+      // The shipped pipeline has its own window accounting across the isolate
+      // boundary (bytes are accepted on send and released on ack), and it must
+      // split an oversized chunk exactly like the in-process one: the reader
+      // hands it whatever the socket produced.
+      final file = File('${dir.path}/isolate-big.bin');
+      final pipeline = await IsolateWritePipeline.open(file, FileMode.write);
+      final big = Uint8List(kSttWriteWindowBytes * 2 + 1024);
+      for (var i = 0; i < big.length; i++) {
+        big[i] = (i * 37) & 0xFF;
+      }
+
+      await pipeline.add(big).timeout(const Duration(seconds: 30));
+      await pipeline.drain();
+      await pipeline.close();
+
+      expect(file.lengthSync(), big.length);
+      expect(file.readAsBytesSync(), big);
     });
 
     test('costs little against the same sink in-process', () async {
