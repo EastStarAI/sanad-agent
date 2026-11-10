@@ -32,6 +32,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_model_store.dart';
 import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
 import 'package:test/test.dart';
@@ -550,6 +551,138 @@ void main() {
         ).code,
         'storage_full',
       );
+    });
+  });
+
+  group('degraded writeback', () {
+    // A platform that will not give the flusher a second handle (a stricter
+    // Windows sharing mode, an AV lock) must cost the overlap, not the install.
+    // The pipeline tests run on one OS, so the refusal is injected where the
+    // handle would be opened and the rest of the path is the real one.
+    const int small = 2 * _chunk;
+
+    test('falls back to one flush at close when the background handle is refused', () async {
+      final file = File('${dir.path}/degraded.bin');
+      final sink = await _FlushingSink.open(file);
+      // Two chunks is a window, so the pre-degradation rule would have forced a
+      // writeback mid-transfer: zero here is the fallback, not a small artifact.
+      final pipeline = InProcessWritePipeline(
+        sink,
+        flushWindowBytes: small,
+        writeback: false,
+      );
+
+      for (var i = 0; i < 10; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      expect(
+        sink.flushes,
+        0,
+        reason: 'writeback was requested after the background handle was refused',
+      );
+      expect(file.lengthSync(), 10 * _chunk);
+
+      await pipeline.close();
+      expect(
+        sink.flushes,
+        1,
+        reason: 'the close-only fallback must still force the artifact out once',
+      );
+      expect(file.lengthSync(), 10 * _chunk);
+    });
+
+    test('an install whose writeback is unavailable still lands byte-exact', () async {
+      // The shipped path: the flusher is really spawned and really refuses its
+      // open, so the message hop, the governor's disabled mode, the lifecycle
+      // line and the close flush are all the production ones. Anything worse than
+      // a lost overlap fails here.
+      final records = <LogRecord>[];
+      final logged = Completer<void>();
+      final subscription = Logger.root.onRecord.listen((record) {
+        if (record.loggerName != 'SttWritePipeline') return;
+        records.add(record);
+        if (!logged.isCompleted) logged.complete();
+      });
+      addTearDown(subscription.cancel);
+
+      final file = File('${dir.path}/isolate-degraded.bin');
+      final pipeline = await IsolateWritePipeline.open(
+        file,
+        FileMode.write,
+        flushWindowBytes: _chunk,
+        writeback: false,
+      );
+      final blocks = <Uint8List>[for (var i = 0; i < 8; i++) _block(i)];
+      for (final block in blocks) {
+        await pipeline.add(block);
+      }
+      await pipeline.drain();
+      await pipeline.close();
+
+      final expected = <int>[for (final block in blocks) ...block];
+      expect(file.lengthSync(), expected.length);
+      expect(file.readAsBytesSync(), expected);
+
+      await logged.future.timeout(const Duration(seconds: 5));
+      expect(
+        records,
+        hasLength(1),
+        reason: 'the fallback is one lifecycle line, not one per artifact chunk',
+      );
+      expect(
+        records.single.message,
+        allOf(
+          contains('background writeback unavailable'),
+          contains('close-only flush'),
+        ),
+      );
+      expect(records.single.level, Level.INFO);
+    });
+
+    test('a model install completes when writeback is unavailable', () async {
+      // What the user sees on such a platform: the store's own install path, its
+      // digest check and its atomic activation, with no writeback in the middle.
+      // A typed failure here would be an install that never completes at all.
+      final root = Directory.systemTemp.createTempSync('stt-degraded-install-');
+      addTearDown(() => root.deleteSync(recursive: true));
+      final body = Uint8List(384 * 1024);
+      for (var i = 0; i < body.length; i++) {
+        body[i] = (i * 11) & 0xFF;
+      }
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => server.close(force: true));
+      server.listen((request) async {
+        request.response.contentLength = body.length;
+        request.response.add(body);
+        await request.response.close();
+      });
+
+      final store = SttModelStore(
+        sanadHome: root.path,
+        createPipeline: (file, mode) =>
+            IsolateWritePipeline.open(file, mode, writeback: false),
+      );
+      final entry = SttCatalogEntry(
+        id: 'degraded-probe',
+        name: 'Degraded probe',
+        description: const {'en': 'Degraded probe.'},
+        mode: SttModelMode.batchVad,
+        engine: SttEngineKind.whisperCpp,
+        files: <SttModelFile>[
+          SttModelFile(
+            name: 'probe.bin',
+            url: 'http://${server.address.address}:${server.port}/probe.bin',
+            sizeBytes: body.length,
+            sha256: sha256.convert(body).toString(),
+          ),
+        ],
+      );
+
+      await store.install(entry);
+      final installed = File('${root.path}/models/stt/degraded-probe/probe.bin');
+      expect(installed.existsSync(), isTrue, reason: 'the artifact was activated');
+      expect(installed.readAsBytesSync(), body);
     });
   });
 

@@ -323,7 +323,17 @@ origin:
   handle, so durability against a power cut is exactly what it was. A refused
   flush is the typed failure a refused write is (`storage_full` for `ENOSPC`),
   never a silently short artifact. Two handles are also what `RandomAccessFile`
-  requires: it refuses a second concurrent async operation on one handle.
+  requires: it refuses a second concurrent async operation on one handle. A
+  platform that refuses that handle — a stricter Windows sharing mode, an
+  antivirus lock — degrades instead of failing: one lifecycle line
+  (`background writeback unavailable (…), using close-only flush`), no bound, no
+  requests, and the single flush at `close`, which is exactly the behaviour
+  before this change. A flush that fails *after* the handle opened keeps its
+  typed failure, because that one means the disk is gone rather than the
+  platform being strict. The bound and the rule are one library of their own
+  (`agent/lib/infrastructure/stt/stt_write_bounds.dart`), shared by the isolate
+  pipeline and the in-process seam so the rule has a single owner and neither
+  file outgrows the 1000-line ratchet.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s

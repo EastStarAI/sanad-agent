@@ -1,7 +1,9 @@
 # 165 — Dictation download writeback overlap
 
 **Status:** implemented on `fix/stt-download-flush`
-**Owners:** `agent/lib/infrastructure/stt/stt_download_pipeline.dart`
+**Owners:** `agent/lib/infrastructure/stt/stt_download_pipeline.dart` (the shipped
+isolate pipeline) and `agent/lib/infrastructure/stt/stt_write_bounds.dart` (the two
+bounds it obeys — written separately so both files stay inside the 1000-line ratchet)
 **Contract:** [docs/technical/local_dictation.md](../../technical/local_dictation.md)
 **Predecessor:** #164 / PR402 (the per-byte cost this made visible)
 
@@ -53,6 +55,13 @@ Force writeback **inside** the transfer, and never on the writer's thread.
    awaited, and the remainder is forced on the writer's handle; a refused flush
    is the same typed `SttWriteFailure` (`storage_full` for `ENOSPC`) a refused
    write is.
+5. **A refused background handle degrades, never fails.** A platform that will
+   not open a second handle of the `.partial` (a stricter Windows sharing mode,
+   an antivirus lock), or an isolate that cannot be spawned, logs one lifecycle
+   line and falls back to the close-only flush — no bound, no requests, one
+   `flushSync()` at close — because the overlap is an optimisation and the
+   install is not. A flush that fails *after* the handle opened stays a typed
+   failure.
 
 Rejected: a synchronous `flushSync()` in the writer (the first review round — it
 keeps the end-to-end at `network + disk`, measured 34.4 s against 31.9 s), a
@@ -103,6 +112,10 @@ page cache instead of 1.5 GB, and CPU per byte unchanged (the fsync is I/O wait)
       bytes already covered), close waiting for a running flush, a refused flush
       typed as `SttWriteFailure`/`storage_full`, and the shipped isolate path
       keeping every byte in order across repeated writebacks.
+- [x] Degradation coverage: an in-process fallback that flushes once at close and
+      never mid-transfer, the shipped isolate path landing byte-exact with its
+      open refused (plus one INFO lifecycle line), and a real `SttModelStore`
+      install completing and activating its artifact with writeback unavailable.
 - [x] Analyzer clean over `lib/infrastructure/stt` and `test/stt`.
 - [x] The affected suites green, each in its own process: `stt_digest_test`,
       `stt_download_pipeline_test`, `stt_install_memory_bound_test`,
@@ -115,7 +128,6 @@ page cache instead of 1.5 GB, and CPU per byte unchanged (the fsync is I/O wait)
       fsync latency instead of the isolate hop (0.47 against its `> 0.5` bound).
 
 ### G3 — Documentation and delivery
-
 - [x] `docs/technical/local_dictation.md`: the writeback cost, the two-isolate
       shape, and the three-build table.
 - [x] `agent/AGENTS.md`: the install invariant names the flusher isolate, the
@@ -131,6 +143,10 @@ page cache instead of 1.5 GB, and CPU per byte unchanged (the fsync is I/O wait)
       exceed the bound, then it stops acknowledging until a flush completes.
 - [x] Given a flush already running, when more windows are written, then exactly
       one further request is remembered and only issued if still needed.
+- [x] Given a platform that refuses the flusher's handle (or an isolate that
+      cannot be spawned), when a model is installed, then the artifact lands
+      byte-exact and activates, exactly one lifecycle line is logged, and no
+      `SttWriteFailure` is raised — the fallback is the single close flush.
 - [x] Given an artifact smaller than one window, when it is installed, then no
       writeback happens before close.
 - [x] Given a flush the volume refuses, when it happens, then the pipeline
