@@ -21,11 +21,21 @@ class _RangeServer {
   _RangeServer(this.bytes);
 
   final Uint8List bytes;
+
+  /// Bodies by request path, so a multi-artifact model can be served. A path
+  /// that is not listed falls back to [bytes].
+  final Map<String, Uint8List> extra = <String, Uint8List>{};
   final List<String?> ranges = <String?>[];
   int requests = 0;
 
   /// Abort the first response after half of the requested slice.
   bool dropFirstBody = false;
+
+  /// Paces a body in [chunkBytes] pieces: loopback otherwise buffers an entire
+  /// small artifact and delivers it in one or two reads, which makes a
+  /// mid-transfer cancel a coin toss.
+  int chunkBytes = 0;
+  Duration chunkPause = Duration.zero;
 
   late HttpServer server;
 
@@ -33,6 +43,7 @@ class _RangeServer {
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requests++;
+      final body = extra[request.uri.path] ?? bytes;
       final range = request.headers.value(HttpHeaders.rangeHeader);
       ranges.add(range);
       var start = 0;
@@ -41,7 +52,7 @@ class _RangeServer {
         expect(match, isNotNull, reason: 'unexpected range header: $range');
         start = int.parse(match!.group(1)!);
       }
-      final slice = bytes.sublist(start);
+      final slice = body.sublist(start);
       final response = request.response;
       response.statusCode = start > 0
           ? HttpStatus.partialContent
@@ -49,12 +60,25 @@ class _RangeServer {
       if (start > 0) {
         response.headers.set(
           HttpHeaders.contentRangeHeader,
-          'bytes $start-${bytes.length - 1}/${bytes.length}',
+          'bytes $start-${body.length - 1}/${body.length}',
         );
       }
       response.contentLength = slice.length;
       if (!(dropFirstBody && requests == 1)) {
-        response.add(slice);
+        if (chunkBytes <= 0) {
+          response.add(slice);
+        } else {
+          for (var offset = 0; offset < slice.length; offset += chunkBytes) {
+            final end = offset + chunkBytes < slice.length
+                ? offset + chunkBytes
+                : slice.length;
+            response.add(slice.sublist(offset, end));
+            await response.flush();
+            if (chunkPause > Duration.zero) {
+              await Future<void>.delayed(chunkPause);
+            }
+          }
+        }
         await response.close();
         return;
       }
@@ -65,7 +89,7 @@ class _RangeServer {
       final socket = await response.detachSocket(writeHeaders: false);
       final status = start > 0 ? '206 Partial Content' : '200 OK';
       final contentRange = start > 0
-          ? 'Content-Range: bytes $start-${bytes.length - 1}/${bytes.length}\r\n'
+          ? 'Content-Range: bytes $start-${body.length - 1}/${body.length}\r\n'
           : '';
       socket.add(
         utf8.encode(
@@ -118,6 +142,130 @@ void main() {
       ),
     ],
   );
+
+  /// Two artifacts served by [source], the shape of a whisper encoder/decoder
+  /// pair — where the encoder is often already complete on a resume.
+  SttCatalogEntry multiFileEntry(
+    String id,
+    Uint8List encoder,
+    Uint8List decoder,
+  ) {
+    final base = 'http://${source.server.address.address}:${source.server.port}';
+    return SttCatalogEntry(
+      id: id,
+      name: 'Resume probe',
+      description: const {'en': 'Resume probe.'},
+      mode: SttModelMode.batchVad,
+      engine: SttEngineKind.whisperCpp,
+      files: [
+        SttModelFile(
+          name: 'encoder.bin',
+          url: '$base/encoder.bin',
+          sizeBytes: encoder.length,
+          sha256: sha256.convert(encoder).toString(),
+        ),
+        SttModelFile(
+          name: 'decoder.bin',
+          url: '$base/decoder.bin',
+          sizeBytes: decoder.length,
+          sha256: sha256.convert(decoder).toString(),
+        ),
+      ],
+    );
+  }
+
+  test('a resumed multi-file install opens at its cumulative progress',
+      () async {
+    // D10: the seed and the tick offset counted only the pending artifacts, so a
+    // resumed encoder/decoder model opened at the pending file's share of the
+    // pending total — 24 % on disk shown as 7 % — and the bar stepped backwards
+    // on its own resume. Progress is cumulative across every artifact.
+    final encoder = payload;
+    final decoder = Uint8List.fromList(
+      List<int>.generate(192 * 1024, (index) => (index * 11) & 0xff),
+    );
+    source.extra['/encoder.bin'] = encoder;
+    source.extra['/decoder.bin'] = decoder;
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = multiFileEntry('multi-probe', encoder, decoder);
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    // The previous run finished the encoder and stopped a third into the decoder.
+    File('${dir.path}/encoder.bin').writeAsBytesSync(encoder);
+    final kept = decoder.length ~/ 3;
+    File(
+      '${dir.path}/decoder.bin.partial',
+    ).writeAsBytesSync(decoder.sublist(0, kept));
+
+    final seed = store.installSeed(entry)!;
+
+    expect(seed.received, encoder.length + kept);
+    expect(seed.total, encoder.length + decoder.length);
+
+    final ticks = <(int, int)>[];
+    await store.install(
+      entry,
+      onProgress: (id, received, total) => ticks.add((received, total)),
+    );
+
+    expect(ticks, isNotEmpty);
+    expect(
+      ticks.first.$1,
+      seed.received,
+      reason: 'the first tick must not step back from the projection',
+    );
+    expect(ticks.first.$2, seed.total);
+    for (var index = 1; index < ticks.length; index++) {
+      expect(
+        ticks[index].$1,
+        greaterThanOrEqualTo(ticks[index - 1].$1),
+        reason: 'progress never steps backwards within a model',
+      );
+      expect(ticks[index].$2, seed.total, reason: 'the total is the model, not the fetch');
+    }
+    expect(ticks.last.$1, seed.total);
+    expect(
+      File('${dir.path}/encoder.bin').lengthSync(),
+      encoder.length,
+      reason: 'a complete artifact is not fetched again',
+    );
+    expect(source.requests, 1, reason: 'only the partial artifact is requested');
+  });
+
+  test('the free-space guard charges only what this run writes', () async {
+    // The complete artifact counts toward progress but must not inflate the
+    // volume requirement: asking for the whole model would refuse a resume the
+    // disk can clearly hold.
+    final encoder = payload;
+    final decoder = Uint8List.fromList(
+      List<int>.generate(64 * 1024, (index) => (index * 13) & 0xff),
+    );
+    source.extra['/encoder.bin'] = encoder;
+    source.extra['/decoder.bin'] = decoder;
+    await source.start();
+    final store = SttModelStore(
+      sanadHome: home.path,
+      freeSpaceProbe: (path) async => 0,
+    );
+    final entry = multiFileEntry('space-probe', encoder, decoder);
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    File('${dir.path}/encoder.bin').writeAsBytesSync(encoder);
+
+    // Zero free bytes refuse the *fetch*, and the error names its size — the
+    // marker of what was charged, since the whole model would be larger.
+    await expectLater(
+      store.install(entry),
+      throwsA(
+        isA<SttException>()
+            .having((error) => error.code, 'code', 'storage_full')
+            .having(
+              (error) => error.message,
+              'message',
+              contains('${decoder.length} bytes'),
+            ),
+      ),
+    );
+  });
 
   test('an interrupted download resumes from the bytes it kept', () async {
     source.dropFirstBody = true;
@@ -193,7 +341,9 @@ void main() {
       List<int>.generate(4 * 1024 * 1024, (index) => (index * 7) & 0xff),
     );
     digest = sha256.convert(payload).toString();
-    source = _RangeServer(payload);
+    source = _RangeServer(payload)
+      ..chunkBytes = 64 * 1024
+      ..chunkPause = const Duration(milliseconds: 2);
     await source.start();
     final store = SttModelStore(sanadHome: home.path);
     final entry = entryFor('cancel-probe');

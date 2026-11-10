@@ -181,10 +181,15 @@ measured defect before it existed:
   256 MB margin do not fit. A write that still fails with `ENOSPC` maps to the
   same typed code, and the retry budget is never spent on either.
 - **The projection is truthful before the first byte.** The install seed — the
-  resumable partials already on disk, and the total this run will fetch — is part of
-  `stt_status.install` from the moment the install starts, so a resumed download
-  begins its bar at the offset it already reached instead of publishing a zero it
-  has to contradict a second later.
+  resumable partials already on disk, and the total of the artifacts this run holds
+  plus the ones it still fetches — is part of `stt_status.install` from the moment
+  the install starts, so a resumed download begins its bar at the offset it already
+  reached instead of publishing a zero it has to contradict a second later.
+- **Progress is cumulative across every artifact of the model**, including the ones
+  an earlier run finished. A resumed encoder/decoder pair whose encoder is complete
+  therefore opens at the model's real share (complete + partial bytes over the
+  model's total), not at the pending file's share of the pending total; only the
+  fetch — not the bytes already held — is charged against the volume.
 - **Progress is a report, not a firehose.** One coalescing emitter serves both
   transports: at most one tick per 250 ms and one per 1 % of the total, always the
   first tick, every phase change, and the terminal 100 %. The ~160 000 per-chunk

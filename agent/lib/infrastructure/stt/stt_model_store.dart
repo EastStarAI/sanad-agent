@@ -245,22 +245,31 @@ class SttModelStore {
     // A file already on disk at its pinned size is not downloaded again: the
     // install is then resumable at artifact granularity, and the free-space
     // check below asks only for what this run will really write.
-    final pending = [
-      for (final file in entry.files)
-        if (!_isCompleteFile(file, '${modelDir(entry.id)}/${file.name}')) file,
-    ];
-    // Progress is cumulative across every artifact of the install, so the
-    // client bar never drops back to zero between encoder/decoder/tokens.
+    final plan = _installPlan(entry);
+    final pending = plan.pending;
+    // Progress is cumulative across every artifact of the **model**, including
+    // the ones an earlier run already finished. Counting only the pending ones
+    // made a resumed encoder/decoder model open at the pending file's share of
+    // the pending total — 24 % on disk reported as 7 % — so the bar stepped
+    // backwards on its own resume, against this method's own contract.
     final needsVad =
         entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
     if (pending.isEmpty && !needsVad) {
       _logger.info('dictation model already installed: ${entry.id}');
       return;
     }
-    var total = pending.fold<int>(0, (sum, file) => sum + file.sizeBytes);
-    if (needsVad) total += _sharedVadAsset.sizeBytes;
-    await _guardFreeSpace(total, modelId: entry.id);
-    var offset = 0;
+    final pendingBytes = pending.fold<int>(
+      0,
+      (sum, file) => sum + file.sizeBytes,
+    );
+    final fetchBytes = needsVad
+        ? pendingBytes + _sharedVadAsset.sizeBytes
+        : pendingBytes;
+    final total = plan.completeBytes + fetchBytes;
+    // Only what this run writes is charged against the volume: the artifacts it
+    // already holds are not requested again.
+    await _guardFreeSpace(fetchBytes, modelId: entry.id);
+    var offset = plan.completeBytes;
     if (needsVad) {
       await _downloadFile(
         _sharedVadAsset,
@@ -287,6 +296,23 @@ class SttModelStore {
       );
       offset += file.sizeBytes;
     }
+  }
+
+  /// Splits [entry] into the artifacts this run still fetches and the bytes it
+  /// already holds, in one pass and in catalog order.
+  ({List<SttModelFile> pending, int completeBytes}) _installPlan(
+    SttCatalogEntry entry,
+  ) {
+    final pending = <SttModelFile>[];
+    var completeBytes = 0;
+    for (final file in entry.files) {
+      if (_isCompleteFile(file, '${modelDir(entry.id)}/${file.name}')) {
+        completeBytes += file.sizeBytes;
+      } else {
+        pending.add(file);
+      }
+    }
+    return (pending: pending, completeBytes: completeBytes);
   }
 
   /// Whether [path] already holds [file] at its pinned size.
@@ -416,22 +442,28 @@ class SttModelStore {
   /// disagree.
   ({int received, int total})? installSeed(SttCatalogEntry entry) {
     if (!entry.hosted || entry.files.any((file) => file.url.isEmpty)) return null;
-    final pending = [
-      for (final file in entry.files)
-        if (!_isCompleteFile(file, '${modelDir(entry.id)}/${file.name}')) file,
-    ];
+    final plan = _installPlan(entry);
     final needsVad =
         entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
-    var total = pending.fold<int>(0, (sum, file) => sum + file.sizeBytes);
-    if (needsVad) total += _sharedVadAsset.sizeBytes;
-    var received = 0;
+    if (plan.pending.isEmpty && !needsVad) {
+      // Nothing is fetched, so there is no install to project: the run settles
+      // as already-installed. A 100 % row here would be a flash, not progress.
+      return (received: 0, total: 0);
+    }
+    final pendingBytes = plan.pending.fold<int>(
+      0,
+      (sum, file) => sum + file.sizeBytes,
+    );
+    var received = plan.completeBytes;
+    var total = plan.completeBytes + pendingBytes;
     if (needsVad) {
       received += _resumableLength(
         File('$vadPath$_partialSuffix'),
         _sharedVadAsset.sizeBytes,
       );
+      total += _sharedVadAsset.sizeBytes;
     }
-    for (final file in pending) {
+    for (final file in plan.pending) {
       received += _resumableLength(
         File('${modelDir(entry.id)}/${file.name}$_partialSuffix'),
         file.sizeBytes,

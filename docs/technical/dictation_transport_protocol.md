@@ -144,7 +144,7 @@ Events (daemon → Client):
 | Event | Fields | Meaning |
 |---|---|---|
 | `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]`, `install?` | Catalog, install truth, readiness. `install` is present exactly while an install is in flight — `{model_id, received_bytes, total_bytes, phase, bytes_per_second}` — so any client rebuilds the same bar after a sheet reopen, a device switch, or a reconnect. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
-| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress, delivered to every attached channel. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. The first tick of a **resumed** install carries the resumed offset, never zero: a phase reported before any byte rides that tick instead of being published as a bar restart. |
+| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress, delivered to every attached channel. `received_bytes` and `total_bytes` are cumulative over the whole model, including artifacts a previous run already finished, so `received/total` is the model's progress rather than the current fetch's. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. The first tick of a **resumed** install carries the resumed offset, never zero: a phase reported before any byte rides that tick instead of being published as a bar restart. |
 | `dictation_ready` | `model_id`, `load_ms` | Recognizer loaded; audio is accepted from now on |
 | `dictation_partial` | `seq`, `text` | Streaming only: mutable segment text, replacing its own range |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of that segment |
@@ -549,8 +549,12 @@ no route at all, so their lifecycle is bounded without route cleanup:
   second client, and a sheet that was already open all stay truthful from the
   moment a download begins;
 - the **install projection states the resumed truth before the first byte**:
-  `stt_status.install` carries the resumable bytes already on disk and the total
-  this run will fetch, so a resumed bar starts at its offset instead of at zero;
+  `stt_status.install` carries the resumable bytes already on disk and the total of
+  the model, so a resumed bar starts at its offset instead of at zero. Both figures
+  are cumulative across **every artifact** of the model — an artifact an earlier run
+  completed counts in `received_bytes` and in `total_bytes` — so a resumed
+  encoder/decoder pair opens at the share the model really holds, and its progress
+  never steps backwards on its own resume;
 - the partial artifact is preserved across every interruption — a dropped
   connection, a cancel, a daemon restart — and resumed with an HTTP `Range`
   request, then verified against the pinned size and SHA-256 before the atomic
