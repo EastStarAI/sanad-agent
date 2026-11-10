@@ -4,8 +4,9 @@ import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:path/path.dart' as p;
 import '../../core/constants.dart';
-import '../../core/sanad_home/sanad_home_bootstrap.dart';
+import '../../core/models/modality_declaration.dart';
 import '../../core/models/model_metadata.dart';
+import '../../core/sanad_home/sanad_home_bootstrap.dart';
 
 class ModelsDevService {
   final _logger = Logger('ModelsDevService');
@@ -212,11 +213,7 @@ class ModelsDevService {
     if (modelEntry is! Map) return null;
     final modalities = modelEntry['modalities'];
     if (modalities is! Map) return null;
-    final input = modalities['input'];
-    if (input is List && input.every((v) => v is String)) {
-      return input.contains('image');
-    }
-    return null;
+    return declaredImageModalitySupport(modalities['input']);
   }
 
   void _ensureDiskCacheLoadedSync() {

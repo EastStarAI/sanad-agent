@@ -402,6 +402,26 @@ default is set — the runtime throws a clear error instead. A missing or delete
 default never silently routes a request through an unrelated account (Plan 29
 §3.10, criterion 13/24).
 
+### Route image capability evidence
+
+`RouteCapabilityResolver` resolves one model route's image-input capability in
+tiers, and `evidenceSource` names the tier that answered: `override`
+(`model_capabilities.<exact-model-id>.supports_image_input` in
+`$SANAD_HOME/config.yaml`), `endpoint_metadata` (the instance's cached `/models`
+entry for that exact normalized id, accepted only while its
+`config_revision`/`credential_revision` still match the instance), `catalog`
+(the exact model's models.dev entry, resolved by model identity across catalog
+namespaces), then `unknown`. Declared lists share one grammar
+(`agent/lib/core/models/modality_declaration.dart`): `image` or any
+`image/<subtype>` token declares image input, a list without one declares
+text-only, and malformed or wildcard-only declarations establish neither state.
+Because a text-only declaration is positive evidence, it stops the chain instead
+of falling through to the catalog; only absent or unusable declarations defer to
+intrinsic catalog knowledge. No resolved capability is persisted — the profile
+is recomputed from cached raw declarations at every turn admission — so a
+corrected parser takes effect on the next resolve without invalidating the model
+cache.
+
 ### Live default adapter resolution
 
 On a fresh install with no provider configured, default adapter resolution
