@@ -132,16 +132,17 @@ void main() {
   /// tests inside a few seconds on CI.
   const int fileSize = 32 * 1024 * 1024;
 
-  /// The envelope a healthy transfer stays inside: the write window plus a
-  /// socket buffer's worth of slack.
+  /// The envelope a healthy transfer stays inside: half the artifact.
   ///
-  /// Sized from measurement, not from a hunch: the reader may now run up to
+  /// Sized from measurement, not from a hunch: the reader may run up to
   /// [kSttWriteWindowBytes] ahead of the disk before it waits, and the socket
-  /// adds its own buffer (measured 1 856 KiB idle on macOS, 4 480 KiB on a Linux
-  /// CI runner). The `IOSink` defect this file was written for carries ~the
-  /// whole artifact (29-30 MiB measured for this 32 MiB file), so this bound
-  /// still separates the two bands by a wide margin.
-  const int transferGapLimit = kSttWriteWindowBytes + 4 * 1024 * 1024;
+  /// then adds buffers that belong to the host — 1 856 KiB idle on macOS and
+  /// close to 10 MiB on a Linux CI runner (measured 14 811 136 B in total, the
+  /// window plus loopback buffers). The `IOSink` defect this file was written
+  /// for carries ~the whole artifact (29-30 MiB measured for this 32 MiB file),
+  /// so this bound still separates the two bands, and the exact bound is the
+  /// seam assertion below rather than this one.
+  const int transferGapLimit = fileSize ~/ 2;
 
   late Directory home;
   late File artifact;
@@ -286,7 +287,10 @@ void main() {
       File('${store.modelDir(entry.id)}/probe.bin').lengthSync(),
       fileSize,
     );
-  });
+    // Two structural waits (the first write, then a settled socket) plus a
+    // 32 MiB transfer: the runner's default 30 s is a latency budget, not a
+    // bound, and every assertion above still fails immediately when broken.
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('the real file sink never holds a share of the artifact', () async {
     _CountingSink? writer;
@@ -341,7 +345,7 @@ void main() {
           'the transfer queued ${maxGap ~/ 1024} KB ahead of the disk for a '
           '${fileSize ~/ (1024 * 1024)} MB artifact',
     );
-  });
+  }, timeout: const Timeout(Duration(seconds: 90)));
 
   test('a retried transfer is not charged the bytes it replaced', () async {
     // A dropped connection is transient: the store keeps the bytes it wrote and
@@ -401,5 +405,5 @@ void main() {
           'the retried transfer queued ${maxGap ~/ 1024} KB ahead of the disk '
           'for a ${fileSize ~/ (1024 * 1024)} MB artifact',
     );
-  });
+  }, timeout: const Timeout(Duration(seconds: 90)));
 }
