@@ -29,7 +29,22 @@ import 'dart:typed_data';
 /// (16 MiB measured) changed throughput by 1 % and only widened the bound.
 const int kSttWriteWindowBytes = 4 * 1024 * 1024;
 
-
+/// Bytes written before the page cache is forced out to the disk.
+///
+/// A write that is merely *accepted* by the kernel is not on the disk: Linux
+/// defers writeback to `dirty_expire_centisecs` (30 s by default) and only
+/// starts earlier when `dirty_background_ratio` is reached, which on a host
+/// with a lot of RAM is far above one artifact. The single `flushSync()` on
+/// close therefore used to pay for the whole download alone — measured on the
+/// reference arm64 host, a 1.62 GB artifact transferred in 36.0 s and then
+/// spent 23.8 s in one fsync with an idle network, and the end-to-end install
+/// landed at 27.1 MB/s against a 45-54 MB/s disk.
+///
+/// Flushing every 64 MiB moves that cost inside the transfer, where it overlaps
+/// the socket, and the install then costs about `max(network, disk)` instead of
+/// their sum. The window ([kSttWriteWindowBytes]) is what paces the reader when
+/// the disk is the slower side, so a flush is never a queue in the heap.
+const int kSttFlushWindowBytes = 64 * 1024 * 1024;
 
 /// Accepts artifact bytes and writes them without blocking the reader.
 ///
@@ -40,8 +55,11 @@ const int kSttWriteWindowBytes = 4 * 1024 * 1024;
 /// * [close] drains and closes the destination, and is idempotent. It is the
 ///   right call from a `finally`: on cancel the bytes already accepted still
 ///   land, which is what makes a resumed install continue from a real prefix.
-/// * A write failure surfaces as [SttWriteFailure] from [add], [drain] or
-///   [close] — never as a silently short file.
+/// * Page cache is forced out every [kSttFlushWindowBytes] of written bytes,
+///   before that write is acknowledged, so the kernel cannot defer the whole
+///   artifact to the close flush.
+/// * A write or flush failure surfaces as [SttWriteFailure] from [add],
+///   [drain] or [close] — never as a silently short file.
 abstract class SttWritePipeline {
   Future<void> add(List<int> chunk);
 
@@ -211,6 +229,30 @@ class IsolateWritePipeline implements SttWritePipeline {
   }
 }
 
+/// Counts written bytes and names the writes that must force writeback.
+///
+/// One rule shared by both pipelines: [reached] is asked after a write lands and
+/// the caller flushes *before* acknowledging it, so a flush is never deferred to
+/// the next write or to close. [window] is the production constant everywhere
+/// except the in-process test seam, which injects a small one to observe the
+/// cadence without writing 64 MiB per assertion.
+class _FlushWindow {
+  _FlushWindow({this.window = kSttFlushWindowBytes})
+    : assert(window > 0, 'a flush window must accept at least one byte');
+
+  final int window;
+  int _sinceFlush = 0;
+
+  /// Accounts one completed write; true when a flush is now due.
+  bool reached(int bytes) {
+    _sinceFlush += bytes;
+    return _sinceFlush >= window;
+  }
+
+  /// Re-arms after a flush that succeeded.
+  void flushed() => _sinceFlush = 0;
+}
+
 class _RoomWaiter {
   _RoomWaiter(this.size);
 
@@ -303,10 +345,18 @@ void _writerMain(List<Object> args) {
     commands.close();
     return;
   }
+  final flush = _FlushWindow();
   commands.listen((Object? message) {
     if (message is Uint8List) {
       try {
         file!.writeFromSync(message);
+        // Forced before the ack: the reader's window is only released once this
+        // write is really on the disk, so a flush slower than the link throttles
+        // the read to disk speed instead of accumulating a tail at close.
+        if (flush.reached(message.length)) {
+          file.flushSync();
+          flush.flushed();
+        }
         inbox.send(message.length);
       } on FileSystemException catch (error) {
         inbox.send(<Object?>[
@@ -321,6 +371,9 @@ void _writerMain(List<Object> args) {
     }
     if (message == 'close') {
       try {
+        // Durability semantics are unchanged: whatever the periodic flushes left
+        // (less than one [kSttFlushWindowBytes]) is forced here, and a torn
+        // `.partial` is still caught by the resume re-read.
         file!.flushSync();
       } on FileSystemException {
         // Closing already loses nothing a flush could have saved; the close
@@ -343,9 +396,13 @@ void _writerMain(List<Object> args) {
 /// fails while the *shipped* window accounting still runs. Production never
 /// takes this path.
 class InProcessWritePipeline implements SttWritePipeline {
-  InProcessWritePipeline(this._sink);
+  InProcessWritePipeline(
+    this._sink, {
+    int flushWindowBytes = kSttFlushWindowBytes,
+  }) : _flush = _FlushWindow(window: flushWindowBytes);
 
   final SttWriteSink _sink;
+  final _FlushWindow _flush;
   final _WriteWindow _window = _WriteWindow();
   final List<Uint8List> _pending = <Uint8List>[];
   Object? _failure;
@@ -386,7 +443,16 @@ class InProcessWritePipeline implements SttWritePipeline {
       while (_pending.isNotEmpty) {
         final bytes = _pending.removeAt(0);
         try {
-          if (_failure == null) await _sink.writeFrom(bytes);
+          if (_failure == null) {
+            await _sink.writeFrom(bytes);
+            // The same cadence the writer isolate keeps, and before the window
+            // is released below: a slow flush then holds the reader back
+            // instead of hiding behind a fire-and-forget write.
+            if (_flush.reached(bytes.length)) {
+              await _sink.flush();
+              _flush.flushed();
+            }
+          }
         } on Object catch (error) {
           _failure ??= _asFailure(error);
           _window.wakeAll();

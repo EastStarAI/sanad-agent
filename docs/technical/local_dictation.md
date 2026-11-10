@@ -275,9 +275,11 @@ measured defect before it existed:
 
 #### What one artifact costs
 
-Two costs sit on the per-byte path besides the socket, and both were measured
-rather than assumed — on a 4-core ARM host against the real catalog URL, and on
-an Apple M4 against a loopback origin:
+An install pays for two things — the network that delivers the bytes and the
+disk that has to keep them — and it pays for them serially unless the write side
+overlaps the read. Three costs were measured rather than assumed, on a 4-core
+ARM host against the real catalog URL and on an Apple M4 against a loopback
+origin:
 
 - **The digest is a native call.** SHA-256 is computed while the bytes are
   written, so it is a term in every second of every download. Pure Dart ran at
@@ -301,12 +303,36 @@ an Apple M4 against a loopback origin:
   request latency, and the extra connections only added CPU and complexity. What
   did work was removing the pacing terms: HTTP-only read 66.1 MB/s, and the
   pipeline above 61.2 MB/s.
+- **Writeback is forced during the transfer, not after it.** A write the kernel
+  accepts lives in the page cache, not on the disk, and Linux does not start
+  writing it back until `dirty_expire_centisecs` (30 s) unless
+  `dirty_background_ratio` is reached first — 10 % of a 24.5 GB host is 2.45 GB,
+  far above any single artifact. The writer therefore calls `flushSync()` every
+  `kSttFlushWindowBytes` (64 MiB) of written bytes and only then acknowledges
+  that write, so the cost lands inside the transfer where it overlaps the
+  socket; the fixed write window is what turns a flush slower than the link into
+  plain read backpressure instead of a heap. The flush at `close` stays, so
+  durability against a power cut is what it always was — it now only forces the
+  last, sub-window tail. A refused flush is the same typed failure a refused
+  write is (`storage_full` for `ENOSPC`), never a silently short artifact.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s
 before, 1 137.6 MB/s after** (7.17 s → 0.90 s per GiB), with the same workload
 falling from 40.3 s to 13.6 s of process CPU. The loopback origin removes the
 network, which is the point: what is left is the cost this change removed.
+
+End to end an install now costs about **max(network, disk)** rather than their
+sum: the reader no longer idles for a write, and the disk no longer waits for
+`close` to start. The shape that made this necessary, measured on the reference
+arm64 host against the real catalog URL: a 1.62 GB artifact transferred in
+36.0 s at 45-47 MB/s and then spent **23.8 s in one final fsync with the network
+idle** — 59.9 s, 27.1 MB/s, against a 54.7 MB/s disk. The same artifact is
+expected at ≈34-36 s with the periodic flush, which is its transfer rate. The
+loopback bench cannot show that gain — a loopback transfer is not
+writeback-blocked, and APFS syncs a 64 MiB window well inside the time the next
+one takes to arrive — so it is measured for the absence of a regression
+(884 MB/s vs 891 MB/s median, inside the run-to-run spread), not for the win.
 
 Pin the size and the digest from the hosting provider's own metadata — the
 Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and

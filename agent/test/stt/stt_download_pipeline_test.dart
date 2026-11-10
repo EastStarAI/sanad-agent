@@ -14,7 +14,12 @@
 //    `download_failed`, and the writer now reports failures from another
 //    isolate, where a `FileSystemException` cannot cross. The store's mapping is
 //    asserted end to end against a real loopback server rather than inferred.
-// 4. **The isolate hop is the shipped one, and it is cheap.** The default
+// 4. **The page cache does not wait for close.** Every `kSttFlushWindowBytes`
+//    of written bytes is forced out before that write is acknowledged, so the
+//    kernel's deferred writeback cannot become one serial fsync at the end of
+//    the install (measured: 36.0 s transfer + 23.8 s tail on a 1.62 GB
+//    artifact).
+// 5. **The isolate hop is the shipped one, and it is cheap.** The default
 //    factory is asserted structurally, and the hop is timed against the same
 //    file sink in-process so a regression that serialises on it shows up as a
 //    ratio rather than as a slow download nobody measures again.
@@ -113,6 +118,41 @@ class _CountingSink implements SttWriteSink {
 
   @override
   Future<void> flush() => _handle.flush();
+
+  @override
+  Future<void> close() => _handle.close();
+}
+
+/// Sink that records forced writebacks, and can park or refuse one.
+class _FlushingSink implements SttWriteSink {
+  _FlushingSink(this._handle, {this.failWith, this.flushGate});
+
+  final RandomAccessFile _handle;
+
+  /// Thrown from [flush] instead of flushing.
+  final Object? failWith;
+
+  /// Parks [flush] until completed, so a caller's wait is observable.
+  final Completer<void>? flushGate;
+
+  int flushes = 0;
+  int bytes = 0;
+
+  @override
+  Future<void> writeFrom(List<int> bytes) async {
+    await _handle.writeFrom(bytes);
+    this.bytes += bytes.length;
+  }
+
+  @override
+  Future<void> flush() async {
+    flushes++;
+    final gate = flushGate;
+    if (gate != null) await gate.future;
+    final failure = failWith;
+    if (failure != null) throw failure;
+    await _handle.flush();
+  }
 
   @override
   Future<void> close() => _handle.close();
@@ -254,6 +294,119 @@ void main() {
         big,
         reason: 'the split pieces must land whole and in order',
       );
+    });
+  });
+
+  group('flush', () {
+    test('forces writeback every window and once more at close', () async {
+      final file = File('${dir.path}/flush.bin');
+      final sink = _FlushingSink(await file.open(mode: FileMode.write));
+      const int window = 4 * _chunk;
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: window);
+
+      for (var i = 0; i < 10; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      expect(
+        sink.flushes,
+        2,
+        reason: '10 chunks over a 4-chunk window is two forced writebacks',
+      );
+
+      await pipeline.close();
+      expect(
+        sink.flushes,
+        3,
+        reason: 'the tail after the last window is what close must force',
+      );
+      expect(sink.bytes, 10 * _chunk);
+      expect(file.lengthSync(), 10 * _chunk);
+    });
+
+    test('a short artifact is flushed once, at close', () async {
+      final file = File('${dir.path}/short.bin');
+      final sink = _FlushingSink(await file.open(mode: FileMode.write));
+      final pipeline = InProcessWritePipeline(sink);
+      for (var i = 0; i < 3; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      expect(
+        sink.flushes,
+        0,
+        reason:
+            'the shipped flush window is ${kSttFlushWindowBytes ~/ (1024 * 1024)}'
+            ' MiB, so a 192 KB artifact must not force writeback mid-transfer',
+      );
+
+      await pipeline.close();
+      expect(sink.flushes, 1);
+      expect(file.lengthSync(), 3 * _chunk);
+    });
+
+    test('a refused flush is typed like a refused write', () async {
+      final file = File('${dir.path}/flush-failed.bin');
+      final sink = _FlushingSink(
+        await file.open(mode: FileMode.write),
+        failWith: const FileSystemException(
+          'Cannot flush file',
+          '/tmp/flush-failed.bin',
+          OSError('No space left on device', 28),
+        ),
+      );
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: _chunk);
+      await pipeline.add(_block(0));
+
+      Object? caught;
+      try {
+        await pipeline.drain();
+      } on Object catch (error) {
+        caught = error;
+      }
+      expect(
+        caught,
+        isA<SttWriteFailure>(),
+        reason: 'a writeback the disk refused must not read as a write failure '
+            'the store cannot classify',
+      );
+      final failure = caught! as SttWriteFailure;
+      expect(failure.osErrorCode, 28);
+      expect(
+        SttModelStore.mapWriteFailure(
+          failure.toFileSystemException(path: '/tmp/flush-failed.bin.partial'),
+          'flush-failed.bin',
+        ).code,
+        'storage_full',
+      );
+    });
+
+    test('drain waits for the writeback it forced', () async {
+      // The write is acknowledged only after its flush: if `drain` returned
+      // first, the store would compare the digest and rename an artifact whose
+      // flush is still in flight.
+      final file = File('${dir.path}/flush-gated.bin');
+      final gate = Completer<void>();
+      final sink = _FlushingSink(
+        await file.open(mode: FileMode.write),
+        flushGate: gate,
+      );
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: _chunk);
+      await pipeline.add(_block(0));
+
+      var drained = false;
+      final draining = pipeline.drain().whenComplete(() => drained = true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        drained,
+        isFalse,
+        reason: 'drain returned while a forced writeback was still pending',
+      );
+
+      gate.complete();
+      await draining.timeout(const Duration(seconds: 5));
+      expect(sink.flushes, 1);
+      await pipeline.close();
     });
   });
 
@@ -443,13 +596,48 @@ void main() {
       expect(file.readAsBytesSync(), big);
     });
 
+    test('forces writeback mid-artifact and keeps writing in order', () async {
+      // One periodic flush happens *inside* this transfer (the window is the
+      // production 64 MiB), so a flush that disturbed the open handle would
+      // corrupt everything written after it. The cadence itself is asserted
+      // in-process, where the sink can count it.
+      final file = File('${dir.path}/isolate-flush.bin');
+      final pipeline = await IsolateWritePipeline.open(file, FileMode.write);
+      final block = _block(9);
+      final total = kSttFlushWindowBytes + block.length;
+      for (var written = 0; written < total; written += block.length) {
+        await pipeline.add(block);
+      }
+      await pipeline.drain();
+      await pipeline.close();
+
+      expect(file.lengthSync(), total);
+      final handle = await file.open();
+      try {
+        await handle.setPosition(kSttFlushWindowBytes - block.length);
+        expect(
+          await handle.read(block.length * 2),
+          <int>[...block, ...block],
+          reason: 'the bytes on both sides of the forced writeback must survive',
+        );
+      } finally {
+        await handle.close();
+      }
+    });
+
     test('costs little against the same sink in-process', () async {
       // 64 MiB through each pipeline: the in-process one is the shape the old
       // loop had (write awaited in the reader's isolate), so the ratio is what
       // the isolate buys on this host. It is a regression guard, not the win:
       // the win is against network latency (29.1 -> 61.2 MB/s measured on the
       // Neoverse host), which a loopback test cannot reproduce.
-      const int total = 64 * 1024 * 1024;
+      //
+      // The transfer deliberately stops one block short of the writeback window
+      // so neither path forces page cache out mid-transfer: this guard compares
+      // the isolate hop against the same sink, and a 64 MiB fsync on a CI runner
+      // is disk latency that would swamp it. The flush cadence has its own tests
+      // above, and the close flush both paths still pay is unchanged.
+      const int total = kSttFlushWindowBytes - _chunk;
       final block = _block(0);
 
       Future<Duration> run(bool isolate) async {
