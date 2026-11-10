@@ -57,12 +57,12 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G2 — Post-merge complement run
 
-- [ ] Classify per lane instead of per component on `push` to `main`.
-- [ ] Find the successful `merge_group` run for the identical commit and skip
+- [x] Classify per lane instead of per component on `push` to `main`.
+- [x] Find the successful `merge_group` run for the identical commit and skip
       exactly the lanes it proved; run everything when no such run exists.
-- [ ] Keep the post-merge-only work (branch history, credential scan, protected
+- [x] Keep the post-merge-only work (branch history, credential scan, protected
       labels) always running.
-- [ ] Document the rule in the workflow comments and the CI doc.
+- [x] Document the rule in the workflow comments and the CI doc.
 
 ### G3 — Release gate on the macOS full suite
 
@@ -141,5 +141,5 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ## Current status
 
-G0 and G1 complete. G2–G7 are open; delivery stays on hold until the timing
+G0–G2 complete. G3–G7 are open; delivery stays on hold until the timing
 constraint is lifted.

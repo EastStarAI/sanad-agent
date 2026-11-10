@@ -26,12 +26,32 @@ jobs:
   classify:
     name: Classify changed paths
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The post-merge complement run reads the merge-queue run, or the merged
+      # pull request's own run, for the exact tree `main` fast-forwarded to.
+      actions: read
+      pull-requests: read
+    # One output per lane, not one per component: the post-merge complement run
+    # has to skip exactly the lanes the merge queue already proved, and two
+    # lanes that share a component cannot express that.
     outputs:
       agent: ${{ steps.paths.outputs.agent }}
       client: ${{ steps.paths.outputs.client }}
       docs: ${{ steps.paths.outputs.docs }}
       release: ${{ steps.paths.outputs.release }}
       security: ${{ steps.paths.outputs.security }}
+      agent_checks: ${{ steps.paths.outputs.agent_checks }}
+      agent_tests: ${{ steps.paths.outputs.agent_tests }}
+      supervisor_skill: ${{ steps.paths.outputs.supervisor_skill }}
+      cli_automation: ${{ steps.paths.outputs.cli_automation }}
+      native_stt: ${{ steps.paths.outputs.native_stt }}
+      client_analyze: ${{ steps.paths.outputs.client_analyze }}
+      client_tests: ${{ steps.paths.outputs.client_tests }}
+      client_web: ${{ steps.paths.outputs.client_web }}
+      sanad_dev: ${{ steps.paths.outputs.sanad_dev }}
+      docs_governance: ${{ steps.paths.outputs.docs_governance }}
+      release_security: ${{ steps.paths.outputs.release_security }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,6 +62,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           classification_failed=false
@@ -80,12 +101,205 @@ jobs:
             echo "Classifier fallback: running every validation lane."
             agent=true; client=true; docs=true; release=true; security=true
           fi
+
+          # ---- Post-merge complement run -------------------------------------
+          # The tree `main` just received may already have been proved. Between
+          # 2026-11-08 and 2026-11-10 that was true for 46 of 46 pushes: the
+          # queue fast-forwarded `main` to the commit a `merge_group` run had
+          # just built and passed. Repeating every lane on the same tree bought
+          # no coverage and cost ~60 runner-minutes per merge, including four
+          # macOS jobs against a five-job account cap.
+          #
+          # Two proof sources are accepted, in order, and only on `push`:
+          #
+          # A. `merge_group` run - the queue built this exact commit.
+          # B. the merged pull request's own `pull_request` run - accepted only
+          #    when all of these hold: the commit resolves to exactly one merged
+          #    pull request, that pull request's head tree is byte-identical to
+          #    this commit's tree, and the head contains this commit's parent so
+          #    the run was made against the same base as well as the same content.
+          #    Source B exists because the queue is a repository setting: if it is
+          #    replaced by "branch must be up to date", the pull request's own run
+          #    is still the proof that this tree passed.
+          #
+          # A lane counts as proven only when a job for it actually executed and
+          # succeeded; a job the run skipped proves nothing. Anything else - no
+          # matching run, a run that is not successful, a different tree, a
+          # commit with several pull requests, an unreadable API - keeps the full
+          # lane set, so the common failure mode of this step is "run every lane".
+          #
+          # Jobs that are genuinely post-merge work are not part of the reduction:
+          # `Verify branch history`, `Verify protected review labels`, and
+          # `Validate release and security boundaries` (whose credential scan
+          # covers the pushed range, not the pull-request range) always run.
+          complement=false
+          proven=" "
+          # Appends the lanes a successful run executed to $proven.
+          collect_proven_lanes() {
+            local run_id="$1" jobs job_name job_conclusion
+            if ! jobs="$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" \
+              --jq '.jobs[] | "\(.name)|\(.conclusion)"' 2>"$RUNNER_TEMP/jobs.err")"; then
+              echo "::warning::Could not read the jobs of run $run_id." >&2
+              cat "$RUNNER_TEMP/jobs.err" >&2 || true
+              return 1
+            fi
+            while IFS='|' read -r job_name job_conclusion; do
+              [[ "$job_conclusion" == success ]] || continue
+              # Matrix job names carry a "(<label>)" suffix; the lane is the
+              # stable prefix. A successful run guarantees every shard of a
+              # proven lane passed, because the run only succeeds when all of
+              # its jobs do.
+              case "${job_name%% (*}" in
+                "Agent contract checks and analyze") proven+="agent-checks " ;;
+                "Test agent") proven+="agent-tests " ;;
+                "Supervisor skill tests") proven+="supervisor-skill " ;;
+                "CLI automation") proven+="cli-automation " ;;
+                "Native dictation") proven+="native-stt " ;;
+                "Analyze client") proven+="client-analyze " ;;
+                "Test client") proven+="client-tests " ;;
+                "Web startup composition") proven+="client-web " ;;
+                "sanad-dev bootstrap") proven+="sanad-dev " ;;
+                "Validate docs and governance") proven+="docs-governance " ;;
+              esac
+            done <<< "$jobs"
+            return 0
+          }
+          # A. Proof from the merge queue.
+          prove_from_merge_queue() {
+            local runs_json run_id
+            if ! runs_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$GITHUB_SHA&per_page=100" \
+              2>"$RUNNER_TEMP/runs.err")"; then
+              echo "::warning::Could not read merge-queue runs for $GITHUB_SHA." >&2
+              cat "$RUNNER_TEMP/runs.err" >&2 || true
+              return 1
+            fi
+            run_id="$(jq -r --arg sha "$GITHUB_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+              | sort_by(.run_started_at) | reverse | (.[0].id // empty)' <<< "$runs_json")"
+            if [[ -z "$run_id" ]]; then
+              echo "No successful merge-queue run for $GITHUB_SHA." >&2
+              return 1
+            fi
+            collect_proven_lanes "$run_id" || return 1
+            proof="merge-queue run $run_id"
+            return 0
+          }
+          # B. Proof from the merged pull request's own run.
+          prove_from_merged_pull_request() {
+            local pr_json count head_sha head_tree tree parent status runs_json run_id
+            if ! pr_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+              2>"$RUNNER_TEMP/pr.err")"; then
+              echo "::warning::Could not read the pull requests for $GITHUB_SHA." >&2
+              cat "$RUNNER_TEMP/pr.err" >&2 || true
+              return 1
+            fi
+            count="$(jq 'length' <<< "$pr_json")"
+            if [[ "$count" != 1 ]]; then
+              echo "$GITHUB_SHA resolves to $count pull requests; not reusing a pull-request proof." >&2
+              return 1
+            fi
+            head_sha="$(jq -r '(.[0].head.sha // empty)' <<< "$pr_json")"
+            if [[ -z "$head_sha" ]] || [[ "$(jq -r '(.[0].merged_at // empty)' <<< "$pr_json")" == "" ]]; then
+              echo "$GITHUB_SHA was not produced by a merged pull request." >&2
+              return 1
+            fi
+            # Same tree is the proof: a squash merge lands the head's content.
+            if ! tree="$(git rev-parse "$GITHUB_SHA^{tree}")" ||
+              ! parent="$(git rev-parse "$GITHUB_SHA^")"; then
+              echo "Could not resolve the tree or parent of $GITHUB_SHA." >&2
+              return 1
+            fi
+            if ! head_tree="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/commits/$head_sha" --jq '.tree.sha' \
+              2>"$RUNNER_TEMP/tree.err")"; then
+              cat "$RUNNER_TEMP/tree.err" >&2 || true
+              return 1
+            fi
+            if [[ "$head_tree" != "$tree" ]]; then
+              echo "Pull request head $head_sha has tree $head_tree, not $tree." >&2
+              return 1
+            fi
+            # The head must also contain the base this push replaced, so the
+            # pull-request run proved the merge with the same `main`.
+            status="$(gh api \
+              "repos/$GITHUB_REPOSITORY/compare/$parent...$head_sha" --jq '.status' \
+              2>"$RUNNER_TEMP/compare.err" || true)"
+            case "$status" in
+              ahead|identical) ;;
+              *)
+                cat "$RUNNER_TEMP/compare.err" >&2 || true
+                echo "Pull request head $head_sha does not contain $parent (status: ${status:-unknown})." >&2
+                return 1
+                ;;
+            esac
+            if ! runs_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
+              2>"$RUNNER_TEMP/pr-runs.err")"; then
+              cat "$RUNNER_TEMP/pr-runs.err" >&2 || true
+              return 1
+            fi
+            run_id="$(jq -r --arg sha "$head_sha" '
+              [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+              | sort_by(.run_started_at) | reverse | (.[0].id // empty)' <<< "$runs_json")"
+            if [[ -z "$run_id" ]]; then
+              echo "No successful pull-request run for $head_sha." >&2
+              return 1
+            fi
+            collect_proven_lanes "$run_id" || return 1
+            proof="pull-request run $run_id for pull request head $head_sha"
+            return 0
+          }
+          if [[ "$EVENT_NAME" == push ]]; then
+            proof=""
+            if prove_from_merge_queue; then
+              complement=true
+            elif prove_from_merged_pull_request; then
+              complement=true
+            else
+              echo "No reusable proof for $GITHUB_SHA; running every lane."
+              proven=" "
+            fi
+            if [[ "$complement" == true ]]; then
+              proven=" $(tr ' ' '\n' <<< "$proven" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+              echo "Proven by ${proof}:${proven}"
+            fi
+          fi
+          # A lane the queue proved is skipped; every other lane keeps whatever
+          # its component classification decided.
+          keep_proven() {
+            local lane="$1" value="$2"
+            if [[ "$complement" == true && "$proven" == *" $lane "* ]]; then
+              echo false
+            else
+              echo "$value"
+            fi
+          }
+          # The credential scan is bounded to the pushed range, which no
+          # merge-group run covers, so this lane is never reduced.
+          release_security=false
+          if [[ "$release" == true || "$security" == true ]]; then release_security=true; fi
+          sanad_dev=false
+          if [[ "$client" == true || "$docs" == true ]]; then sanad_dev=true; fi
           {
             echo "agent=$agent"
             echo "client=$client"
             echo "docs=$docs"
             echo "release=$release"
             echo "security=$security"
+            echo "agent_checks=$(keep_proven agent-checks "$agent")"
+            echo "agent_tests=$(keep_proven agent-tests "$agent")"
+            echo "supervisor_skill=$(keep_proven supervisor-skill "$agent")"
+            echo "cli_automation=$(keep_proven cli-automation "$agent")"
+            echo "native_stt=$(keep_proven native-stt "$agent")"
+            echo "client_analyze=$(keep_proven client-analyze "$client")"
+            echo "client_tests=$(keep_proven client-tests "$client")"
+            echo "client_web=$(keep_proven client-web "$client")"
+            echo "sanad_dev=$(keep_proven sanad-dev "$sanad_dev")"
+            echo "docs_governance=$(keep_proven docs-governance "$docs")"
+            echo "release_security=$release_security"
           } >> "$GITHUB_OUTPUT"
 
   history:
@@ -104,7 +318,7 @@ jobs:
   agent-checks:
     name: Agent contract checks and analyze
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.agent_checks == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -200,7 +414,7 @@ jobs:
   agent-tests:
     name: Test agent (${{ matrix.shard }}/4)
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.agent_tests == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -238,7 +452,7 @@ jobs:
   supervisor-skill:
     name: Supervisor skill tests
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.supervisor_skill == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -254,7 +468,7 @@ jobs:
   cli-automation:
     name: CLI automation (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.cli_automation == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -323,7 +537,7 @@ jobs:
   native-stt:
     name: Native dictation (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.native_stt == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -511,7 +725,7 @@ jobs:
   client-analyze:
     name: Analyze client
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_analyze == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -526,7 +740,7 @@ jobs:
   client-tests:
     name: Test client (${{ matrix.shard }}/4)
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_tests == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -567,7 +781,7 @@ jobs:
   client-web:
     name: Web startup composition
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -588,7 +802,7 @@ jobs:
   sanad-dev-platforms:
     name: sanad-dev bootstrap (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.client == 'true' || needs.classify.outputs.docs == 'true'
+    if: needs.classify.outputs.sanad_dev == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -626,7 +840,7 @@ jobs:
   docs-governance:
     name: Validate docs and governance
     needs: classify
-    if: needs.classify.outputs.docs == 'true'
+    if: needs.classify.outputs.docs_governance == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -646,7 +860,7 @@ jobs:
   release-security:
     name: Validate release and security boundaries
     needs: classify
-    if: needs.classify.outputs.release == 'true' || needs.classify.outputs.security == 'true'
+    if: needs.classify.outputs.release_security == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:

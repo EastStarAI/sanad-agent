@@ -13,9 +13,16 @@ runbook the repository owner and merge agent follow.
 ## Pipeline Model
 
 Classification (`classify`) reads the changed paths and enables only the lanes
-that the change touches. A classification failure, a `push` to `main`, or a
-`workflow_dispatch` run enables every lane, so a broken classifier can never
-silently skip validation.
+that the change touches. It publishes **one output per lane**, not one per
+component, because a component and a lane are not the same set: the client
+component feeds four lanes and the post-merge complement run has to be able to
+skip exactly the lanes the merge queue already proved.
+
+A classification failure, a `workflow_dispatch` run, or a changed path that
+matches no class enables every lane, so a broken classifier can never silently
+skip validation. A `push` to `main` also enables every lane — and then reduces
+that set to the complement described in the next section, which is the only
+reduction a `push` ever applies.
 
 Every lane is an independent job. The client and agent test lanes are matrices
 with one job per shard, so the critical path is the setup cost plus the
@@ -24,19 +31,26 @@ slowest single shard instead of the whole suite.
 | Lane | Job names | Runs when |
 | --- | --- | --- |
 | History | `Verify branch history` | always |
-| Client analysis | `Analyze client` | `client` paths |
-| Client tests | `Test client (1/4)`, `Test client (2/4)`, `Test client (3/4)`, `Test client (4/4)` | `client` paths |
-| Client Web guard | `Web startup composition` | `client` paths |
-| Agent checks | `Agent contract checks and analyze` | `agent` paths |
-| Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent` paths |
-| Supervisor skill tests | `Supervisor skill tests` | `agent` paths |
-| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `agent` paths |
-| Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `agent` paths |
-| `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `client` or `docs` paths |
-| Docs and governance | `Validate docs and governance` | `docs` paths |
-| Release and security | `Validate release and security boundaries` | `release` or `security` paths |
+| Client analysis | `Analyze client` | `client_analyze` |
+| Client tests | `Test client (1/4)`, `Test client (2/4)`, `Test client (3/4)`, `Test client (4/4)` | `client_tests` |
+| Client Web guard | `Web startup composition` | `client_web` |
+| Agent checks | `Agent contract checks and analyze` | `agent_checks` |
+| Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent_tests` |
+| Supervisor skill tests | `Supervisor skill tests` | `supervisor_skill` |
+| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `cli_automation` |
+| Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `native_stt` |
+| `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `sanad_dev` |
+| Docs and governance | `Validate docs and governance` | `docs_governance` |
+| Release and security | `Validate release and security boundaries` | `release_security` |
 | Protected review | `Verify protected review labels` | always |
 | Aggregate | `All required checks pass` | always |
+
+Each lane output is its component's classification, except `native_stt` and
+`sanad_dev`, which are decided by their declared input sets (see
+[Lane Input Sets](#lane-input-sets)), and `release_security`, which is never
+reduced by the post-merge complement run because its credential scan covers the
+pushed range.
+
 
 `All required checks pass` depends on every lane and on every shard of a
 matrix, and it fails unless each dependency succeeded or was skipped by
@@ -106,6 +120,65 @@ Client consumer unverified, which is how a stale relay table reached `main`.
 Client-to-Agent contracts follow the inverse rule and belong in the `agent`
 case. A new consumer also needs a test in the consuming component, because
 classification only decides which lanes run, never whether the consumer agrees.
+
+## Post-Merge Complement Run
+
+A merge through the queue fast-forwards `main` to the exact commit the queue just
+built. Between 2026-11-08 and 2026-11-10 that was true for **46 of 46** pushes to
+`main`, so the `push` run of Public CI was re-proving a tree that had already
+passed every lane the classifier selected for it. What the `push` run added was
+the lanes the queue *skipped*, plus roughly 60 runner-minutes per merge of
+repeated work — four macOS jobs among them, against an account cap of five
+concurrent macOS jobs. That repeat is what turned a normal merge into a 33-minute
+post-merge run: with `macOS full suite` and a release candidate starting minutes
+later, the four duplicate jobs waited 28–30 minutes for a runner.
+
+On `push` to `main`, classification therefore runs the **complement** of a proof:
+
+**Proof A — the merge queue.** Ask the Actions API for the runs of this workflow
+with `event=merge_group` and `head_sha` equal to this commit, and keep the most
+recent one whose conclusion is `success`.
+
+**Proof B — the merged pull request's own run.** Accept only when *all* of these
+hold: the commit resolves to exactly one **merged** pull request; that pull
+request's head tree is byte-identical to this commit's tree; the head contains
+this commit's parent, so the run was made against the same `main` as well as the
+same content; and there is a successful `pull_request` run for that head.
+
+Proof B exists because the merge queue is a repository setting rather than a
+property of this workflow: if the queue is replaced by "require branches to be up
+to date", the pull request's own run is still the proof that this tree passed. A
+squash merge lands the head's content, so identical trees plus a contained base is
+the same guarantee the queue provides. A and B are tried in that order; the first
+one that yields proof is used.
+
+Then:
+
+1. Read that run's jobs. A lane counts as **proven** only when a job for it
+   actually executed and succeeded; a job the run skipped proves nothing.
+2. Set a proven lane to `false` and leave every other lane as classified.
+
+The reduction is fail-closed by construction. No matching run, a run that is not
+successful, a tree that differs, a commit that maps to several pull requests, or
+an unreadable API all leave the full lane set in place, so the worst case of this
+step is today's behaviour. A `workflow_dispatch` run and any event other than
+`push` never reduce anything.
+
+These jobs never participate in the reduction, because their work is genuinely
+post-merge:
+
+- `Verify branch history` — the pushed range is the merge itself.
+- `Verify protected review labels` — the label check belongs to the merge
+  decision, and a `push` run re-reads it on the merged diff.
+- `Validate release and security boundaries` — its credential scan is bounded to
+  `BEFORE..AFTER` on a push and to `BASE...HEAD` on a pull request, so it is the
+  one lane that scans the merged commit as pushed.
+
+The complement run is also what keeps per-pull-request lane selection honest: a
+lane a pull request skipped still executes on the merged commit, and the release
+workflow additionally refuses to publish without a green `macOS full suite` run on
+the release commit (see
+[Release, Signing, and Deployment Architecture](release_and_signing.md#release-gate-on-the-macos-full-suite)).
 
 ## Test Sharding
 
