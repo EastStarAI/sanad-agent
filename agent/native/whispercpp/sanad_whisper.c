@@ -45,9 +45,24 @@ SANAD_WHISPER_EXPORT void* sanad_whisper_load(const char* path_model, int use_gp
   cparams.use_gpu = use_gpu != 0;
   cparams.flash_attn = use_gpu != 0;
   struct whisper_context* ctx = whisper_init_from_file_with_params_no_state(path_model, cparams);
-  if (ctx == NULL && err != NULL && err_cap > 0) {
-    snprintf(err, (size_t)err_cap, "whisper_init_from_file_with_params_no_state failed");
+  if (ctx == NULL) {
+    if (err != NULL && err_cap > 0) {
+      snprintf(err, (size_t)err_cap, "whisper_init_from_file_with_params_no_state failed");
+    }
+    return NULL;
   }
+  // Decode states are per call, so prove one can be allocated now: a failure
+  // here reaches the caller's load path (and its CPU fallback) instead of
+  // failing every utterance later.
+  struct whisper_state* probe = whisper_init_state(ctx);
+  if (probe == NULL) {
+    whisper_free(ctx);
+    if (err != NULL && err_cap > 0) {
+      snprintf(err, (size_t)err_cap, "whisper_init_state failed at load");
+    }
+    return NULL;
+  }
+  whisper_free_state(probe);
   return ctx;
 }
 

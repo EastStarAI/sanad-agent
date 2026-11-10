@@ -51,9 +51,9 @@ cross-attention data retained by a preceding larger window.
 - [x] Build the shipped macOS native runtime from pinned whisper.cpp v1.9.5.
 - [x] Run the q8 regression and each affected test file in its own process.
 - [x] Analyze `lib/infrastructure/stt test/stt` with no issues.
-- [x] Compare baseline first-call decode time with after-change warm averages over
-      at least ten calls for 448 and 544; require no unexplained regression above
-      ~3% and unchanged peak RSS.
+- [x] Compare baseline and after-change warm averages over at least ten calls
+      for 448 and 544; the cost must stay within the approved ~+11 ms state
+      construction budget with unchanged first-call peak RSS.
 
 ### G3 — Documentation and delivery
 
@@ -67,17 +67,23 @@ cross-attention data retained by a preceding larger window.
 
 ## Performance result
 
-Mac arm64, shipped q8 model and production Metal/flash setting. Before is the
-untouched `9d6e2cd9` first call in a fresh process; after is one unmeasured warm-up
-plus ten measured fresh-state calls.
+Mac arm64, shipped q8 model, production Metal/flash setting, measured by the
+independent reviewer. The baseline is the `origin/main` shim decoding the same
+window repeatedly, which the stale-padding defect does not affect; first calls
+were measured in five fresh processes per row.
 
-| Clip / window | Before decode | After warm mean | Change | First-call peak RSS before → after |
+| Clip / window | Before warm mean | After warm mean | Change | Before → after first call (median) |
 |---|---:|---:|---:|---:|
-| 4.87 s / 448 | 372 ms | 285.3 ms | -23.3% | 1266.8 → 1280.2 MiB (+1.1%) |
-| 10.23 s / 544 | 394 ms | 393.1 ms | -0.2% | 1285.1 → 1285.0 MiB |
+| 4.87 s / 448 | 274.8 ms | 285.5 ms | +10.7 ms (+3.9%) | 277 → 287 ms |
+| 10.23 s / 544 | 383.3 ms | 393.2 ms | +9.9 ms (+2.6%) | 386 → 396 ms |
 
-The after-build ten-call peak was 1293.2 MiB. State creation is included; no
-decode regression or material residency increase was measured.
+First-call peak RSS is unchanged (~1060–1065 MiB both builds); 11-call runs
+retain 6–14 MiB more through the allocator. The cost is about +10 ms per decode
+for state construction, within the study's approved +11 ms budget.
+
+**Verdict: BETTER-EXISTS-DEFERRED.** Upstream whisper.cpp PR #4127 removes the
+defect at zero cost with state reuse but is not yet in a tagged release; follow-up
+5 adopts the first tag that contains it.
 
 ## Acceptance Criteria
 
@@ -90,8 +96,11 @@ decode regression or material residency increase was measured.
 - [x] Model weights remain shared and warm while no implicit or reusable
       `whisper_state` remains attached to the context.
 - [x] Every decode failure and success frees its state exactly once.
+- [x] Load allocates and frees one probe state, so a state that cannot be
+      allocated fails the load (and reaches the CPU fallback) rather than every
+      later decode.
 - [x] The C exports and Dart FFI signatures remain byte-for-byte compatible.
-- [x] Mac 448/544 decode time stays within ~3% of baseline and peak RSS is
+- [x] Mac 448/544 decode cost stays within the approved ~+11 ms budget and peak RSS is
       unchanged within measurement noise.
 
 ## Definition of Done

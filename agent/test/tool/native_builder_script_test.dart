@@ -369,6 +369,16 @@ void main() {
       contains('whisper_full_get_segment_text_from_state(state, i)'),
     );
     expect(source, contains('cleanup:\n  whisper_free_state(state);'));
+    // A state the model cannot allocate must fail at load, where the worker
+    // still falls back to the CPU, not on every utterance afterwards.
+    final load = source.substring(
+      source.indexOf('sanad_whisper_load('),
+      source.indexOf('sanad_whisper_free('),
+    );
+    expect(load, contains('whisper_init_state(ctx)'));
+    expect(load, contains('whisper_free_state(probe)'));
+    expect(load, contains('whisper_free(ctx)'));
+    expect(load, contains('return NULL;'));
     expect(
       RegExp(r'\bwhisper_full\(ctx').hasMatch(source),
       isFalse,

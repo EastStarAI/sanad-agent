@@ -140,12 +140,20 @@ fixture returned a deterministic corrupted tail until the model was reloaded.
 buffers. Keeping the weights in a no-state context and making the state
 per-decode preserves warm-model residency while removing the carry-over.
 
-The Mac merge gate compared untouched first calls with the fresh-state build's
-10-call warm mean: 448 was 372 ms before and 285.3 ms after; 544 was 394 ms
-before and 393.1 ms after. Like-for-like first-call peak RSS was 1266.8 → 1280.2
-MiB for 448 (+1.1 %) and 1285.1 → 1285.0 MiB for 544; the repeated-run peak was
-1293.2 MiB. State construction is inside those figures and caused no decode
-regression or material residency change.
+`sanad_whisper_load` also allocates and frees one probe state right after the
+model opens. A state the host cannot allocate (memory pressure, a backend fault)
+therefore fails the load, where the worker's existing CPU fallback still applies,
+instead of failing every utterance with `decode_failed` afterwards.
+
+Fresh state is not free. On the Mac reference host (q8, Metal/flash), the
+warm mean over ten calls went from 274.8 to 285.5 ms at 448 frames (+3.9 %) and
+from 383.3 to 393.2 ms at 544 frames (+2.6 %). That is about +10 ms per decode
+for state construction. First-call peak RSS is unchanged; repeated runs retain
+6–14 MiB more through the allocator. The baseline is the old shim decoding the
+same window repeatedly, which the stale-padding defect does not affect. The
+zero-cost root fix is upstream whisper.cpp PR #4127, which is not yet in a tagged
+release. Follow-up: adopt the first whisper.cpp tag that contains it, then
+reconsider state reuse behind the same q8 regression.
 
 #### The repetition guard
 
