@@ -1,6 +1,7 @@
 import '../../engine/adapters/models_dev_service.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import '../config.dart';
+import '../models/modality_declaration.dart';
 import '../provider_thinking/native_thinking_directive.dart';
 import '../provider_thinking/thinking_control_models.dart';
 import '../provider_thinking/thinking_selection_resolver.dart';
@@ -106,9 +107,8 @@ class RouteCapabilityResolver {
         return capabilities['supports_image_input'] as bool;
       }
     } else {
-      final declared = _validatedCapabilityNames(capabilities);
-      if (declared != null &&
-          (declared.contains('vision') || declared.contains('image'))) {
+      final declared = declaredModalityTokens(capabilities);
+      if (declared != null && declared.any(declaresVisionOrImageModality)) {
         return true;
       }
       // Generic features such as ['tools'] are not complete modality evidence.
@@ -116,29 +116,41 @@ class RouteCapabilityResolver {
 
     final rawOllamaCaps = metadata['ollama_capabilities'];
     if (rawOllamaCaps is List && rawOllamaCaps.isNotEmpty) {
-      final declared = _validatedCapabilityNames(rawOllamaCaps);
+      final declared = declaredModalityTokens(rawOllamaCaps);
       // A malformed complete-list declaration establishes neither state.
       if (declared == null) return null;
-      return declared.contains('vision') || declared.contains('image');
+      return declared.any(declaresVisionOrImageModality);
     }
 
-    final inputModalities = _validatedCapabilityNames(
+    final inputModalities = declaredImageModalitySupport(
       metadata['input_modalities'],
     );
-    if (inputModalities != null) return inputModalities.contains('image');
+    if (inputModalities != null) return inputModalities;
 
     final modalities = metadata['modalities'];
-    final declaredModalities = _validatedCapabilityNames(
+    final declaredModalities = declaredImageModalitySupport(
       modalities is Map ? modalities['input'] : modalities,
     );
-    if (declaredModalities != null) return declaredModalities.contains('image');
+    if (declaredModalities != null) return declaredModalities;
 
     final architecture = metadata['architecture'];
     if (architecture is Map) {
-      final modality = architecture['modality']?.toString().toLowerCase();
+      final modality = architecture['modality']
+          ?.toString()
+          .trim()
+          .toLowerCase();
       if (modality != null && modality.isNotEmpty) {
-        if (modality.contains('image')) return true;
-        if (modality.contains('text->text')) return false;
+        final arrow = modality.indexOf('->');
+        if (arrow >= 0) {
+          // Only the input side declares image *input*; `text->image` is output.
+          final declaredInput = declaredImageModalitySupport(
+            modality.substring(0, arrow).split('+'),
+          );
+          if (declaredInput != null) return declaredInput;
+        } else if (modality.contains('image')) {
+          // A single non-arrow descriptor keeps its established meaning.
+          return true;
+        }
       }
     }
 
@@ -151,17 +163,6 @@ class RouteCapabilityResolver {
     }
 
     return null;
-  }
-
-  /// Nonempty, well-typed declaration only; coercion cannot establish support.
-  static Set<String>? _validatedCapabilityNames(Object? raw) {
-    if (raw is! List || raw.isEmpty) return null;
-    final names = <String>{};
-    for (final entry in raw) {
-      if (entry is! String || entry.trim().isEmpty) return null;
-      names.add(entry.trim().toLowerCase());
-    }
-    return names;
   }
 
   /// Authoritatively and synchronously resolves capabilities from memory cache and overrides.

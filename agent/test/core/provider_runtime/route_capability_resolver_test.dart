@@ -104,6 +104,230 @@ void main() {
       );
     });
 
+    test('parses MIME-typed input modalities (Issue 395)', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'input_modalities': ['text', 'image/webp'],
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'input_modalities': ['text', 'image/jpeg', 'image/png'],
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'input_modalities': ['image/png'],
+        }),
+        isTrue,
+      );
+    });
+
+    test('parses MIME-typed modalities.input (Issue 395 live shape)', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': [
+              'text',
+              'image/jpeg',
+              'image/png',
+              'image/gif',
+              'image/webp',
+            ],
+          },
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['image/bmp'],
+          },
+        }),
+        isTrue,
+      );
+    });
+
+    test('modality declarations are case-insensitive', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['TEXT', 'IMAGE/JPEG'],
+          },
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'input_modalities': ['Text', 'Image'],
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['TEXT'],
+          },
+        }),
+        isFalse,
+      );
+    });
+
+    test('MIME wildcards and structured subtypes declare image input', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', 'image/*'],
+          },
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', 'image/svg+xml'],
+          },
+        }),
+        isTrue,
+      );
+    });
+
+    test('non-image media declarations stay text-only', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', 'application/pdf', 'audio/wav', 'video/mp4'],
+          },
+        }),
+        isFalse,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', 'imagex'],
+          },
+        }),
+        isFalse,
+      );
+    });
+
+    test('modality wildcards establish neither state', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['*/*'],
+          },
+        }),
+        isNull,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', '*/*'],
+          },
+        }),
+        isNull,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', '*/*', 'image/png'],
+          },
+        }),
+        isTrue,
+      );
+    });
+
+    test('output-side image declarations are not image input', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text'],
+            'output': ['text', 'image'],
+          },
+        }),
+        isFalse,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'architecture': {'modality': 'text->image'},
+        }),
+        isFalse,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'architecture': {'modality': 'image->text'},
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'architecture': {'modality': 'text+image+file->text'},
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'architecture': {'modality': 'text+image->text+image'},
+        }),
+        isTrue,
+      );
+    });
+
+    test('malformed modality declarations establish neither state', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {'input': <String>[]},
+        }),
+        isNull,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['text', 42],
+          },
+        }),
+        isNull,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'modalities': {
+            'input': ['  ', 'text'],
+          },
+        }),
+        isNull,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'input_modalities': <String>[],
+        }),
+        isNull,
+      );
+    });
+
+    test('parses MIME-typed capability lists', () {
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'capabilities': ['image/png'],
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'ollama_capabilities': ['completion', 'image/png'],
+        }),
+        isTrue,
+      );
+      expect(
+        RouteCapabilityResolver.parseDeclaredImageSupport({
+          'ollama_capabilities': ['completion', 'text'],
+        }),
+        isFalse,
+      );
+    });
+
     test('parses architecture.modality string', () {
       expect(
         RouteCapabilityResolver.parseDeclaredImageSupport({
@@ -307,6 +531,100 @@ void main() {
 
         expect(profile.imageSupport, RouteImageSupport.unknown);
         expect(profile.evidenceSource, 'unknown');
+      },
+    );
+
+    test(
+      'tier 2: MIME-typed endpoint metadata resolves supported without catalog shadowing',
+      () async {
+        final repo = _FakeProviderInstanceRepository();
+        repo.instances['opencode-1'] = _opencodeInstance();
+        _cacheModelMetadata(repo, 'deepseek-v4.1-flash', {
+          'modalities': {
+            'input': [
+              'text',
+              'image/jpeg',
+              'image/png',
+              'image/gif',
+              'image/webp',
+            ],
+          },
+        });
+
+        final modelsDev = _catalogWith('deepseek-v4.1-flash', [
+          'text',
+          'image',
+        ]);
+        await modelsDev.ensureLoaded();
+
+        final resolver = RouteCapabilityResolver(
+          instances: repo,
+          modelsDevService: modelsDev,
+        );
+        final profile = resolver.resolveSync(
+          providerInstanceId: 'opencode-1',
+          modelId: 'deepseek-v4.1-flash',
+        );
+
+        expect(profile.imageSupport, RouteImageSupport.supported);
+        expect(profile.evidenceSource, 'endpoint_metadata');
+      },
+    );
+
+    test(
+      'tier 2: a positive text-only declaration stays authoritative over catalog image evidence',
+      () async {
+        final repo = _FakeProviderInstanceRepository();
+        repo.instances['opencode-1'] = _opencodeInstance();
+        _cacheModelMetadata(repo, 'deepseek-v4.1-flash', {
+          'modalities': {
+            'input': ['text'],
+          },
+        });
+
+        final modelsDev = _catalogWith('deepseek-v4.1-flash', [
+          'text',
+          'image',
+        ]);
+        await modelsDev.ensureLoaded();
+
+        final resolver = RouteCapabilityResolver(
+          instances: repo,
+          modelsDevService: modelsDev,
+        );
+        final profile = resolver.resolveSync(
+          providerInstanceId: 'opencode-1',
+          modelId: 'deepseek-v4.1-flash',
+        );
+
+        expect(profile.imageSupport, RouteImageSupport.unsupported);
+        expect(profile.evidenceSource, 'endpoint_metadata');
+      },
+    );
+
+    test(
+      'tier 3: MIME-typed catalog modalities resolve supported',
+      () async {
+        final repo = _FakeProviderInstanceRepository();
+        repo.instances['opencode-1'] = _opencodeInstance();
+
+        final modelsDev = _catalogWith('deepseek-v4.1-flash', [
+          'text',
+          'image/png',
+        ]);
+        await modelsDev.ensureLoaded();
+
+        final resolver = RouteCapabilityResolver(
+          instances: repo,
+          modelsDevService: modelsDev,
+        );
+        final profile = resolver.resolveSync(
+          providerInstanceId: 'opencode-1',
+          modelId: 'deepseek-v4.1-flash',
+        );
+
+        expect(profile.imageSupport, RouteImageSupport.supported);
+        expect(profile.evidenceSource, 'catalog');
       },
     );
   });
@@ -1351,4 +1669,57 @@ class _FakeProviderInstanceRepository implements ProviderInstanceRepository {
 
   @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+ProviderInstance _opencodeInstance() {
+  final now = DateTime.now();
+  return ProviderInstance(
+    id: 'opencode-1',
+    templateId: 'opencode-go',
+    displayName: 'OpenCode Go',
+    protocol: 'openai_chat_completions',
+    authMethod: ProviderAuthMethod.apiKey,
+    createdAt: now,
+    updatedAt: now,
+  );
+}
+
+void _cacheModelMetadata(
+  _FakeProviderInstanceRepository repo,
+  String modelId,
+  Map<String, Object?> metadata,
+) {
+  repo.modelCaches['opencode-1:models'] = {
+    'config_revision': 1,
+    'credential_revision': 1,
+    'models': [
+      ModelOption(
+        value: modelId,
+        label: modelId,
+        modelMetadata: metadata,
+      ).toJson(),
+    ],
+  };
+}
+
+/// Catalog evidence for one exact model on the `opencode-go` vendor.
+ModelsDevService _catalogWith(String modelId, List<String> input) {
+  final tempDir = Directory.systemTemp.createTempSync('issue395-catalog-');
+  return ModelsDevService(
+    cacheFilePathOverride: '${tempDir.path}/models_dev_cache.json',
+    client: MockClient(
+      (_) async => http.Response(
+        jsonEncode({
+          'opencode-go': {
+            'models': {
+              modelId: {
+                'modalities': {'input': input},
+              },
+            },
+          },
+        }),
+        200,
+      ),
+    ),
+  );
 }
