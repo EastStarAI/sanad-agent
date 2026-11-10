@@ -1,8 +1,8 @@
-# Task 159 — Supervisor block-flake: one parked turn, one cause
+# Task 161 — Supervisor block-flake: one parked turn, one cause
 
 - Status: delivered (PR: `fix/supervisor-block-flake`)
 - Owning area: `.agents/skills/delegate-task-supervisor`
-- Related: task 157 (incident regression suite), PR390 (the scenario that flaked)
+- Related: task 157 (incident regression suite), PR390 (the scenario that flaked), task 162 (the context-window record that previously shared the number 159)
 
 ## Goal
 
@@ -105,7 +105,7 @@ writes, so the check is deterministic instead of load-dependent. Run it in a cop
 outside the repository — it must never touch the tracked tree:
 
 ```bash
-rm -rf /tmp/mutant-159 && cp -R .agents/skills/delegate-task-supervisor /tmp/mutant-159
+rm -rf /tmp/mutant-161 && cp -R .agents/skills/delegate-task-supervisor /tmp/mutant-161
 # scripts/supervisor-worker/follower.mjs:
 #   confirmFollow(task, snapshot);                      -> await confirmFollow(task, snapshot);
 #   const confirmFollow = (task, snapshot) => {          -> async (task, snapshot) => {
@@ -113,7 +113,7 @@ rm -rf /tmp/mutant-159 && cp -R .agents/skills/delegate-task-supervisor /tmp/mut
 #                                                          applyFollowSnapshot(task, snapshot);
 TMPDIR=$(mktemp -d) node --test \
   --test-name-pattern="block-reaches-the-journal-early" \
-  /tmp/mutant-159/test/incident_regression_test.mjs
+  /tmp/mutant-161/test/incident_regression_test.mjs
 ```
 
 - Against a **pre-fix** `follower.mjs` (entry cause = transport cause): fails in
@@ -127,5 +127,26 @@ composition; the gap is what makes it observable.
 ## Current status
 
 G0–G2 closed with the evidence above. G3 is open pending review and exact-head
-CI. Follow-ups recorded here rather than implemented: none outstanding — the two
-leaks and the sweep scope landed in this change.
+CI. The two known leaks and the sweep scope landed in this change. Numbered 161
+after review found two pre-existing records sharing 159: the context-window
+record is now `done/162-context-window-defaults-and-cap.md`, the dictation record
+keeps 159, and this file takes 161.
+
+## Follow-ups (not implemented here)
+
+1. **`delegate-add-enqueue-test-*` leftover.** One reviewer suite run reaped one
+   process from this fixture, which the other two leak fixes do not explain. The
+   scenario already closes its run (`close --run`, `supervisor_test.mjs`) and then
+   awaits `manifest.status === 'completed'`, which the worker writes immediately
+   before `process.exit(0)` (`scheduler.mjs` `checkRunCompletion`), and both
+   logical orders of "task settles" versus "close arrives" reach that exit. It was
+   not reproducible here: 12 isolated runs under six CPU hogs and five full-suite
+   runs reaped nothing. Next step for whoever sees it again: have the teardown
+   print the reaped process's command line, then assert `processIsAlive(manifest.supervisorPid) === false`
+   after the completion await — that turns a silent leak into a named failure
+   instead of another guess.
+2. **Journal-then-manifest projection lag is not a documented reader contract.**
+   Two scenarios in this file were bitten by it. Worth one sentence in
+   `docs/agent_engine/sanad_delegate_relay.md` §5 next to the `following`
+   contract.
+
