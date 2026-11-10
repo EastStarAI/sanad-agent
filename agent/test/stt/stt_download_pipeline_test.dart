@@ -1034,6 +1034,23 @@ void main() {
       await pipeline.close();
     });
 
+    test('a concurrent failed close rethrows its typed failure once', () async {
+      final missing = File('${dir.path}/missing-concurrent/artifact.bin');
+      final pipeline = await IsolateWritePipeline.open(missing, FileMode.write);
+      await expectLater(() async {
+        await pipeline.add(_block(0));
+        await pipeline.drain();
+      }(), throwsA(isA<SttWriteFailure>()));
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
+
+      final first = pipeline.close();
+      final second = pipeline.close();
+      await expectLater(first, throwsA(isA<SttWriteFailure>()));
+      await expectLater(second, completes);
+      // A later sequential close remains a no-op.
+      await pipeline.close();
+    });
+
     test('close ends the flusher isolate, not only its handle', () async {
       // The writer is already gone before `close()` runs, so nothing else in the
       // teardown can mask the flusher's own exit: the zero timeout asks exactly

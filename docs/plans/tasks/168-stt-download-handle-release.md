@@ -52,7 +52,9 @@ platform — including Windows, which refuses both while any handle is open.
       guard (`flusher_handshake_stress_test.dart`) passes, and the reviewed head
       failed it with 63 open descriptors.
 - [x] Blocker 2: concurrent `close()` shares one teardown; the reviewer's
-      `concurrent_close_guard_test.dart` passes.
+      `concurrent_close_guard_test.dart` passes. Re-review also verifies that
+      concurrent callers wait together while only the initiating close rethrows
+      a recorded typed failure.
 - [x] Warning 1: flusher isolate exit is a separate completion awaited on every
       spawned path, including refused open and death before handoff.
 - [x] Warning 2: the 250 ms delay is replaced by the exact lifecycle event

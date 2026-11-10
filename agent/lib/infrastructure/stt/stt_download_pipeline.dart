@@ -369,7 +369,14 @@ class IsolateWritePipeline implements SttWritePipeline {
     // what makes the caller's own delete or rename safe — and one that arrives
     // after it settled gets a no-op: the failure belongs to the close that ran it.
     if (_tornDown) return Future<void>.value();
-    return _teardown ??= _teardownOnce().whenComplete(() => _tornDown = true);
+    final active = _teardown;
+    if (active != null) {
+      return active.then<void>(
+        (_) {},
+        onError: (Object _, StackTrace _) {},
+      );
+    }
+    return _teardown = _teardownOnce().whenComplete(() => _tornDown = true);
   }
 
   /// The one teardown: every handle closed, both isolates ended, then the
