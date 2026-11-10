@@ -64,7 +64,9 @@ void main() {
   final entries = <String, List<String>>{};
   for (final declaration in declarations) {
     final target = declaration.kind == 'glob' ? globs : entries;
-    target.putIfAbsent(declaration.lane, () => <String>[]).add(declaration.value);
+    target
+        .putIfAbsent(declaration.lane, () => <String>[])
+        .add(declaration.value);
   }
 
   group('declarations', () {
@@ -170,8 +172,9 @@ void main() {
       expect(job, isNotNull, reason: 'ci.yml has no `native-stt` job.');
       final steps = job!.replaceAll(RegExp(r'^\s*#.*$', multiLine: true), '');
       final executed = <String>{
-        for (final match
-            in RegExp(r'\b((?:test|tool)/[\w/]+\.dart)\b').allMatches(steps))
+        for (final match in RegExp(
+          r'\b((?:test|tool)/[\w/]+\.dart)\b',
+        ).allMatches(steps))
           'agent/${match.group(1)}',
       };
       expect(executed, isNotEmpty);
@@ -212,8 +215,12 @@ void main() {
   group('sanad-dev inputs', () {
     test('every path dependency of the package is covered by some glob', () {
       final pubspec =
-          loadYaml(File(p.join(_repoRootPath, 'scripts/sanad_dev/pubspec.yaml'))
-              .readAsStringSync()) as YamlMap;
+          loadYaml(
+                File(
+                  p.join(_repoRootPath, 'scripts/sanad_dev/pubspec.yaml'),
+                ).readAsStringSync(),
+              )
+              as YamlMap;
       final paths = <String>{
         for (final section in <String>['dependencies', 'dev_dependencies'])
           if (pubspec[section] is YamlMap)
@@ -249,7 +256,9 @@ void main() {
             for (final match in literal.allMatches(
               file.readAsStringSync().replaceAll(_directive, ''),
             ))
-              p.posix.normalize(p.url.join('scripts/sanad_dev', match.group(1))),
+              p.posix.normalize(
+                p.url.join('scripts/sanad_dev', match.group(1)),
+              ),
       }..removeWhere((path) => !File(p.join(_repoRootPath, path)).existsSync());
       expect(reads, isNotEmpty);
       final coveredBy = <String>[...?globs['sanad-dev'], ...?globs['all']];
@@ -328,8 +337,7 @@ bool _matches(String pattern, String path) {
 Map<String, String> _packageRoots() {
   final config = File('.dart_tool/package_config.json');
   if (!config.existsSync()) return <String, String>{};
-  final decoded =
-      jsonDecode(config.readAsStringSync()) as Map<String, dynamic>;
+  final decoded = jsonDecode(config.readAsStringSync()) as Map<String, dynamic>;
   final base = config.absolute.parent.uri;
   final roots = <String, String>{};
   for (final entry in (decoded['packages'] as List<dynamic>)) {
@@ -364,11 +372,17 @@ Set<String> _closure(
     for (final match in directive.allMatches(file.readAsStringSync())) {
       final target = _resolve(file, match.group(1)!, packageRoots);
       if (target == null) continue;
-      if (target != _repoRootPath && !p.isWithin(_repoRootPath, target)) continue;
+      if (target != _repoRootPath && !p.isWithin(_repoRootPath, target)) {
+        continue;
+      }
       queue.add(File(target));
     }
   }
-  return seen.map((path) => p.relative(path, from: _repoRootPath).replaceAll(r'\', '/')).toSet();
+  return seen
+      .map(
+        (path) => p.relative(path, from: _repoRootPath).replaceAll(r'\', '/'),
+      )
+      .toSet();
 }
 
 String? _resolve(File from, String uri, Map<String, String> packageRoots) {
