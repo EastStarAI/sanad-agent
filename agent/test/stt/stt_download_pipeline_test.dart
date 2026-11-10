@@ -201,15 +201,47 @@ class _RefusingSink implements SttWriteSink {
   Future<void> close() => _handle.close();
 }
 
+/// Every path this process currently has a descriptor on, as the OS reports it.
+///
+/// Windows exposes no descriptor table, so it contributes nothing here and its
+/// guards use the rename probe in [_holdsOpenHandle] instead; Linux lists
+/// `/proc/self/fd` and macOS prints one `n<path>` record per descriptor with
+/// `lsof -F n`.
+Future<List<String>> _descriptorTargets() async {
+  if (Platform.isLinux) {
+    final fds = Directory('/proc/self/fd');
+    if (!fds.existsSync()) return const <String>[];
+    final targets = <String>[];
+    for (final entry in fds.listSync(followLinks: false)) {
+      if (entry is! Link) continue;
+      try {
+        targets.add(entry.targetSync());
+      } on FileSystemException {
+        continue;
+      }
+    }
+    return targets;
+  }
+  if (Platform.isMacOS) {
+    final lsof = Process.runSync('lsof', <String>['-n', '-F', 'n', '-p', '$pid']);
+    return '${lsof.stdout}'
+        .split('\n')
+        .where((String line) => line.startsWith('n') && line.length > 1)
+        .map((String line) => line.substring(1))
+        .toList();
+  }
+  return const <String>[];
+}
+
 /// Whether this process still holds an open descriptor on [path].
 ///
 /// The property `close()` has to leave behind is the same everywhere — the
 /// artifact can be renamed or deleted the moment it returns — but each platform
 /// answers it through the channel it has. Windows refuses to delete or rename a
 /// file that any handle has open, and a rename is used because it fails exactly
-/// like a delete and can be undone; macOS lists the descriptor table with `lsof`;
-/// Linux exposes it as `/proc/self/fd`. A host that offers none of them reports
-/// `false`, and the lane that owns that platform still covers it.
+/// like a delete and can be undone; macOS and Linux are asked through their
+/// descriptor table. A host that offers neither reports `false`, and the lane
+/// that owns that platform still covers it.
 Future<bool> _holdsOpenHandle(String path) async {
   if (!File(path).existsSync()) return false;
   final resolved = File(path).resolveSymbolicLinksSync();
@@ -223,32 +255,7 @@ Future<bool> _holdsOpenHandle(String path) async {
     File(probe).renameSync(resolved);
     return false;
   }
-  if (Platform.isLinux) {
-    final fds = Directory('/proc/self/fd');
-    if (!fds.existsSync()) return false;
-    for (final entry in fds.listSync(followLinks: false)) {
-      if (entry is! Link) continue;
-      String target;
-      try {
-        target = entry.targetSync();
-      } on FileSystemException {
-        continue;
-      }
-      if (target == resolved || target.startsWith('$resolved ')) return true;
-    }
-    return false;
-  }
-  if (Platform.isMacOS) {
-    // `lsof` exits 0 only when it listed a descriptor for the path.
-    final lsof = Process.runSync('lsof', <String>[
-      '-n',
-      '-p',
-      '$pid',
-      resolved,
-    ]);
-    return lsof.exitCode == 0;
-  }
-  return false;
+  return (await _descriptorTargets()).contains(resolved);
 }
 
 void main() {
@@ -674,6 +681,15 @@ void main() {
       expect(file.lengthSync(), expected.length);
       expect(file.readAsBytesSync(), expected);
 
+      // A refused open still leaves an isolate running, and ending it is part of
+      // the close contract even though it holds no file. Read synchronously: an
+      // awaited future would concede the event-loop turn the exit needs.
+      expect(
+        pipeline.flusherIsolateEnded,
+        isTrue,
+        reason: 'the refused-open flusher outlived close()',
+      );
+
       await logged.future.timeout(const Duration(seconds: 5));
       expect(
         records,
@@ -951,10 +967,9 @@ void main() {
 
       // The writer reports the refusal and then ends. The state this guards
       // against — a pipeline whose writer already exited — only exists once that
-      // exit has been delivered, so give the isolate its turn rather than racing
-      // the event loop: a `close()` that short-circuits on it never rethrows, and
-      // never tears the flusher down either.
-      await Future<void>.delayed(const Duration(milliseconds: 250));
+      // isolate is gone, so wait for the exact lifecycle event and not for a
+      // duration: the deadline is a failure bound, never the synchronization.
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
 
       await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
       // Idempotent: a second close is a no-op, not a second teardown.
@@ -962,6 +977,90 @@ void main() {
 
       expect(missing.existsSync(), isFalse);
       expect(await _holdsOpenHandle(missing.path), isFalse);
+    });
+
+    test('an immediate close never strands the flusher handle', () async {
+      // Cancel-right-away: `open()` returns before the flusher has sent its
+      // command channel, so `close()` runs while that message is still in
+      // flight. Reading the channel once and treating "not here yet" as "no
+      // handle" stranded the append descriptor on roughly one close in twelve
+      // (17/200 measured by review, 63/200 on another host), and a killed
+      // isolate does not release it — so on Windows the `.partial` stayed
+      // undeletable and a resumed install could never repair it.
+      final root = Directory(dir.path).resolveSymbolicLinksSync();
+      for (var i = 0; i < 64; i++) {
+        final pipeline = await IsolateWritePipeline.open(
+          File('${dir.path}/immediate-$i.bin'),
+          FileMode.write,
+        );
+        await pipeline.close();
+      }
+
+      final leaked = (await _descriptorTargets())
+          .where((String path) => path.startsWith(root))
+          .toList();
+      expect(
+        leaked,
+        isEmpty,
+        reason: 'close() returned with these descriptors still open: $leaked',
+      );
+      // The same property as the user feels it: every artifact is removable, and
+      // on Windows that is only true when no handle survived the close.
+      for (final entity in Directory(root).listSync()) {
+        expect(entity.deleteSync, returnsNormally);
+      }
+    });
+
+    test('a concurrent close waits for the same teardown', () async {
+      // Two callers must not race: the one that arrives second may not treat the
+      // first one's work as done, or it renames or deletes while the flusher is
+      // still inside `closeSync`.
+      final file = File('${dir.path}/concurrent.bin');
+      final pipeline = await IsolateWritePipeline.open(file, FileMode.write);
+      await pipeline.add(_block(0));
+
+      var firstSettled = false;
+      final first = pipeline.close().whenComplete(() => firstSettled = true);
+      await pipeline.close();
+
+      expect(
+        firstSettled,
+        isTrue,
+        reason: 'a concurrent close must not return before the shared teardown',
+      );
+      await first;
+      expect(await _holdsOpenHandle(file.path), isFalse);
+      // Sequential closes stay no-ops rather than repeating the teardown.
+      await pipeline.close();
+    });
+
+    test('close ends the flusher isolate, not only its handle', () async {
+      // The writer is already gone before `close()` runs, so nothing else in the
+      // teardown can mask the flusher's own exit: the zero timeout asks exactly
+      // "has this already completed?" with no delay and no room for scheduling
+      // luck. A close that only waited for the `gone` message fails here.
+      final missing = File('${dir.path}/missing-exit/artifact.bin');
+      final pipeline = await IsolateWritePipeline.open(missing, FileMode.write);
+      await expectLater(() async {
+        await pipeline.add(_block(0));
+        await pipeline.drain();
+      }(), throwsA(isA<SttWriteFailure>()));
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
+
+      await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
+      // Read synchronously, at the instant close() returned: awaiting a future
+      // here would give the exit event the very turn it needs, which is what made
+      // this unobservable before.
+      expect(
+        pipeline.flusherIsolateEnded,
+        isTrue,
+        reason: 'close() returned before the flusher isolate had ended',
+      );
+      expect(
+        pipeline.writerIsolateEnded,
+        isTrue,
+        reason: 'close() returned before the writer isolate had ended',
+      );
     });
   });
 

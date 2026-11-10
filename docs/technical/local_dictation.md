@@ -375,11 +375,24 @@ origin:
   handle on every path it can take, the flusher does the same on `exit` and after
   a refused flush, and `close()` asks the flusher directly over a parent-facing
   channel — it reports `gone` only after its `closeSync()` — then awaits both
-  isolate exits. `close()` never short-circuits: a pipeline whose writer or
-  flusher already ended still tears down and still rethrows its typed failure,
-  because the alternative is a `.partial` that can never be repaired, activated,
-  or removed until the daemon exits. Killing an isolate remains only as the net
-  for a flusher that never opened a handle at all.
+  isolate exits (`gone` closes the handle a moment before the isolate ends, so the
+  exit is tracked separately). Two details carry that guarantee:
+  - **The flusher handoff is a state, not a value.** The channel arrives
+    asynchronously after the spawn, so `close()` first waits for the handoff to
+    settle — channel received, or no handle, or isolate exited — and only then
+    decides whether there is a handle to ask. Sampling the channel once and
+    reading "not here yet" as "no handle" stranded one append descriptor per
+    immediate cancel (17/200 measured by review; 63/200 on another host).
+  - **One teardown, shared.** Every concurrent `close()` awaits the same
+    completion, so a second caller cannot return while the flusher is still inside
+    `closeSync`; a caller that arrives after the teardown settled gets a no-op,
+    and the typed failure belongs to the close that ran it.
+
+  `close()` never short-circuits: a pipeline whose writer or flusher already ended
+  still tears down and still rethrows its typed failure, because the alternative
+  is a `.partial` that can never be repaired, activated, or removed until the
+  daemon exits. Killing an isolate remains only as the net for a flusher that
+  never took a command channel.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s
