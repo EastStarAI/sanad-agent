@@ -1,9 +1,9 @@
 ---
 title: "Task 160: STT Install Memory-Bound Test Stability"
 description: "Make the dictation download backpressure test host-independent after it failed a pull-request run on a socket-buffer ceiling, without weakening the guarantee it pins."
-status: "in_progress"
-current_gate: "G2"
-remaining_estimate: "25%"
+status: "completed"
+current_gate: "Complete"
+remaining_estimate: "0%"
 priority: "high"
 depends_on: "Task 159; PR391 (11230022)"
 ---
@@ -54,32 +54,33 @@ keeps one chunk in flight and never holds a share of the artifact.
 
 ### G2 — Verification and Delivery
 
-- [ ] Analyzer passes for the changed file and for `agent`.
-- [ ] The file passes ten consecutive runs, and further runs under parallel CPU
+- [x] Analyzer passes for the changed file and for `agent`.
+- [x] The file passes ten consecutive runs, and further runs under parallel CPU
       load.
-- [ ] The mutation proof fails: a read loop that stops awaiting the write must
+- [x] The mutation proof fails: a read loop that stops awaiting the write must
       fail the guards, and the mutation is reverted uncommitted.
-- [ ] Public CI is green on the exact head commit of attempt 1, without a rerun.
-- [ ] Owning documentation states the Range dependency of resume.
+- [x] Public CI is green on the exact head commit of attempt 1, without a rerun
+      (run `42745350893`, `Test agent (2/4)` pass, `All required checks pass`).
+- [x] Owning documentation states the Range dependency of resume.
 
 ## Acceptance Criteria
 
-- [ ] Given a write that is held open, when the download's accepted bytes are
+- [x] Given a write that is held open, when the download's accepted bytes are
       sampled after the pipeline settles, then the growth across a 300 ms window
       is at most one chunk, and the artifact is never absorbed.
-- [ ] Given a healthy install, when the envelope is sampled, then the gap stays
+- [x] Given a healthy install, when the envelope is sampled, then the gap stays
       under half the artifact and the writer never sees two concurrent writes.
-- [ ] Given a first response that ends 40 % short, when the store retries, then
+- [x] Given a first response that ends 40 % short, when the store retries, then
       the install completes, exactly two responses are served, and the envelope
       stays under half the artifact.
-- [ ] No assertion compares against a host socket constant, and no test retries or
+- [x] No assertion compares against a host socket constant, and no test retries or
       reruns to pass.
 
 ## Definition of Done
 
-- [ ] `fvm dart analyze` clean for `agent`.
-- [ ] The focused test file passes repeatedly, including under parallel CPU load.
-- [ ] `docs/technical/local_dictation.md` records that resume depends on the host
+- [x] `fvm dart analyze` clean for `agent`.
+- [x] The focused test file passes repeatedly, including under parallel CPU load.
+- [x] `docs/technical/local_dictation.md` records that resume depends on the host
       honouring `Range`.
-- [ ] Graphify updated after the change.
-- [ ] Pull request opened against `main` with the task file included; not merged.
+- [x] Graphify updated after the change.
+- [x] Pull request opened against `main` with the task file included; not merged.
