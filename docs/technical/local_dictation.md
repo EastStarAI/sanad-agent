@@ -375,8 +375,12 @@ origin:
   handle on every path it can take, the flusher does the same on `exit` and after
   a refused flush, and `close()` asks the flusher directly over a parent-facing
   channel — it reports `gone` only after its `closeSync()` — then awaits both
-  isolate exits (`gone` closes the handle a moment before the isolate ends, so the
-  exit is tracked separately). Two details carry that guarantee:
+  isolate exits. `gone` and the exit are **different events and different
+  completers**: `gone` proves the descriptor was closed by the isolate whose
+  handle it was, while the isolate keeps running until its own `onExit` fires, and
+  only that event (or a spawn that never produced an isolate) may count as an
+  exit. Conflating them made `close()` report an exit it never observed. Three
+  details carry the guarantee:
   - **The flusher handoff is a state, not a value.** The channel arrives
     asynchronously after the spawn, so `close()` first waits for the handoff to
     settle — channel received, or no handle, or isolate exited — and only then
@@ -386,7 +390,7 @@ origin:
   - **One teardown, shared.** Every concurrent `close()` awaits the same
     completion, so a second caller cannot return while the flusher is still inside
     `closeSync`; a caller that arrives after the teardown settled gets a no-op,
-    and the typed failure belongs to the close that ran it.
+    and the typed failure is rethrown once — by the close that ran it.
 
   `close()` never short-circuits: a pipeline whose writer or flusher already ended
   still tears down and still rethrows its typed failure, because the alternative

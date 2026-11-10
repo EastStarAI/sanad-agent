@@ -64,6 +64,18 @@ platform — including Windows, which refuses both while any handle is open.
 - [x] Hot path unchanged: AOT benchmark 1 GiB before/after — CPU 0.120 → 0.120
       CPU-s/GiB, maxRSS 46.84 → 47.23 MiB, throughput within noise.
 
+### G3c — Re-review repair (flusher exit is not the handle close)
+- [x] `_flusherExited` is completed **only** by a spawn that produced no isolate or
+      by the real `onExit` listener; the `gone`/handle state completes
+      `_flusherClosed` alone (`_settleFlusher`, `stt_download_pipeline.dart`).
+- [x] The exit assertion is independent of `gone`: removing
+      `await _flusherExited.future` makes the committed guard fail 3/3, while the
+      same mutation was green 3/3 on the reviewed head `f561d4f5` — the
+      false-positive oracle is gone.
+- [x] `close()` therefore proves the flusher isolate ended, not only that its
+      descriptor was closed; the class doc, `_FlusherState`, and the technical
+      record say exactly that.
+
 ### G2 — Verification
 - [x] `fvm dart analyze lib/infrastructure/stt test/stt` — clean.
 - [x] The eight STT suites, each in its own process — all pass.
@@ -91,8 +103,10 @@ platform — including Windows, which refuses both while any handle is open.
       open/close cycles, plus a descriptor scan and a delete of every artifact).
 - [x] Given two concurrent `close()` calls, when the second returns, then the first
       teardown has settled and the artifacts are removable.
-- [x] Given a `close()` that returns, then both isolate exit events have already
-      fired (`flusherIsolateEnded` / `writerIsolateEnded` read synchronously).
+- [x] Given a `close()` that returns, then both isolate exit events have actually
+      fired — `_flusherExited` is completed only by the real `onExit` event (or a
+      spawn that produced no isolate), never by the `gone` message, and removing
+      the real exit wait fails the guard.
 - [x] Given a refused write through the in-process seam, when the caller closes
       the pipeline, then the sink is closed even though the write failed, and the
       typed failure reaches the caller through `close()` as well.
@@ -114,5 +128,10 @@ All gates closed on PR [#406](https://github.com/EastStarAI/sanad-agent/pull/406
 Round 1 (reviewed head `2b3be3b0`) was returned with two blockers and two
 warnings — the pre-handshake flusher race and unsafe concurrent close — both
 repaired in round 2 together with the flusher-exit wait and the deterministic
-writer-exit signal. Remaining work: re-review and merge, both outside this task's
+writer-exit signal. Round 2's re-review accepted both blockers and the delay
+warning, kept the single-rethrow policy for concurrent failed closes (reviewer
+commit `f561d4f5`), and returned the one remaining warning: the exit completer was
+still satisfied by the `gone` message. Round 3 separates the two events, so the
+exit assertion is now independent of the handle close and fails when the real
+wait is removed. Remaining work: re-review and merge, both outside this task's
 authorization.

@@ -256,10 +256,17 @@ class IsolateWritePipeline implements SttWritePipeline {
   }
 
   /// Completes the flusher state that has become true, once each.
+  ///
+  /// [IsolateWritePipeline._flusherExited] is deliberately **not** part of the
+  /// handle state: `gone` proves the descriptor was closed by the isolate, not
+  /// that the isolate stopped running. Only a spawn that never produced an
+  /// isolate, or the isolate's own `onExit` event, may complete it — otherwise
+  /// `close()` would report an exit it never observed.
   void _settleFlusher({required _FlusherState settle}) {
     if (!_flusherReady.isCompleted) _flusherReady.complete();
     if (settle == _FlusherState.ready) return;
     if (!_flusherClosed.isCompleted) _flusherClosed.complete();
+    if (settle == _FlusherState.handle) return;
     if (!_flusherExited.isCompleted) _flusherExited.complete();
   }
 
