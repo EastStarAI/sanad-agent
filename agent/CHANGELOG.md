@@ -1,3 +1,12 @@
+## 1.0.23
+
+- Dictation model downloads resume where they stopped instead of restarting, write with bounded memory, show the model size, real progress, and time left, survive a closed sheet, a device switch, or a reconnect, and stop only when cancelled.
+- Dictation states its real refusal reason in the model sheet instead of claiming that no model is installed.
+- One effective context window per model, resolved by a single policy owner behind a built-in global cap, with the catalog, `sanad models`, the Client indicator, and compaction all reading the same value.
+- Image input declared as a MIME type (`image/jpeg`, `image/png`, `image/gif`, `image/webp`) is recognized again.
+- A supervised restart is proven by a replacement owner instead of the outgoing process's own answer, and a blocked session publishes `blocked` on the run timeline as it happens.
+- Developer and CI tooling: primary-checkout runtime identity derived from its path, safe reclaim of an orphaned daemon, stable and allowlisted Web origins, a macOS subset on the release lanes with full macOS coverage after merge, and two suites that assert the shipped contract instead of the host.
+
 ## 1.0.22
 
 - Added dictation to the Agent daemon: one pipeline served by a `/ws?type=dictation` local channel beside the untouched voice path and by the hosted `dictation_relay_v1` capability with request/route/seq identity, binary PCM framing, origin-only delivery, admission limits, and TTL cleanup, both sharing one `DictationService` (lease, engine, residency, vocabulary); a dictation session never creates a conversation session, session identity, or client tag, and voice origin correlation is unchanged (#337).
