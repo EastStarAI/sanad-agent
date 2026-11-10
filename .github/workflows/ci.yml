@@ -420,14 +420,15 @@ jobs:
       # red lane whose cause is packaging).
       - name: Install the disassembler the instruction-set guard needs
         if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v objdump >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq binutils
-          fi
-          objdump --version | head -1
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: binutils
+          options: ''
+          skip-if-command: objdump
+      - name: Report the disassembler
+        if: runner.os == 'Linux'
+        run: objdump --version | head -1
       - name: Verify the installed runtime and its manifest entry
         if: runner.os != 'Windows'
         working-directory: agent
@@ -538,12 +539,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      # The nativeapi build hook needs the GTK 3, X11, and Xi development
+      # packages; the image only ships their runtime libraries. The bounded
+      # action and step timeout exist because this install's `update` half once
+      # hung for 19m49s and consumed the whole job budget.
       - name: Install native-asset build dependencies
-        run: |
-          # The nativeapi build hook needs the GTK 3, X11, and Xi development
-          # packages; the image only ships their runtime libraries.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgtk-3-dev libasound2-dev
       - name: Test client shard ${{ matrix.shard }}/4
         working-directory: client
         run: |
@@ -570,9 +574,10 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
       - name: Install native-asset build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgtk-3-dev libasound2-dev
       - name: Web startup composition
         working-directory: client
         run: |

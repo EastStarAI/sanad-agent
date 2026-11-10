@@ -196,6 +196,41 @@ The client test shards and the Web guard install `libgtk-3-dev` and
 and Xi with `pkg-config`, and the image only ships those runtime libraries. The
 analysis and agent lanes do not build native assets and install nothing.
 
+### Bounded package installs
+
+Every `apt-get` in `ci.yml` and `release.yml` goes through
+`.github/actions/apt-install`, which owns the retry and timeout policy for
+package installation, and every calling step declares its own
+`timeout-minutes`.
+
+`apt-get` has no timeout of its own: a mirror that accepts the connection and
+then stops answering holds the step until the *job* timeout kills it. That is
+not hypothetical here. On 2026-11-10 the `apt-get update` half of the client
+shard dependency install in `Test client (3/4)` hung for 19m49s, was killed by
+the 20-minute job timeout, and the clean re-run finished the same install in
+17 seconds. The same step was slow or stalled 11 times in 2.5 days, across the
+client shards, the Web guard, and the post-merge run.
+
+The action therefore:
+
+- bounds the acquire phase per command (`Acquire::Retries=3`,
+  `Acquire::http::Timeout=20`, `Acquire::https::Timeout=20`, plus
+  `Acquire::ForceIPv4=true` so an unroutable IPv6 path fails instead of
+  blackholing);
+- retries the whole `update` + `install` pair at most three times with a 10s
+  then 20s backoff, so one late or truncated index costs seconds instead of the
+  lane;
+- fails with a single actionable error after the last attempt, and
+- skips the install entirely when its `skip-if-command` input already resolves,
+  which is how the instruction-set disassembler stays a no-op on runners that
+  ship `objdump`.
+
+A caller's `timeout-minutes` (8 minutes for the dependency installs and the
+disassembler, 10 for the release Linux build dependencies) is the last bound: a
+stall that survives three bounded attempts fails fast instead of consuming a
+20–45 minute job budget. Nothing about which packages are installed, or on
+which lane, changed — only how a stalled mirror is handled.
+
 ## Required Checks and Protected Labels
 
 `All required checks pass` is the single branch-protection context. Job names

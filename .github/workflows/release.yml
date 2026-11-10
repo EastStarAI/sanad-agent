@@ -298,20 +298,22 @@ jobs:
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
+      # `--verify` disassembles the staged libraries and fails on any
+      # instruction above the declared baseline. Installing the disassembler
+      # when it is absent keeps the gate from skipping on the lane that
+      # actually ships the payload; the bounded action makes a stalled mirror a
+      # fast failure instead of a lost release lane.
       - name: Install the disassembler the instruction-set guard needs
         if: matrix.platform == 'linux'
-        shell: bash
-        # `--verify` disassembles the staged libraries and fails on any
-        # instruction above the declared baseline. Installing the disassembler
-        # when it is absent keeps the gate from skipping on the lane that
-        # actually ships the payload.
-        run: |
-          set -euo pipefail
-          if ! command -v objdump >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq binutils
-          fi
-          objdump --version | head -1
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: binutils
+          options: ''
+          skip-if-command: objdump
+      - name: Report the disassembler
+        if: matrix.platform == 'linux'
+        run: objdump --version | head -1
       # Audit D9: the packaged Agent must carry the native dictation runtime
       # beside its executable. It is built in the same matrix entry as the
       # executable, so one platform's payload cannot silently receive another
@@ -666,9 +668,11 @@ jobs:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
       - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev xvfb
+        timeout-minutes: 10
+        uses: ./.github/actions/apt-install
+        with:
+          packages: clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev xvfb
+          options: ''
       - name: Build Linux and Web
         working-directory: client
         run: |
