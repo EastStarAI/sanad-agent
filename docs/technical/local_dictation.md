@@ -303,18 +303,27 @@ origin:
   request latency, and the extra connections only added CPU and complexity. What
   did work was removing the pacing terms: HTTP-only read 66.1 MB/s, and the
   pipeline above 61.2 MB/s.
-- **Writeback is forced during the transfer, not after it.** A write the kernel
-  accepts lives in the page cache, not on the disk, and Linux does not start
-  writing it back until `dirty_expire_centisecs` (30 s) unless
+- **Writeback is forced during the transfer, and it does not stop the writer.**
+  A write the kernel accepts lives in the page cache, not on the disk, and Linux
+  does not start writing it back until `dirty_expire_centisecs` (30 s) unless
   `dirty_background_ratio` is reached first — 10 % of a 24.5 GB host is 2.45 GB,
-  far above any single artifact. The writer therefore calls `flushSync()` every
-  `kSttFlushWindowBytes` (64 MiB) of written bytes and only then acknowledges
-  that write, so the cost lands inside the transfer where it overlaps the
-  socket; the fixed write window is what turns a flush slower than the link into
-  plain read backpressure instead of a heap. The flush at `close` stays, so
-  durability against a power cut is what it always was — it now only forces the
-  last, sub-window tail. A refused flush is the same typed failure a refused
-  write is (`storage_full` for `ENOSPC`), never a silently short artifact.
+  far above any single artifact. So the page cache is forced out every
+  `kSttFlushWindowBytes` (64 MiB) of written bytes — but from a second isolate
+  with its own handle of the same file, never on the writer's thread. That
+  distinction is the whole difference between overlapping and re-serializing:
+  `fsync` of one window costs about as much as reading it (~1.2 s against
+  ~1.3 s per 64 MiB here), so a synchronous flush degenerates into "read a
+  window, fsync it, read the next" and the end-to-end stays at their sum
+  (measured below: 34.4 s against 31.9 s). The writer is held to **two windows
+  ahead of the last completed flush** — past that it stops acknowledging, which
+  caps the dirty page cache at ~128 MiB whatever the artifact size and paces the
+  read to a disk slower than the link — and a request that arrives while one is
+  running is *coalesced* into one remembered request, never a queue. `close()`
+  waits for the running flush and then forces the remainder on the writer's own
+  handle, so durability against a power cut is exactly what it was. A refused
+  flush is the typed failure a refused write is (`storage_full` for `ENOSPC`),
+  never a silently short artifact. Two handles are also what `RandomAccessFile`
+  requires: it refuses a second concurrent async operation on one handle.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s
@@ -322,17 +331,25 @@ before, 1 137.6 MB/s after** (7.17 s → 0.90 s per GiB), with the same workload
 falling from 40.3 s to 13.6 s of process CPU. The loopback origin removes the
 network, which is the point: what is left is the cost this change removed.
 
-End to end an install now costs about **max(network, disk)** rather than their
-sum: the reader no longer idles for a write, and the disk no longer waits for
-`close` to start. The shape that made this necessary, measured on the reference
-arm64 host against the real catalog URL: a 1.62 GB artifact transferred in
-36.0 s at 45-47 MB/s and then spent **23.8 s in one final fsync with the network
-idle** — 59.9 s, 27.1 MB/s, against a 54.7 MB/s disk. The same artifact is
-expected at ≈34-36 s with the periodic flush, which is its transfer rate. The
-loopback bench cannot show that gain — a loopback transfer is not
-writeback-blocked, and APFS syncs a 64 MiB window well inside the time the next
-one takes to arrive — so it is measured for the absence of a regression
-(884 MB/s vs 891 MB/s median, inside the run-to-run spread), not for the win.
+End to end an install costs about **max(network, disk)** rather than their sum,
+because the reader never idles for a write and the disk never waits for `close`
+to start. Three builds of the shipped pipeline against the real f16 URL
+(1 624 555 275 B), on the reference server, interleaved, median of three:
+
+| Build | End to end | Transfer phase | Tail | Peak `Dirty` | CPU-s/GB |
+|---|---|---|---|---|---|
+| close-only flush (before #402's follow-up) | **59.12 s** (26.2 MB/s) | 28.9 s | 30.2 s | **1 500 MB** | 27.1 |
+| synchronous flush every 64 MiB | **34.37 s** (44.8 MB/s) | 34.3 s | 0.06 s | 58 MB | 27.2 |
+| asynchronous flush (this design) | **31.85 s** (48.6 MB/s) | 30.6 s | 1.27 s | 66 MB | 27.6 |
+
+The middle row is why the second isolate exists: the fsync did not disappear, it
+moved *into* the transfer phase, so the total was still the sum — and the
+46 % it bought over the close-only build was all it could buy. The third row is
+the overlap: 30.6 s of reading while the flusher drains, which is `max(read,
+disk)` on a host whose disk needs 29.7 s for the same 1.62 GB at 54.7 MB/s. CPU
+per byte is unchanged across all three (the fsync is I/O wait, not compute), and
+the dirty page cache falls from ~1.5 GB to ~66 MB — one artifact's worth of RAM
+that the host used to loan out at the owner's risk.
 
 Pin the size and the digest from the hosting provider's own metadata — the
 Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and

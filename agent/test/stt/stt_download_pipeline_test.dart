@@ -14,11 +14,14 @@
 //    `download_failed`, and the writer now reports failures from another
 //    isolate, where a `FileSystemException` cannot cross. The store's mapping is
 //    asserted end to end against a real loopback server rather than inferred.
-// 4. **The page cache does not wait for close.** Every `kSttFlushWindowBytes`
-//    of written bytes is forced out before that write is acknowledged, so the
-//    kernel's deferred writeback cannot become one serial fsync at the end of
-//    the install (measured: 36.0 s transfer + 23.8 s tail on a 1.62 GB
-//    artifact).
+// 4. **The page cache does not wait for close, and writeback does not stop the
+//    writer.** Every `kSttFlushWindowBytes` of written bytes is forced out from
+//    a second isolate while the writer keeps writing, so the reader is never
+//    paused for an fsync and the kernel's deferred writeback cannot become one
+//    serial tail at the end of the install (measured: 36.0 s transfer + 23.8 s
+//    tail on a 1.62 GB artifact, and a synchronous flush only re-serialized the
+//    two phases). The writer is held to two windows ahead of the last completed
+//    flush, which is what bounds the dirty page cache and paces a slow disk.
 // 5. **The isolate hop is the shipped one, and it is cheap.** The default
 //    factory is asserted structurally, and the hop is timed against the same
 //    file sink in-process so a regression that serialises on it shows up as a
@@ -124,10 +127,26 @@ class _CountingSink implements SttWriteSink {
 }
 
 /// Sink that records forced writebacks, and can park or refuse one.
+///
+/// It holds two handles for the same reason the shipped flusher isolate does:
+/// `RandomAccessFile` refuses a second concurrent async operation on one handle,
+/// so an fsync and a write must not share it.
 class _FlushingSink implements SttWriteSink {
-  _FlushingSink(this._handle, {this.failWith, this.flushGate});
+  _FlushingSink._(this._handle, this._flushHandle, this.flushGate, this.failWith);
+
+  static Future<_FlushingSink> open(
+    File file, {
+    Object? failWith,
+    Completer<void>? flushGate,
+  }) async => _FlushingSink._(
+    await file.open(mode: FileMode.write),
+    await file.open(mode: FileMode.append),
+    flushGate,
+    failWith,
+  );
 
   final RandomAccessFile _handle;
+  final RandomAccessFile _flushHandle;
 
   /// Thrown from [flush] instead of flushing.
   final Object? failWith;
@@ -151,11 +170,17 @@ class _FlushingSink implements SttWriteSink {
     if (gate != null) await gate.future;
     final failure = failWith;
     if (failure != null) throw failure;
-    await _handle.flush();
+    await _flushHandle.flush();
   }
 
   @override
-  Future<void> close() => _handle.close();
+  Future<void> close() async {
+    try {
+      await _flushHandle.close();
+    } finally {
+      await _handle.close();
+    }
+  }
 }
 
 /// Sink that refuses every write the way a full volume does.
@@ -298,9 +323,13 @@ void main() {
   });
 
   group('flush', () {
+    // Two chunks, so a window and the two-window bound are reachable with a few
+    // hundred KB instead of the shipped 64 MiB. The rule is the same one.
+    const int small = 2 * _chunk;
+
     test('forces writeback every window and once more at close', () async {
       final file = File('${dir.path}/flush.bin');
-      final sink = _FlushingSink(await file.open(mode: FileMode.write));
+      final sink = await _FlushingSink.open(file);
       const int window = 4 * _chunk;
       final pipeline = InProcessWritePipeline(sink, flushWindowBytes: window);
 
@@ -326,7 +355,7 @@ void main() {
 
     test('a short artifact is flushed once, at close', () async {
       final file = File('${dir.path}/short.bin');
-      final sink = _FlushingSink(await file.open(mode: FileMode.write));
+      final sink = await _FlushingSink.open(file);
       final pipeline = InProcessWritePipeline(sink);
       for (var i = 0; i < 3; i++) {
         await pipeline.add(_block(i));
@@ -345,30 +374,172 @@ void main() {
       expect(file.lengthSync(), 3 * _chunk);
     });
 
+    test('keeps writing while writeback runs', () async {
+      // The defect this shape exists for: an fsync on the writer's own thread
+      // stops the writer, the 4 MiB window fills in a fraction of the flush, and
+      // the phases become sequential again. Two chunks are written past the
+      // window here while the flush is still parked.
+      final file = File('${dir.path}/overlap.bin');
+      final gate = Completer<void>();
+      final sink = await _FlushingSink.open(file, flushGate: gate);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
+
+      for (var i = 0; i < 4; i++) {
+        await pipeline.add(_block(i));
+      }
+      // `drain` returns once everything handed over has been written; it does not
+      // wait for writeback, which is exactly what the parked gate must survive.
+      await pipeline.drain();
+      expect(sink.flushes, 1, reason: 'one window is written, so one writeback');
+      expect(
+        sink.bytes,
+        4 * _chunk,
+        reason: 'the writer stopped at the first window while the flush ran',
+      );
+
+      gate.complete();
+      await pipeline.drain();
+      await pipeline.close();
+      expect(file.lengthSync(), 4 * _chunk);
+    });
+
+    test('never runs more than two windows ahead of a completed writeback', () async {
+      // Past two windows the reader gets no further ack, which is what bounds the
+      // dirty page cache whatever the artifact size — and what paces the read to
+      // a disk slower than the link.
+      final file = File('${dir.path}/bound.bin');
+      final gate = Completer<void>();
+      final sink = await _FlushingSink.open(file, flushGate: gate);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
+
+      // Enough chunks to fill the reader's write window past the bound.
+      final blocks = kSttWriteWindowBytes ~/ _chunk + 16;
+      var accepted = 0;
+      final feeding = () async {
+        for (var i = 0; i < blocks; i++) {
+          await pipeline.add(_block(i));
+          accepted++;
+        }
+      }();
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+      expect(
+        sink.bytes,
+        2 * small,
+        reason: 'the writer went past the two-window bound while the flush ran',
+      );
+      expect(
+        accepted,
+        lessThan(blocks),
+        reason: 'the reader kept handing over bytes while the bound held',
+      );
+
+      gate.complete();
+      await feeding.timeout(const Duration(seconds: 10));
+      await pipeline.drain();
+      await pipeline.close();
+      expect(file.lengthSync(), blocks * _chunk);
+    });
+
+    test('coalesces to one running flush plus at most one remembered', () async {
+      // Nothing written after the running flush, so its completion must not
+      // re-arm a second one for the same bytes: close is then the only other.
+      final file = File('${dir.path}/coalesce-one.bin');
+      final gate = Completer<void>();
+      final sink = await _FlushingSink.open(file, flushGate: gate);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
+      for (var i = 0; i < 2; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      expect(sink.flushes, 1);
+
+      gate.complete();
+      await pipeline.close();
+      expect(
+        sink.flushes,
+        2,
+        reason: 'a flush was re-armed for bytes the running one already covered',
+      );
+    });
+
+    test('a second window written during a flush is one request, not a queue', () async {
+      final file = File('${dir.path}/coalesce-two.bin');
+      final gate = Completer<void>();
+      final sink = await _FlushingSink.open(file, flushGate: gate);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
+      for (var i = 0; i < 4; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      expect(
+        sink.flushes,
+        1,
+        reason: 'the second window is remembered, not started, while one runs',
+      );
+
+      gate.complete();
+      await pipeline.close();
+      expect(
+        sink.flushes,
+        3,
+        reason: 'two windows and a close is exactly three writebacks',
+      );
+      expect(file.lengthSync(), 4 * _chunk);
+    });
+
+    test('close waits for the writeback it forced', () async {
+      // `drain` may return with writeback still running; the digest comparison
+      // and the rename must not.
+      final file = File('${dir.path}/flush-gated.bin');
+      final gate = Completer<void>();
+      final sink = await _FlushingSink.open(file, flushGate: gate);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
+      await pipeline.add(_block(0));
+      await pipeline.add(_block(1));
+
+      var closed = false;
+      final closing = pipeline.close().whenComplete(() => closed = true);
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+      expect(
+        closed,
+        isFalse,
+        reason: 'close returned while a forced writeback was still running',
+      );
+
+      gate.complete();
+      await closing.timeout(const Duration(seconds: 5));
+      expect(
+        sink.flushes,
+        2,
+        reason: 'close forced the tail once after the running writeback',
+      );
+    });
+
     test('a refused flush is typed like a refused write', () async {
       final file = File('${dir.path}/flush-failed.bin');
-      final sink = _FlushingSink(
-        await file.open(mode: FileMode.write),
+      final sink = await _FlushingSink.open(
+        file,
         failWith: const FileSystemException(
           'Cannot flush file',
           '/tmp/flush-failed.bin',
           OSError('No space left on device', 28),
         ),
       );
-      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: _chunk);
+      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: small);
       await pipeline.add(_block(0));
+      await pipeline.add(_block(1));
 
       Object? caught;
       try {
-        await pipeline.drain();
+        await pipeline.close();
       } on Object catch (error) {
         caught = error;
       }
       expect(
         caught,
         isA<SttWriteFailure>(),
-        reason: 'a writeback the disk refused must not read as a write failure '
-            'the store cannot classify',
+        reason: 'a writeback the disk refused must not read as a failure the '
+            'store cannot classify',
       );
       final failure = caught! as SttWriteFailure;
       expect(failure.osErrorCode, 28);
@@ -379,34 +550,6 @@ void main() {
         ).code,
         'storage_full',
       );
-    });
-
-    test('drain waits for the writeback it forced', () async {
-      // The write is acknowledged only after its flush: if `drain` returned
-      // first, the store would compare the digest and rename an artifact whose
-      // flush is still in flight.
-      final file = File('${dir.path}/flush-gated.bin');
-      final gate = Completer<void>();
-      final sink = _FlushingSink(
-        await file.open(mode: FileMode.write),
-        flushGate: gate,
-      );
-      final pipeline = InProcessWritePipeline(sink, flushWindowBytes: _chunk);
-      await pipeline.add(_block(0));
-
-      var drained = false;
-      final draining = pipeline.drain().whenComplete(() => drained = true);
-      await Future<void>.delayed(const Duration(milliseconds: 50));
-      expect(
-        drained,
-        isFalse,
-        reason: 'drain returned while a forced writeback was still pending',
-      );
-
-      gate.complete();
-      await draining.timeout(const Duration(seconds: 5));
-      expect(sink.flushes, 1);
-      await pipeline.close();
     });
   });
 
@@ -596,33 +739,29 @@ void main() {
       expect(file.readAsBytesSync(), big);
     });
 
-    test('forces writeback mid-artifact and keeps writing in order', () async {
-      // One periodic flush happens *inside* this transfer (the window is the
-      // production 64 MiB), so a flush that disturbed the open handle would
-      // corrupt everything written after it. The cadence itself is asserted
-      // in-process, where the sink can count it.
+    test('forces writeback repeatedly and keeps writing in order', () async {
+      // A window of one chunk makes the shipped writer/flusher pair cross a
+      // writeback boundary on every piece, which is the interleaving that has to
+      // stay correct: the flusher holds its own handle of the same file while the
+      // writer appends to it, and the writer's own final flush still owns the
+      // durability. The cadence and the bound are asserted in-process, where a
+      // sink can count them.
       final file = File('${dir.path}/isolate-flush.bin');
-      final pipeline = await IsolateWritePipeline.open(file, FileMode.write);
-      final block = _block(9);
-      final total = kSttFlushWindowBytes + block.length;
-      for (var written = 0; written < total; written += block.length) {
+      final pipeline = await IsolateWritePipeline.open(
+        file,
+        FileMode.write,
+        flushWindowBytes: _chunk,
+      );
+      final blocks = <Uint8List>[for (var i = 0; i < 8; i++) _block(i)];
+      for (final block in blocks) {
         await pipeline.add(block);
       }
       await pipeline.drain();
       await pipeline.close();
 
-      expect(file.lengthSync(), total);
-      final handle = await file.open();
-      try {
-        await handle.setPosition(kSttFlushWindowBytes - block.length);
-        expect(
-          await handle.read(block.length * 2),
-          <int>[...block, ...block],
-          reason: 'the bytes on both sides of the forced writeback must survive',
-        );
-      } finally {
-        await handle.close();
-      }
+      final expected = <int>[for (final block in blocks) ...block];
+      expect(file.lengthSync(), expected.length);
+      expect(file.readAsBytesSync(), expected);
     });
 
     test('costs little against the same sink in-process', () async {
