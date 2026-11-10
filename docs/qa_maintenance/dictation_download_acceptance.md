@@ -26,15 +26,31 @@ backs each step lives in `agent/test/stt/` and
 Use `sanad-dev` for every runtime action. Never restart, stop, or sign in through a
 bare `dart`/`flutter` command, and never point this run at the user's normal Home.
 
+## 0. Environment sanity (do this first)
+
+`status` reporting the expected commit is **not** proof that the running Clients carry
+that build: a hot restarted Client keeps its process id, and `status` names the source
+checkout, not the compiled code. Prove the binary functionally before recording any
+result — pick the check that the change under test owns (for an audio-path change, the
+one-line `dictation_audio` log; for an install change, the install row), and quote it in
+the report. A result collected from a stale binary is discarded, not annotated.
+
 ## 1. Bounded memory
 
-1. Start the install of the largest model from the model sheet.
-2. Sample the daemon's resident memory while it runs, at least five times:
+1. Confirm **no dictation model is warm**: a loaded recognizer holds ~800 MB–1 GB in the
+   daemon independent of any download (measured: 918 MB–1.05 GB right after a dictation,
+   against a 43–47 MB fresh idle). Either wait for the warm engine to unload or restart
+   the Agent, and record which one you did.
+2. Start the install of the largest model from the model sheet.
+3. Sample the daemon's resident memory while it runs, at least five times:
    `ps -o rss= -p <agent pid>` (or Activity Monitor, filtered by `sanad_agent`).
-3. **Pass:** the sampled value stays flat while the artifact grows, and never
+4. **Pass:** the sampled value stays flat while the artifact grows, and never
    exceeds the artifact size by more than ~300 MB. A climb that tracks the download
    byte for byte is the `IOSink` regression returning: file the failure with the
    series, not with a single reading.
+5. **Report the baseline you measured against.** If a warm model is unavoidable, subtract
+   its own baseline (sample before the install, in the same warm state) and say so — a
+   warm engine must never be quoted as download overhead.
 4. **Pass:** `sanad-dev logs agent -n 50` shows no per-chunk line and no repetition of
    the same install warning.
 

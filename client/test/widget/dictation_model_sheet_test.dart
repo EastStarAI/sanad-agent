@@ -32,6 +32,7 @@ class _RecordingCubit extends DictationCubit {
   Future<void> refreshStatus(
     DeviceConfig device, {
     Duration timeout = const Duration(seconds: 4),
+    bool silent = false,
   }) async {
     refreshes++;
   }

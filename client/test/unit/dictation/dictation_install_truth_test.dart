@@ -50,6 +50,8 @@ void main() {
       capture: SilentDictationCapture(),
       sessionIdFactory: () => 'session-${resolver.resolved.length}',
       now: () => now,
+      // The recovery probe waits between attempts; a test does not.
+      delay: (_) async {},
     );
   });
 
@@ -321,6 +323,40 @@ void main() {
       expect(cubit.state.errorCode, isNull, reason: 'a cancel is not a failure');
       expect(cubit.state.model.isDownloading, isFalse);
       expect(transport.isOpen, isTrue);
+    });
+
+    test('a lost socket clears the row and re-asks the device', () async {
+      // D7: after a hard Agent restart the open sheet kept a dead Cancel at 28 %,
+      // because nothing told it the daemon that owned the install was gone.
+      unawaited(cubit.installModel('large', device: deviceA));
+      await settle();
+      final first = resolver.latest('agent-a');
+      expect(first.commandNames, ['install']);
+      expect(cubit.state.model.installingModelId, 'large');
+
+      // The Agent process dies: the local socket closes with no terminal event.
+      await first.close();
+      await settle();
+
+      expect(
+        cubit.state.model.installingModelId,
+        isNull,
+        reason: 'a row with no daemon behind it must not keep a Cancel button',
+      );
+      expect(cubit.state.errorCode, isNull, reason: 'a probe is not a failure');
+
+      // The probe resolves a fresh socket and asks the device for truth.
+      await settle();
+      expect(resolver.resolvesFor('agent-a'), 2);
+      final second = resolver.latest('agent-a');
+      expect(second.commandNames, ['status']);
+
+      second.emit(
+        dictationStatusEvent(selected: null, ready: false, models: [hostedRow]),
+      );
+      await settle();
+      expect(cubit.state.model.installingModelId, isNull);
+      expect(second.commandNames, ['status'], reason: 'one probe, not a poll');
     });
 
     test('install_in_progress is state: no reset, no socket close', () async {

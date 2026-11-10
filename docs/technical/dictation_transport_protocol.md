@@ -134,7 +134,7 @@ Commands (Client → daemon):
 | `stop` | — | Drain the session; final transcripts then `dictation_done`. |
 | `cancel` | — | Abandon the session and drop its transcript. |
 | `status` | — | Emit a fresh `stt_status`. |
-| `install` | `model_id` | Download and verify one catalog model, streaming progress. A second `install` for a model already downloading **joins** the running install; a different model is refused with `install_in_progress`. |
+| `install` | `model_id` | Download and verify one catalog model, streaming progress. A second `install` for a model already downloading **joins** the running install; a different model is refused with `install_in_progress`. The running install is announced with `stt_status` to every channel of the device, and its `install` payload states the bytes a resumed download already has on disk — never zero. |
 | `cancelInstall` | — | Abandon the running install. It is the **only** thing that stops one, and it is not the session `cancel`. |
 | `select` | `model_id` | Persist the selected model and emit `stt_status`. |
 | `prepareRuntime` | — | Start native runtime preparation, then emit `stt_status`. |
@@ -542,12 +542,15 @@ no route at all, so their lifecycle is bounded without route cleanup:
   emitted **after** the install stops being truth — a payload built while it is
   still active states `install` again, and a client that reads it can only draw a
   row that never ends;
-- every channel **attached to the device** receives the progress and the terminal
-  status, not only the channel that sent `install`. A channel attaches by sending
-  `status` while an install runs (and by joining or being refused with
-  `install_in_progress`, which also attaches it), so a client that restarted, a
-  second client, and a sheet reopened after a reconnect all stay truthful from
-  their first status onward;
+- every channel **attached to the device** receives the install — its start, its
+  progress, and its terminal status — not only the channel that sent `install`. A
+  channel attaches by sending any control command (`status` attaches it at once,
+  and every later install is announced to it), so a client that restarted, a
+  second client, and a sheet that was already open all stay truthful from the
+  moment a download begins;
+- the **install projection states the resumed truth before the first byte**:
+  `stt_status.install` carries the resumable bytes already on disk and the total
+  this run will fetch, so a resumed bar starts at its offset instead of at zero;
 - the partial artifact is preserved across every interruption — a dropped
   connection, a cancel, a daemon restart — and resumed with an HTTP `Range`
   request, then verified against the pinned size and SHA-256 before the atomic

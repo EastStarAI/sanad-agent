@@ -150,6 +150,42 @@ void main() {
     expect(store.statusOf(entry).installed, isTrue);
   });
 
+  test('the install seed states what a resumed download already has', () async {
+    await source.start();
+    // D4: the projection published at install start is built before the first
+    // HTTP response, so it must state the partial's bytes — a zero there is a
+    // resumed bar restarting at 0 % for a file the daemon already holds.
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('seed-probe', url: 'https://example.invalid/x.bin');
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    final kept = payload.length ~/ 3;
+    File('${dir.path}/probe.bin.partial').writeAsBytesSync(
+      payload.sublist(0, kept),
+    );
+
+    final seed = store.installSeed(entry);
+
+    expect(seed?.received, kept);
+    expect(seed?.total, payload.length);
+    // Reading the seed must not touch the bytes it reports.
+    expect(File('${dir.path}/probe.bin.partial').lengthSync(), kept);
+  });
+
+  test('the install seed ignores a complete artifact', () async {
+    await source.start();
+    // A file already at its pinned size is not downloaded again, so it is not
+    // part of the total either: the seed describes this run, not the catalog.
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('done-probe', url: 'https://example.invalid/x.bin');
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    File('${dir.path}/probe.bin').writeAsBytesSync(payload);
+
+    final seed = store.installSeed(entry);
+
+    expect(seed?.received, 0);
+    expect(seed?.total, 0);
+  });
+
   test('a cancelled download keeps its resumable partial', () async {
     // A few MB so the cancel lands mid-transfer rather than after the last
     // chunk of a loopback-fast artifact.

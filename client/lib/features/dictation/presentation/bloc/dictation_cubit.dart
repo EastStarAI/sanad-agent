@@ -23,11 +23,16 @@ class DictationCubit extends Cubit<DictationState> {
     DictationPreviewPolicy previewPolicy = DictationPreviewPolicy.live,
     String Function()? sessionIdFactory,
     DateTime Function()? now,
+    Future<void> Function(Duration)? delay,
   })  : _resolver = resolver,
         _capture = capture,
         _sessionIdFactory = sessionIdFactory ?? DictationIdentity.next,
         _now = now ?? DateTime.now,
+        _delay = delay ?? _defaultDelay,
         super(DictationState(previewPolicy: previewPolicy));
+
+  static Future<void> _defaultDelay(Duration duration) =>
+      Future<void>.delayed(duration);
 
   static final _logger = Logger('DictationCubit');
 
@@ -45,6 +50,14 @@ class DictationCubit extends Cubit<DictationState> {
 
   /// The Client's own clock, so a projection's age is testable.
   final DateTime Function() _now;
+
+  /// How the post-disconnect recovery waits between attempts; injected so a
+  /// test does not spend nine real seconds proving a bound.
+  final Future<void> Function(Duration) _delay;
+
+  /// Status replies seen, so a recovery attempt can tell an answer from a
+  /// timeout without comparing timestamps (a fixed test clock makes those equal).
+  int _statusReplies = 0;
 
   DictationTransport? _transport;
 
@@ -365,8 +378,9 @@ class DictationCubit extends Cubit<DictationState> {
   Future<void> refreshStatus(
     DeviceConfig device, {
     Duration timeout = const Duration(seconds: 4),
+    bool silent = false,
   }) async {
-    final transport = await _ensureTransport(device);
+    final transport = await _ensureTransport(device, silent: silent);
     if (transport == null) return;
     final completer = Completer<void>();
     _statusCompleter = completer;
@@ -398,7 +412,10 @@ class DictationCubit extends Cubit<DictationState> {
     await refreshStatus(device);
   }
 
-  Future<DictationTransport?> _ensureTransport(DeviceConfig device) async {
+  Future<DictationTransport?> _ensureTransport(
+    DeviceConfig device, {
+    bool silent = false,
+  }) async {
     _lastCommandDevice = device;
     final existing = _transport;
     final sameDevice = _transportDeviceId == device.id;
@@ -424,11 +441,11 @@ class DictationCubit extends Cubit<DictationState> {
       _attachEvents(transport);
       return transport;
     } on DictationTransportUnavailable catch (error) {
-      emit(state.copyWith(errorCode: error.reason));
+      if (!silent) emit(state.copyWith(errorCode: error.reason));
       return null;
     } on Object catch (error) {
       _logger.warning('dictation connect failed: ${error.runtimeType}');
-      emit(state.copyWith(errorCode: 'connect_failed'));
+      if (!silent) emit(state.copyWith(errorCode: 'connect_failed'));
       return null;
     }
   }
@@ -467,6 +484,7 @@ class DictationCubit extends Cubit<DictationState> {
     if (!_lifecycle.isClosed) _lifecycle.add(event);
     switch (event['event']) {
       case 'stt_status':
+        _statusReplies++;
         _statusCompleter?.complete();
         // The status is the daemon's whole answer, install included: it is
         // reconstructed here rather than merged into the previous projection, so
@@ -698,10 +716,35 @@ class DictationCubit extends Cubit<DictationState> {
 
   void _onTransportClosed() {
     if (_closing) return;
-    // A closed socket does not end an install: the download is daemon-scoped and
-    // keeps running, so the projection is kept and the next `stt_status` (a
-    // refresh on the next open) states the real progress.
+    final device = _device ?? _lastCommandDevice;
+    final lostInstall = state.model.installingModelId != null;
     unawaited(_reset(clearText: false));
+    if (!lostInstall) return;
+    // A closed socket does not end an install — the download is daemon-scoped —
+    // but it cannot report one either. Keeping the row left a dead Cancel at a
+    // stale percentage after a hard Agent restart, and the install it pointed at
+    // no longer exists (the process died). Drop the row and ask the device for
+    // the truth, a bounded number of times: the live restart was back in ~8 s.
+    emit(state.copyWith(model: state.model.copyWith(clearInstallingModel: true)));
+    if (device != null) unawaited(_recoverModelTruth(device));
+  }
+
+  /// Re-asks [device] for its model truth after the socket was lost.
+  ///
+  /// Bounded on purpose: three attempts, three seconds apart, and it stops the
+  /// moment a reply arrives, a session starts, or the device is gone. A silent
+  /// attempt never raises `connect_failed` — a recovery probe is not a user
+  /// action and must not paint an error over the composer.
+  Future<void> _recoverModelTruth(DeviceConfig device) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await _delay(const Duration(seconds: 3));
+      if (isClosed || state.isActive) return;
+      if (state.model.installingModelId != null) return;
+      if (_device != null) return;
+      final replies = _statusReplies;
+      await refreshStatus(device, silent: true);
+      if (_statusReplies != replies) return;
+    }
   }
 
   Future<void> _reset({required bool clearText, String? errorCode}) async {

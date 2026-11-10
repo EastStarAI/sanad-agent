@@ -216,6 +216,55 @@ void main() {
     await transport.close();
   });
 
+  test('the duration budget starts with the session, not the transport',
+      () async {
+    // D9: the same transport answers `status` (and every other control command)
+    // long before a session exists. Anchoring the budget at construction made a
+    // press minutes later fail `session_limit reason=duration sent=0` on a fresh
+    // session, which blocked dictation during an active turn.
+    final records = <String>[];
+    final subscription = Logger('HostedDictationTransport').onRecord.listen(
+      (record) => records.add(record.message),
+    );
+    addTearDown(subscription.cancel);
+
+    var now = DateTime(2026, 11, 10, 12);
+    final transport = HostedDictationTransport.connect(
+      socket: socket,
+      deviceId: 'account-device-9',
+      dictationId: 'dict-1',
+      maxFrameBytes: 8192,
+      maxSessionSeconds: 30,
+      clock: () => now,
+    );
+
+    // A model-sheet refresh on this transport, five minutes before the press.
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    now = now.add(const Duration(minutes: 5));
+
+    transport.sendCommand('start');
+    transport.sendAudio(const [1, 2, 3]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(records.where((line) => line.contains('session_limit')), isEmpty);
+    expect(transport.isOpen, isTrue);
+    expect(ends(), isEmpty);
+
+    // The session's own budget still bounds it: 31 s into the route, the next
+    // frame is refused with the reason and the counters.
+    now = now.add(const Duration(seconds: 31));
+    transport.sendAudio(const [4, 5, 6]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(records, hasLength(1));
+    expect(records.single, contains('code=session_limit'));
+    expect(records.single, contains('reason=duration'));
+    expect(records.single, contains('cap=30'));
+
+    await transport.close();
+    expect(ends(), hasLength(1));
+  });
+
   test('a transport that never opened a route sends nothing', () async {
     final transport = openTransport();
 

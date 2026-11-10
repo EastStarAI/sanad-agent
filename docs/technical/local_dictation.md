@@ -134,17 +134,27 @@ verified against its SHA-256, and activated atomically.
 An install is daemon-scoped, not connection-scoped. Closing the model sheet,
 switching to another device, reconnecting, or a Client restart all detach a
 listener and leave the download running; only `cancelInstall` stops it, and even
-that keeps the bytes it already received. That is what `stt_status.install`
+that keeps the bytes it already received.
+
+The Client side of that rule: a **closed** socket cannot report an install, and a
+hard Agent restart ends one (the process that owned it died). So when the dictation
+socket closes with an install row on screen, the Client drops the row instead of
+leaving a Cancel button that reaches nothing, and re-asks the device for truth a
+bounded number of times (three attempts, three seconds apart, silent) so the row
+reappears if the daemon was merely reconnecting. That is what `stt_status.install`
 exists for: any client that arrives mid-download rebuilds the same bar from the
 daemon's own truth instead of relying on a continuous event stream.
 
 The shape of the download is part of that contract, because each property was a
 measured defect before it existed:
 
-- **Every attached client sees it.** A channel attaches by asking for `status`
-  while an install runs, so a client that restarted mid-download, a second client,
-  and a sheet reopened after a reconnect receive the same ticks and the same
-  terminal `stt_status` as the one that pressed the button. The terminal status is
+- **Every attached client sees it, from the start.** A channel attaches by asking for
+  `status`, and an install that starts later is announced to every channel that has
+  spoken to the control surface — a sheet that was already open learns about a
+  download another client began instead of staying blank until it is reopened. A
+  client that restarted mid-download, a second client, and a sheet reopened after a
+  reconnect all receive the same ticks and the same terminal `stt_status` as the one
+  that pressed the button. The terminal status is
   built **after** the install is released: built any earlier it still states
   `install`, and the row it was meant to unfreeze stays frozen until the sheet is
   reopened.
@@ -170,6 +180,11 @@ measured defect before it existed:
   volume's free space and refuses with `storage_full` when the artifacts plus a
   256 MB margin do not fit. A write that still fails with `ENOSPC` maps to the
   same typed code, and the retry budget is never spent on either.
+- **The projection is truthful before the first byte.** The install seed — the
+  resumable partials already on disk, and the total this run will fetch — is part of
+  `stt_status.install` from the moment the install starts, so a resumed download
+  begins its bar at the offset it already reached instead of publishing a zero it
+  has to contradict a second later.
 - **Progress is a report, not a firehose.** One coalescing emitter serves both
   transports: at most one tick per 250 ms and one per 1 % of the total, always the
   first tick, every phase change, and the terminal 100 %. The ~160 000 per-chunk

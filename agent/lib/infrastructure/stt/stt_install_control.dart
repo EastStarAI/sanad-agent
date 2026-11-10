@@ -200,6 +200,8 @@ class SttInstallControl {
   SttInstallLease? start(
     String modelId, {
     required SttInstallObserver observer,
+    int seedReceived = 0,
+    int seedTotal = 0,
   }) {
     final active = _active;
     if (active != null) {
@@ -212,6 +214,8 @@ class SttInstallControl {
       clock: _clock,
       interval: interval,
       step: step,
+      seedReceived: seedReceived,
+      seedTotal: seedTotal,
     );
     _active = install;
     final lease = install.attach(observer, joined: false);
@@ -239,10 +243,15 @@ class _SttInstall {
     required DateTime Function() clock,
     required Duration interval,
     required double step,
+    int seedReceived = 0,
+    int seedTotal = 0,
   }) : _runner = runner,
        _clock = clock,
        _interval = interval,
-       _step = step;
+       _step = step,
+       _seed = seedReceived,
+       _received = seedReceived,
+       _total = seedTotal;
 
   final String modelId;
   final SttInstallRunner _runner;
@@ -259,8 +268,15 @@ class _SttInstall {
   bool _cancelled = false;
   bool _settled = false;
 
-  int _received = 0;
-  int _total = 0;
+  /// Bytes a resumed install already had when it started.
+  ///
+  /// They belong in the projection from the first moment — the payload is built
+  /// before the first HTTP response — but not in the observed rate, or the first
+  /// tick would report a spike measured from zero.
+  final int _seed;
+
+  int _received;
+  int _total;
   SttInstallPhase _phase = SttInstallPhase.downloading;
   int _bytesPerSecond = 0;
 
@@ -340,7 +356,9 @@ class _SttInstall {
   void _measureRate() {
     final elapsedMs = _elapsed.elapsedMilliseconds;
     if (elapsedMs < 400) return;
-    _bytesPerSecond = (_received * 1000 / elapsedMs).round();
+    final transferred = _received - _seed;
+    if (transferred <= 0) return;
+    _bytesPerSecond = (transferred * 1000 / elapsedMs).round();
   }
 
   void _maybeEmit() {

@@ -33,6 +33,9 @@ class HostedDictationTransport implements DictationTransport {
        _maxSessionBytes = maxSessionBytes,
        _maxSessionSeconds = maxSessionSeconds,
        _clock = clock {
+    // A safe value until a route opens: the session's budget is anchored in
+    // `_openRoute`, never here ([_openedAt] is `late` so `sendAudio` before a
+    // session is a programming error rather than a silent cap).
     _openedAt = _clock();
     _listen();
   }
@@ -118,6 +121,13 @@ class HostedDictationTransport implements DictationTransport {
       _fail('relay_unavailable');
       return;
     }
+    // The session's budget starts with its route, not with the transport: the
+    // same transport answers `status` (and every other control command) before a
+    // session exists, so anchoring the clock at construction made a press
+    // minutes later fail `session_limit reason=duration sent=0` on a session
+    // that had not sent a byte.
+    _openedAt = _clock();
+    _sentBytes = 0;
     _socket.emit('dictation_start', {
       'version': 'v1',
       'dictation_id': dictationId,

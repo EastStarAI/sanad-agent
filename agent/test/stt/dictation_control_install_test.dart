@@ -35,15 +35,25 @@ class _ChannelLog {
 
 /// Minimal host: the control only asks it for status and the install runner.
 class _FakeHost implements DictationControlHost {
-  _FakeHost({this.gate});
+  _FakeHost({this.gate, this.reportAfterGate = false});
 
   final Completer<void>? gate;
+
+  /// Report the first chunk only after [gate] completes, so a test can read the
+  /// announcement the daemon publishes before any byte arrives.
+  final bool reportAfterGate;
   final List<String> installs = <String>[];
 
   /// Set by each test after the control is built, so `statusPayload` reports the
   /// control's live truth exactly as the daemon's service does.
   DictationControl? control;
   SttInstallPhase phase = SttInstallPhase.downloading;
+
+  /// What a resumed install already has on disk, as the store would report it.
+  ({int received, int total})? seed;
+
+  @override
+  ({int received, int total})? installSeed(String modelId) => seed;
 
   @override
   String get selectedModelId => 'default-model';
@@ -64,12 +74,15 @@ class _FakeHost implements DictationControlHost {
     if (installs.length > 1) {
       throw StateError('a second writer must never start');
     }
-    onProgress?.call(modelId, 10, 100);
+    if (!reportAfterGate) {
+      onProgress?.call(modelId, (seed?.received ?? 0) + 10, seed?.total ?? 100);
+    }
     // `gate` is a Completer, not a Future: awaiting the field itself never
     // suspends.
     await (gate?.future ?? Completer<void>().future);
     onPhase?.call(SttInstallPhase.verifying);
-    onProgress?.call(modelId, 100, 100);
+    final total = seed?.total ?? 100;
+    onProgress?.call(modelId, total, total);
   }
 
   @override
@@ -115,9 +128,10 @@ void main() {
     await firstRun;
 
     // Both channels are told the same terminal truth: the channel that started
-    // the install hears it once, the one that joined hears its join reply and
-    // then the same terminal status.
-    expect(first.of('stt_status'), hasLength(1));
+    // the install hears its own start announcement and then the terminal status,
+    // the one that joined hears its join reply and the same terminal status.
+    expect(first.of('stt_status'), hasLength(2));
+    expect(first.of('stt_status').first['install'], isNotNull);
     expect(second.of('stt_status'), hasLength(2));
     expect(second.of('stt_status').last['ready'], isFalse);
     expect(first.of('dictation_error'), isEmpty);
@@ -224,9 +238,10 @@ void main() {
       emit: log.emit,
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));
-    // Nothing has settled yet: the row is fed by progress, and the status the
-    // channel holds still states the install.
-    expect(log.of('stt_status'), isEmpty);
+    // Nothing has settled yet: the row is fed by progress, and the announcement
+    // the channel holds still states the install.
+    expect(log.of('stt_status'), hasLength(1));
+    expect(log.of('stt_status').single['install'], isNotNull);
     expect(log.names, contains('stt_download_progress'));
     expect(control.installPayload, isNotNull);
 
@@ -269,6 +284,81 @@ void main() {
     expect(log.of('dictation_error'), isEmpty);
   });
 
+  test('a resumed install states its offset from the first moment', () async {
+    // D4: the projection is published before the first HTTP response, so a
+    // resumed install used to state `received_bytes: 0` and the bar restarted at
+    // 0 % for a second before jumping to the real percentage.
+    final gate = Completer<void>();
+    final host = _FakeHost(gate: gate, reportAfterGate: true);
+    final control = DictationControl(host);
+    host.control = control;
+    host.seed = (received: 400, total: 1000);
+    final log = _ChannelLog();
+
+    final run = control.handle(
+      const DictationMessage(DictationCommand.install, {'model_id': 'm'}),
+      owner: Object(),
+      emit: log.emit,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // The start announcement carries what is already on disk.
+    final started = log.of('stt_status').first['install'] as Map;
+    expect(started['received_bytes'], 400);
+    expect(started['total_bytes'], 1000);
+
+    // Nothing has arrived from the network yet, and the projection still states
+    // 400 rather than zero.
+    expect(control.installPayload?['received_bytes'], 400);
+    expect(log.of('stt_download_progress'), isEmpty);
+
+    gate.complete();
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // The first real tick continues from it.
+    final firstTick = log.of('stt_download_progress').first;
+    expect(firstTick['received_bytes'], 1000);
+    expect(firstTick['total_bytes'], 1000);
+    await run;
+    expect(log.of('stt_status').last.containsKey('install'), isFalse);
+  });
+
+  test('an install start reaches a channel that was already open', () async {
+    // D8: a sheet that was already open never learned that another client had
+    // started an install; only a reopen showed it.
+    final gate = Completer<void>();
+    final host = _FakeHost(gate: gate);
+    final control = DictationControl(host);
+    host.control = control;
+    final watcher = _ChannelLog();
+    final starter = _ChannelLog();
+
+    // The second sheet asked for status while nothing was running.
+    await control.handle(
+      const DictationMessage(DictationCommand.status, {}),
+      owner: Object(),
+      emit: watcher.emit,
+    );
+    expect(watcher.of('stt_status').single.containsKey('install'), isFalse);
+
+    final run = control.handle(
+      const DictationMessage(DictationCommand.install, {'model_id': 'm'}),
+      owner: Object(),
+      emit: starter.emit,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // It is told the install started, and stays attached from there.
+    final announcement = watcher.of('stt_status').last['install'] as Map;
+    expect(announcement['model_id'], 'm');
+    expect(watcher.of('stt_download_progress'), isNotEmpty);
+
+    gate.complete();
+    await run;
+
+    expect(watcher.of('stt_status').last.containsKey('install'), isFalse);
+  });
+
   test('a channel that arrives mid-install keeps receiving it', () async {
     // D2: a client that restarted saw one snapshot and then nothing, while the
     // daemon finished the install alone. A status request attaches the channel.
@@ -303,7 +393,7 @@ void main() {
     expect(late.of('stt_status'), hasLength(2));
     expect(late.of('stt_status').last.containsKey('install'), isFalse);
     expect(starter.of('stt_status').last.containsKey('install'), isFalse);
-    expect(starter.of('stt_status'), hasLength(1));
+    expect(starter.of('stt_status'), hasLength(2));
   });
 
   test('stt_status carries the install truth and omits it when idle', () async {

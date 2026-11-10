@@ -546,6 +546,14 @@ class DictationService implements DictationControlHost {
 
 
   @override
+  @override
+  ({int received, int total})? installSeed(String modelId) {
+    final entry = sttEntryById(modelId);
+    if (entry == null) return null;
+    return _store.installSeed(entry);
+  }
+
+  @override
   Future<void> install(
     String modelId, {
     SttProgressCallback? onProgress,

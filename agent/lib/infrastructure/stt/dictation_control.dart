@@ -45,6 +45,13 @@ abstract class DictationControlHost {
     bool Function()? isCancelled,
   });
 
+  /// What [install] would continue from, and the total it will report.
+  ///
+  /// A resumed install knows both before the first network frame; publishing the
+  /// projection without them states `received_bytes: 0` for a partial the daemon
+  /// already holds.
+  ({int received, int total})? installSeed(String modelId);
+
   Future<void> selectModel(String modelId);
 
   bool prepareNativeRuntime();
@@ -66,11 +73,17 @@ class DictationControl {
 
   late final SttInstallControl _installs;
 
-  /// One attachment per **channel**, so a repeat command replaces its own
-  /// observer instead of adding a second one and the map never grows with
-  /// command count. Cleared when the install settles.
-  final Map<Object, _InstallChannel> _installChannels =
-      <Object, _InstallChannel>{};
+  /// Every channel that has spoken to this control surface.
+  ///
+  /// Kept after its command returns — one entry per connection, removed on
+  /// detach — so an install that **starts** can be announced to a client whose
+  /// sheet is already open instead of waiting for it to ask again. Before that,
+  /// only the channel that pressed Download learned about the start, and every
+  /// other open sheet stayed blank until it was reopened.
+  final Map<Object, _InstallTarget> _channels = <Object, _InstallTarget>{};
+
+  /// The channels currently observing the install in flight (progress + settle).
+  final Map<Object, SttInstallLease> _observers = <Object, SttInstallLease>{};
 
   bool get isInstalling => _installs.isRunning;
 
@@ -87,7 +100,8 @@ class DictationControl {
   /// This is the whole difference between a connection-scoped and a
   /// daemon-scoped install: teardown detaches, and only [cancelInstall] stops.
   void detachInstallChannel(Object channel) {
-    _installChannels.remove(channel)?.lease?.detach();
+    _observers.remove(channel)?.detach();
+    _channels.remove(channel);
   }
 
   /// Explicit cancel command. It is the only thing that stops an install.
@@ -109,6 +123,11 @@ class DictationControl {
     required DictationEmit emit,
     Object? installChannel,
   }) async {
+    final channel = installChannel ?? owner;
+    // Registration is what makes a later install visible on a sheet that is
+    // already open: the announcement goes to every channel that has spoken here,
+    // not only to the one that presses Download.
+    _channelTarget(channel, emit);
     try {
       switch (message.command) {
         case DictationCommand.status:
@@ -116,12 +135,12 @@ class DictationControl {
           // so a client that joined late — a restart, a second device, a sheet
           // reopened after a reconnect — keeps receiving progress and the
           // terminal answer instead of one stale snapshot.
-          _observeInstall(installChannel ?? owner, emit);
+          _observeInstall(channel, emit);
           emit('stt_status', _service.statusPayload());
         case DictationCommand.install:
           await _install(
             message.modelId ?? _service.selectedModelId,
-            channel: installChannel ?? owner,
+            channel: channel,
             emit: emit,
           );
         case DictationCommand.cancelInstall:
@@ -173,10 +192,16 @@ class DictationControl {
     required Object channel,
     required DictationEmit emit,
   }) async {
-    final target = _InstallTarget(emit);
+    final target = _channelTarget(channel, emit);
+    // What is already on disk is part of the install from its first moment: the
+    // projection is published before the first HTTP response, and a zero there
+    // restarted a resumed bar at 0 % for a second.
+    final seed = _service.installSeed(modelId);
     final lease = _installs.start(
       modelId,
       observer: _ChannelInstallObserver(target),
+      seedReceived: seed?.received ?? 0,
+      seedTotal: seed?.total ?? 0,
     );
     if (lease == null) {
       // A different model is installing. The running download is the device's
@@ -192,8 +217,8 @@ class DictationControl {
       emit('stt_status', _service.statusPayload());
       return;
     }
-    _installChannels.remove(channel)?.lease?.detach();
-    _installChannels[channel] = _InstallChannel(target)..lease = lease;
+    _observers.remove(channel)?.detach();
+    _observers[channel] = lease;
     if (lease.joined) {
       // This command asked for the model that is already downloading: join it,
       // answer with its truth, and never start a second writer.
@@ -202,26 +227,56 @@ class DictationControl {
       return;
     }
     _logger.info('dictation model install started: model=$modelId');
+    // Every channel learns that it started **and** follows it from here: a sheet
+    // that was already open has no other way to learn about a download another
+    // client pressed, and a snapshot alone would leave its bar frozen.
+    _attachAllChannels();
+    _broadcast('stt_status', _service.statusPayload());
     // The command completes with the install, exactly as it did when the install
     // was connection-scoped; the channel is free to leave before that.
     await lease.done;
   }
 
+  /// The target for [channel], refreshed with the emit of the current command.
+  ///
+  /// A hosted channel's emit closure is bound to one operation, so a later
+  /// command replaces the destination without replacing the attachment.
+  _InstallTarget _channelTarget(Object channel, DictationEmit emit) =>
+      _channels.putIfAbsent(channel, () => _InstallTarget(emit))..emit = emit;
+
+  /// Attaches every known channel to the install that just started.
+  void _attachAllChannels() {
+    for (final entry in _channels.entries.toList(growable: false)) {
+      if (_observers.containsKey(entry.key)) continue;
+      final lease = _installs.attach(
+        observer: _ChannelInstallObserver(entry.value),
+      );
+      if (lease != null) _observers[entry.key] = lease;
+    }
+  }
+
   /// Attaches [channel] to the install in flight, if there is one.
   void _observeInstall(Object channel, DictationEmit emit) {
-    final existing = _installChannels[channel];
-    if (existing != null) {
-      // A hosted channel's emit closure is bound to one operation, so a later
-      // command refreshes the target instead of adding a second attachment.
-      existing.target.emit = emit;
-      return;
-    }
-    final target = _InstallTarget(emit);
+    final target = _channelTarget(channel, emit);
+    if (_observers.containsKey(channel)) return;
     final lease = _installs.attach(
       observer: _ChannelInstallObserver(target),
     );
     if (lease == null) return;
-    _installChannels[channel] = _InstallChannel(target)..lease = lease;
+    _observers[channel] = lease;
+  }
+
+  /// Sends one event to every channel that has spoken to this control surface.
+  void _broadcast(String event, Map<String, dynamic> payload) {
+    if (_channels.isEmpty) return;
+    for (final target in _channels.values.toList(growable: false)) {
+      try {
+        target.emit(event, payload);
+      } on Object {
+        // A channel that died between the command and this line has nothing left
+        // to receive; the install itself is unaffected.
+      }
+    }
   }
 
   /// The daemon's terminal answer, published once the install is released.
@@ -229,18 +284,9 @@ class DictationControl {
   /// One payload for every attached channel: the install truth is the device's,
   /// so no channel is told a different ending.
   void _publishInstallSettled(SttInstallOutcome outcome) {
-    if (_installChannels.isEmpty) return;
-    final channels = _installChannels.values.toList(growable: false);
-    _installChannels.clear();
-    final payload = _service.statusPayload();
-    for (final channel in channels) {
-      try {
-        channel.target.emit('stt_status', payload);
-      } on Object {
-        // A channel that died between the settle and this line has nothing left
-        // to receive; the install itself is already over.
-      }
-    }
+    _observers.clear();
+    if (_channels.isEmpty) return;
+    _broadcast('stt_status', _service.statusPayload());
   }
 
   Future<void> _runInstall(
@@ -264,14 +310,6 @@ class _InstallTarget {
   _InstallTarget(this.emit);
 
   DictationEmit emit;
-}
-
-/// One channel's attachment to the install in flight.
-class _InstallChannel {
-  _InstallChannel(this.target);
-
-  final _InstallTarget target;
-  SttInstallLease? lease;
 }
 
 /// Maps one install's ticks onto wire events for one channel.

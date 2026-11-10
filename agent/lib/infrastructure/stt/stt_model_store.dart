@@ -405,20 +405,62 @@ class SttModelStore {
     onPhase?.call(SttInstallPhase.downloading);
   }
 
+  /// What `install` will continue from and report as its total.
+  ///
+  /// The projection published at install start (`stt_status.install`) is built
+  /// before the first HTTP response, so without this the daemon stated
+  /// `received_bytes: 0` for a partial it already held, and a resumed download
+  /// visibly restarted its bar at 0 % for the first second or so. [received]
+  /// counts only resumable bytes of the artifacts this run will actually fetch,
+  /// and [total] is the same cumulative total `install` reports, so the two never
+  /// disagree.
+  ({int received, int total})? installSeed(SttCatalogEntry entry) {
+    if (!entry.hosted || entry.files.any((file) => file.url.isEmpty)) return null;
+    final pending = [
+      for (final file in entry.files)
+        if (!_isCompleteFile(file, '${modelDir(entry.id)}/${file.name}')) file,
+    ];
+    final needsVad =
+        entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
+    var total = pending.fold<int>(0, (sum, file) => sum + file.sizeBytes);
+    if (needsVad) total += _sharedVadAsset.sizeBytes;
+    var received = 0;
+    if (needsVad) {
+      received += _resumableLength(
+        File('$vadPath$_partialSuffix'),
+        _sharedVadAsset.sizeBytes,
+      );
+    }
+    for (final file in pending) {
+      received += _resumableLength(
+        File('${modelDir(entry.id)}/${file.name}$_partialSuffix'),
+        file.sizeBytes,
+      );
+    }
+    return (received: received, total: total);
+  }
+
   /// Bytes of [partial] that may be resumed from.
   ///
   /// A zero-length, oversized, or already-complete partial is not resumable and
   /// is replaced by the next attempt.
   int _resumableBytes(File partial, int sizeBytes) {
+    final resumable = _resumableLength(partial, sizeBytes);
+    if (resumable > 0) return resumable;
     if (!partial.existsSync()) return 0;
-    final length = partial.lengthSync();
-    if (length > 0 && length < sizeBytes) return length;
     try {
       partial.deleteSync();
     } on FileSystemException {
       // A partial that cannot be removed is overwritten from zero anyway.
     }
     return 0;
+  }
+
+  /// Resumable prefix of [partial], without touching the file.
+  int _resumableLength(File partial, int sizeBytes) {
+    if (!partial.existsSync()) return 0;
+    final length = partial.lengthSync();
+    return length > 0 && length < sizeBytes ? length : 0;
   }
 
   static bool _isRetryable(SttException error) => switch (error.code) {
