@@ -119,6 +119,70 @@ void main() {
       );
     });
 
+    test('two live digests keep two separate contexts', () {
+      // The factory used to hand out one cached native instance, so two digests
+      // alive at once shared a context: interleaved input produced a checksum
+      // that belonged to neither artifact, and the first `finish()` freed the
+      // memory the other was still writing.
+      final first = _pattern(1024 * 1024 + 3);
+      final second = _pattern(1024 * 1024 + 5);
+      final firstExpected = _hex(first);
+      final secondExpected = _hex(second);
+
+      final a = createSttDigest();
+      final b = createSttDigest();
+      const step = 64 * 1024;
+      for (var offset = 0;
+          offset < first.length || offset < second.length;
+          offset += step) {
+        if (offset < first.length) {
+          final end = offset + step > first.length
+              ? first.length
+              : offset + step;
+          a.add(Uint8List.sublistView(first, offset, end));
+        }
+        if (offset < second.length) {
+          final end = offset + step > second.length
+              ? second.length
+              : offset + step;
+          b.add(Uint8List.sublistView(second, offset, end));
+        }
+      }
+      expect(a.finish(), firstExpected, reason: 'the first digest was corrupted');
+      expect(b.finish(), secondExpected, reason: 'the second digest was corrupted');
+      a.close();
+      b.close();
+    });
+
+    test('closing an abandoned digest releases it and leaves the factory able '
+        'to start another', () {
+      // A cancelled install, a refused write, or a dropped connection never
+      // reaches `finish()`; without `close()` that context is leaked and the
+      // next `init()` overwrote its pointers.
+      final bytes = _pattern(512 * 1024);
+      final expected = _hex(bytes);
+
+      final abandoned = createSttDigest();
+      abandoned.add(Uint8List.sublistView(bytes, 0, 1024));
+      abandoned.close();
+      abandoned.close(); // idempotent
+
+      final fresh = createSttDigest();
+      fresh.add(bytes);
+      expect(fresh.finish(), expected);
+      fresh.close(); // no-op after finish
+    });
+
+    test('finish then close is safe on every implementation', () {
+      for (final (label, create) in implementations) {
+        final digest = create();
+        digest.add(Uint8List.fromList(const <int>[1, 2, 3]));
+        expect(digest.finish(), _hex(const <int>[1, 2, 3]), reason: label);
+        digest.close();
+        digest.close();
+      }
+    });
+
     test('costs a fraction of pure Dart per byte', () {
       if (!sttNativeDigestAvailable) {
         markTestSkipped('no OS SHA-256 on this host');

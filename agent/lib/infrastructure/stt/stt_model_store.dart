@@ -504,6 +504,7 @@ class SttModelStore {
   }) async {
     final client = _httpClient();
     SttWritePipeline? pipeline;
+    SttDigest? hashInput;
     try {
       final request = await client.getUrl(Uri.parse(file.url));
       request.followRedirects = true;
@@ -534,7 +535,7 @@ class SttModelStore {
         partial,
         start > 0 ? FileMode.append : FileMode.write,
       );
-      final hashInput = _createDigest();
+      hashInput = _createDigest();
       if (start > 0) {
         // Report the resumed truth before the re-read, so a client that joins
         // here sees the real percentage instead of zero for a whole second.
@@ -586,6 +587,11 @@ class SttModelStore {
       // the bytes already on disk stay and the next attempt resumes from them.
       throw SttException('download_failed', '${file.name}: $error');
     } finally {
+      // A cancel, a refused write, or a dropped connection never reaches
+      // `finish()`, and the digest holds native memory that no Dart finalizer
+      // releases: closing it here is what keeps a failed attempt from leaking a
+      // context and a staging buffer per retry. It is a no-op after a finish.
+      hashInput?.close();
       try {
         await pipeline?.close();
       } on Object {

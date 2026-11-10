@@ -289,6 +289,11 @@ an Apple M4 against a loopback origin:
   signed because the library belongs to the OS. A host without one falls back to
   the pure-Dart path silently; both paths are pinned against `package:crypto`
   across every chunking, including chunks wider than the 64 KiB native window.
+  What is cached is the availability *answer*, never a context: each digest owns
+  its own native state and its owner closes it in a `finally`, because native
+  memory has no finalizer and a cancelled or refused transfer never reaches
+  `finish()` — a shared context would corrupt two concurrent checksums and be
+  freed under the survivor.
 - **One connection, not many parallel ranges.** Splitting the artifact into
   concurrent `Range` requests is the obvious way to use an idle link, and it did
   not survive measurement: 1/2/3/4 workers ran at 29.4/31.0/30.1/28.4 MB/s on

@@ -30,6 +30,14 @@ abstract class SttDigest {
   void add(List<int> bytes);
 
   String finish();
+
+  /// Releases whatever this digest holds, without producing a digest.
+  ///
+  /// Idempotent, and a no-op once [finish] has run — [finish] releases the same
+  /// state. A transfer that is cancelled, refused by the disk, or dropped by the
+  /// network never reaches [finish], and native memory is not garbage collected,
+  /// so the owner must call this from a `finally`.
+  void close();
 }
 
 /// Creates the digest an install should use.
@@ -39,10 +47,12 @@ typedef SttDigestFactory = SttDigest Function();
 ///
 /// Resolved once: a missing symbol or library is a permanent property of the
 /// running executable, not a transient condition, and probing it per artifact
-/// would pay the FFI lookup for nothing.
-bool get sttNativeDigestAvailable => _native != null;
+/// would pay the FFI lookup for nothing. What is cached is the *answer*, never a
+/// context: the per-stream state is native memory, so every digest owns its own
+/// and frees it.
+bool get sttNativeDigestAvailable => _nativeFactory() != null;
 
-_OsSha256? _native;
+_OsSha256 Function()? _native;
 
 /// The digest production uses: OS crypto when it loads, pure Dart otherwise.
 ///
@@ -51,17 +61,26 @@ _OsSha256? _native;
 /// observable through [sttNativeDigestAvailable] so a test can assert which one
 /// ran.
 SttDigest createSttDigest() {
-  final native = _nativeSha256();
-  return native == null ? PureDartSttDigest() : _NativeSttDigest(native);
+  final factory = _nativeFactory();
+  if (factory == null) return PureDartSttDigest();
+  try {
+    return _NativeSttDigest(factory());
+  } on Object {
+    // A library that resolved its symbols but refuses a context: keep working.
+    _native = null;
+    return PureDartSttDigest();
+  }
 }
 
-_OsSha256? _nativeSha256() {
+_OsSha256 Function()? _nativeFactory() {
   if (_native != null) return _native;
   try {
-    _native = _OsSha256.open();
+    _OsSha256.open().probe();
+    _native = _OsSha256.open;
     return _native;
   } on Object {
     // A host without the library keeps working at the pure-Dart speed.
+    _native = null;
     return null;
   }
 }
@@ -81,6 +100,10 @@ class PureDartSttDigest implements SttDigest {
     _input.close();
     return _collector.value?.toString() ?? '';
   }
+
+  /// Nothing native to free: the hasher is ordinary Dart memory.
+  @override
+  void close() {}
 }
 
 class _Collector implements Sink<Digest> {
@@ -100,31 +123,42 @@ class _NativeSttDigest implements SttDigest {
   }
 
   final _OsSha256 _sha;
-
-  /// One reusable staging buffer: a native context cannot read Dart memory, and
-  /// re-allocating per chunk would add an allocation to every 64 KiB.
-  ///
-  /// It is also the hard cap on one native call. The reader hands over whatever
-  /// the socket or the resumed re-read produced, and a single chunk can be
-  /// megabytes, so bytes are staged in windows instead of trusting the caller's
-  /// size — a view past the allocation corrupts the heap rather than failing.
-  final Uint8List _buffer = Uint8List(_OsSha256.chunkBytes);
+  bool _finished = false;
+  bool _closed = false;
 
   @override
   void add(List<int> bytes) {
-    var offset = 0;
-    while (offset < bytes.length) {
-      final take = bytes.length - offset < _buffer.length
+    if (bytes is! Uint8List) {
+      add(Uint8List.fromList(bytes));
+      return;
+    }
+    // A native context cannot read Dart memory, so bytes are copied into it in
+    // windows: the reader hands over whatever the socket or the resumed re-read
+    // produced, and a single chunk can be megabytes. The view is passed down and
+    // copied exactly once, inside the backend.
+    for (var offset = 0; offset < bytes.length;) {
+      final take = bytes.length - offset < _OsSha256.chunkBytes
           ? bytes.length - offset
-          : _buffer.length;
-      _buffer.setRange(0, take, bytes, offset);
-      _sha.update(_buffer, take);
+          : _OsSha256.chunkBytes;
+      _sha.update(Uint8List.sublistView(bytes, offset, offset + take), take);
       offset += take;
     }
   }
 
   @override
-  String finish() => _sha.finish();
+  String finish() {
+    if (_finished) throw StateError('SHA-256 already finished');
+    if (_closed) throw StateError('SHA-256 already closed');
+    _finished = true;
+    return _sha.finish();
+  }
+
+  @override
+  void close() {
+    if (_closed || _finished) return;
+    _closed = true;
+    _sha.dispose();
+  }
 }
 
 /// One platform-specific SHA-256 context.
@@ -143,11 +177,19 @@ abstract class _OsSha256 {
     throw UnsupportedError('no OS SHA-256 on ${Platform.operatingSystem}');
   }
 
+  /// Forces this backend's symbols to resolve, so availability is an answer
+  /// rather than an assumption that only surfaces at the first digest of an
+  /// install.
+  void probe();
+
   void init();
 
   void update(List<int> bytes, int length);
 
   String finish();
+
+  /// Frees the context without finalizing. Idempotent.
+  void dispose();
 }
 
 /// macOS: CommonCrypto lives in libSystem, so nothing is bundled or signed.
@@ -169,6 +211,10 @@ class _CommonCryptoSha256 implements _OsSha256 {
   Pointer<Uint8>? _ctx;
   Pointer<Uint8>? _input;
 
+  /// Resolves the first CommonCrypto symbol now instead of mid-install.
+  @override
+  void probe() => _init;
+
   @override
   void init() {
     _ctx = calloc<Uint8>(_ctxBytes);
@@ -186,15 +232,26 @@ class _CommonCryptoSha256 implements _OsSha256 {
 
   @override
   String finish() {
+    final ctx = _ctx;
+    if (ctx == null) throw StateError('SHA-256 context already released');
     final out = calloc<Uint8>(32);
     try {
-      _final(out, _ctx!);
+      _final(out, ctx);
       return _hex(out);
     } finally {
       calloc.free(out);
-      calloc.free(_ctx!);
-      calloc.free(_input!);
+      dispose();
     }
+  }
+
+  @override
+  void dispose() {
+    final ctx = _ctx;
+    final input = _input;
+    _ctx = null;
+    _input = null;
+    if (ctx != null) calloc.free(ctx);
+    if (input != null) calloc.free(input);
   }
 }
 
@@ -232,6 +289,10 @@ class _OpenSslSha256 implements _OsSha256 {
   Pointer<Void>? _ctx;
   Pointer<Uint8>? _input;
 
+  /// Resolves the first OpenSSL symbol now instead of mid-install.
+  @override
+  void probe() => _sha256();
+
   @override
   void init() {
     final ctx = _ctxNew();
@@ -255,19 +316,30 @@ class _OpenSslSha256 implements _OsSha256 {
 
   @override
   String finish() {
+    final ctx = _ctx;
+    if (ctx == null) throw StateError('SHA-256 context already released');
     final out = calloc<Uint8>(32);
     final size = calloc<Uint32>(1);
     try {
-      if (_finalEx(_ctx!, out, size) != 1) {
+      if (_finalEx(ctx, out, size) != 1) {
         throw StateError('EVP_DigestFinal_ex failed');
       }
       return _hex(out);
     } finally {
       calloc.free(out);
       calloc.free(size);
-      calloc.free(_input!);
-      _ctxFree(_ctx!);
+      dispose();
     }
+  }
+
+  @override
+  void dispose() {
+    final ctx = _ctx;
+    final input = _input;
+    _ctx = null;
+    _input = null;
+    if (input != null) calloc.free(input);
+    if (ctx != null) _ctxFree(ctx);
   }
 }
 
@@ -292,6 +364,10 @@ class _BCryptSha256 implements _OsSha256 {
   Pointer<Void> _algorithm = nullptr;
   Pointer<Void> _hash = nullptr;
   Pointer<Uint8>? _input;
+
+  /// Resolves the first bcrypt symbol now instead of mid-install.
+  @override
+  void probe() => _open;
 
   @override
   void init() {
@@ -326,16 +402,28 @@ class _BCryptSha256 implements _OsSha256 {
 
   @override
   String finish() {
+    if (_hash == nullptr) throw StateError('SHA-256 context already released');
     final out = calloc<Uint8>(32);
     try {
       _check(_finishHash(_hash, out, 32, 0), 'BCryptFinishHash');
       return _hex(out);
     } finally {
       calloc.free(out);
-      calloc.free(_input!);
-      _destroy(_hash);
-      _close(_algorithm, 0);
+      dispose();
     }
+  }
+
+  @override
+  void dispose() {
+    final input = _input;
+    final hash = _hash;
+    final algorithm = _algorithm;
+    _input = null;
+    _hash = nullptr;
+    _algorithm = nullptr;
+    if (input != null) calloc.free(input);
+    if (hash != nullptr) _destroy(hash);
+    if (algorithm != nullptr) _close(algorithm, 0);
   }
 
   static void _check(int status, String call) {
