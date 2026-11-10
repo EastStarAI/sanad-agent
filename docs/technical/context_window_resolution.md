@@ -11,6 +11,16 @@ constants), `agent/lib/core/config/model_aware_runtime_policy.dart` (the parsed
 `agent/lib/core/provider_runtime/local_provider_routes.dart` (what counts as a
 local/self-hosted route). Adapters do not own precedence.
 
+Each adapter family reaches that resolver through
+`agent/lib/engine/adapters/context_window_evidence.dart`, which owns the shared
+evidence-to-policy plumbing (`catalog`, `metadata`, `knownMetadata`,
+`isLocalRoute`, `resolve`). The local probe rules live in
+`agent/lib/engine/adapters/openai_compatible/context_window_probes.dart` (LM
+Studio native API and llama.cpp props, transport supplied as a callback), and the
+Anthropic model list including its window stamping lives in
+`agent/lib/engine/adapters/anthropic/anthropic_model_options.dart`, so the
+adapters stay transport-only.
+
 ## The decision
 
 For each model, in this order:

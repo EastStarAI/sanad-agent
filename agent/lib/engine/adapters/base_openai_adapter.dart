@@ -24,14 +24,15 @@ import '../../core/provider_runtime/provider_instance.dart';
 import '../../core/provider_runtime/provider_protocol_constants.dart';
 import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
-import '../../core/provider_runtime/local_provider_routes.dart';
 import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'context_window_evidence.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
 import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
+import 'openai_compatible/context_window_probes.dart';
 import 'openai_compatible/model_discovery.dart';
 import 'openai_compatible/thinking_control_discovery.dart';
 import 'package:crypto/crypto.dart';
@@ -273,21 +274,14 @@ class BaseOpenAIAdapter
                 profile,
                 normalizedId,
               );
-          // Discovery reports one effective window: policy (user override,
-          // built-in default, global cap) is applied here so the cached catalog
-          // and every later reader share the same number. The raw provider
-          // value is kept only as internal evidence for diagnostics.
           final rawContextWindow = contextLimit;
-          final resolvedContextWindow = config.resolveContextWindow(
+          final resolvedContextWindow = ContextWindowEvidence.resolve(
+            config: config,
             modelId: normalizedId,
-            providerEvidence: rawContextWindow == null
-                ? null
-                : ProviderContextWindow(
-                    tokens: rawContextWindow,
-                    source: ContextWindowSource.providerMetadata,
-                  ),
-            localProvider: isLocalRoute,
+            profile: profile,
+            baseUrl: baseUrl,
             unknownCloudFallback: ModelMetadata.unknownContextLimit,
+            evidence: ContextWindowEvidence.metadata(rawContextWindow),
           );
 
           options.add(
@@ -295,7 +289,7 @@ class BaseOpenAIAdapter
               value: normalizedId,
               label: label,
               provider: profile.name,
-              contextWindow: resolvedContextWindow.tokens,
+              contextWindow: resolvedContextWindow,
               contextWindowRaw: rawContextWindow,
               supportsReasoning: supportsReasoning,
               modelMetadata: item is Map
@@ -368,21 +362,15 @@ class BaseOpenAIAdapter
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
-    return config
-        .resolveContextWindow(
-          modelId: resolvedModel,
-          providerEvidence: await providerContextWindow(resolvedModel),
-          localProvider: isLocalRoute,
-          unknownCloudFallback: ModelMetadata.unknownContextLimit,
-        )
-        .tokens;
+    return ContextWindowEvidence.resolve(
+      config: config,
+      modelId: resolvedModel,
+      profile: profile,
+      baseUrl: baseUrl,
+      unknownCloudFallback: ModelMetadata.unknownContextLimit,
+      evidence: await providerContextWindow(resolvedModel),
+    );
   }
-
-  /// Whether this route serves a model the user runs locally.
-  bool get isLocalRoute => LocalProviderRoutes.isLocalRoute(
-    templateId: profile.name,
-    baseUrl: baseUrl,
-  );
 
   /// What the provider itself reports for [resolvedModel]'s window, or `null`
   /// when nothing is known. Policy (user override, built-in default, cap) is
@@ -399,73 +387,19 @@ class BaseOpenAIAdapter
       );
     }
 
-    // 1. LM Studio local probe (reference-style)
-    if (profile.name == 'lm-studio') {
-      try {
-        final cleanBase = _lmStudioNativeBase;
-        final url = Uri.parse('$cleanBase/api/v1/models');
-        final response = await _get(url, timeout: const Duration(seconds: 2));
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final models = data['models'] as List?;
-          if (models != null) {
-            for (var model in models) {
-              if (model is Map) {
-                final key = model['key'] ?? model['id'];
-                if (key == resolvedModel) {
-                  final loadedInstances = model['loaded_instances'] as List?;
-                  if (loadedInstances != null && loadedInstances.isNotEmpty) {
-                    final config = loadedInstances.first['config'];
-                    if (config is Map) {
-                      final ctxLen = config['context_length'];
-                      if (ctxLen is num && ctxLen > 0) {
-                        return ProviderContextWindow(
-                          tokens: ctxLen.toInt(),
-                          source: ContextWindowSource.providerMetadata,
-                        );
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        _logger.warning('Failed to probe LM Studio context limit: $e');
-      }
-    }
-
-    // 2. llama.cpp local probe (reference-style)
-    if (profile.name == 'llama-cpp') {
-      try {
-        final cleanBase = baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
-        final urls = [
-          Uri.parse('$baseUrl/props'),
-          Uri.parse('$cleanBase/v1/props'),
-          Uri.parse('$cleanBase/props'),
-        ];
-        for (final url in urls) {
-          try {
-            final response = await _get(
-              url,
-              timeout: const Duration(seconds: 2),
-            );
-            if (response.statusCode == 200) {
-              final data = jsonDecode(response.body);
-              final nCtx = data['default_generation_settings']?['n_ctx'];
-              if (nCtx is num && nCtx > 0) {
-                return ProviderContextWindow(
-                  tokens: nCtx.toInt(),
-                  source: ContextWindowSource.providerMetadata,
-                );
-              }
-            }
-          } catch (_) {}
-        }
-      } catch (e) {
-        _logger.warning('Failed to probe llama.cpp context limit: $e');
-      }
+    // 1-2. Local engine probes (LM Studio native API, llama.cpp props).
+    final probed = await ContextWindowProbes.forTemplate(
+      templateId: profile.name,
+      baseUrl: profile.name == 'lm-studio' ? _lmStudioNativeBase : baseUrl,
+      model: resolvedModel,
+      get: (url) => _get(url, timeout: ContextWindowProbes.timeout),
+      onWarning: (message) => _logger.warning(message),
+    );
+    if (probed != null) {
+      return ProviderContextWindow(
+        tokens: probed,
+        source: ContextWindowSource.providerMetadata,
+      );
     }
 
     if (modelsDevService != null) {
