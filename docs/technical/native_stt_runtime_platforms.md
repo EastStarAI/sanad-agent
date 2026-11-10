@@ -117,6 +117,13 @@ empty, so "portable" would then mean "whatever this `gcc` defaults to" — not a
 contract, and it also drops the dot-product kernels that Q8 decoding spends its
 time in. `armv8.2-a+dotprod+fp16` is the widest floor the release host proves.
 
+The baseline costs almost nothing: a **non-native build measured within 0.2–0.3 %
+of a native one on the Neoverse-N1** (whisper.cpp v1.9.5, same model, same
+window), so no portable target is paying a measurable speed penalty for being
+loadable. The encoder cost that *did* matter on that host was the decode window,
+not the instruction set; see
+[Local Dictation](local_dictation.md#the-decode-window).
+
 ### The engine subtree
 
 The sherpa-onnx libraries live in a `sherpa/` subdirectory of the same tag

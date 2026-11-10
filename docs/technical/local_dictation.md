@@ -102,6 +102,70 @@ the decoder's 30 s ceiling, and the groups are joined into one transcript. A
 half-second of trailing silence is appended before decoding, because a segment
 that ends on the last phoneme otherwise loses its final word.
 
+### The decode window
+
+whisper.cpp's encoder defaults to the full 1500-frame (30 s) window for every
+utterance, so a five-second dictation used to pay the same encoder pass as a
+thirty-second one: **12.4 s of a 12.5 s decode** on the reference Ampere
+Neoverse-N1 host. The window now follows the buffered audio; the encoder is the
+whole cost of a short decode, so this is where dictation latency lived.
+
+| Parameter | Value | Why |
+|---|---|---|
+| `audio_ctx` | `clamp(roundUp32(ceil(padded_samples / 320)), 448, whisper_n_audio_ctx(ctx))` | 320 samples per mel frame (10 ms); the ceiling is the loaded model's own window, so a future checkpoint smaller than the floor is still obeyed |
+| floor | 448 frames = 8.96 s of audio | measured, not derived: with the bare proportional window **5 of 8 short Arabic clips (1.8–3.9 s) decoded into deterministic phrase loops** — the 3 s clip came back as 42 words of `تماما خلاص كدا` instead of 3. The trigger is trailing silence: the audio path guarantees only 0.5 s after the last phoneme, and a window ending within ~1 s of it leaves whisper no room to close a segment. In a 60-run sweep (6 clips × windows 320–768 frames) every loop sat at a 2.5–4.5 s window and every run at or above 448 frames was clean |
+| `greedy.best_of` | 1 | whisper.cpp's default asks for five candidates per temperature tier. At `temperature = 0` it is unused; on a temperature fallback it multiplies the decode five times. Measured: it changed no transcript and rescued no loop |
+| repetition guard | one retry at `audio_ctx = 0` | below |
+
+The window is derived by `audioCtxForSamples` in
+[`agent/lib/infrastructure/stt/stt_decode_params.dart`](../../agent/lib/infrastructure/stt/stt_decode_params.dart),
+which is pure and unit-tested (`agent/test/stt/stt_decode_params_test.dart`), and
+applied by the shim in `agent/native/whispercpp/sanad_whisper.c`. `audio_ctx = 0`
+stays callable and means whisper's own window.
+
+#### The repetition guard
+
+No fixed window is provably safe — one window value (512 frames) still looped on
+one clip in the sweep — so a looped group would reach the composer as visible
+garbage. `stt_repetition_guard.dart` therefore re-decodes a group **once** at the
+full window when its transcript repeats any 4-gram three times, and keeps that
+result. It logs one line (`dictation decode: repetition guard re-decoded group`)
+and never logs transcript text.
+
+Repetition alone is not sufficient evidence, and this was measured rather than
+assumed: a 24 s group of the **same sentence said three times** repeats a 4-gram
+three times, and re-decoding it at the full window on the reference host
+**dropped two of the three sentences**. A loop is distinguished by throughput —
+it emitted 42 words for 3.0 s of audio (14 words/s), while the deliberate
+repetition emitted 36 words in 24 s (1.5 words/s) — so the guard also requires
+the transcript to outrun five words per second, which no dictation pace reaches.
+The retry is bounded to one attempt, and one decode line is written per actual
+decode:
+
+```
+dictation decode: samples=85857 audio_ctx=448 threads=4
+```
+
+#### Measured decode cost
+
+RTF is decode time ÷ audio duration. The N1 column is the reference host, the
+Mac column is Metal on an Apple-silicon laptop; both used the shipped Egyptian
+Arabic q8 checkpoint.
+
+| Case | Window | N1 (CPU) | Mac (Metal) |
+|---|---|---|---|
+| 4.87 s dictation (product buffer) | 1500 (default) | 12.47 s / RTF 2.56 | 3.16 s / RTF 0.65 |
+| 4.87 s dictation (product buffer) | 448 | ~2.7 s / RTF 0.55 | 0.73 s / RTF 0.15 |
+| 8 s sentence | 448 | 2.93 s / RTF 0.37 (measured) | 0.81 s / RTF 0.10 |
+| 24 s group | 1248 | ~10.3 s / RTF 0.43 | 2.82 s / RTF 0.12 |
+| 26.3 s take (two groups) | 1248 + 448 | — | 4.21 s / RTF 0.16 |
+
+The 448 row on the N1 interpolates between the measured 384 (2.39 s) and 512
+(3.06 s) windows, because the encoder is proportional to the window; the 8 s row
+is a direct measurement. The win is concentrated in short dictation, which is
+what a composer microphone press is: long takes were never encoder-bound on
+either host.
+
 Streaming exists to keep the contract honest, not because Arabic streaming is
 available: no sherpa-packaged Arabic streaming model exists today, so the only
 streaming entry is English and labelled experimental.

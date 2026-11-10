@@ -2,7 +2,7 @@
 //
 // whisper.cpp returns `struct whisper_full_params` by value and keeps growing
 // it, so binding that struct through dart:ffi would break on every upstream
-// bump. This shim keeps the ABI to four flat functions: the daemon never sees a
+// bump. This shim keeps the ABI to five flat functions: the daemon never sees a
 // whisper struct, only an opaque handle.
 //
 // Build (macOS arm64):
@@ -15,7 +15,7 @@
 
 #include "whisper.h"
 
-// The daemon loads this shim through dart:ffi, so its four entry points must be
+// The daemon loads this shim through dart:ffi, so its five entry points must be
 // exported. POSIX builds export them by default; MSVC exports nothing unless a
 // function is marked, which is why the Windows runtime could be built, staged,
 // and then fail to load with "procedure could not be found" (error 127).
@@ -56,6 +56,14 @@ SANAD_WHISPER_EXPORT void sanad_whisper_free(void* handle) {
   whisper_free((struct whisper_context*)handle);
 }
 
+// Encoder window of the loaded model, in mel frames (1500 for the shipped 30 s
+// checkpoints). The daemon clamps its computed window to this value, because
+// whisper rejects any larger one. Returns 0 when `handle` is NULL.
+SANAD_WHISPER_EXPORT int sanad_whisper_audio_ctx(void* handle) {
+  if (handle == NULL) return 0;
+  return whisper_n_audio_ctx((struct whisper_context*)handle);
+}
+
 // Transcribes one float32 buffer (16 kHz mono). Returns the number of bytes
 // written into `out` (excluding the terminator), or -1 on failure.
 //
@@ -65,6 +73,7 @@ SANAD_WHISPER_EXPORT int sanad_whisper_run(void* handle,
                       int n_samples,
                       const char* language,
                       int n_threads,
+                      int audio_ctx,
                       bool translate,
                       bool no_timestamps,
                       int tail_paddings_ms,
@@ -86,6 +95,23 @@ SANAD_WHISPER_EXPORT int sanad_whisper_run(void* handle,
   params.no_timestamps = no_timestamps;
   params.n_threads = n_threads > 0 ? n_threads : 4;
   params.language = language;
+
+  // Encoder window, in mel frames. The daemon computes it from the utterance
+  // length with a measured floor (lib/infrastructure/stt/stt_decode_params.dart);
+  // 0 keeps whisper's own full window, which is what the repetition guard asks
+  // for when a short window looped. whisper rejects a window larger than the
+  // model's, so the clamp here is the last line of defence, not the policy.
+  if (audio_ctx > 0) {
+    const int model_audio_ctx = whisper_n_audio_ctx(ctx);
+    params.audio_ctx = audio_ctx > model_audio_ctx ? model_audio_ctx : audio_ctx;
+  } else {
+    params.audio_ctx = 0;
+  }
+
+  // One candidate per temperature tier. whisper.cpp's greedy default asks for
+  // five, which multiplies the cost of a temperature fallback five times and
+  // never changed a measured transcript; at temperature 0 it is unused.
+  params.greedy.best_of = 1;
 
   if (whisper_full(ctx, params, samples, n_samples) != 0) return -1;
 

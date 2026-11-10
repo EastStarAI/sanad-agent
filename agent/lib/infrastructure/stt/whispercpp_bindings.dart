@@ -23,12 +23,16 @@ typedef _LoadDart =
 typedef _FreeNative = Void Function(Pointer<Void>);
 typedef _FreeDart = void Function(Pointer<Void>);
 
+typedef _AudioCtxNative = Int32 Function(Pointer<Void>);
+typedef _AudioCtxDart = int Function(Pointer<Void>);
+
 typedef _RunNative =
     Int32 Function(
       Pointer<Void>,
       Pointer<Float>,
       Int32,
       Pointer<Utf8>,
+      Int32,
       Int32,
       Bool,
       Bool,
@@ -45,6 +49,7 @@ typedef _RunDart =
       int,
       Pointer<Utf8>,
       int,
+      int,
       bool,
       bool,
       int,
@@ -56,11 +61,12 @@ typedef _RunDart =
 
 /// Loads the shim once per process and exposes the two calls the worker needs.
 class WhisperCppLibrary {
-  WhisperCppLibrary._(this._lib, this._load, this._free, this._run);
+  WhisperCppLibrary._(this._lib, this._load, this._free, this._audioCtx, this._run);
 
   final DynamicLibrary _lib;
   final _LoadDart _load;
   final _FreeDart _free;
+  final _AudioCtxDart _audioCtx;
   final _RunDart _run;
 
   /// Kept alive so the underlying handle is never closed while in use.
@@ -188,6 +194,9 @@ class WhisperCppLibrary {
       lib,
       lib.lookupFunction<_LoadNative, _LoadDart>('sanad_whisper_load'),
       lib.lookupFunction<_FreeNative, _FreeDart>('sanad_whisper_free'),
+      lib.lookupFunction<_AudioCtxNative, _AudioCtxDart>(
+        'sanad_whisper_audio_ctx',
+      ),
       lib.lookupFunction<_RunNative, _RunDart>('sanad_whisper_run'),
     );
     _instance = instance;
@@ -259,12 +268,24 @@ class WhisperCppLibrary {
 
   void freeModel(Pointer<Void> handle) => _free(handle);
 
+  /// Encoder window of the loaded model, in mel frames (1500 for the shipped
+  /// checkpoints), or 0 when the shim cannot report it.
+  ///
+  /// The daemon clamps a computed window to this value: whisper rejects any
+  /// window larger than the model's.
+  int modelAudioCtx(Pointer<Void> handle) => _audioCtx(handle);
+
   /// Decodes one 16 kHz mono buffer and returns the joined segment text.
+  ///
+  /// [audioCtx] is the encoder window in mel frames, or 0 for whisper's own
+  /// full window (the repetition guard's retry). Callers should derive it with
+  /// `audioCtxForSamples` so every short utterance gets a small window.
   WhisperCppResult run(
     Pointer<Void> handle,
     Float32List samples, {
     required String language,
     required int threads,
+    required int audioCtx,
   }) {
     final languagePtr = language.toNativeUtf8();
     final samplePtr = calloc<Float>(samples.length);
@@ -280,6 +301,7 @@ class WhisperCppLibrary {
         samples.length,
         languagePtr,
         threads,
+        audioCtx,
         false,
         true,
         1000,
