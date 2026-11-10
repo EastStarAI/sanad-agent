@@ -175,7 +175,11 @@ measured defect before it existed:
   artifact. Three retries with linear backoff cover a dropped connection; a
   resumable partial is deleted only when its digest is wrong. A 874 MB model on a
   27 Mbit/s link is a 4.5-minute download, and restarting it from zero at 99 % was
-  the normal outcome before this.
+  the normal outcome before this. Resuming is only as good as the host serving it:
+  a server that ignores `Range` and answers `200` makes the store rewrite the
+  partial from zero, so that attempt's bytes are fetched again instead of
+  continued. The artifact still ends up correct and the retry stays bounded, but
+  no client-side change can resume against a host that does not honour the range.
 - **Refusal beats stalling.** Before the first byte the store asks for the
   volume's free space and refuses with `storage_full` when the artifacts plus a
   256 MB margin do not fit. A write that still fails with `ENOSPC` maps to the
