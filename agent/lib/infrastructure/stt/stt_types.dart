@@ -199,6 +199,22 @@ class SttCatalogEntry {
   int get totalBytes => files.fold(0, (sum, file) => sum + file.sizeBytes);
 }
 
+/// Stage of one model install, reported on `stt_status.install.phase`.
+///
+/// Bytes stop moving between the transfer and the activation, so a bar that only
+/// knows bytes reads as stuck while a resumed prefix is re-hashed or the verified
+/// file is renamed. The phase is the factual answer to "what is it doing".
+enum SttInstallPhase {
+  /// Transferring the artifact (with `Range` resume when a partial exists).
+  downloading,
+
+  /// Re-reading a resumed prefix and comparing the pinned size and digest.
+  verifying,
+
+  /// Activating the verified file with the atomic rename.
+  activating,
+}
+
 /// Why dictation is or is not usable on this device.
 class SttReadiness {
   const SttReadiness.ready()

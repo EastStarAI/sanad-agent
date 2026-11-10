@@ -55,6 +55,9 @@ String dictationReasonLabel(AppLocalizations l10n, String reason) {
     'dictation_disabled' => l10n.dictationDisabled,
     'model_not_installed' => l10n.dictationModelNotInstalled,
     'sherpa_runtime_missing' => l10n.dictationSherpaRuntimeMissing,
+    // A model install the volume cannot hold. It is the daemon's typed refusal,
+    // not a generic download failure, because the remedy is different.
+    'storage_full' => l10n.dictationStorageFull,
     _ => l10n.dictationUnavailable,
   };
 }

@@ -69,6 +69,7 @@ class HostedDictationRelay {
   static const Set<String> _controlOps = {
     'status',
     'install',
+    'cancelInstall',
     'select',
     'prepareRuntime',
   };
@@ -85,8 +86,6 @@ class HostedDictationRelay {
 
   HostedDictationChannel? _session;
   _HostedControlOperation? _control;
-  Object? _installOwner;
-  String? _installDictationId;
 
   bool get hasSession => _session != null;
   bool get hasControlOperation => _control != null;
@@ -209,6 +208,7 @@ class HostedDictationRelay {
     final command = switch (op) {
       'status' => DictationCommand.status,
       'install' => DictationCommand.install,
+      'cancelInstall' => DictationCommand.cancelInstall,
       'select' => DictationCommand.select,
       _ => DictationCommand.prepareRuntime,
     };
@@ -229,23 +229,27 @@ class HostedDictationRelay {
     }
 
     if (command == DictationCommand.install) {
-      _installOwner = operation;
-      _installDictationId = dictationId;
-      // A download can outlive one dispatch; it is bounded by the operation
-      // deadline and cancellable through `dictation_abort`.
+      // A download outlives this dispatch and this operation: it is
+      // daemon-scoped, and only an explicit `cancelInstall` stops it. Progress
+      // is addressed to the relay (the channel), so a later command from the
+      // same device keeps receiving it; the operation's own expiry still drops
+      // events that can no longer be delivered.
       unawaited(
-        _service.control
-            .handle(message, owner: operation, emit: emit)
-            .whenComplete(() {
-              if (identical(_installOwner, operation)) {
-                _installOwner = null;
-                _installDictationId = null;
-              }
-            }),
+        _service.control.handle(
+          message,
+          owner: operation,
+          emit: emit,
+          installChannel: this,
+        ),
       );
       return;
     }
-    await _service.control.handle(message, owner: operation, emit: emit);
+    await _service.control.handle(
+      message,
+      owner: operation,
+      emit: emit,
+      installChannel: this,
+    );
   }
 
   Future<void> _start(
@@ -333,10 +337,12 @@ class HostedDictationRelay {
     );
   }
 
-  /// `dictation_abort`: advisory-but-authoritative cancellation.
+  /// `dictation_abort`: advisory-but-authoritative cancellation **of a session**.
   ///
-  /// It works with no audio route at all, so a control-only install is abandoned
-  /// with its partial artifacts discarded.
+  /// A model install is not a session and is daemon-scoped: an abort, a client
+  /// disconnect, or a lost claim only retires this relay's delivery operation, so
+  /// the download keeps running and the next `status` from any client reports
+  /// it. Only the explicit `cancelInstall` command stops an install.
   void onAbort(Map<String, dynamic> data) {
     final dictationId = data['dictation_id'];
     if (dictationId is! String || dictationId.isEmpty) return;
@@ -352,15 +358,12 @@ class HostedDictationRelay {
     if (control != null && control.dictationId == dictationId) {
       control.retire();
     }
-    final installOwner = _installOwner;
-    if (installOwner != null && _installDictationId == dictationId) {
-      _service.control.cancelInstall(installOwner);
-      _installOwner = null;
-      _installDictationId = null;
-    }
   }
 
-  /// The shared cloud socket is gone: cancel everything this relay owns.
+  /// The shared cloud socket is gone: close this relay's own live objects.
+  ///
+  /// The install deliberately outlives it — it belongs to the daemon, and the
+  /// local channel (or a reconnected relay) keeps receiving its truth.
   Future<void> closeAll() async {
     final session = _session;
     _session = null;
@@ -368,10 +371,7 @@ class HostedDictationRelay {
     final control = _control;
     control?.retire();
     _control = null;
-    final installOwner = _installOwner;
-    if (installOwner != null) _service.control.cancelInstall(installOwner);
-    _installOwner = null;
-    _installDictationId = null;
+    _service.control.detachInstallChannel(this);
   }
 
   void _emitError({

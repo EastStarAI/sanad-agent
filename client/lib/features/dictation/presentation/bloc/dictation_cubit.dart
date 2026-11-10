@@ -23,11 +23,16 @@ class DictationCubit extends Cubit<DictationState> {
     DictationPreviewPolicy previewPolicy = DictationPreviewPolicy.live,
     String Function()? sessionIdFactory,
     DateTime Function()? now,
+    Future<void> Function(Duration)? delay,
   })  : _resolver = resolver,
         _capture = capture,
         _sessionIdFactory = sessionIdFactory ?? DictationIdentity.next,
         _now = now ?? DateTime.now,
+        _delay = delay ?? _defaultDelay,
         super(DictationState(previewPolicy: previewPolicy));
+
+  static Future<void> _defaultDelay(Duration duration) =>
+      Future<void>.delayed(duration);
 
   static final _logger = Logger('DictationCubit');
 
@@ -46,7 +51,26 @@ class DictationCubit extends Cubit<DictationState> {
   /// The Client's own clock, so a projection's age is testable.
   final DateTime Function() _now;
 
+  /// How the post-disconnect recovery waits between attempts; injected so a
+  /// test does not spend nine real seconds proving a bound.
+  final Future<void> Function(Duration) _delay;
+
+  /// Status replies seen, so a recovery attempt can tell an answer from a
+  /// timeout without comparing timestamps (a fixed test clock makes those equal).
+  int _statusReplies = 0;
+
   DictationTransport? _transport;
+
+  /// The device [_transport] speaks to, and the last device that asked for a
+  /// command.
+  ///
+  /// One transport carries one device's truth: reusing an open transport for a
+  /// different device is what made A→B→A answer A's press with B's
+  /// `model_not_installed`, because the resolver was only consulted once the
+  /// previous socket had closed.
+  String? _transportDeviceId;
+  DeviceConfig? _lastCommandDevice;
+
   DeviceConfig? _device;
   String? _sessionId;
   StreamSubscription<Map<String, dynamic>>? _eventSubscription;
@@ -317,20 +341,33 @@ class DictationCubit extends Cubit<DictationState> {
     await _reset(clearText: true);
   }
 
-  /// Starts (or retries) the model download and reports progress.
+  /// Starts (or joins) the model download; the daemon owns its lifetime.
+  ///
+  /// The local state is a seed, not the truth: the daemon reports the real
+  /// install on every `stt_status`, so a press that races a running download is
+  /// answered with that truth instead of a second writer.
   Future<void> installModel(String modelId, {required DeviceConfig device}) async {
+    if (state.model.installingModelId == modelId) return;
     final transport = await _ensureTransport(device);
     if (transport == null) return;
     emit(
       state.copyWith(
         model: state.model.copyWith(
           installingModelId: modelId,
-          downloadProgress: 0,
+          downloadProgress: state.model.installingModelId == null ? 0 : null,
         ),
         clearError: true,
       ),
     );
     transport.sendCommand('install', {'model_id': modelId});
+  }
+
+  /// Abandons a running install. It is the only thing that stops one: closing
+  /// the sheet, switching device, or dropping the socket never does.
+  Future<void> cancelInstallModel({required DeviceConfig device}) async {
+    final transport = await _ensureTransport(device);
+    if (transport == null) return;
+    transport.sendCommand('cancelInstall');
   }
 
   /// Asks the daemon for the current status/catalog and waits for the reply.
@@ -341,8 +378,9 @@ class DictationCubit extends Cubit<DictationState> {
   Future<void> refreshStatus(
     DeviceConfig device, {
     Duration timeout = const Duration(seconds: 4),
+    bool silent = false,
   }) async {
-    final transport = await _ensureTransport(device);
+    final transport = await _ensureTransport(device, silent: silent);
     if (transport == null) return;
     final completer = Completer<void>();
     _statusCompleter = completer;
@@ -374,13 +412,23 @@ class DictationCubit extends Cubit<DictationState> {
     await refreshStatus(device);
   }
 
-  Future<DictationTransport?> _ensureTransport(DeviceConfig device) async {
+  Future<DictationTransport?> _ensureTransport(
+    DeviceConfig device, {
+    bool silent = false,
+  }) async {
+    _lastCommandDevice = device;
     final existing = _transport;
-    if (existing != null && existing.isOpen) return existing;
+    final sameDevice = _transportDeviceId == device.id;
+    if (existing != null && existing.isOpen && sameDevice) return existing;
     if (existing != null) {
       // A replacement closes the previous connection: an orphaned socket keeps a
       // daemon connection (and eventually its lease) alive with no owner.
       await _detachTransport(existing);
+    }
+    if (!sameDevice) {
+      // A projection — including an install — that answered another device is
+      // not a guess about this one. The status this call returns rebuilds it.
+      emit(state.copyWith(model: const DictationModelStatus()));
     }
     _sessionId = _sessionIdFactory();
     try {
@@ -389,14 +437,15 @@ class DictationCubit extends Cubit<DictationState> {
         sessionId: _sessionId!,
       );
       _transport = transport;
+      _transportDeviceId = device.id;
       _attachEvents(transport);
       return transport;
     } on DictationTransportUnavailable catch (error) {
-      emit(state.copyWith(errorCode: error.reason));
+      if (!silent) emit(state.copyWith(errorCode: error.reason));
       return null;
     } on Object catch (error) {
       _logger.warning('dictation connect failed: ${error.runtimeType}');
-      emit(state.copyWith(errorCode: 'connect_failed'));
+      if (!silent) emit(state.copyWith(errorCode: 'connect_failed'));
       return null;
     }
   }
@@ -409,7 +458,10 @@ class DictationCubit extends Cubit<DictationState> {
       _eventTransport = null;
     }
     await transport.close();
-    if (identical(_transport, transport)) _transport = null;
+    if (identical(_transport, transport)) {
+      _transport = null;
+      _transportDeviceId = null;
+    }
   }
 
   /// Listens to the transport exactly once: status refreshes and a later
@@ -432,16 +484,15 @@ class DictationCubit extends Cubit<DictationState> {
     if (!_lifecycle.isClosed) _lifecycle.add(event);
     switch (event['event']) {
       case 'stt_status':
+        _statusReplies++;
         _statusCompleter?.complete();
+        // The status is the daemon's whole answer, install included: it is
+        // reconstructed here rather than merged into the previous projection, so
+        // a refresh can neither erase a running download nor invent one.
         final status = _modelFromStatus(event);
-        final installing = state.model.installingModelId;
-        final finished = installing != null &&
-            status.models.any((m) => m.id == installing && m.installed);
         emit(
           state.copyWith(
             model: status.copyWith(
-              clearInstallingModel: finished,
-              clearDownloadProgress: finished,
               // The projection is only ever as good as the moment the daemon
               // answered it, and a press decides from that age whether to ask
               // again (another Client can change the selection at any time).
@@ -452,11 +503,17 @@ class DictationCubit extends Cubit<DictationState> {
       case 'stt_download_progress':
         final received = (event['received_bytes'] as num?)?.toInt() ?? 0;
         final total = (event['total_bytes'] as num?)?.toInt() ?? 0;
+        final phase = event['phase'] as String?;
         emit(
           state.copyWith(
             model: state.model.copyWith(
               installingModelId: event['model_id'] as String?,
               downloadProgress: total <= 0 ? null : (received / total).clamp(0, 1),
+              installReceivedBytes: received,
+              installTotalBytes: total <= 0 ? null : total,
+              installBytesPerSecond:
+                  (event['bytes_per_second'] as num?)?.toInt(),
+              installPhase: phase,
             ),
           ),
         );
@@ -552,12 +609,25 @@ class DictationCubit extends Cubit<DictationState> {
         // runtime) is what the user needs to see.
         final reason = event['reason'] as String?;
         final effective = code == 'unavailable' && reason != null ? reason : code;
+        if (effective == 'install_in_progress') {
+          // A press that races a running install is **state**, not a failure.
+          // Treating it as one is what closed the socket and, on the local
+          // channel, cancelled the real download with its partial bytes.
+          _logger.info('dictation install already running on this device');
+          final device = _lastCommandDevice;
+          if (device != null) unawaited(refreshStatus(device));
+          return;
+        }
         if (state.model.installingModelId != null) {
+          // The install died, not the session: the row is cleared and the code
+          // is reported, but the transport stays open so the sheet can retry.
           emit(
             state.copyWith(
               model: state.model.copyWith(clearInstallingModel: true),
+              errorCode: effective,
             ),
           );
+          return;
         }
         _fail(effective);
       default:
@@ -598,6 +668,16 @@ class DictationCubit extends Cubit<DictationState> {
         ),
       );
     }
+    // The daemon states the running install in its status. Absent means nothing
+    // is in flight, which is the only honest way for a reopened sheet, a device
+    // switch, or a reconnect to know that a download ended.
+    final install = event['install'];
+    final installFields = install is Map ? install : const {};
+    final installModelId = installFields['model_id'] as String?;
+    final installReceived = (installFields['received_bytes'] as num?)?.toInt();
+    final installTotal = (installFields['total_bytes'] as num?)?.toInt();
+    final installRate = (installFields['bytes_per_second'] as num?)?.toInt();
+    final installPhase = installFields['phase'] as String?;
     final selectedEntry = models.where((m) => m.id == selected).firstOrNull;
     // `ready` is authoritative; the installed flag is only a catalog echo and is
     // absent for an override model that is on disk but not in the catalog.
@@ -616,6 +696,16 @@ class DictationCubit extends Cubit<DictationState> {
       isPlatformSupported: supported,
       busy: event['busy'] == true,
       models: models,
+      installingModelId: installModelId,
+      downloadProgress: installTotal != null &&
+              installTotal > 0 &&
+              installReceived != null
+          ? (installReceived / installTotal).clamp(0.0, 1.0)
+          : null,
+      installReceivedBytes: installReceived,
+      installTotalBytes: installTotal,
+      installBytesPerSecond: installRate,
+      installPhase: installPhase,
     );
   }
 
@@ -626,16 +716,38 @@ class DictationCubit extends Cubit<DictationState> {
 
   void _onTransportClosed() {
     if (_closing) return;
-    // The socket died under an in-flight install: the daemon's progress events
-    // can no longer reach this cubit, so the spinner must not outlive them.
-    unawaited(_reset(clearText: false, clearModelProgress: true));
+    final device = _device ?? _lastCommandDevice;
+    final lostInstall = state.model.installingModelId != null;
+    unawaited(_reset(clearText: false));
+    if (!lostInstall) return;
+    // A closed socket does not end an install — the download is daemon-scoped —
+    // but it cannot report one either. Keeping the row left a dead Cancel at a
+    // stale percentage after a hard Agent restart, and the install it pointed at
+    // no longer exists (the process died). Drop the row and ask the device for
+    // the truth, a bounded number of times: the live restart was back in ~8 s.
+    emit(state.copyWith(model: state.model.copyWith(clearInstallingModel: true)));
+    if (device != null) unawaited(_recoverModelTruth(device));
   }
 
-  Future<void> _reset({
-    required bool clearText,
-    String? errorCode,
-    bool clearModelProgress = false,
-  }) async {
+  /// Re-asks [device] for its model truth after the socket was lost.
+  ///
+  /// Bounded on purpose: three attempts, three seconds apart, and it stops the
+  /// moment a reply arrives, a session starts, or the device is gone. A silent
+  /// attempt never raises `connect_failed` — a recovery probe is not a user
+  /// action and must not paint an error over the composer.
+  Future<void> _recoverModelTruth(DeviceConfig device) async {
+    for (var attempt = 0; attempt < 3; attempt++) {
+      await _delay(const Duration(seconds: 3));
+      if (isClosed || state.isActive) return;
+      if (state.model.installingModelId != null) return;
+      if (_device != null) return;
+      final replies = _statusReplies;
+      await refreshStatus(device, silent: true);
+      if (_statusReplies != replies) return;
+    }
+  }
+
+  Future<void> _reset({required bool clearText, String? errorCode}) async {
     if (_closing) return;
     _closing = true;
     _clock.stop();
@@ -669,12 +781,6 @@ class DictationCubit extends Cubit<DictationState> {
         errorCode: errorCode ?? (limitReached ? 'session_limit' : null),
         clearError: errorCode == null && !limitReached,
         sessionNeedsFirstUseSheet: errorCode == 'model_not_installed',
-        model: clearModelProgress
-            ? state.model.copyWith(
-                clearInstallingModel: true,
-                clearDownloadProgress: true,
-              )
-            : null,
       ),
     );
     _closing = false;

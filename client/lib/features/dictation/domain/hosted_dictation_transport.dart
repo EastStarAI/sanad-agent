@@ -33,6 +33,9 @@ class HostedDictationTransport implements DictationTransport {
        _maxSessionBytes = maxSessionBytes,
        _maxSessionSeconds = maxSessionSeconds,
        _clock = clock {
+    // A safe value until a route opens: the session's budget is anchored in
+    // `_openRoute`, never here ([_openedAt] is `late` so `sendAudio` before a
+    // session is a programming error rather than a silent cap).
     _openedAt = _clock();
     _listen();
   }
@@ -118,6 +121,13 @@ class HostedDictationTransport implements DictationTransport {
       _fail('relay_unavailable');
       return;
     }
+    // The session's budget starts with its route, not with the transport: the
+    // same transport answers `status` (and every other control command) before a
+    // session exists, so anchoring the clock at construction made a press
+    // minutes later fail `session_limit reason=duration sent=0` on a session
+    // that had not sent a byte.
+    _openedAt = _clock();
+    _sentBytes = 0;
     _socket.emit('dictation_start', {
       'version': 'v1',
       'dictation_id': dictationId,
@@ -190,14 +200,21 @@ class HostedDictationTransport implements DictationTransport {
     _fail(mapped, gatewayCode: errorCode);
   }
 
-  void _fail(String code, {String? gatewayCode}) {
+  /// [reason] names the bound a **local** check hit.
+  ///
+  /// One line per failure, codes and counters only: a support log has to say
+  /// whether the session stopped because of its byte cap, its duration cap, or a
+  /// Gateway refusal — the three used to collapse into one `session_limit` with
+  /// no way to tell them apart afterwards.
+  void _fail(String code, {String? gatewayCode, String? reason}) {
     if (_routeFailed) return;
     _routeFailed = true;
     // Codes only, never text: the raw Gateway code is what separates a
     // misordered route (`forbidden`) from a real outage in a support log.
     _logger.info(
       'hosted dictation route failed: code=$code'
-      '${gatewayCode == null ? '' : ' gateway=$gatewayCode'}',
+      '${gatewayCode == null ? '' : ' gateway=$gatewayCode'}'
+      '${reason == null ? '' : ' reason=$reason sent=$_sentBytes cap=${reason == 'duration' ? _maxSessionSeconds : _maxSessionBytes}'}',
     );
     if (!_events.isClosed) {
       _events.add({'event': 'dictation_error', 'code': code});
@@ -258,13 +275,13 @@ class HostedDictationTransport implements DictationTransport {
         Duration(seconds: _maxSessionSeconds)) {
       // The declared duration bound is the peer's admission window: stop before
       // it closes so the daemon never decodes a truncated utterance.
-      _fail('session_limit');
+      _fail('session_limit', reason: 'duration');
       return;
     }
     if (_sentBytes + pcm16.length > _maxSessionBytes) {
       // The session cap is a memory bound, not a hint: stop sending and let the
       // session end through the existing limit path.
-      _fail('session_limit');
+      _fail('session_limit', reason: 'bytes');
       return;
     }
     // The wire contract is a binary attachment, and the socket.io encoder only
@@ -298,10 +315,16 @@ class HostedDictationTransport implements DictationTransport {
     // that never asked for a stop still ends its route here — otherwise the
     // Gateway held the device occupied until its idle route TTL and every press
     // on every client was refused `busy` (5 m 35 s after one aborted press).
-    // A failed route admits nothing, so it is sent nothing: the Agent's
-    // `firstAudioTimeout` watchdog releases the daemon, and the Gateway retires
-    // the route on its own.
-    if (_routeOpened && !_routeFailed && _socket.isConnected) {
+    //
+    // That holds after a route failure too. A failed route admits nothing
+    // further, but the Gateway's route may still be live: only this packet (or a
+    // Gateway error, or a disconnect) retires it, and the daemon's own
+    // first-audio watchdog releases the engine in 15 s while a never-started
+    // route lives for 60 s. Skipping the end on failure therefore turned one
+    // client-side refusal into a device-wide `busy` for a minute, for every
+    // client (PR391 live run, D3). The packet is inert when the route is already
+    // gone, and `_sendEnd` is once-only by construction.
+    if (_routeOpened && _socket.isConnected) {
       _sendEnd('cancelled');
     }
     _closed = true;

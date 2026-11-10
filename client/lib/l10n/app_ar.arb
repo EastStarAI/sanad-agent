@@ -560,6 +560,26 @@
       }
     }
   },
+  "dictationDownloadEtaMinutes": "باقي {minutes} دقيقة",
+  "@dictationDownloadEtaMinutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationDownloadEtaSeconds": "باقي {seconds} ثانية",
+  "@dictationDownloadEtaSeconds": {
+    "placeholders": {
+      "seconds": {
+        "type": "String"
+      }
+    }
+  },
+  "dictationDownloadVerifying": "جارٍ التحقق\u2026",
+  "dictationDownloadFinishing": "جارٍ الإنهاء\u2026",
+  "dictationCancelDownload": "إلغاء",
+  "dictationStorageFull": "لا توجد مساحة كافية على القرص لتثبيت هذا النموذج.",
   "voiceUpdateRequired": "حدّث الوكيل أو التطبيق لاستخدام الصوت على هذا الجهاز.",
   "voiceUnavailable": "الصوت غير متاح لهذا الجهاز الآن.",
   "deviceSettingsDictationTitle": "الإملاء",

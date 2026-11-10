@@ -1,9 +1,9 @@
 /// Local dictation model installation and resolution.
 ///
 /// Everything lives under `Sanad Home/models/stt/<model-id>/`; the Silero VAD
-/// asset is shared in `_shared/`. Downloads are one-writer, cancellable,
-/// checksum-verified, and activated by an atomic rename, so a partially
-/// downloaded model can never be reported as ready.
+/// asset is shared in `_shared/`. Downloads are one-writer, resumable,
+/// memory-bounded, checksum-verified, and activated by an atomic rename, so a
+/// partially downloaded model can never be reported as ready.
 library;
 
 import 'dart:async';
@@ -11,8 +11,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:logging/logging.dart';
 
 import 'stt_catalog.dart';
+import 'stt_free_space.dart';
 import 'stt_settings.dart';
 import 'stt_types.dart';
 
@@ -71,16 +73,71 @@ class SttModelStatus {
 /// Progress callback: model id, bytes received, total bytes.
 typedef SttProgressCallback = void Function(String id, int received, int total);
 
+/// Sequential byte sink for one artifact file.
+///
+/// It exists as a seam because the write is the boundary that decides whether a
+/// download is bounded: awaiting [writeFrom] keeps at most one chunk alive,
+/// while a fire-and-forget write lets a fast producer queue the whole artifact
+/// in the heap. A test can hold a write open and prove the download waits.
+abstract class SttWriteSink {
+  Future<void> writeFrom(List<int> bytes);
+
+  Future<void> flush();
+
+  Future<void> close();
+}
+
+/// Opens the destination writer for one artifact and mode.
+typedef SttWriteSinkOpener =
+    Future<SttWriteSink> Function(File file, FileMode mode);
+
+class _FileWriteSink implements SttWriteSink {
+  _FileWriteSink(this._handle);
+
+  final RandomAccessFile _handle;
+
+  @override
+  Future<void> writeFrom(List<int> bytes) => _handle.writeFrom(bytes);
+
+  @override
+  Future<void> flush() => _handle.flush();
+
+  @override
+  Future<void> close() => _handle.close();
+}
+
+Future<SttWriteSink> _openFileSink(File file, FileMode mode) async =>
+    _FileWriteSink(await file.open(mode: mode));
+
 class SttModelStore {
   SttModelStore({
     required this.sanadHome,
     HttpClient Function()? httpClient,
     SttModelFile sharedVadAsset = kSileroVadFile,
+    SttFreeSpaceProbe freeSpaceProbe = defaultSttFreeSpace,
+    SttWriteSinkOpener openWrite = _openFileSink,
   }) : _httpClient = httpClient ?? HttpClient.new,
-       _sharedVadAsset = sharedVadAsset;
+       _sharedVadAsset = sharedVadAsset,
+       _freeSpaceProbe = freeSpaceProbe,
+       _openWrite = openWrite;
 
   final String sanadHome;
   final HttpClient Function() _httpClient;
+
+  /// Free space of the volume an install writes to.
+  ///
+  /// Injected because it is the one fact `dart:io` cannot answer: a test proves
+  /// the refusal deterministically instead of depending on how full the machine
+  /// running it happens to be.
+  final SttFreeSpaceProbe _freeSpaceProbe;
+
+  /// Opens the writer for one artifact.
+  ///
+  /// Production is a [RandomAccessFile]; the seam is what lets a test hold a
+  /// write open and assert the download waits for the disk.
+  final SttWriteSinkOpener _openWrite;
+
+  final Logger _logger = Logger('SttModelStore');
 
   /// The shared VAD descriptor an install downloads.
   ///
@@ -92,6 +149,15 @@ class SttModelStore {
   final SttModelFile _sharedVadAsset;
 
   static const String _partialSuffix = '.partial';
+
+  /// How many times one artifact may be requested again after a transient
+  /// failure. Three retries cover a dropped connection on a 4.5-minute download
+  /// without turning a dead host into a busy loop.
+  static const int _maxDownloadAttempts = 4;
+
+  /// Backoff before retry `n`; it grows linearly, so the whole retry budget for
+  /// one artifact stays inside ten seconds.
+  static const Duration _retryBackoff = Duration(seconds: 1);
 
   String get modelsRoot => '$sanadHome/models/stt';
   String get sharedDir => '$modelsRoot/_shared';
@@ -153,11 +219,17 @@ class SttModelStore {
   /// Downloads the entry (and the shared VAD once) then activates it.
   ///
   /// Throws [SttException] with code `cancelled` when [isCancelled] turns true,
-  /// `download_failed` on transport errors, `checksum_mismatch` when bytes do
-  /// not match the pinned digest, and `not_hosted` when the entry has no URL.
+  /// `storage_full` when the volume cannot hold the artifacts plus
+  /// [kSttInstallFreeSpaceMarginBytes], `download_failed` on transport errors
+  /// that outlast the retry budget, `checksum_mismatch` when bytes do not match
+  /// the pinned digest or size, and `not_hosted` when the entry has no URL.
+  ///
+  /// A resumable partial is never deleted by a transient failure, so a retry —
+  /// or a later press — continues from the bytes already on disk.
   Future<void> install(
     SttCatalogEntry entry, {
     SttProgressCallback? onProgress,
+    void Function(SttInstallPhase phase)? onPhase,
     bool Function()? isCancelled,
   }) async {
     if (!entry.hosted ||
@@ -170,31 +242,54 @@ class SttModelStore {
     }
     await Directory(modelDir(entry.id)).create(recursive: true);
     await Directory(sharedDir).create(recursive: true);
-    // Progress is cumulative across every artifact of the install, so the
-    // client bar never drops back to zero between encoder/decoder/tokens.
+    // A file already on disk at its pinned size is not downloaded again: the
+    // install is then resumable at artifact granularity, and the free-space
+    // check below asks only for what this run will really write.
+    final plan = _installPlan(entry);
+    final pending = plan.pending;
+    // Progress is cumulative across every artifact of the **model**, including
+    // the ones an earlier run already finished. Counting only the pending ones
+    // made a resumed encoder/decoder model open at the pending file's share of
+    // the pending total — 24 % on disk reported as 7 % — so the bar stepped
+    // backwards on its own resume, against this method's own contract.
     final needsVad =
         entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
-    var total = entry.files.fold<int>(0, (sum, file) => sum + file.sizeBytes);
-    if (needsVad) total += _sharedVadAsset.sizeBytes;
-    var offset = 0;
+    if (pending.isEmpty && !needsVad) {
+      _logger.info('dictation model already installed: ${entry.id}');
+      return;
+    }
+    final pendingBytes = pending.fold<int>(
+      0,
+      (sum, file) => sum + file.sizeBytes,
+    );
+    final fetchBytes = needsVad
+        ? pendingBytes + _sharedVadAsset.sizeBytes
+        : pendingBytes;
+    final total = plan.completeBytes + fetchBytes;
+    // Only what this run writes is charged against the volume: the artifacts it
+    // already holds are not requested again.
+    await _guardFreeSpace(fetchBytes, modelId: entry.id);
+    var offset = plan.completeBytes;
     if (needsVad) {
       await _downloadFile(
         _sharedVadAsset,
         vadPath,
         id: entry.id,
         onProgress: onProgress,
+        onPhase: onPhase,
         isCancelled: isCancelled,
         offsetBase: offset,
         grandTotal: total,
       );
       offset += _sharedVadAsset.sizeBytes;
     }
-    for (final file in entry.files) {
+    for (final file in pending) {
       await _downloadFile(
         file,
         '${modelDir(entry.id)}/${file.name}',
         id: entry.id,
         onProgress: onProgress,
+        onPhase: onPhase,
         isCancelled: isCancelled,
         offsetBase: offset,
         grandTotal: total,
@@ -203,80 +298,329 @@ class SttModelStore {
     }
   }
 
+  /// Splits [entry] into the artifacts this run still fetches and the bytes it
+  /// already holds, in one pass and in catalog order.
+  ({List<SttModelFile> pending, int completeBytes}) _installPlan(
+    SttCatalogEntry entry,
+  ) {
+    final pending = <SttModelFile>[];
+    var completeBytes = 0;
+    for (final file in entry.files) {
+      if (_isCompleteFile(file, '${modelDir(entry.id)}/${file.name}')) {
+        completeBytes += file.sizeBytes;
+      } else {
+        pending.add(file);
+      }
+    }
+    return (pending: pending, completeBytes: completeBytes);
+  }
+
+  /// Whether [path] already holds [file] at its pinned size.
+  bool _isCompleteFile(SttModelFile file, String path) {
+    final handle = File(path);
+    return handle.existsSync() && handle.lengthSync() == file.sizeBytes;
+  }
+
+  /// Refuses an install the volume cannot hold, before a byte is written.
+  ///
+  /// A download that starts and then stalls on a full disk is the worst of both
+  /// outcomes: the user waits minutes to learn what one probe knew immediately,
+  /// and the daemon has already queued writes it cannot complete.
+  Future<void> _guardFreeSpace(int neededBytes, {required String modelId}) async {
+    final free = await _freeSpaceProbe(modelsRoot);
+    if (free == null) return;
+    final required = neededBytes + kSttInstallFreeSpaceMarginBytes;
+    if (free >= required) return;
+    _logger.warning(
+      'dictation model install refused: storage_full model=$modelId '
+      'need=$required free=$free',
+    );
+    throw SttException(
+      'storage_full',
+      'not enough free disk space to install "$modelId": '
+          '$neededBytes bytes plus a '
+          '${kSttInstallFreeSpaceMarginBytes ~/ (1024 * 1024)} MB margin is '
+          'required, $free bytes are available',
+    );
+  }
+
   Future<void> _downloadFile(
     SttModelFile file,
     String destination, {
     required String id,
     SttProgressCallback? onProgress,
+    void Function(SttInstallPhase phase)? onPhase,
     bool Function()? isCancelled,
     int offsetBase = 0,
     int? grandTotal,
   }) async {
     final partial = File('$destination$_partialSuffix');
-    if (partial.existsSync()) {
-      await partial.delete();
+    final total = grandTotal ?? file.sizeBytes;
+    var resumeFrom = _resumableBytes(partial, file.sizeBytes);
+    if (resumeFrom > 0) {
+      _logger.info(
+        'dictation model download resuming: model=$id file=${file.name} '
+        'bytes=$resumeFrom',
+      );
     }
+    _TransferResult? transferred;
+    SttException? failure;
+    for (var attempt = 1; attempt <= _maxDownloadAttempts; attempt++) {
+      if (isCancelled?.call() ?? false) {
+        throw const SttException('cancelled', 'download cancelled');
+      }
+      try {
+        transferred = await _transfer(
+          file,
+          partial,
+          resumeFrom: resumeFrom,
+          id: id,
+          onProgress: onProgress,
+          onPhase: onPhase,
+          isCancelled: isCancelled,
+          offsetBase: offsetBase,
+          grandTotal: total,
+        );
+        if (transferred.bytesOnDisk == file.sizeBytes) break;
+        // A body that ends early is a truncation, not a wrong file: the bytes it
+        // did deliver are resumable, so they stay and the next attempt continues
+        // from them.
+        resumeFrom = transferred.bytesOnDisk;
+        failure = SttException(
+          'download_failed',
+          '${file.name}: short body '
+              '(${transferred.bytesOnDisk} of ${file.sizeBytes})',
+        );
+        transferred = null;
+      } on _DownloadRejected catch (rejected) {
+        // A refusal the server will repeat verbatim (404, 403, a range it cannot
+        // satisfy) is not worth a retry budget.
+        throw rejected.error;
+      } on SttException catch (error) {
+        if (!_isRetryable(error)) rethrow;
+        failure = error;
+        transferred = null;
+        resumeFrom = _resumableBytes(partial, file.sizeBytes);
+      }
+      if (attempt == _maxDownloadAttempts) break;
+      _logger.info(
+        'dictation model download retry: model=$id file=${file.name} '
+        'attempt=${attempt + 1} bytes=$resumeFrom',
+      );
+      await Future<void>.delayed(_retryBackoff * attempt);
+    }
+    final result = transferred;
+    if (result == null) {
+      throw failure ??
+          const SttException('download_failed', 'download failed');
+    }
+    onPhase?.call(SttInstallPhase.verifying);
+    final digest = result.digest;
+    if (digest == null || digest != file.sha256) {
+      // A digest that does not match can never resume into a valid file, so this
+      // is the one failure that discards the bytes.
+      await _deleteQuietly(partial);
+      throw SttException(
+        'checksum_mismatch',
+        '${file.name} checksum mismatch',
+      );
+    }
+    onPhase?.call(SttInstallPhase.activating);
+    // Atomic activation: a reader either sees the verified file or nothing.
+    await partial.rename(destination);
+    onPhase?.call(SttInstallPhase.downloading);
+  }
 
+  /// What `install` will continue from and report as its total.
+  ///
+  /// The projection published at install start (`stt_status.install`) is built
+  /// before the first HTTP response, so without this the daemon stated
+  /// `received_bytes: 0` for a partial it already held, and a resumed download
+  /// visibly restarted its bar at 0 % for the first second or so. [received]
+  /// counts only resumable bytes of the artifacts this run will actually fetch,
+  /// and [total] is the same cumulative total `install` reports, so the two never
+  /// disagree.
+  ({int received, int total})? installSeed(SttCatalogEntry entry) {
+    if (!entry.hosted || entry.files.any((file) => file.url.isEmpty)) return null;
+    final plan = _installPlan(entry);
+    final needsVad =
+        entry.engine == SttEngineKind.sherpa && !File(vadPath).existsSync();
+    if (plan.pending.isEmpty && !needsVad) {
+      // Nothing is fetched, so there is no install to project: the run settles
+      // as already-installed. A 100 % row here would be a flash, not progress.
+      return (received: 0, total: 0);
+    }
+    final pendingBytes = plan.pending.fold<int>(
+      0,
+      (sum, file) => sum + file.sizeBytes,
+    );
+    var received = plan.completeBytes;
+    var total = plan.completeBytes + pendingBytes;
+    if (needsVad) {
+      received += _resumableLength(
+        File('$vadPath$_partialSuffix'),
+        _sharedVadAsset.sizeBytes,
+      );
+      total += _sharedVadAsset.sizeBytes;
+    }
+    for (final file in plan.pending) {
+      received += _resumableLength(
+        File('${modelDir(entry.id)}/${file.name}$_partialSuffix'),
+        file.sizeBytes,
+      );
+    }
+    return (received: received, total: total);
+  }
+
+  /// Bytes of [partial] that may be resumed from.
+  ///
+  /// A zero-length, oversized, or already-complete partial is not resumable and
+  /// is replaced by the next attempt.
+  int _resumableBytes(File partial, int sizeBytes) {
+    final resumable = _resumableLength(partial, sizeBytes);
+    if (resumable > 0) return resumable;
+    if (!partial.existsSync()) return 0;
+    try {
+      partial.deleteSync();
+    } on FileSystemException {
+      // A partial that cannot be removed is overwritten from zero anyway.
+    }
+    return 0;
+  }
+
+  /// Resumable prefix of [partial], without touching the file.
+  int _resumableLength(File partial, int sizeBytes) {
+    if (!partial.existsSync()) return 0;
+    final length = partial.lengthSync();
+    return length > 0 && length < sizeBytes ? length : 0;
+  }
+
+  static bool _isRetryable(SttException error) => switch (error.code) {
+    'cancelled' || 'checksum_mismatch' || 'storage_full' || 'not_hosted' =>
+      false,
+    _ => true,
+  };
+
+  /// One artifact transfer, resuming at [resumeFrom] when the server allows it.
+  ///
+  /// The digest is computed while the bytes are written, so no separate
+  /// verification pass over the artifact is needed; a resumed prefix is re-read
+  /// into the same hasher first, which is what keeps the final comparison
+  /// meaningful.
+  Future<_TransferResult> _transfer(
+    SttModelFile file,
+    File partial, {
+    required int resumeFrom,
+    required String id,
+    SttProgressCallback? onProgress,
+    void Function(SttInstallPhase phase)? onPhase,
+    bool Function()? isCancelled,
+    required int offsetBase,
+    required int grandTotal,
+  }) async {
     final client = _httpClient();
-    final digestCollector = _DigestCollector();
-    IOSink? sink;
-    var received = 0;
+    SttWriteSink? writer;
     try {
       final request = await client.getUrl(Uri.parse(file.url));
       request.followRedirects = true;
+      if (resumeFrom > 0) {
+        request.headers.set(HttpHeaders.rangeHeader, 'bytes=$resumeFrom-');
+      }
       final response = await request.close();
-      if (response.statusCode != HttpStatus.ok) {
-        throw SttException(
+      var start = resumeFrom;
+      if (response.statusCode == HttpStatus.partialContent) {
+        // The requested range is what the body carries.
+      } else if (response.statusCode == HttpStatus.ok) {
+        // The server ignored `Range`, or there was nothing to resume: the body
+        // is the whole artifact and the partial is rewritten from zero.
+        start = 0;
+      } else {
+        final error = SttException(
           'download_failed',
           'HTTP ${response.statusCode} for ${file.name}',
         );
+        final transient =
+            response.statusCode >= 500 ||
+            response.statusCode == HttpStatus.requestTimeout ||
+            response.statusCode == HttpStatus.tooManyRequests;
+        if (!transient) throw _DownloadRejected(error);
+        throw error;
       }
-      final hashInput = sha256.startChunkedConversion(digestCollector);
-      sink = partial.openWrite();
+      writer = await _openWrite(
+        partial,
+        start > 0 ? FileMode.append : FileMode.write,
+      );
+      final collector = _DigestCollector();
+      final hashInput = sha256.startChunkedConversion(collector);
+      if (start > 0) {
+        // Report the resumed truth before the re-read, so a client that joins
+        // here sees the real percentage instead of zero for a whole second.
+        onPhase?.call(SttInstallPhase.verifying);
+        onProgress?.call(id, offsetBase + start, grandTotal);
+        await for (final chunk in partial.openRead(0, start)) {
+          if (isCancelled?.call() ?? false) {
+            throw const SttException('cancelled', 'download cancelled');
+          }
+          hashInput.add(chunk);
+        }
+        onPhase?.call(SttInstallPhase.downloading);
+      }
+      var onDisk = start;
       await for (final chunk in response) {
         if (isCancelled?.call() ?? false) {
           throw const SttException('cancelled', 'download cancelled');
         }
-        received += chunk.length;
+        // Backpressure. `RandomAccessFile.writeFrom` completes when the bytes
+        // reached the file, so the socket is read at the disk's pace; an
+        // `IOSink.add` is `void`, which let a fast producer queue the whole
+        // artifact in the heap while a write was in flight (measured: 723 MB
+        // retained for an 823 MB artifact, 187 MB with this await).
+        await writer.writeFrom(chunk);
+        onDisk += chunk.length;
         hashInput.add(chunk);
-        sink.add(chunk);
-        onProgress?.call(
-          id,
-          offsetBase + received,
-          grandTotal ?? file.sizeBytes,
-        );
+        onProgress?.call(id, offsetBase + onDisk, grandTotal);
       }
-      await sink.flush();
-      await sink.close();
-      sink = null;
       hashInput.close();
-      final digest = digestCollector.value?.toString();
-      if (digest == null || digest != file.sha256) {
-        await _deleteQuietly(partial);
-        throw SttException(
-          'checksum_mismatch',
-          '${file.name} checksum mismatch',
-        );
-      }
-      if (received != file.sizeBytes) {
-        await _deleteQuietly(partial);
-        throw SttException(
-          'checksum_mismatch',
-          '${file.name} size mismatch ($received != ${file.sizeBytes})',
-        );
-      }
-      // Atomic activation: a reader either sees the verified file or nothing.
-      await partial.rename(destination);
-    } on SttException {
-      await _deleteQuietly(partial);
+      await writer.flush();
+      await writer.close();
+      writer = null;
+      return _TransferResult(
+        bytesOnDisk: onDisk,
+        digest: collector.value?.toString(),
+      );
+    } on _DownloadRejected {
       rethrow;
+    } on SttException {
+      rethrow;
+    } on FileSystemException catch (error) {
+      throw _writeFailure(error, file.name);
     } on Object catch (error) {
-      await _deleteQuietly(partial);
+      // A dropped connection, a DNS failure, a timeout: transient by nature, so
+      // the bytes already on disk stay and the next attempt resumes from them.
       throw SttException('download_failed', '${file.name}: $error');
     } finally {
-      await sink?.close();
+      await writer?.close();
       client.close(force: true);
     }
+  }
+
+  /// Maps a write failure onto the daemon's typed codes.
+  ///
+  /// A full volume is `storage_full` — the daemon's existing typed local failure
+  /// — not a generic download error, because the remedy is different and the
+  /// retry budget must not be spent on it.
+  static SttException _writeFailure(FileSystemException error, String name) {
+    final code = error.osError?.errorCode;
+    final message = (error.osError?.message ?? error.message).toString();
+    final full =
+        code == 28 || // ENOSPC on macOS and Linux
+        code == 112 || // ERROR_DISK_FULL on Windows
+        message.toLowerCase().contains('no space left') ||
+        message.toLowerCase().contains('not enough space');
+    if (full) {
+      return SttException('storage_full', '$name: not enough free disk space');
+    }
+    return SttException('download_failed', '$name: ${error.message}');
   }
 
   Future<void> _deleteQuietly(File file) async {
@@ -429,6 +773,24 @@ class _DigestCollector implements Sink<Digest> {
 
   @override
   void close() {}
+}
+
+/// Outcome of one artifact transfer.
+class _TransferResult {
+  const _TransferResult({required this.bytesOnDisk, required this.digest});
+
+  /// Bytes the artifact occupies once the transfer returned.
+  final int bytesOnDisk;
+
+  /// SHA-256 of the whole artifact, including a resumed prefix.
+  final String? digest;
+}
+
+/// A server refusal that must not consume the retry budget.
+class _DownloadRejected implements Exception {
+  const _DownloadRejected(this.error);
+
+  final SttException error;
 }
 
 /// Reads a catalog entry's manifest as JSON, used by tests and diagnostics.

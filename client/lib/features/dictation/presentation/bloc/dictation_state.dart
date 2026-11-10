@@ -95,6 +95,10 @@ class DictationModelStatus extends Equatable {
     this.busy = false,
     this.models = const [],
     this.installingModelId,
+    this.installReceivedBytes,
+    this.installTotalBytes,
+    this.installBytesPerSecond,
+    this.installPhase,
     this.fetchedAt,
   });
 
@@ -144,11 +148,50 @@ class DictationModelStatus extends Equatable {
   /// Full catalog as reported by the daemon (for the model sheet).
   final List<DictationModelOption> models;
 
-  /// Model whose install is currently running; owned here, not by the sheet,
-  /// so the progress bar survives rebuilds until the daemon reports installed.
+  /// Model whose install is currently running; owned by the **daemon**, and
+  /// rebuilt from `stt_status.install`.
+  ///
+  /// It used to be event-continuous: every `stt_status` rebuilt this object and
+  /// `copyWith` merged against the fresh one, so the refresh the sheet issues on
+  /// open erased the very install it was meant to display. The daemon now states
+  /// the install in its status, which is why this field survives a reopen, a
+  /// device switch, and a reconnect.
   final String? installingModelId;
 
-  bool get isDownloading => downloadProgress != null;
+  /// Bytes the daemon reports on disk for the running install.
+  final int? installReceivedBytes;
+
+  /// Total bytes that install will write.
+  final int? installTotalBytes;
+
+  /// The daemon's observed transfer rate, used for the remaining-time estimate.
+  final int? installBytesPerSecond;
+
+  /// `downloading`, `verifying`, or `activating`; null when nothing is in flight.
+  final String? installPhase;
+
+  bool get isDownloading => installingModelId != null;
+
+  /// Remaining time from the daemon's own rate, or null when it cannot be known.
+  ///
+  /// It is computed here rather than in the widget so the sheet, the device
+  /// settings card, and any future surface estimate the same download the same
+  /// way.
+  Duration? get installEta {
+    final total = installTotalBytes;
+    final received = installReceivedBytes;
+    final rate = installBytesPerSecond;
+    if (total == null || total <= 0 || received == null) return null;
+    final remaining = total - received;
+    // Nothing left to transfer: the remaining time is zero whatever the rate
+    // says, because the bytes are already on disk and only the rename is left.
+    if (remaining <= 0) return Duration.zero;
+    if (rate == null || rate <= 0) return null;
+    return Duration(seconds: (remaining / rate).ceil());
+  }
+
+  /// The phase a running install is in, as a closed-set code.
+  String? get installingPhase => isDownloading ? installPhase : null;
 
   DictationModelStatus copyWith({
     String? selectedModelId,
@@ -164,6 +207,10 @@ class DictationModelStatus extends Equatable {
     List<DictationModelOption>? models,
     String? installingModelId,
     bool clearInstallingModel = false,
+    int? installReceivedBytes,
+    int? installTotalBytes,
+    int? installBytesPerSecond,
+    String? installPhase,
     DateTime? fetchedAt,
   }) {
     return DictationModelStatus(
@@ -182,6 +229,18 @@ class DictationModelStatus extends Equatable {
       installingModelId: clearInstallingModel
           ? null
           : (installingModelId ?? this.installingModelId),
+      installReceivedBytes: clearInstallingModel
+          ? null
+          : (installReceivedBytes ?? this.installReceivedBytes),
+      installTotalBytes: clearInstallingModel
+          ? null
+          : (installTotalBytes ?? this.installTotalBytes),
+      installBytesPerSecond: clearInstallingModel
+          ? null
+          : (installBytesPerSecond ?? this.installBytesPerSecond),
+      installPhase: clearInstallingModel
+          ? null
+          : (installPhase ?? this.installPhase),
       fetchedAt: fetchedAt ?? this.fetchedAt,
     );
   }
@@ -198,6 +257,10 @@ class DictationModelStatus extends Equatable {
         busy,
         models,
         installingModelId,
+        installReceivedBytes,
+        installTotalBytes,
+        installBytesPerSecond,
+        installPhase,
         fetchedAt,
       ];
 }

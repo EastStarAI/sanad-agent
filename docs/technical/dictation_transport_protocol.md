@@ -115,8 +115,11 @@ Validation rules:
   non-integer is malformed, so the Client falls back to the contract maximum
   instead of throwing or truncating: one bad advertisement can never break
   capability parsing for the whole device list.
-- Capabilities never carry transient state. Model install progress and native
-  runtime preparation are reported only through live events.
+- Capabilities never carry transient state. Readiness and a running model install
+  are transient, so they live on the live `stt_status` path (§3, §6.6) and never
+  on this envelope: a device that is merely not ready — or downloading — still
+  advertises plain support, and a missing model can never fail
+  `register_device`.
 
 ## 3. Canonical daemon vocabulary
 
@@ -131,7 +134,8 @@ Commands (Client → daemon):
 | `stop` | — | Drain the session; final transcripts then `dictation_done`. |
 | `cancel` | — | Abandon the session and drop its transcript. |
 | `status` | — | Emit a fresh `stt_status`. |
-| `install` | `model_id` | Download and verify one catalog model, streaming progress. |
+| `install` | `model_id` | Download and verify one catalog model, streaming progress. A second `install` for a model already downloading **joins** the running install; a different model is refused with `install_in_progress`. The running install is announced with `stt_status` to every channel of the device, and its `install` payload states the bytes a resumed download already has on disk — never zero. |
+| `cancelInstall` | — | Abandon the running install. It is the **only** thing that stops one, and it is not the session `cancel`. |
 | `select` | `model_id` | Persist the selected model and emit `stt_status`. |
 | `prepareRuntime` | — | Start native runtime preparation, then emit `stt_status`. |
 
@@ -139,8 +143,8 @@ Events (daemon → Client):
 
 | Event | Fields | Meaning |
 |---|---|---|
-| `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]` | Catalog, install state, readiness. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
-| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes` | Install progress |
+| `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]`, `install?` | Catalog, install truth, readiness. `install` is present exactly while an install is in flight — `{model_id, received_bytes, total_bytes, phase, bytes_per_second}` — so any client rebuilds the same bar after a sheet reopen, a device switch, or a reconnect. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
+| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress, delivered to every attached channel. `received_bytes` and `total_bytes` are cumulative over the whole model, including artifacts a previous run already finished, so `received/total` is the model's progress rather than the current fetch's. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. The first tick of a **resumed** install carries the resumed offset, never zero: a phase reported before any byte rides that tick instead of being published as a bar restart. |
 | `dictation_ready` | `model_id`, `load_ms` | Recognizer loaded; audio is accepted from now on |
 | `dictation_partial` | `seq`, `text` | Streaming only: mutable segment text, replacing its own range |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of that segment |
@@ -208,10 +212,12 @@ Producer order is an obligation, not a convenience:
 - Exactly one route is opened per session, and the opening call is idempotent, so
   a repeated `start` cannot emit a second `dictation_start` for one
   `dictation_id`.
-- A claim whose route is refused still names a live session, but the command path cannot end it: a `dictation` command `op: cancel` is rejected by the daemon relay with `invalid_request`, by design. Teardown therefore travels on the ordered control — `dictation_end{reason: cancelled}` — when the route is still healthy, and nowhere at all when the route has already failed (it admits nothing; the daemon's first-audio watchdog releases the engine and the Gateway retires the route). A producer that simply stops talking keeps the Gateway's route occupied until its idle TTL, and every press on every client is answered `busy` in the meantime.
-- Frames and the ordered `dictation_end` are refused from the moment a route
-  fails, so a failed route is not a reusable transport: a new session
-  (`dictation_id` is a fresh UUID) is the only way back.
+- A claim whose route is refused still names a live session, but the command path cannot end it: a `dictation` command `op: cancel` is rejected by the daemon relay with `invalid_request`, by design. Teardown therefore travels on the ordered control — `dictation_end{reason: cancelled}` — **whenever a route was opened and the socket is connected, including after that route failed**. A failed route admits nothing further, but the Gateway's route can still be live, and only this packet (a Gateway terminal error, or a disconnect) retires it: the daemon's first-audio watchdog releases the engine in 15 s while a never-started route lives for its own TTL, so skipping the end on failure left the device answered `busy` for a minute after one refused press. The packet is inert when the route is already gone, and a producer sends at most one `dictation_end` per session.
+- Frames and command-path writes are refused from the moment a route fails, so a
+  failed route is not a reusable transport: a new session (`dictation_id` is a
+  fresh UUID) is the only way back. The one packet a failed route still emits is
+  the teardown's `dictation_end` (see above), because it is what tells the
+  Gateway the route is over.
 
 ### 5.1 Origin claim
 
@@ -284,12 +290,12 @@ it can never overwrite the active recipient.
    channel, session identity, or client tag.
 2. Parse `op` with the same parser the local channel uses. An unknown `op` is a
    typed `dictation_error`, never a silent drop.
-3. Serve `status`, `install`, `select`, and `prepareRuntime` from the shared
-   service path, so the local and hosted channels cannot diverge in catalog,
-   install, selection, or preparation behavior. These four commands are
-   stateless and create no per-`dictation_id` context: at most one install is in
-   flight per device, `status` and `select` answer synchronously, and
-   `prepareRuntime` keeps its existing single-flight guard.
+3. Serve `status`, `install`, `cancelInstall`, `select`, and `prepareRuntime`
+   from the shared service path, so the local and hosted channels cannot diverge
+   in catalog, install, selection, or preparation behavior. These commands create
+   no per-`dictation_id` context: at most one install is in flight per device,
+   `status` and `select` answer synchronously, and `prepareRuntime` keeps its
+   existing single-flight guard.
 4. `prepareRuntime` remains the owner-only fixed action it is on the local
    channel: the daemon runs its own preparation entry point and accepts no
    caller-supplied path, command, or argument of any kind.
@@ -407,7 +413,9 @@ Two tests hold this shape from both ends, against one shared field table
 ```
 
 `dictation_end` is the hosted carrier for the daemon's `stop` and `cancel`
-commands. It is admitted only when the caller's claim of §5.1 is present and
+commands, and for teardown. A Client sends it once when the session ends —
+explicitly (`stopped`/`cancelled`) or because the transport is being closed after
+a failed route — and never twice for one `dictation_id`. It is admitted only when the caller's claim of §5.1 is present and
 owned; a foreign or missing claim is rejected with `forbidden` and nothing is
 forwarded.
 
@@ -516,16 +524,43 @@ hosted sessions on socket disconnect and on its own session caps.
 
 ### 6.6 Control-only lifecycle
 
-`status`, `install`, `select`, and `prepareRuntime` can run with no route at all,
-so their lifecycle is bounded without route cleanup:
+`status`, `install`, `cancelInstall`, `select`, and `prepareRuntime` can run with
+no route at all, so their lifecycle is bounded without route cleanup:
 
 - they create no per-`dictation_id` state in the daemon and no listener that
   outlives the operation; replies are addressed by the origin claim alone;
-- at most one install is in flight per device; progress streams to the claim
-  owner and nowhere else;
-- when the owner's socket disconnects or its claim expires, an in-flight install
-  is abandoned with its partial artifacts discarded and the daemon keeps no
-  pending operation, so a later session starts clean;
+- at most one install is in flight per **device**, and it is daemon-scoped: a
+  repeated `install` for that model joins it, a different model is refused with
+  `install_in_progress`, and progress streams to whichever channels are attached;
+- an install outlives the connection that asked for it. A socket close, a claim
+  expiry, a `dictation_abort`, a device switch, and a Client restart all detach a
+  listener and leave the download running, because its bytes belong to the device
+  rather than to the session. Only `cancelInstall` stops it;
+- because of that, an install is **reported by the daemon, not reconstructed by
+  the Client**: `stt_status.install` is the in-flight truth, and the terminal
+  `stt_status` after it settles carries no `install`. That terminal status is
+  emitted **after** the install stops being truth — a payload built while it is
+  still active states `install` again, and a client that reads it can only draw a
+  row that never ends;
+- every channel **attached to the device** receives the install — its start, its
+  progress, and its terminal status — not only the channel that sent `install`. A
+  channel attaches by sending any control command (`status` attaches it at once,
+  and every later install is announced to it), so a client that restarted, a
+  second client, and a sheet that was already open all stay truthful from the
+  moment a download begins;
+- the **install projection states the resumed truth before the first byte**:
+  `stt_status.install` carries the resumable bytes already on disk and the total of
+  the model, so a resumed bar starts at its offset instead of at zero. Both figures
+  are cumulative across **every artifact** of the model — an artifact an earlier run
+  completed counts in `received_bytes` and in `total_bytes` — so a resumed
+  encoder/decoder pair opens at the share the model really holds, and its progress
+  never steps backwards on its own resume;
+- the partial artifact is preserved across every interruption — a dropped
+  connection, a cancel, a daemon restart — and resumed with an HTTP `Range`
+  request, then verified against the pinned size and SHA-256 before the atomic
+  rename. Bounded retries (three) run before a transport failure is reported, and
+  a volume that cannot hold the artifact plus a safety margin is refused as
+  `storage_full` before the first byte;
 - after claim retirement the Gateway rejects further events for that `request_id`;
   the daemon's operation finishes or aborts within the producer deadline of §5.1,
   with cancellation signalled even when no audio route was opened;
@@ -628,8 +663,8 @@ retry-later outcomes.
 
 Recognition failures keep their daemon codes (`unavailable`, `model_unknown`,
 `model_not_installed`, `dictation_busy`, `session_limit`, `no_speech`,
-`install_in_progress`, `prepare_unavailable`, `internal`, `audio_gap`, plus the
-readiness reasons `dictation_disabled`, `unsupported_platform`,
+`install_in_progress`, `storage_full`, `prepare_unavailable`, `internal`,
+`audio_gap`, plus the readiness reasons `dictation_disabled`, `unsupported_platform`,
 `native_runtime_missing`, `native_runtime_preparing`,
 `native_runtime_install_failed`).
 
@@ -779,9 +814,12 @@ identical:
   is never delivered to any client.
 - **D10** No log line, metric, or stored route record contains audio bytes or
   transcript text.
-- **D11** Model `status`, `install`, `select`, and `prepareRuntime` behave
-  identically over both channels, including progress events, and every reply is
-  origin-only.
+- **D11** Model `status`, `install`, `cancelInstall`, `select`, and
+  `prepareRuntime` behave identically over both channels, including progress
+  events, and every reply is origin-only. A second `install` for a model already
+  downloading joins it instead of starting a second writer, an install survives
+  the disconnect of the channel that requested it, and `stt_status.install`
+  reports the same bytes the progress stream last delivered.
 - **D12** A dictation command creates no conversation session channel, session
   identity, or client tag in the daemon.
 - **D13** Origin takeover is impossible: a second authenticated app socket of the

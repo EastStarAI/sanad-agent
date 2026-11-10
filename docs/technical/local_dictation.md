@@ -34,17 +34,18 @@ The client opens `ws://127.0.0.1:<port>/ws?type=dictation` on the local gateway
 mono PCM16 little-endian audio; text frames are JSON commands.
 
 Commands (client → daemon): `start`, `stop`, `cancel`, `status`, `install`,
-`select`.
+`cancelInstall`, `select`.
 
 Events (daemon → client):
 
 | Event | Payload | Meaning |
 |---|---|---|
-| `stt_status` | `selected`, `models[]`, `supports_dictation`, `reason` | Catalog, install state, readiness |
+| `stt_status` | `selected`, `models[]`, `supports_dictation`, `reason`, `install?` | Catalog, install truth, readiness |
 | `dictation_ready` | `model_id`, `load_ms` | Recognizer loaded, audio accepted |
 | `dictation_partial` | `seq`, `text` | Streaming only: open segment, replaced in place |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of segment `seq` |
 | `dictation_done` | `segments`, `dropped_chunks` | Session drained; nothing follows |
+| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Coalesced install progress; `phase` is `downloading`, `verifying`, or `activating` |
 | `dictation_error` | `code`, `reason`, `message` | Typed failure; no text is fabricated |
 
 `seq` is the replacement key: a partial and its final share the same `seq`, so
@@ -75,13 +76,19 @@ until the Gateway's route TTL released it — five minutes in the live run, duri
 which every other press was refused with `dictation_busy`. The window keys on
 **zero frames ever**, so it never fires for a user who is simply quiet.
 
-The Agent is not the only side that cleans up. A Client that abandons a healthy
-route ends it with the ordered `dictation_end{reason: cancelled}`, which ends the
-daemon session and releases the Gateway's route. The command path cannot do it: a
+The Agent is not the only side that cleans up. A Client that abandons a route ends
+it with the ordered `dictation_end{reason: cancelled}`, which ends the daemon
+session and releases the Gateway's route. The command path cannot do it: a
 `dictation` command `op: cancel` is refused with `invalid_request` by design, so a
 Client that relied on it released nothing and left the Gateway holding the device
-for its whole idle TTL. When the route itself has already failed there is nothing
-to send, and the watchdog below is the only cleanup left — which is why it exists.
+for its whole idle TTL.
+
+That end is sent **even when the route already failed**, because the two sides
+release on different clocks: the watchdog below frees the daemon in 15 s, while a
+route the Gateway never saw a frame on lives for 60 s. A Client that skipped the
+end after a local refusal therefore left every press on every client answered
+`busy` for a minute after a single failed one. The packet costs nothing when the
+route is already gone, and a Client sends it at most once per session.
 
 ## Batch and streaming
 
@@ -121,6 +128,73 @@ finals only, and the missing rows simply are not there.
 The catalog is data, not code: adding a model is an entry with pinned URL, size
 and SHA-256. A model is installed through the same hosted download path,
 verified against its SHA-256, and activated atomically.
+
+### The install belongs to the daemon
+
+An install is daemon-scoped, not connection-scoped. Closing the model sheet,
+switching to another device, reconnecting, or a Client restart all detach a
+listener and leave the download running; only `cancelInstall` stops it, and even
+that keeps the bytes it already received.
+
+The Client side of that rule: a **closed** socket cannot report an install, and a
+hard Agent restart ends one (the process that owned it died). So when the dictation
+socket closes with an install row on screen, the Client drops the row instead of
+leaving a Cancel button that reaches nothing, and re-asks the device for truth a
+bounded number of times (three attempts, three seconds apart, silent) so the row
+reappears if the daemon was merely reconnecting. That is what `stt_status.install`
+exists for: any client that arrives mid-download rebuilds the same bar from the
+daemon's own truth instead of relying on a continuous event stream.
+
+The shape of the download is part of that contract, because each property was a
+measured defect before it existed:
+
+- **Every attached client sees it, from the start.** A channel attaches by asking for
+  `status`, and an install that starts later is announced to every channel that has
+  spoken to the control surface — a sheet that was already open learns about a
+  download another client began instead of staying blank until it is reopened. A
+  client that restarted mid-download, a second client, and a sheet reopened after a
+  reconnect all receive the same ticks and the same terminal `stt_status` as the one
+  that pressed the button. The terminal status is
+  built **after** the install is released: built any earlier it still states
+  `install`, and the row it was meant to unfreeze stays frozen until the sheet is
+  reopened.
+- **One writer per device.** A repeated `install` of a model already downloading
+  joins the running install and is answered with its truth; a different model is
+  refused with `install_in_progress`, and the refusal also carries the running
+  install so the sheet can show it. Two writers could never share one partial
+  file, and a second press used to reach a code path that discarded it.
+- **Bounded memory.** Bytes are written through
+  `RandomAccessFile.writeFrom` and awaited, so at most one chunk is in flight.
+  An `IOSink.add` returns `void`, which let a fast producer — a fast link, or a
+  nearly-full volume whose writes stall — queue the whole artifact in the Dart
+  heap: measured at 723 MB retained for the 823 MB English entry, and 187 MB with
+  the await.
+- **Resume, not restart.** A `.partial` file is preserved across every
+  interruption and continued with `Range: bytes=<n>-`; a prefix is re-read into
+  the same SHA-256 hasher, so the final comparison still covers the whole
+  artifact. Three retries with linear backoff cover a dropped connection; a
+  resumable partial is deleted only when its digest is wrong. A 874 MB model on a
+  27 Mbit/s link is a 4.5-minute download, and restarting it from zero at 99 % was
+  the normal outcome before this.
+- **Refusal beats stalling.** Before the first byte the store asks for the
+  volume's free space and refuses with `storage_full` when the artifacts plus a
+  256 MB margin do not fit. A write that still fails with `ENOSPC` maps to the
+  same typed code, and the retry budget is never spent on either.
+- **The projection is truthful before the first byte.** The install seed — the
+  resumable partials already on disk, and the total of the artifacts this run holds
+  plus the ones it still fetches — is part of `stt_status.install` from the moment
+  the install starts, so a resumed download begins its bar at the offset it already
+  reached instead of publishing a zero it has to contradict a second later.
+- **Progress is cumulative across every artifact of the model**, including the ones
+  an earlier run finished. A resumed encoder/decoder pair whose encoder is complete
+  therefore opens at the model's real share (complete + partial bytes over the
+  model's total), not at the pending file's share of the pending total; only the
+  fetch — not the bytes already held — is charged against the volume.
+- **Progress is a report, not a firehose.** One coalescing emitter serves both
+  transports: at most one tick per 250 ms and one per 1 % of the total, always the
+  first tick, every phase change, and the terminal 100 %. The ~160 000 per-chunk
+  events of one install become ~100, and the same tick carries the observed rate
+  the sheet turns into a remaining-time estimate.
 
 Pin the size and the digest from the hosting provider's own metadata — the
 Hugging Face tree API field `lfs.size`/`lfs.oid`, or the `x-linked-size` and

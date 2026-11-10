@@ -63,6 +63,9 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
     return cubit.installModel(modelId, device: widget.device);
   }
 
+  Future<void> _cancelDownload(DictationCubit cubit) =>
+      cubit.cancelInstallModel(device: widget.device);
+
   /// Installed and custom rows first, then the daemon's own order.
   ///
   /// A user opens this sheet to either use what is already on disk or add
@@ -175,11 +178,23 @@ class _DictationModelSheetState extends State<DictationModelSheet> {
                     _ModelTile(
                       option: option,
                       selected: option.id == model.selectedModelId,
-                      isDownloading: model.installingModelId == option.id,
+                      installing: model.installingModelId == option.id,
+                      // Another model's download locks every other row: the
+                      // daemon refuses a second writer, so offering the button
+                      // would only produce a refusal.
+                      installBusy: model.installingModelId != null &&
+                          model.installingModelId != option.id,
                       progress: model.installingModelId == option.id
                           ? model.downloadProgress
                           : null,
+                      eta: model.installingModelId == option.id
+                          ? model.installEta
+                          : null,
+                      phase: model.installingModelId == option.id
+                          ? model.installingPhase
+                          : null,
                       onDownload: () => _download(cubit, option.id),
+                      onCancel: () => _cancelDownload(cubit),
                       onSelect: () => cubit.selectModel(
                         option.id,
                         device: widget.device,
@@ -221,17 +236,33 @@ class _ModelTile extends StatelessWidget {
   const _ModelTile({
     required this.option,
     required this.selected,
-    required this.isDownloading,
+    required this.installing,
+    required this.installBusy,
     required this.progress,
+    required this.eta,
+    required this.phase,
     required this.onDownload,
+    required this.onCancel,
     required this.onSelect,
   });
 
   final DictationModelOption option;
   final bool selected;
-  final bool isDownloading;
+
+  /// This row's own install is running.
+  final bool installing;
+
+  /// Another row's install is running, so this one cannot start.
+  final bool installBusy;
   final double? progress;
+
+  /// Remaining time from the daemon's observed rate.
+  final Duration? eta;
+
+  /// `downloading`, `verifying`, or `activating`.
+  final String? phase;
   final VoidCallback onDownload;
+  final VoidCallback onCancel;
   final VoidCallback onSelect;
 
   @override
@@ -244,7 +275,7 @@ class _ModelTile extends StatelessWidget {
     final badge = dictationModelBadge(l10n, option.badge);
 
     Widget? action;
-    if (isDownloading) {
+    if (installing) {
       action = Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -272,7 +303,9 @@ class _ModelTile extends StatelessWidget {
     } else if (!option.installed && option.hosted) {
       action = FilledButton(
         key: Key('dictation_download_${option.id}'),
-        onPressed: onDownload,
+        // The daemon installs one model at a time, so a second row's button is
+        // disabled rather than answered with a refusal.
+        onPressed: installBusy ? null : onDownload,
         child: Text(l10n.dictationDownload),
       );
     } else if (!option.installed) {
@@ -387,19 +420,69 @@ class _ModelTile extends StatelessWidget {
               if (action != null) action,
             ],
           ),
-          if (isDownloading && progress != null) ...[
+          if (installing) ...[
             const SizedBox(height: 6),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(4),
-              child: LinearProgressIndicator(
-                key: const Key('dictation_download_progress'),
-                value: progress,
-                minHeight: 4,
+            // Real progress only: an indeterminate line under a row that knows
+            // its percentage reads as decoration, not as state.
+            if (progress != null)
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  key: const Key('dictation_download_progress'),
+                  value: progress,
+                  minHeight: 4,
+                ),
               ),
+            Row(
+              children: [
+                Expanded(child: _installCaption(l10n, theme, size)),
+                TextButton(
+                  key: Key('dictation_cancel_download_${option.id}'),
+                  onPressed: onCancel,
+                  child: Text(l10n.dictationCancelDownload),
+                ),
+              ],
             ),
           ],
         ],
       ),
+    );
+  }
+
+  /// What the running install is doing, and how long it may still take.
+  ///
+  /// The size stays visible while it downloads: it is the fact that makes a
+  /// multi-minute wait on a slow link legible.
+  Widget _installCaption(
+    AppLocalizations l10n,
+    ThemeData theme,
+    String? size,
+  ) {
+    final style = theme.textTheme.labelSmall?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+    final phaseLabel = switch (phase) {
+      'verifying' => l10n.dictationDownloadVerifying,
+      'activating' => l10n.dictationDownloadFinishing,
+      _ => null,
+    };
+    final etaLabel = switch (eta) {
+      final Duration remaining? when remaining.inMinutes >= 1 =>
+        l10n.dictationDownloadEtaMinutes('${remaining.inMinutes}'),
+      final Duration remaining? =>
+        l10n.dictationDownloadEtaSeconds('${remaining.inSeconds}'),
+      _ => null,
+    };
+    final detail = phaseLabel ?? etaLabel;
+    final parts = <String>[
+      if (size != null) size,
+      if (detail != null) detail,
+    ];
+    if (parts.isEmpty) return const SizedBox.shrink();
+    return Text(
+      parts.join(' · '),
+      key: Key('dictation_download_eta_${option.id}'),
+      style: style,
     );
   }
 

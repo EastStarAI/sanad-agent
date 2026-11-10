@@ -65,6 +65,7 @@ class SocketConnectionController {
   Future<void>? _connectFuture;
   Completer<void>? _readyCompleter;
   String? _lastIncomingEventName;
+  String? _lastOutgoingEventName;
 
   RelayEventHandler? onRelayEvent;
   CloudEventHandler? onCloudEvent;
@@ -189,6 +190,7 @@ class SocketConnectionController {
 
   Future<void> _connectInternal() async {
     _lastIncomingEventName = null;
+    _lastOutgoingEventName = null;
     if (!isLocalTransport && _authToken == null) {
       _logger.warning('[${hashCode}]: ⚠️ No auth token provided. Waiting...');
       _setLifecycleState(SocketLifecycleState.disconnected);
@@ -629,6 +631,29 @@ class SocketConnectionController {
     _logOutgoingSocketEvent(event, data);
   }
 
+  void debugLogOutgoingSocketEvent(String event, dynamic data) {
+    _logOutgoingSocketEvent(event, data);
+  }
+
+  /// Events that may arrive hundreds of times per second.
+  ///
+  /// A streamed answer is deltas; a dictation install is progress. Logging every
+  /// one of them produced 150-250 INFO lines/s during a model download, which
+  /// buries every other line and violates the project's clean-logging law, so
+  /// these log the first of each run instead of each event.
+  static const Set<String> _rateLimitedEventNames = {
+    'thought_stream',
+    'reasoning_stream',
+    'dictation_event',
+  };
+
+  /// Outgoing events that repeat for the whole length of one action.
+  ///
+  /// `dictation_audio` is one frame per ~100 ms of speech (49 lines for a 4.9 s
+  /// utterance), which is the same defect as a per-chunk progress event: it
+  /// buries every other line. The first frame of a run logs, the rest do not.
+  static const Set<String> _rateLimitedOutgoingEventNames = {'dictation_audio'};
+
   void _logIncomingSocketEvent(String event, dynamic data) {
     if (!kDebugMode) return;
 
@@ -642,7 +667,7 @@ class SocketConnectionController {
         currentEventName = eventName.toString();
       }
 
-      if (currentEventName == 'thought_stream' || currentEventName == 'reasoning_stream') {
+      if (_rateLimitedEventNames.contains(currentEventName)) {
         if (_lastIncomingEventName == currentEventName) {
           return;
         }
@@ -661,11 +686,18 @@ class SocketConnectionController {
 
     try {
       String logMessage = '⬆️ event "\x1B[32m$event\x1B[0m"';
+      String currentEventName = event;
 
       if (event == 'device_command' && data is Map<String, dynamic>) {
         final command = data['command'] ?? 'unknown';
         logMessage = '⬆️ [command \x1B[32m$command\x1B[0m] >';
+        currentEventName = command.toString();
       }
+
+      if (_rateLimitedOutgoingEventNames.contains(currentEventName)) {
+        if (_lastOutgoingEventName == currentEventName) return;
+      }
+      _lastOutgoingEventName = currentEventName;
 
       final debugData = _formatDebugData(_boundedSocketLogData(event, data));
       _logger.info('$logMessage: $debugData');

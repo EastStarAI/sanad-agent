@@ -1,0 +1,463 @@
+// Resume, retry, and the low-disk guard for dictation model downloads.
+//
+// A 874 MB model on the owner's 27 Mbit/s link is a 4.5-minute download, and the
+// shipped code deleted the partial before every attempt: one dropped connection
+// at 99 % restarted from zero. These tests pin the replacement contract —
+// `Range` resume that keeps the bytes, bounded retry, and a refusal before the
+// first byte when the volume cannot hold the artifact.
+
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
+import 'package:crypto/crypto.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_model_store.dart';
+import 'package:sanad_agent/infrastructure/stt/stt_types.dart';
+import 'package:test/test.dart';
+
+/// Loopback server that honours `Range`, and can cut the first body short.
+class _RangeServer {
+  _RangeServer(this.bytes);
+
+  final Uint8List bytes;
+
+  /// Bodies by request path, so a multi-artifact model can be served. A path
+  /// that is not listed falls back to [bytes].
+  final Map<String, Uint8List> extra = <String, Uint8List>{};
+  final List<String?> ranges = <String?>[];
+  int requests = 0;
+
+  /// Abort the first response after half of the requested slice.
+  bool dropFirstBody = false;
+
+  /// Paces a body in [chunkBytes] pieces: loopback otherwise buffers an entire
+  /// small artifact and delivers it in one or two reads, which makes a
+  /// mid-transfer cancel a coin toss.
+  int chunkBytes = 0;
+  Duration chunkPause = Duration.zero;
+
+  late HttpServer server;
+
+  Future<void> start() async {
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      requests++;
+      final body = extra[request.uri.path] ?? bytes;
+      final range = request.headers.value(HttpHeaders.rangeHeader);
+      ranges.add(range);
+      var start = 0;
+      if (range != null) {
+        final match = RegExp(r'bytes=(\d+)-').firstMatch(range);
+        expect(match, isNotNull, reason: 'unexpected range header: $range');
+        start = int.parse(match!.group(1)!);
+      }
+      final slice = body.sublist(start);
+      final response = request.response;
+      response.statusCode = start > 0
+          ? HttpStatus.partialContent
+          : HttpStatus.ok;
+      if (start > 0) {
+        response.headers.set(
+          HttpHeaders.contentRangeHeader,
+          'bytes $start-${body.length - 1}/${body.length}',
+        );
+      }
+      response.contentLength = slice.length;
+      if (!(dropFirstBody && requests == 1)) {
+        if (chunkBytes <= 0) {
+          response.add(slice);
+        } else {
+          for (var offset = 0; offset < slice.length; offset += chunkBytes) {
+            final end = offset + chunkBytes < slice.length
+                ? offset + chunkBytes
+                : slice.length;
+            response.add(slice.sublist(offset, end));
+            await response.flush();
+            if (chunkPause > Duration.zero) {
+              await Future<void>.delayed(chunkPause);
+            }
+          }
+        }
+        await response.close();
+        return;
+      }
+      // Deliver a third and kill the connection: the client has to keep those
+      // bytes and ask for the rest. The socket is detached before anything is
+      // written, because a response that already flushed its headers cannot be
+      // detached.
+      final socket = await response.detachSocket(writeHeaders: false);
+      final status = start > 0 ? '206 Partial Content' : '200 OK';
+      final contentRange = start > 0
+          ? 'Content-Range: bytes $start-${body.length - 1}/${body.length}\r\n'
+          : '';
+      socket.add(
+        utf8.encode(
+          'HTTP/1.1 $status\r\n$contentRange'
+          'Content-Length: ${slice.length}\r\n\r\n',
+        ),
+      );
+      socket.add(slice.sublist(0, slice.length ~/ 3));
+      await socket.flush();
+      socket.destroy();
+    });
+  }
+
+  Future<void> stop() => server.close(force: true);
+}
+
+void main() {
+  late Directory home;
+  late Uint8List payload;
+  late String digest;
+  late _RangeServer source;
+
+  setUp(() {
+    home = Directory.systemTemp.createTempSync('stt-resume-');
+    // Small but multi-chunk, so the cut lands inside the body.
+    payload = Uint8List.fromList(
+      List<int>.generate(256 * 1024, (index) => (index * 7) & 0xff),
+    );
+    digest = sha256.convert(payload).toString();
+    source = _RangeServer(payload);
+  });
+
+  tearDown(() async {
+    await source.stop();
+    if (home.existsSync()) home.deleteSync(recursive: true);
+  });
+
+  SttCatalogEntry entryFor(String id, {String? url}) => SttCatalogEntry(
+    id: id,
+    name: 'Resume probe',
+    description: const {'en': 'Resume probe.'},
+    mode: SttModelMode.batchVad,
+    engine: SttEngineKind.whisperCpp,
+    files: [
+      SttModelFile(
+        name: 'probe.bin',
+        url: url ?? 'http://${source.server.address.address}:${source.server.port}/m.bin',
+        sizeBytes: payload.length,
+        sha256: digest,
+      ),
+    ],
+  );
+
+  /// Two artifacts served by [source], the shape of a whisper encoder/decoder
+  /// pair — where the encoder is often already complete on a resume.
+  SttCatalogEntry multiFileEntry(
+    String id,
+    Uint8List encoder,
+    Uint8List decoder,
+  ) {
+    final base = 'http://${source.server.address.address}:${source.server.port}';
+    return SttCatalogEntry(
+      id: id,
+      name: 'Resume probe',
+      description: const {'en': 'Resume probe.'},
+      mode: SttModelMode.batchVad,
+      engine: SttEngineKind.whisperCpp,
+      files: [
+        SttModelFile(
+          name: 'encoder.bin',
+          url: '$base/encoder.bin',
+          sizeBytes: encoder.length,
+          sha256: sha256.convert(encoder).toString(),
+        ),
+        SttModelFile(
+          name: 'decoder.bin',
+          url: '$base/decoder.bin',
+          sizeBytes: decoder.length,
+          sha256: sha256.convert(decoder).toString(),
+        ),
+      ],
+    );
+  }
+
+  test('a resumed multi-file install opens at its cumulative progress',
+      () async {
+    // D10: the seed and the tick offset counted only the pending artifacts, so a
+    // resumed encoder/decoder model opened at the pending file's share of the
+    // pending total — 24 % on disk shown as 7 % — and the bar stepped backwards
+    // on its own resume. Progress is cumulative across every artifact.
+    final encoder = payload;
+    final decoder = Uint8List.fromList(
+      List<int>.generate(192 * 1024, (index) => (index * 11) & 0xff),
+    );
+    source.extra['/encoder.bin'] = encoder;
+    source.extra['/decoder.bin'] = decoder;
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = multiFileEntry('multi-probe', encoder, decoder);
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    // The previous run finished the encoder and stopped a third into the decoder.
+    File('${dir.path}/encoder.bin').writeAsBytesSync(encoder);
+    final kept = decoder.length ~/ 3;
+    File(
+      '${dir.path}/decoder.bin.partial',
+    ).writeAsBytesSync(decoder.sublist(0, kept));
+
+    final seed = store.installSeed(entry)!;
+
+    expect(seed.received, encoder.length + kept);
+    expect(seed.total, encoder.length + decoder.length);
+
+    final ticks = <(int, int)>[];
+    await store.install(
+      entry,
+      onProgress: (id, received, total) => ticks.add((received, total)),
+    );
+
+    expect(ticks, isNotEmpty);
+    expect(
+      ticks.first.$1,
+      seed.received,
+      reason: 'the first tick must not step back from the projection',
+    );
+    expect(ticks.first.$2, seed.total);
+    for (var index = 1; index < ticks.length; index++) {
+      expect(
+        ticks[index].$1,
+        greaterThanOrEqualTo(ticks[index - 1].$1),
+        reason: 'progress never steps backwards within a model',
+      );
+      expect(ticks[index].$2, seed.total, reason: 'the total is the model, not the fetch');
+    }
+    expect(ticks.last.$1, seed.total);
+    expect(
+      File('${dir.path}/encoder.bin').lengthSync(),
+      encoder.length,
+      reason: 'a complete artifact is not fetched again',
+    );
+    expect(source.requests, 1, reason: 'only the partial artifact is requested');
+  });
+
+  test('the free-space guard charges only what this run writes', () async {
+    // The complete artifact counts toward progress but must not inflate the
+    // volume requirement: asking for the whole model would refuse a resume the
+    // disk can clearly hold.
+    final encoder = payload;
+    final decoder = Uint8List.fromList(
+      List<int>.generate(64 * 1024, (index) => (index * 13) & 0xff),
+    );
+    source.extra['/encoder.bin'] = encoder;
+    source.extra['/decoder.bin'] = decoder;
+    await source.start();
+    final store = SttModelStore(
+      sanadHome: home.path,
+      freeSpaceProbe: (path) async => 0,
+    );
+    final entry = multiFileEntry('space-probe', encoder, decoder);
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    File('${dir.path}/encoder.bin').writeAsBytesSync(encoder);
+
+    // Zero free bytes refuse the *fetch*, and the error names its size — the
+    // marker of what was charged, since the whole model would be larger.
+    await expectLater(
+      store.install(entry),
+      throwsA(
+        isA<SttException>()
+            .having((error) => error.code, 'code', 'storage_full')
+            .having(
+              (error) => error.message,
+              'message',
+              contains('${decoder.length} bytes'),
+            ),
+      ),
+    );
+  });
+
+  test('an interrupted download resumes from the bytes it kept', () async {
+    source.dropFirstBody = true;
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('resume-probe');
+
+    await store.install(entry);
+
+    expect(source.requests, greaterThanOrEqualTo(2));
+    // The first request had nothing to resume; the second must address the bytes
+    // already on disk instead of starting over.
+    expect(source.ranges.first, isNull);
+    final resumed = source.ranges
+        .skip(1)
+        .whereType<String>()
+        .where((value) => value != 'bytes=0-')
+        .toList();
+    expect(
+      resumed,
+      isNotEmpty,
+      reason: 'the retry must send a Range header; saw ${source.ranges}',
+    );
+    expect(resumed.first, matches(RegExp(r'^bytes=\d+-$')));
+
+    final installed = File('${store.modelDir(entry.id)}/probe.bin');
+    expect(installed.existsSync(), isTrue);
+    expect(installed.lengthSync(), payload.length);
+    expect(sha256.convert(installed.readAsBytesSync()).toString(), digest);
+    expect(store.statusOf(entry).installed, isTrue);
+  });
+
+  test('the install seed states what a resumed download already has', () async {
+    await source.start();
+    // D4: the projection published at install start is built before the first
+    // HTTP response, so it must state the partial's bytes — a zero there is a
+    // resumed bar restarting at 0 % for a file the daemon already holds.
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('seed-probe', url: 'https://example.invalid/x.bin');
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    final kept = payload.length ~/ 3;
+    File('${dir.path}/probe.bin.partial').writeAsBytesSync(
+      payload.sublist(0, kept),
+    );
+
+    final seed = store.installSeed(entry);
+
+    expect(seed?.received, kept);
+    expect(seed?.total, payload.length);
+    // Reading the seed must not touch the bytes it reports.
+    expect(File('${dir.path}/probe.bin.partial').lengthSync(), kept);
+  });
+
+  test('the install seed ignores a complete artifact', () async {
+    await source.start();
+    // A file already at its pinned size is not downloaded again, so it is not
+    // part of the total either: the seed describes this run, not the catalog.
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('done-probe', url: 'https://example.invalid/x.bin');
+    final dir = Directory(store.modelDir(entry.id))..createSync(recursive: true);
+    File('${dir.path}/probe.bin').writeAsBytesSync(payload);
+
+    final seed = store.installSeed(entry);
+
+    expect(seed?.received, 0);
+    expect(seed?.total, 0);
+  });
+
+  test('a cancelled download keeps its resumable partial', () async {
+    // A few MB so the cancel lands mid-transfer rather than after the last
+    // chunk of a loopback-fast artifact.
+    payload = Uint8List.fromList(
+      List<int>.generate(4 * 1024 * 1024, (index) => (index * 7) & 0xff),
+    );
+    digest = sha256.convert(payload).toString();
+    source = _RangeServer(payload)
+      ..chunkBytes = 64 * 1024
+      ..chunkPause = const Duration(milliseconds: 2);
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('cancel-probe');
+    var received = 0;
+
+    await expectLater(
+      store.install(
+        entry,
+        onProgress: (_, bytes, _) {
+          received = bytes;
+        },
+        // Cancel once half the artifact is on disk: loopback delivers large
+        // chunks, so counting chunks is not a reliable mid-transfer point.
+        isCancelled: () => received > payload.length ~/ 2,
+      ),
+      throwsA(
+        isA<SttException>().having((error) => error.code, 'code', 'cancelled'),
+      ),
+    );
+
+    final partial = File('${store.modelDir(entry.id)}/probe.bin.partial');
+    expect(
+      partial.existsSync(),
+      isTrue,
+      reason: 'a cancel is not a corruption: the bytes stay for the next press',
+    );
+    expect(partial.lengthSync(), greaterThan(0));
+    expect(store.statusOf(entry).installed, isFalse);
+  });
+
+  test('a volume that cannot hold the artifact refuses before writing', () async {
+    await source.start();
+    final store = SttModelStore(
+      sanadHome: home.path,
+      // 1 MB free against a margin of 256 MB: the refusal must not wait for a
+      // write to fail.
+      freeSpaceProbe: (_) async => 1024 * 1024,
+    );
+    final entry = entryFor('storage-probe');
+
+    await expectLater(
+      store.install(entry),
+      throwsA(
+        isA<SttException>().having((error) => error.code, 'code', 'storage_full'),
+      ),
+    );
+    expect(source.requests, 0, reason: 'nothing may be requested');
+    expect(File('${store.modelDir(entry.id)}/probe.bin.partial').existsSync(), isFalse);
+  });
+
+  test('an unknown free space never refuses an install', () async {
+    await source.start();
+    final store = SttModelStore(
+      sanadHome: home.path,
+      freeSpaceProbe: (_) async => null,
+    );
+    final entry = entryFor('unknown-space-probe');
+
+    await store.install(entry);
+    expect(store.statusOf(entry).installed, isTrue);
+  });
+
+  test('an artifact already on disk is not downloaded again', () async {
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = entryFor('complete-probe');
+    await store.install(entry);
+    final afterFirst = source.requests;
+
+    await store.install(entry);
+
+    expect(
+      source.requests,
+      afterFirst,
+      reason: 'a second install must not re-download a complete artifact',
+    );
+    expect(store.statusOf(entry).installed, isTrue);
+  });
+
+  test('a digest mismatch discards the bytes it cannot trust', () async {
+    await source.start();
+    final store = SttModelStore(sanadHome: home.path);
+    final entry = SttCatalogEntry(
+      id: 'digest-probe',
+      name: 'Digest probe',
+      description: const {'en': 'Digest probe.'},
+      mode: SttModelMode.batchVad,
+      engine: SttEngineKind.whisperCpp,
+      files: [
+        SttModelFile(
+          name: 'probe.bin',
+          url: entryFor('unused').files.first.url,
+          sizeBytes: payload.length,
+          sha256: '0' * 64,
+        ),
+      ],
+    );
+
+    await expectLater(
+      store.install(entry),
+      throwsA(
+        isA<SttException>().having(
+          (error) => error.code,
+          'code',
+          'checksum_mismatch',
+        ),
+      ),
+    );
+    expect(
+      File('${store.modelDir(entry.id)}/probe.bin.partial').existsSync(),
+      isFalse,
+      reason: 'bytes that hash wrong can never resume into a valid file',
+    );
+    // Bounded retry: a checksum failure is not transient, so it is not repeated.
+    expect(source.requests, 1);
+  });
+}
