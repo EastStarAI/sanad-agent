@@ -212,10 +212,12 @@ Producer order is an obligation, not a convenience:
 - Exactly one route is opened per session, and the opening call is idempotent, so
   a repeated `start` cannot emit a second `dictation_start` for one
   `dictation_id`.
-- A claim whose route is refused still names a live session, but the command path cannot end it: a `dictation` command `op: cancel` is rejected by the daemon relay with `invalid_request`, by design. Teardown therefore travels on the ordered control — `dictation_end{reason: cancelled}` — when the route is still healthy, and nowhere at all when the route has already failed (it admits nothing; the daemon's first-audio watchdog releases the engine and the Gateway retires the route). A producer that simply stops talking keeps the Gateway's route occupied until its idle TTL, and every press on every client is answered `busy` in the meantime.
-- Frames and the ordered `dictation_end` are refused from the moment a route
-  fails, so a failed route is not a reusable transport: a new session
-  (`dictation_id` is a fresh UUID) is the only way back.
+- A claim whose route is refused still names a live session, but the command path cannot end it: a `dictation` command `op: cancel` is rejected by the daemon relay with `invalid_request`, by design. Teardown therefore travels on the ordered control — `dictation_end{reason: cancelled}` — **whenever a route was opened and the socket is connected, including after that route failed**. A failed route admits nothing further, but the Gateway's route can still be live, and only this packet (a Gateway terminal error, or a disconnect) retires it: the daemon's first-audio watchdog releases the engine in 15 s while a never-started route lives for its own TTL, so skipping the end on failure left the device answered `busy` for a minute after one refused press. The packet is inert when the route is already gone, and a producer sends at most one `dictation_end` per session.
+- Frames and command-path writes are refused from the moment a route fails, so a
+  failed route is not a reusable transport: a new session (`dictation_id` is a
+  fresh UUID) is the only way back. The one packet a failed route still emits is
+  the teardown's `dictation_end` (see above), because it is what tells the
+  Gateway the route is over.
 
 ### 5.1 Origin claim
 
@@ -411,7 +413,9 @@ Two tests hold this shape from both ends, against one shared field table
 ```
 
 `dictation_end` is the hosted carrier for the daemon's `stop` and `cancel`
-commands. It is admitted only when the caller's claim of §5.1 is present and
+commands, and for teardown. A Client sends it once when the session ends —
+explicitly (`stopped`/`cancelled`) or because the transport is being closed after
+a failed route — and never twice for one `dictation_id`. It is admitted only when the caller's claim of §5.1 is present and
 owned; a foreign or missing claim is rejected with `forbidden` and nothing is
 forwarded.
 

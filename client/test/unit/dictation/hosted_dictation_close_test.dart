@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:logging/logging.dart';
 import 'package:sanad_client/features/dictation/domain/hosted_dictation_transport.dart';
 
 import '../../helpers/fake_socket.dart';
@@ -17,9 +18,11 @@ import '../../helpers/fake_socket.dart';
 /// refused `busy` for **5 m 35 s** after one aborted press
 /// (`live-4/RESULT.md`, 05:46:54 → 05:53:26).
 ///
-/// A route that already failed is the opposite case: it admits nothing, so the
-/// teardown sends **nothing** and the Agent's `firstAudioTimeout` watchdog is the
-/// backstop that releases the engine.
+/// A route that already failed is **not** the opposite case. It admits nothing
+/// further, but the Gateway's own route may still be live, and only this packet
+/// (or a Gateway error, or a disconnect) retires it. Skipping the end on failure
+/// therefore held the device for a minute after one refused press
+/// (`dictation-download-live-20261110/RESULT.md`, D3).
 void main() {
   late FakeSanadSocketService socket;
 
@@ -122,22 +125,95 @@ void main() {
     expect(commandCancels(), isEmpty);
   });
 
-  test('a failed route sends nothing on the way out', () async {
+  test('a failed route still ends its Gateway route, exactly once', () async {
     final transport = openTransport();
     transport.sendCommand('start');
 
     await failRoute('forbidden');
 
-    // The route admits nothing, so there is no carrier left: the Agent's
-    // first-audio watchdog releases the engine, and the Gateway retires the
-    // route on its own.
+    // Nothing is written while the route is failed: no frame, no command.
+    expect(ends(), isEmpty);
+    transport.sendAudio(const [1, 2, 3]);
+    transport.sendCommand('stop');
     expect(ends(), isEmpty);
     expect(commandCancels(), isEmpty);
 
     await transport.close();
 
-    expect(ends(), isEmpty);
+    // The Gateway may still hold this route — only the ordered end retires it —
+    // so the teardown sends it even though the local route already failed.
+    expect(ends(), hasLength(1));
+    expect(ends().single['reason'], 'cancelled');
     expect(commandCancels(), isEmpty);
+
+    // Closing again is never a second end.
+    await transport.close();
+    expect(ends(), hasLength(1));
+  });
+
+  test('a local byte cap is diagnosed with its reason and counters', () async {
+    final records = <String>[];
+    final subscription = Logger('HostedDictationTransport').onRecord.listen(
+      (record) => records.add(record.message),
+    );
+    addTearDown(subscription.cancel);
+
+    // A 1 KiB cap makes the first frame trip it: the point is the diagnostic,
+    // not the size.
+    final transport = HostedDictationTransport.connect(
+      socket: socket,
+      deviceId: 'account-device-9',
+      dictationId: 'dict-1',
+      maxFrameBytes: 8192,
+      maxSessionBytes: 1024,
+    );
+    transport.sendCommand('start');
+    transport.sendAudio(List<int>.filled(2048, 0));
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    // One line, and it says which bound fired: `session_limit` alone covered a
+    // client byte cap, a client duration cap, and a Gateway size refusal.
+    expect(records, hasLength(1));
+    expect(records.single, contains('code=session_limit'));
+    expect(records.single, contains('reason=bytes'));
+    expect(records.single, contains('sent=0'));
+    expect(records.single, contains('cap=1024'));
+    expect(records.single, isNot(contains('gateway=')));
+
+    await transport.close();
+    // The failure is terminal for the transport but not for the route.
+    expect(ends(), hasLength(1));
+  });
+
+  test('a local duration cap reports the duration bound, not the byte one',
+      () async {
+    final records = <String>[];
+    final subscription = Logger('HostedDictationTransport').onRecord.listen(
+      (record) => records.add(record.message),
+    );
+    addTearDown(subscription.cancel);
+
+    var now = DateTime(2026, 11, 10, 12);
+    final transport = HostedDictationTransport.connect(
+      socket: socket,
+      deviceId: 'account-device-9',
+      dictationId: 'dict-1',
+      maxFrameBytes: 8192,
+      maxSessionSeconds: 30,
+      clock: () => now,
+    );
+    transport.sendCommand('start');
+    now = now.add(const Duration(seconds: 31));
+    transport.sendAudio(const [1, 2, 3]);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    expect(records, hasLength(1));
+    expect(records.single, contains('code=session_limit'));
+    expect(records.single, contains('reason=duration'));
+    expect(records.single, contains('sent=0'));
+    expect(records.single, contains('cap=30'));
+
+    await transport.close();
   });
 
   test('a transport that never opened a route sends nothing', () async {
