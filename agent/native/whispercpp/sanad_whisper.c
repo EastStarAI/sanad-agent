@@ -44,9 +44,9 @@ SANAD_WHISPER_EXPORT void* sanad_whisper_load(const char* path_model, int use_gp
   struct whisper_context_params cparams = whisper_context_default_params();
   cparams.use_gpu = use_gpu != 0;
   cparams.flash_attn = use_gpu != 0;
-  struct whisper_context* ctx = whisper_init_from_file_with_params(path_model, cparams);
+  struct whisper_context* ctx = whisper_init_from_file_with_params_no_state(path_model, cparams);
   if (ctx == NULL && err != NULL && err_cap > 0) {
-    snprintf(err, (size_t)err_cap, "whisper_init_from_file_with_params failed");
+    snprintf(err, (size_t)err_cap, "whisper_init_from_file_with_params_no_state failed");
   }
   return ctx;
 }
@@ -113,12 +113,22 @@ SANAD_WHISPER_EXPORT int sanad_whisper_run(void* handle,
   // never changed a measured transcript; at temperature 0 it is unused.
   params.greedy.best_of = 1;
 
-  if (whisper_full(ctx, params, samples, n_samples) != 0) return -1;
+  // Model weights stay warm in `ctx`, but decode state never crosses a call.
+  // whisper.cpp v1.9.5 lays flash-attention K/V buffers out from audio_ctx and
+  // does not mask every padded position, so reusing a state after the window
+  // shrinks can expose bytes written by the preceding larger decode.
+  struct whisper_state* state = whisper_init_state(ctx);
+  if (state == NULL) return -1;
 
-  const int n_segments = whisper_full_n_segments(ctx);
+  int result = -1;
+  if (whisper_full_with_state(ctx, state, params, samples, n_samples) != 0) {
+    goto cleanup;
+  }
+
+  const int n_segments = whisper_full_n_segments_from_state(state);
   int written = 0;
   for (int i = 0; i < n_segments; i++) {
-    const char* text = whisper_full_get_segment_text(ctx, i);
+    const char* text = whisper_full_get_segment_text_from_state(state, i);
     if (text == NULL) continue;
     // Skip whisper's non-speech markers so the daemon never inserts them.
     if (strstr(text, "[BLANK_AUDIO]") != NULL) continue;
@@ -133,7 +143,11 @@ SANAD_WHISPER_EXPORT int sanad_whisper_run(void* handle,
 
   if (audio_ms != NULL) *audio_ms = (int)((int64_t)n_samples * 1000 / 16000);
   if (decode_ms != NULL) *decode_ms = 0;
-  return written;
+  result = written;
+
+cleanup:
+  whisper_free_state(state);
+  return result;
 }
 
 // Reports the ggml backend actually in use ("CPU" for the CPU-only build).

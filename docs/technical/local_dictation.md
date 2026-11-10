@@ -123,6 +123,30 @@ which is pure and unit-tested (`agent/test/stt/stt_decode_params_test.dart`), an
 applied by the shim in `agent/native/whispercpp/sanad_whisper.c`. `audio_ctx = 0`
 stays callable and means whisper's own window.
 
+#### Decode-state isolation
+
+The warm model context retains weights only. Every `sanad_whisper_run` allocates
+a fresh `whisper_state`, calls `whisper_full_with_state`, reads results through
+the `_from_state` accessors, and frees the state before returning — on success
+and failure. No encoder, decoder, mel, prompt, or graph state crosses a decode.
+The exported C ABI and Dart bindings do not change.
+
+This is a correctness boundary for the pinned whisper.cpp v1.9.5. Its flash
+attention views padded encoder and cross-attention K/V regions without masking
+every padded position. A reused state therefore made a 448-frame decode after a
+544- or 1500-frame decode read bytes from the preceding larger layout; the q8
+fixture returned a deterministic corrupted tail until the model was reloaded.
+`no_context = true` clears prompt text only and cannot reset those native
+buffers. Keeping the weights in a no-state context and making the state
+per-decode preserves warm-model residency while removing the carry-over.
+
+The Mac merge gate compared untouched first calls with the fresh-state build's
+10-call warm mean: 448 was 372 ms before and 285.3 ms after; 544 was 394 ms
+before and 393.1 ms after. Like-for-like first-call peak RSS was 1266.8 → 1280.2
+MiB for 448 (+1.1 %) and 1285.1 → 1285.0 MiB for 544; the repeated-run peak was
+1293.2 MiB. State construction is inside those figures and caused no decode
+regression or material residency change.
+
 #### The repetition guard
 
 No fixed window is provably safe — one window value (512 frames) still looped on
