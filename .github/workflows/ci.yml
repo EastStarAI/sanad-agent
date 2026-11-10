@@ -256,7 +256,7 @@ jobs:
           }
           # B. Proof from the merged pull request's own run.
           prove_from_merged_pull_request() {
-            local pr_json count head_sha head_tree tree parent status runs_json run_id
+            local pr_json count head_sha pr_number head_ref head_prs head_tree tree parent status runs_json run_id
             if ! pr_json="$(gh api \
               "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
               2>"$RUNNER_TEMP/pr.err")"; then
@@ -270,8 +270,27 @@ jobs:
               return 1
             fi
             head_sha="$(jq -r '(.[0].head.sha // empty)' <<< "$pr_json")"
-            if [[ -z "$head_sha" ]] || [[ "$(jq -r '(.[0].merged_at // empty)' <<< "$pr_json")" == "" ]]; then
-              echo "$GITHUB_SHA was not produced by a merged pull request." >&2
+            pr_number="$(jq -r '(.[0].number // empty)' <<< "$pr_json")"
+            head_ref="$(jq -r '(.[0].head.ref // empty)' <<< "$pr_json")"
+            if [[ -z "$head_sha" || -z "$pr_number" || -z "$head_ref" ]] ||
+              [[ "$(jq -r '(.[0].merged_at // empty)' <<< "$pr_json")" == "" ]] ||
+              [[ "$(jq -r '(.[0].base.ref // empty)' <<< "$pr_json")" != main ]]; then
+              echo "$GITHUB_SHA was not produced by a pull request merged into main." >&2
+              return 1
+            fi
+            # A `pull_request` run is keyed by head SHA only, so it is attributable
+            # to this pull request only when no other pull request (open, closed,
+            # or merged, to any base) has the same head: a second one targeting
+            # another base would have a run that tested a different merge.
+            if ! head_prs="$(gh api \
+              "repos/$GITHUB_REPOSITORY/commits/$head_sha/pulls" \
+              --jq "[.[] | select(.head.sha == \"$head_sha\")] | map(\"\(.number) \(.base.ref)\") | join(\",\")" \
+              2>"$RUNNER_TEMP/head-prs.err")"; then
+              cat "$RUNNER_TEMP/head-prs.err" >&2 || true
+              return 1
+            fi
+            if [[ "$head_prs" != "$pr_number main" ]]; then
+              echo "Head $head_sha belongs to pull requests [${head_prs}], not only #$pr_number into main; not reusing a pull-request proof." >&2
               return 1
             fi
             # Same tree is the proof: a squash merge lands the head's content.
@@ -309,8 +328,9 @@ jobs:
               cat "$RUNNER_TEMP/pr-runs.err" >&2 || true
               return 1
             fi
-            run_id="$(jq -r --arg sha "$head_sha" '
-              [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+            run_id="$(jq -r --arg sha "$head_sha" --arg ref "$head_ref" '
+              [.workflow_runs[] | select(.head_sha == $sha and .head_branch == $ref
+                and .event == "pull_request" and .conclusion == "success")]
               | sort_by(.run_started_at) | reverse | (.[0].id // empty)' <<< "$runs_json")"
             if [[ -z "$run_id" ]]; then
               echo "No successful pull-request run for $head_sha." >&2

@@ -151,10 +151,17 @@ with `event=merge_group` and `head_sha` equal to this commit, and keep the most
 recent one whose conclusion is `success`.
 
 **Proof B — the merged pull request's own run.** Accept only when *all* of these
-hold: the commit resolves to exactly one **merged** pull request; that pull
-request's head tree is byte-identical to this commit's tree; the head contains
+hold: the commit resolves to exactly one pull request **merged into `main`**; that
+pull request is the only one the API associates with its head SHA (a second pull
+request with the same head, for example one targeting another base branch, would
+own a run that tested a different merge, and a run is keyed by head SHA only); that
+pull request's head tree is byte-identical to this commit's tree; the head contains
 this commit's parent, so the run was made against the same `main` as well as the
-same content; and there is a successful `pull_request` run for that head.
+same content; and there is a successful run with event `pull_request`, that head
+SHA, and that head branch. Zero or several candidate pull requests mean no proof.
+The commit-to-pull-request endpoint lists open and merged pull requests for a
+commit outside the default branch; a closed, unmerged duplicate is the residual
+case it may omit.
 
 Proof B exists because the merge queue is a repository setting rather than a
 property of this workflow: if the queue is replaced by "require branches to be up
