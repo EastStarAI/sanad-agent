@@ -21,9 +21,14 @@
 ///   mistaken for a frozen one;
 /// * **the first tick, every phase change, and the terminal 100 % tick are
 ///   always emitted**, so the bar appears immediately and can never stall short
-///   of the end;
+///   of the end — but a phase change that arrives before any byte is known rides
+///   the first real tick instead of publishing a zero the resumed install would
+///   have to contradict;
 /// * **listeners are bounded by channels** — a channel attaches at most one
-///   observer, and a join replaces it instead of accumulating.
+///   observer, and a join replaces it instead of accumulating;
+/// * **the terminal truth is published after the install stops being truth** —
+///   [onSettled] runs once `state` is null, so the last `stt_status` of an
+///   install is the one that says nothing is in flight.
 library;
 
 import 'dart:async';
@@ -152,6 +157,7 @@ class SttInstallControl {
     DateTime Function()? clock,
     this.interval = kSttInstallProgressInterval,
     this.step = kSttInstallProgressStep,
+    this.onSettled,
   }) : _runner = runner,
        _clock = clock ?? DateTime.now;
 
@@ -170,6 +176,22 @@ class SttInstallControl {
   bool get isRunning => _active != null;
 
   String? get modelId => _active?.modelId;
+
+  /// Called once per install **after** [state] stops describing it.
+  ///
+  /// It is the only correct moment to publish a terminal `stt_status`: a status
+  /// built while the install is still the active one carries `install` again,
+  /// which is exactly how a finished download used to freeze a client's row.
+  final void Function(SttInstallOutcome outcome)? onSettled;
+
+  /// Attaches [observer] to the running install, or returns null when idle.
+  ///
+  /// This is what makes an install observable by every channel of the device
+  /// rather than by the one that started it: a client that arrives mid-download
+  /// asks for the status, attaches here, and then receives the same ticks and the
+  /// same terminal event as the client that pressed the button.
+  SttInstallLease? attach({required SttInstallObserver observer}) =>
+      _active?.attach(observer, joined: true);
 
   /// Starts an install of [modelId], or attaches to the running one.
   ///
@@ -194,8 +216,11 @@ class SttInstallControl {
     _active = install;
     final lease = install.attach(observer, joined: false);
     unawaited(
-      install.run().whenComplete(() {
+      install.run().then((outcome) {
+        // Release first, notify second: everything downstream builds its
+        // terminal answer from [state].
         if (identical(_active, install)) _active = null;
+        onSettled?.call(outcome);
       }),
     );
     return lease;
@@ -262,7 +287,7 @@ class _SttInstall {
 
   void requestCancel() => _cancelled = true;
 
-  Future<void> run() async {
+  Future<SttInstallOutcome> run() async {
     SttInstallOutcome outcome;
     try {
       await _runner(
@@ -281,6 +306,7 @@ class _SttInstall {
       );
     }
     _settle(outcome);
+    return outcome;
   }
 
   bool _isCancelled() => _cancelled || _settled;
@@ -296,6 +322,11 @@ class _SttInstall {
   void _onPhase(SttInstallPhase phase) {
     if (_settled || phase == _phase) return;
     _phase = phase;
+    // A resumed install reports `verifying` before it has reported a byte, and
+    // publishing that as a tick would send `received_bytes: 0` for a partial the
+    // bar already had at 29 %: the bar dips to zero and then jumps back. The
+    // phase is not lost — the first real tick carries it.
+    if (_lastEmitAt == null) return;
     // Three or four phase changes per install: they are always delivered, so a
     // bar whose bytes stopped moving still says what the daemon is doing.
     _emit();

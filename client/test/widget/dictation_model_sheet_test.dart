@@ -10,6 +10,7 @@ import 'package:sanad_client/features/dictation/presentation/bloc/dictation_stat
 import 'package:sanad_client/features/dictation/presentation/widgets/dictation_model_sheet.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 
+import '../helpers/dictation_fakes.dart';
 import '../helpers/pump_app.dart';
 
 /// The sheet renders daemon-owned codes, never daemon sentences, and never sends
@@ -87,6 +88,14 @@ void main() {
     name: 'Studio Mac',
     hardwareId: 'studio-mac',
   );
+
+  const hostedRow = <String, dynamic>{
+    'id': 'large',
+    'name': 'Whisper Large v3 Turbo',
+    'size_bytes': 812000000,
+    'hosted': true,
+    'installed': false,
+  };
 
   late _RecordingCubit cubit;
 
@@ -341,6 +350,126 @@ void main() {
       reason: 'the daemon installs one model at a time',
     );
     expect(find.byKey(const Key('dictation_process_loading')), findsNothing);
+  });
+
+  testWidgets('a finished install clears the row without closing the sheet',
+      (tester) async {
+    // D1, end to end from the widget's side: the sheet is mounted the whole
+    // time, and the daemon's terminal status — one without `install` — has to
+    // turn the downloading row back into Use.
+    final resolver = FakeDictationResolver();
+    final liveCubit = DictationCubit(
+      resolver: resolver,
+      capture: SilentDictationCapture(),
+    );
+    addTearDown(liveCubit.close);
+
+    await pumpTestApp(
+      tester,
+      child: BlocProvider<DictationCubit>.value(
+        value: liveCubit,
+        child: DictationModelSheet(device: device),
+      ),
+    );
+    await tester.pump();
+
+    final transport = resolver.latest('agent-1');
+    transport.emit(
+      dictationStatusEvent(
+        selected: null,
+        ready: false,
+        models: [hostedRow],
+        install: {
+          'model_id': 'large',
+          'received_bytes': 800,
+          'total_bytes': 1000,
+          'phase': 'downloading',
+          'bytes_per_second': 125,
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(liveCubit.state.model.installingModelId, 'large');
+    expect(
+      find.byKey(const Key('dictation_cancel_download_large')),
+      findsOneWidget,
+    );
+
+    transport.emit(
+      dictationStatusEvent(
+        selected: null,
+        ready: false,
+        models: [
+          {...hostedRow, 'installed': true},
+        ],
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('dictation_cancel_download_large')),
+      findsNothing,
+      reason: 'the sheet never had to be reopened',
+    );
+    expect(find.byKey(const Key('dictation_download_progress')), findsNothing);
+    expect(find.byKey(const Key('dictation_use_large')), findsOneWidget);
+  });
+
+  testWidgets('a cancelled install returns the row to Download', (tester) async {
+    final resolver = FakeDictationResolver();
+    final liveCubit = DictationCubit(
+      resolver: resolver,
+      capture: SilentDictationCapture(),
+    );
+    addTearDown(liveCubit.close);
+
+    await pumpTestApp(
+      tester,
+      child: BlocProvider<DictationCubit>.value(
+        value: liveCubit,
+        child: DictationModelSheet(device: device),
+      ),
+    );
+    await tester.pump();
+
+    final transport = resolver.latest('agent-1');
+    transport.emit(
+      dictationStatusEvent(
+        selected: null,
+        ready: false,
+        models: [hostedRow],
+        install: {
+          'model_id': 'large',
+          'received_bytes': 150,
+          'total_bytes': 1000,
+          'phase': 'downloading',
+          'bytes_per_second': 50,
+        },
+      ),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    await tester.tap(find.byKey(const Key('dictation_cancel_download_large')));
+    await tester.pump();
+    expect(transport.commandNames, contains('cancelInstall'));
+
+    // The daemon's answer to the cancel: nothing is in flight any more.
+    transport.emit(
+      dictationStatusEvent(selected: null, ready: false, models: [hostedRow]),
+    );
+    await tester.pump();
+    await tester.pump();
+
+    expect(
+      find.byKey(const Key('dictation_download_large')),
+      findsOneWidget,
+      reason: 'a cancelled download is offered again, in place',
+    );
+    expect(find.byKey(const Key('dictation_cancel_download_large')), findsNothing);
   });
 
   testWidgets('a row renders its name, badge, description and speed', (

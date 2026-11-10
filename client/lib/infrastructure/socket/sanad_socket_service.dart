@@ -449,6 +449,10 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       _connectionController.debugLogIncomingSocketEvent(event, data);
 
   @visibleForTesting
+  void debugLogOutgoingSocketEvent(String event, dynamic data) =>
+      _connectionController.debugLogOutgoingSocketEvent(event, data);
+
+  @visibleForTesting
   String debugFormatData(dynamic data, {int maxLength = 500}) =>
       _connectionController.debugFormatData(data, maxLength: maxLength);
 

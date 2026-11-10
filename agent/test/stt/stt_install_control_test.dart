@@ -120,6 +120,38 @@ void main() {
       expect(recorder.ticks.last.progress, 1);
     });
 
+    test('a resumed install never publishes a zero it has to contradict', () async {
+      // A `.partial` on disk makes the store report `verifying` before it reports
+      // a byte. Emitting that as a tick sent `received_bytes: 0` for an artifact
+      // the bar showed at 29 %, so the sheet dipped to 0 % and jumped back: the
+      // first tick has to carry the resumed offset instead.
+      const resumed = 468542332;
+      const total = 1624555275;
+      var now = DateTime(2026, 11, 9, 12);
+      final control = SttInstallControl(
+        clock: () => now,
+        runner: (modelId, {required onProgress, required onPhase, required isCancelled}) async {
+          onPhase(SttInstallPhase.verifying);
+          now = now.add(const Duration(milliseconds: 100));
+          onProgress(resumed, total);
+          onPhase(SttInstallPhase.downloading);
+          now = now.add(const Duration(seconds: 3));
+          onProgress(total, total);
+        },
+      );
+      final recorder = _Recorder();
+      await control.start('m', observer: recorder)!.done;
+
+      expect(recorder.ticks.first.receivedBytes, resumed);
+      expect(recorder.ticks.first.phase, SttInstallPhase.verifying);
+      expect(
+        recorder.ticks.any((tick) => tick.receivedBytes == 0),
+        isFalse,
+        reason: 'a resumed bar must never restart from zero',
+      );
+      expect(recorder.ticks.last.progress, 1);
+    });
+
     test('a phase change is always delivered', () async {
       var now = DateTime(2026, 11, 9, 12);
       final control = SttInstallControl(

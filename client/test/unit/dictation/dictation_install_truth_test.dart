@@ -15,107 +15,21 @@ import 'dart:async';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
-import 'package:sanad_client/features/dictation/domain/dictation_audio_capture.dart';
-import 'package:sanad_client/features/dictation/domain/dictation_transport.dart';
-import 'package:sanad_client/features/dictation/domain/dictation_transport_resolver.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_cubit.dart';
 import 'package:sanad_client/features/dictation/presentation/bloc/dictation_state.dart';
 
-/// One device's transport, with the commands it received.
-class _FakeTransport implements DictationTransport {
-  _FakeTransport(this.deviceId);
-
-  final String deviceId;
-  final StreamController<Map<String, dynamic>> controller =
-      StreamController<Map<String, dynamic>>.broadcast();
-  final List<(String, Map<String, dynamic>)> commands =
-      <(String, Map<String, dynamic>)>[];
-  bool closed = false;
-
-  @override
-  Stream<Map<String, dynamic>> get events => controller.stream;
-
-  @override
-  bool get isOpen => !closed;
-
-  @override
-  void sendCommand(String event, [Map<String, dynamic> payload = const {}]) {
-    commands.add((event, payload));
-  }
-
-  @override
-  void sendAudio(List<int> pcm16) {}
-
-  @override
-  Future<void> close() async {
-    closed = true;
-    if (!controller.isClosed) await controller.close();
-  }
-
-  void emit(Map<String, dynamic> event) {
-    if (!controller.isClosed) controller.add(event);
-  }
-
-  List<String> get commandNames => [for (final entry in commands) entry.$1];
-}
-
-/// Resolves a **new** transport per call, exactly like a real socket, and keeps
-/// the last one per device so a test can address the live channel.
-class _DeviceResolver implements DictationResolver {
-  final Map<String, List<_FakeTransport>> _byDevice =
-      <String, List<_FakeTransport>>{};
-  final List<String> resolved = <String>[];
-
-  _FakeTransport latest(String deviceId) => _byDevice[deviceId]!.last;
-
-  int resolvesFor(String deviceId) => _byDevice[deviceId]?.length ?? 0;
-
-  @override
-  Future<DictationTransport> resolve({
-    required DeviceConfig device,
-    required String sessionId,
-  }) async {
-    resolved.add(device.id);
-    final transport = _FakeTransport(device.id);
-    _byDevice.putIfAbsent(device.id, () => <_FakeTransport>[]).add(transport);
-    return transport;
-  }
-}
-
-class _SilentCapture implements DictationCapture {
-  @override
-  Future<bool> hasPermission() async => true;
-
-  @override
-  Future<Stream<List<int>>> start() async => const Stream<List<int>>.empty();
-
-  @override
-  Future<void> stop() async {}
-
-  @override
-  Future<void> dispose() async {}
-}
-
-Map<String, dynamic> statusPayload({
-  required String? selected,
-  required bool ready,
-  List<Map<String, dynamic>> models = const [],
-  String? reason,
-  Map<String, dynamic>? install,
-}) => {
-  'event': 'stt_status',
-  'supported': true,
-  'ready': ready,
-  if (reason != null) 'reason': reason,
-  'busy': false,
-  'selected': selected,
-  'models': models,
-  if (install != null) 'install': install,
-};
+import '../../helpers/dictation_fakes.dart';
 
 void main() {
   final deviceA = DeviceConfig(id: 'agent-a', name: 'Studio Mac');
   final deviceB = DeviceConfig(id: 'agent-b', name: 'Oracle');
+  const hostedRow = {
+    'id': 'large',
+    'name': 'Whisper Large v3 Turbo',
+    'size_bytes': 812000000,
+    'hosted': true,
+    'installed': false,
+  };
   const installedRow = {
     'id': 'q8',
     'name': 'Egyptian Whisper Turbo Q8',
@@ -124,16 +38,16 @@ void main() {
     'installed': true,
   };
 
-  late _DeviceResolver resolver;
+  late FakeDictationResolver resolver;
   late DictationCubit cubit;
   late DateTime now;
 
   setUp(() {
-    resolver = _DeviceResolver();
+    resolver = FakeDictationResolver();
     now = DateTime(2026, 11, 9, 12);
     cubit = DictationCubit(
       resolver: resolver,
-      capture: _SilentCapture(),
+      capture: SilentDictationCapture(),
       sessionIdFactory: () => 'session-${resolver.resolved.length}',
       now: () => now,
     );
@@ -152,7 +66,7 @@ void main() {
       final statusA = cubit.refreshStatus(deviceA);
       await settle();
       resolver.latest('agent-a').emit(
-        statusPayload(selected: 'q8', ready: true, models: [installedRow]),
+        dictationStatusEvent(selected: 'q8', ready: true, models: [installedRow]),
       );
       await statusA;
       expect(cubit.state.model.isReady, isTrue);
@@ -162,7 +76,7 @@ void main() {
       final statusB = cubit.refreshStatus(deviceB);
       await settle();
       resolver.latest('agent-b').emit(
-        statusPayload(selected: null, ready: false, reason: 'model_not_installed'),
+        dictationStatusEvent(selected: null, ready: false, reason: 'model_not_installed'),
       );
       await statusB;
       expect(cubit.state.model.isReady, isFalse);
@@ -188,7 +102,7 @@ void main() {
         reason: 'the third status must never travel to B',
       );
       resolver.latest('agent-a').emit(
-        statusPayload(selected: 'q8', ready: true, models: [installedRow]),
+        dictationStatusEvent(selected: 'q8', ready: true, models: [installedRow]),
       );
       await statusA2;
 
@@ -203,7 +117,7 @@ void main() {
       await settle();
       final transport = resolver.latest('agent-a');
       transport.emit(
-        statusPayload(
+        dictationStatusEvent(
           selected: 'q8',
           ready: false,
           models: [installedRow],
@@ -226,7 +140,7 @@ void main() {
       final reopened = cubit.refreshStatus(deviceA);
       await settle();
       transport.emit(
-        statusPayload(
+        dictationStatusEvent(
           selected: 'q8',
           ready: false,
           models: [installedRow],
@@ -255,7 +169,7 @@ void main() {
       await settle();
       final transport = resolver.latest('agent-a');
       transport.emit(
-        statusPayload(
+        dictationStatusEvent(
           selected: 'q8',
           ready: false,
           models: [installedRow],
@@ -275,7 +189,7 @@ void main() {
       final second = cubit.refreshStatus(deviceA);
       await settle();
       transport.emit(
-        statusPayload(selected: 'f16', ready: true, models: [installedRow]),
+        dictationStatusEvent(selected: 'f16', ready: true, models: [installedRow]),
       );
       await second;
 
@@ -288,7 +202,7 @@ void main() {
       final opened = cubit.refreshStatus(deviceA);
       await settle();
       resolver.latest('agent-a').emit(
-        statusPayload(
+        dictationStatusEvent(
           selected: 'q8',
           ready: false,
           models: [installedRow],
@@ -311,7 +225,7 @@ void main() {
       await settle();
       final transport = resolver.latest('agent-a');
       transport.emit(
-        statusPayload(
+        dictationStatusEvent(
           selected: 'q8',
           ready: false,
           models: [installedRow],
@@ -331,6 +245,82 @@ void main() {
 
       expect(transport.commands.length, before);
       expect(transport.closed, isFalse);
+    });
+
+    test('a terminal status clears a finished install on an open sheet',
+        () async {
+      // D1: the daemon used to build this status while the install was still
+      // active, so it carried `install` again and the row never cleared. The
+      // client's contract is the same either way: a status without `install` is
+      // the end of the download, and it must land without touching the socket.
+      unawaited(cubit.installModel('large', device: deviceA));
+      await settle();
+      final transport = resolver.latest('agent-a');
+      expect(transport.commandNames, ['install']);
+
+      transport.emit({
+        'event': 'stt_download_progress',
+        'model_id': 'large',
+        'received_bytes': 800,
+        'total_bytes': 1000,
+        'phase': 'downloading',
+        'bytes_per_second': 125,
+      });
+      await settle();
+      expect(cubit.state.model.installingModelId, 'large');
+
+      transport.emit(
+        dictationStatusEvent(
+          selected: null,
+          ready: false,
+          models: [
+            {...hostedRow, 'installed': true},
+          ],
+        ),
+      );
+      await settle();
+
+      expect(cubit.state.model.installingModelId, isNull);
+      expect(cubit.state.model.isDownloading, isFalse);
+      expect(cubit.state.model.downloadProgress, isNull);
+      expect(
+        cubit.state.model.models.single.installed,
+        isTrue,
+        reason: 'the same status also reports the model as installed',
+      );
+      expect(transport.isOpen, isTrue, reason: 'a settle is not a failure');
+    });
+
+    test('a cancelled install also ends on a status without install', () async {
+      unawaited(cubit.installModel('large', device: deviceA));
+      await settle();
+      final transport = resolver.latest('agent-a');
+      transport.emit({
+        'event': 'stt_download_progress',
+        'model_id': 'large',
+        'received_bytes': 150,
+        'total_bytes': 1000,
+        'phase': 'downloading',
+        'bytes_per_second': 50,
+      });
+      await settle();
+      unawaited(cubit.cancelInstallModel(device: deviceA));
+      await settle();
+      expect(transport.commandNames, ['install', 'cancelInstall']);
+
+      transport.emit(
+        dictationStatusEvent(
+          selected: null,
+          ready: false,
+          models: [hostedRow],
+        ),
+      );
+      await settle();
+
+      expect(cubit.state.model.installingModelId, isNull);
+      expect(cubit.state.errorCode, isNull, reason: 'a cancel is not a failure');
+      expect(cubit.state.model.isDownloading, isFalse);
+      expect(transport.isOpen, isTrue);
     });
 
     test('install_in_progress is state: no reset, no socket close', () async {

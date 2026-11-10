@@ -39,19 +39,19 @@ class _FakeHost implements DictationControlHost {
 
   final Completer<void>? gate;
   final List<String> installs = <String>[];
-  Map<String, dynamic>? runningInstall;
-  int received = 0;
-  int total = 0;
+
+  /// Set by each test after the control is built, so `statusPayload` reports the
+  /// control's live truth exactly as the daemon's service does.
+  DictationControl? control;
   SttInstallPhase phase = SttInstallPhase.downloading;
 
   @override
   String get selectedModelId => 'default-model';
 
   @override
-  Map<String, dynamic> statusPayload() => {
-    'ready': false,
-    'install': ?runningInstall,
-  };
+  Map<String, dynamic> statusPayload() {
+    return {'ready': false, 'install': ?control?.installPayload};
+  }
 
   @override
   Future<void> install(
@@ -84,6 +84,7 @@ void main() {
     final gate = Completer<void>();
     final host = _FakeHost(gate: gate);
     final control = DictationControl(host);
+    host.control = control;
     final first = _ChannelLog();
     final second = _ChannelLog();
 
@@ -128,6 +129,7 @@ void main() {
     final gate = Completer<void>();
     final host = _FakeHost(gate: gate);
     final control = DictationControl(host);
+    host.control = control;
     final first = _ChannelLog();
     final other = _ChannelLog();
 
@@ -138,7 +140,6 @@ void main() {
     );
     await Future<void>.delayed(const Duration(milliseconds: 20));
 
-    host.runningInstall = control.installPayload;
     await control.handle(
       const DictationMessage(DictationCommand.install, {'model_id': 'other'}),
       owner: Object(),
@@ -159,6 +160,7 @@ void main() {
     final gate = Completer<void>();
     final host = _FakeHost(gate: gate);
     final control = DictationControl(host);
+    host.control = control;
     final log = _ChannelLog();
 
     final run = control.handle(
@@ -185,6 +187,7 @@ void main() {
     final gate = Completer<void>();
     final host = _FakeHost(gate: gate);
     final control = DictationControl(host);
+    host.control = control;
     final log = _ChannelLog();
 
     final run = control.handle(
@@ -206,6 +209,101 @@ void main() {
     expect(log.of('dictation_error'), isEmpty);
     expect(log.names.last, 'stt_status');
     expect(control.isInstalling, isFalse);
+  });
+
+  test('the terminal status of a finished install carries no install', () async {
+    final gate = Completer<void>();
+    final host = _FakeHost(gate: gate);
+    final control = DictationControl(host);
+    host.control = control;
+    final log = _ChannelLog();
+
+    final run = control.handle(
+      const DictationMessage(DictationCommand.install, {'model_id': 'm'}),
+      owner: Object(),
+      emit: log.emit,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    // Nothing has settled yet: the row is fed by progress, and the status the
+    // channel holds still states the install.
+    expect(log.of('stt_status'), isEmpty);
+    expect(log.names, contains('stt_download_progress'));
+    expect(control.installPayload, isNotNull);
+
+    gate.complete();
+    await run;
+
+    // This is D1: the terminal status was built while the install was still the
+    // active one, so it carried `install` again — the client set the row back to
+    // downloading and no further status ever cleared it.
+    final terminal = log.of('stt_status').last;
+    expect(terminal.containsKey('install'), isFalse);
+    expect(control.installPayload, isNull);
+    expect(control.isInstalling, isFalse);
+  });
+
+  test('a cancelled install ends with a status that carries no install', () async {
+    final gate = Completer<void>();
+    final host = _FakeHost(gate: gate);
+    final control = DictationControl(host);
+    host.control = control;
+    final log = _ChannelLog();
+
+    final run = control.handle(
+      const DictationMessage(DictationCommand.install, {'model_id': 'm'}),
+      owner: Object(),
+      emit: log.emit,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+    await control.handle(
+      const DictationMessage(DictationCommand.cancelInstall, {}),
+      owner: Object(),
+      emit: _ChannelLog().emit,
+    );
+    gate.complete();
+    await run;
+
+    // The live cancel froze at 15 % with Cancel still offered: the daemon had
+    // released the install, but its last word still claimed one was running.
+    expect(log.of('stt_status').last.containsKey('install'), isFalse);
+    expect(log.of('dictation_error'), isEmpty);
+  });
+
+  test('a channel that arrives mid-install keeps receiving it', () async {
+    // D2: a client that restarted saw one snapshot and then nothing, while the
+    // daemon finished the install alone. A status request attaches the channel.
+    final gate = Completer<void>();
+    final host = _FakeHost(gate: gate);
+    final control = DictationControl(host);
+    host.control = control;
+    final starter = _ChannelLog();
+    final late = _ChannelLog();
+
+    final run = control.handle(
+      const DictationMessage(DictationCommand.install, {'model_id': 'm'}),
+      owner: Object(),
+      emit: starter.emit,
+    );
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    await control.handle(
+      const DictationMessage(DictationCommand.status, {}),
+      owner: Object(),
+      emit: late.emit,
+    );
+
+    // The snapshot it asked for, plus the running install it just attached to.
+    expect(late.names, ['stt_download_progress', 'stt_status']);
+    expect(late.of('stt_download_progress').single['received_bytes'], 10);
+
+    gate.complete();
+    await run;
+
+    // The end of the install reaches both channels, and only once.
+    expect(late.of('stt_status'), hasLength(2));
+    expect(late.of('stt_status').last.containsKey('install'), isFalse);
+    expect(starter.of('stt_status').last.containsKey('install'), isFalse);
+    expect(starter.of('stt_status'), hasLength(1));
   });
 
   test('stt_status carries the install truth and omits it when idle', () async {

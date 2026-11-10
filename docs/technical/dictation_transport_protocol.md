@@ -144,7 +144,7 @@ Events (daemon → Client):
 | Event | Fields | Meaning |
 |---|---|---|
 | `stt_status` | `supported`, `ready`, `reason?`, `busy`, `selected`, `has_model_path`, `models[]`, `install?` | Catalog, install truth, readiness. `install` is present exactly while an install is in flight — `{model_id, received_bytes, total_bytes, phase, bytes_per_second}` — so any client rebuilds the same bar after a sheet reopen, a device switch, or a reconnect. No host filesystem path is ever included: `has_model_path` only says an `stt.model_path` override exists, and the override row carries `label_code` without a `note`. |
-| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. |
+| `stt_download_progress` | `model_id`, `received_bytes`, `total_bytes`, `phase`, `bytes_per_second` | Install progress, delivered to every attached channel. `phase` is `downloading`, `verifying` (a resumed prefix is re-hashed), or `activating` (the atomic rename), and `bytes_per_second` is the daemon's observed rate, which is what a remaining-time estimate is computed from. Ticks are coalesced: at most one per 250 ms and one per 1 % of the total, plus the first, every phase change, and the terminal 100 % tick. The first tick of a **resumed** install carries the resumed offset, never zero: a phase reported before any byte rides that tick instead of being published as a bar restart. |
 | `dictation_ready` | `model_id`, `load_ms` | Recognizer loaded; audio is accepted from now on |
 | `dictation_partial` | `seq`, `text` | Streaming only: mutable segment text, replacing its own range |
 | `dictation_final` | `seq`, `text`, `audio_ms`, `decode_ms` | Terminal text of that segment |
@@ -534,7 +534,16 @@ no route at all, so their lifecycle is bounded without route cleanup:
   rather than to the session. Only `cancelInstall` stops it;
 - because of that, an install is **reported by the daemon, not reconstructed by
   the Client**: `stt_status.install` is the in-flight truth, and the terminal
-  `stt_status` after it settles carries no `install`;
+  `stt_status` after it settles carries no `install`. That terminal status is
+  emitted **after** the install stops being truth — a payload built while it is
+  still active states `install` again, and a client that reads it can only draw a
+  row that never ends;
+- every channel **attached to the device** receives the progress and the terminal
+  status, not only the channel that sent `install`. A channel attaches by sending
+  `status` while an install runs (and by joining or being refused with
+  `install_in_progress`, which also attaches it), so a client that restarted, a
+  second client, and a sheet reopened after a reconnect all stay truthful from
+  their first status onward;
 - the partial artifact is preserved across every interruption — a dropped
   connection, a cancel, a daemon restart — and resumed with an HTTP `Range`
   request, then verified against the pinned size and SHA-256 before the atomic

@@ -3,7 +3,7 @@ title: Dictation Model Download Acceptance
 description: "Live acceptance for a dictation model install: bounded memory, install truth across a sheet reopen, a device switch, a socket close, and an interrupted resume."
 area: qa_maintenance
 status: current
-task: 158
+task: 159
 ---
 
 # Dictation Model Download Acceptance
@@ -47,6 +47,12 @@ bare `dart`/`flutter` command, and never point this run at the user's normal Hom
    (`Verifying…`, `Finishing…`).
 4. **Pass:** the row's only action is Cancel, and every other row's Download button is
    disabled for as long as the install runs.
+5. **Leave the sheet open** until the Agent logs `dictation model installed`.
+6. **Pass:** within a second of that line the row becomes **Use** (or **Download** for a
+   cancelled install), the bar and the Cancel button are gone, and every other row's
+   Download is enabled again — **without** closing and reopening the sheet. A row that
+   stays at its last percentage with Cancel offered is a defect: the terminal status
+   arrived while the install still counted as in flight, so nothing cleared it.
 
 ## 3. Interrupted resume
 
@@ -55,8 +61,12 @@ bare `dart`/`flutter` command, and never point this run at the user's normal Hom
    artifact is still on disk (`ls` its `.partial` file).
 3. Restart the Client with `sanad-dev run`, open the sheet, and finish the install.
 4. **Pass:** the progress continues from the partial's offset instead of restarting at
-   zero, the install completes, and the model becomes usable (a dictation run
-   transcribes).
+   zero, the first percentage after the reopen is at least the pre-stop percentage,
+   the install completes, **and the open sheet clears by itself** (step 2.6). Only the
+   `status` reply and `ls -l` on the model directory are observable while no client is
+   attached; the Client journal is not available in that window.
+5. **Pass (cancel):** start another install, press Cancel, and confirm the row returns
+   to **Download** while the sheet stays open, with every peer row enabled again.
 
 ## 4. Device switch (A → B → A)
 

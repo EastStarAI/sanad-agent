@@ -1,6 +1,7 @@
 # Dictation model downloads: bounded, resumable, daemon-owned
 
-Delivered in [PR391](https://github.com/EastStarAI/sanad-agent/pull/391).
+Delivered in [PR391](https://github.com/EastStarAI/sanad-agent/pull/391). Numbered 159 because PR388 landed
+`158-sanad-dev-stable-web-origin.md` on `main` first.
 
 ## Goal
 A dictation model install is daemon-owned, memory-bounded, resumable, and visible to

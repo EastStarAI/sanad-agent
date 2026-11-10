@@ -839,6 +839,30 @@ void main() {
       expect(loggedMessages[4], contains('[event \x1B[35mthought_stream\x1B[0m]'));
     });
 
+    test('a dictated utterance logs one audio line, not one per frame', () {
+      // One `dictation_audio` frame per ~100 ms: a 4.9 s utterance was 49 INFO
+      // lines. The first frame of the run logs; the rest do not.
+      for (var frame = 0; frame < 49; frame++) {
+        service.debugLogOutgoingSocketEvent('dictation_audio', {
+          'seq': frame,
+          'data': Uint8List(3200),
+        });
+      }
+
+      expect(loggedMessages, hasLength(1));
+      expect(
+        loggedMessages.single,
+        contains('event "\x1B[32mdictation_audio\x1B[0m"'),
+      );
+
+      // Another command ends the run, so the next utterance logs again.
+      service.debugLogOutgoingSocketEvent('device_command', {
+        'command': 'send_message',
+      });
+      service.debugLogOutgoingSocketEvent('dictation_audio', {'seq': 0});
+      expect(loggedMessages, hasLength(3));
+    });
+
     test('a dictation install logs one line per run, not one per progress event', () {
       // A model download emits ~600 dictation_event frames per second: one INFO
       // line per frame was 150-250 lines/s and buried everything else.

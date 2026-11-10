@@ -135,6 +135,13 @@ daemon's own truth instead of relying on a continuous event stream.
 The shape of the download is part of that contract, because each property was a
 measured defect before it existed:
 
+- **Every attached client sees it.** A channel attaches by asking for `status`
+  while an install runs, so a client that restarted mid-download, a second client,
+  and a sheet reopened after a reconnect receive the same ticks and the same
+  terminal `stt_status` as the one that pressed the button. The terminal status is
+  built **after** the install is released: built any earlier it still states
+  `install`, and the row it was meant to unfreeze stays frozen until the sheet is
+  reopened.
 - **One writer per device.** A repeated `install` of a model already downloading
   joins the running install and is answered with its truth; a different model is
   refused with `install_in_progress`, and the refusal also carries the running
