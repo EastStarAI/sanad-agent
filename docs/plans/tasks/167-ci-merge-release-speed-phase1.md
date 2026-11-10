@@ -102,41 +102,41 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G7 — Verification and delivery
 
-- [ ] `actionlint` clean for every changed workflow (no new findings against the
+- [x] `actionlint` clean for every changed workflow (no new findings against the
       baseline).
-- [ ] Repository governance and workflow-contract scripts pass.
-- [ ] Agent analyzer passes; the new guard test passes.
-- [ ] Docs updated in the same change as the behaviour.
-- [ ] One commit per item with its guardrail statement; no push until the
+- [x] Repository governance and workflow-contract scripts pass.
+- [x] Agent analyzer passes; the new guard test passes.
+- [x] Docs updated in the same change as the behaviour.
+- [x] One commit per item with its guardrail statement; no push until the
       coordinator releases the timing hold.
 
 ## Acceptance Criteria
 
-- [ ] Given a stalled Ubuntu mirror, when the dependency install runs, then the
+- [x] Given a stalled Ubuntu mirror, when the dependency install runs, then the
       lane fails within its step timeout instead of consuming the job budget, and
       a transient failure recovers inside the same step.
-- [ ] Given a merge that fast-forwarded `main` to a commit the merge queue already
+- [x] Given a merge that fast-forwarded `main` to a commit the merge queue already
       proved, when the `push` run classifies, then only the lanes that run did not
       prove execute, and every post-merge-only job still executes.
-- [ ] Given a tagged run without a green `macOS full suite` on that commit, when
+- [x] Given a tagged run without a green `macOS full suite` on that commit, when
       `validate` finishes, then no Draft or publication step can run.
-- [ ] Given a documentation-only change, when classification finishes, then
+- [x] Given a documentation-only change, when classification finishes, then
       `Native dictation` and `sanad-dev bootstrap` do not run; given a change to
       their declared inputs, then they do.
-- [ ] Given a `.github/workflows/*` change, when classification finishes, then
+- [x] Given a `.github/workflows/*` change, when classification finishes, then
       every lane runs.
-- [ ] Given two concurrent `validation_only` dispatches, when the second starts,
+- [x] Given two concurrent `validation_only` dispatches, when the second starts,
       then the first is cancelled; given a tagged run, when any dispatch starts,
       then the tagged run is never cancelled.
 
 ## Definition of Done
 
-- [ ] `actionlint` on every changed workflow.
-- [ ] `LANG=en_US.UTF-8 ruby scripts/community/validate_governance.rb` and
+- [x] `actionlint` on every changed workflow.
+- [x] `LANG=en_US.UTF-8 ruby scripts/community/validate_governance.rb` and
       `ruby scripts/community/simulate_workflows.rb`.
-- [ ] `fvm dart analyze` in `agent/` and the new guard test.
-- [ ] CI doc, release doc, and the QA measurement record updated.
-- [ ] Six commits with their guardrail statements; worktree removed after the
+- [x] `fvm dart analyze` in `agent/` and the new guard test.
+- [x] CI doc, release doc, and the QA measurement record updated.
+- [x] Six commits with their guardrail statements; worktree removed after the
       branch is delivered.
 
 ## Current status
