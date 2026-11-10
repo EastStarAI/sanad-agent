@@ -10,13 +10,19 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:crypto/crypto.dart';
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 
 import 'stt_catalog.dart';
+import 'stt_digest.dart';
+import 'stt_download_pipeline.dart';
 import 'stt_free_space.dart';
 import 'stt_settings.dart';
 import 'stt_types.dart';
+
+// The write side lives in its own library now; re-exported because callers that
+// used to reach for the sink seam through the store still should.
+export 'stt_download_pipeline.dart';
 
 /// Explicit artifact paths the engine needs.
 class SttModelFiles {
@@ -73,53 +79,19 @@ class SttModelStatus {
 /// Progress callback: model id, bytes received, total bytes.
 typedef SttProgressCallback = void Function(String id, int received, int total);
 
-/// Sequential byte sink for one artifact file.
-///
-/// It exists as a seam because the write is the boundary that decides whether a
-/// download is bounded: awaiting [writeFrom] keeps at most one chunk alive,
-/// while a fire-and-forget write lets a fast producer queue the whole artifact
-/// in the heap. A test can hold a write open and prove the download waits.
-abstract class SttWriteSink {
-  Future<void> writeFrom(List<int> bytes);
-
-  Future<void> flush();
-
-  Future<void> close();
-}
-
-/// Opens the destination writer for one artifact and mode.
-typedef SttWriteSinkOpener =
-    Future<SttWriteSink> Function(File file, FileMode mode);
-
-class _FileWriteSink implements SttWriteSink {
-  _FileWriteSink(this._handle);
-
-  final RandomAccessFile _handle;
-
-  @override
-  Future<void> writeFrom(List<int> bytes) => _handle.writeFrom(bytes);
-
-  @override
-  Future<void> flush() => _handle.flush();
-
-  @override
-  Future<void> close() => _handle.close();
-}
-
-Future<SttWriteSink> _openFileSink(File file, FileMode mode) async =>
-    _FileWriteSink(await file.open(mode: mode));
-
 class SttModelStore {
   SttModelStore({
     required this.sanadHome,
     HttpClient Function()? httpClient,
     SttModelFile sharedVadAsset = kSileroVadFile,
     SttFreeSpaceProbe freeSpaceProbe = defaultSttFreeSpace,
-    SttWriteSinkOpener openWrite = _openFileSink,
+    SttWritePipelineFactory createPipeline = IsolateWritePipeline.open,
+    SttDigestFactory createDigest = createSttDigest,
   }) : _httpClient = httpClient ?? HttpClient.new,
        _sharedVadAsset = sharedVadAsset,
        _freeSpaceProbe = freeSpaceProbe,
-       _openWrite = openWrite;
+       _createPipeline = createPipeline,
+       _createDigest = createDigest;
 
   final String sanadHome;
   final HttpClient Function() _httpClient;
@@ -131,11 +103,23 @@ class SttModelStore {
   /// running it happens to be.
   final SttFreeSpaceProbe _freeSpaceProbe;
 
-  /// Opens the writer for one artifact.
+  /// How one artifact's bytes reach the disk.
   ///
-  /// Production is a [RandomAccessFile]; the seam is what lets a test hold a
-  /// write open and assert the download waits for the disk.
-  final SttWriteSinkOpener _openWrite;
+  /// Production writes in a separate isolate ([IsolateWritePipeline]) so the
+  /// socket read loop never pays for the write; a test injects
+  /// `inProcessPipeline(opener)` to keep its sink in the picture.
+  final SttWritePipelineFactory _createPipeline;
+
+  /// The factory above, exposed so a test can prove the shipped default is the
+  /// isolate pipeline instead of inferring it from behaviour a fast disk masks.
+  @visibleForTesting
+  SttWritePipelineFactory get pipelineFactory => _createPipeline;
+
+  /// How the artifact's SHA-256 is computed.
+  ///
+  /// Production is OS crypto through `dart:ffi` with a pure-Dart fallback; the
+  /// seam is what lets a test pin both.
+  final SttDigestFactory _createDigest;
 
   final Logger _logger = Logger('SttModelStore');
 
@@ -519,7 +503,7 @@ class SttModelStore {
     required int grandTotal,
   }) async {
     final client = _httpClient();
-    SttWriteSink? writer;
+    SttWritePipeline? pipeline;
     try {
       final request = await client.getUrl(Uri.parse(file.url));
       request.followRedirects = true;
@@ -546,12 +530,11 @@ class SttModelStore {
         if (!transient) throw _DownloadRejected(error);
         throw error;
       }
-      writer = await _openWrite(
+      pipeline = await _createPipeline(
         partial,
         start > 0 ? FileMode.append : FileMode.write,
       );
-      final collector = _DigestCollector();
-      final hashInput = sha256.startChunkedConversion(collector);
+      final hashInput = _createDigest();
       if (start > 0) {
         // Report the resumed truth before the re-read, so a client that joins
         // here sees the real percentage instead of zero for a whole second.
@@ -570,36 +553,45 @@ class SttModelStore {
         if (isCancelled?.call() ?? false) {
           throw const SttException('cancelled', 'download cancelled');
         }
-        // Backpressure. `RandomAccessFile.writeFrom` completes when the bytes
-        // reached the file, so the socket is read at the disk's pace; an
-        // `IOSink.add` is `void`, which let a fast producer queue the whole
-        // artifact in the heap while a write was in flight (measured: 723 MB
-        // retained for an 823 MB artifact, 187 MB with this await).
-        await writer.writeFrom(chunk);
+        // Backpressure, at the pipeline rather than at the chunk: the write
+        // happens in another isolate, so this returns as soon as the byte
+        // window has room and the socket keeps streaming while the disk
+        // drains. The window (`kSttWriteWindowBytes`) is what bounds the
+        // heap — the reason PR391 replaced an `IOSink.add` with an awaited
+        // write in the first place, and the bound this seam keeps.
+        await pipeline.add(chunk);
         onDisk += chunk.length;
         hashInput.add(chunk);
         onProgress?.call(id, offsetBase + onDisk, grandTotal);
       }
-      hashInput.close();
-      await writer.flush();
-      await writer.close();
-      writer = null;
+      await pipeline.drain();
+      await pipeline.close();
+      pipeline = null;
       return _TransferResult(
         bytesOnDisk: onDisk,
-        digest: collector.value?.toString(),
+        digest: hashInput.finish(),
       );
     } on _DownloadRejected {
       rethrow;
     } on SttException {
       rethrow;
+    } on SttWriteFailure catch (failure) {
+      // The writer isolate reported a refused write: map it to the same typed
+      // codes an in-process failure always produced.
+      throw mapWriteFailure(failure.toFileSystemException(path: partial.path), file.name);
     } on FileSystemException catch (error) {
-      throw _writeFailure(error, file.name);
+      throw mapWriteFailure(error, file.name);
     } on Object catch (error) {
       // A dropped connection, a DNS failure, a timeout: transient by nature, so
       // the bytes already on disk stay and the next attempt resumes from them.
       throw SttException('download_failed', '${file.name}: $error');
     } finally {
-      await writer?.close();
+      try {
+        await pipeline?.close();
+      } on Object {
+        // The transfer's own failure is the one worth reporting; a close that
+        // also failed changes nothing about it.
+      }
       client.close(force: true);
     }
   }
@@ -608,8 +600,11 @@ class SttModelStore {
   ///
   /// A full volume is `storage_full` — the daemon's existing typed local failure
   /// — not a generic download error, because the remedy is different and the
-  /// retry budget must not be spent on it.
-  static SttException _writeFailure(FileSystemException error, String name) {
+  /// retry budget must not be spent on it. Exposed so the mapping can be tested
+  /// without filling a disk, and so the same mapping can be asserted against a
+  /// failure that crossed the writer isolate.
+  @visibleForTesting
+  static SttException mapWriteFailure(FileSystemException error, String name) {
     final code = error.osError?.errorCode;
     final message = (error.osError?.message ?? error.message).toString();
     final full =
@@ -763,16 +758,6 @@ class SttModelStore {
     }
     throw SttException('model_incomplete', 'catalog entry lacks a $needle file');
   }
-}
-
-class _DigestCollector implements Sink<Digest> {
-  Digest? value;
-
-  @override
-  void add(Digest data) => value = data;
-
-  @override
-  void close() {}
 }
 
 /// Outcome of one artifact transfer.
