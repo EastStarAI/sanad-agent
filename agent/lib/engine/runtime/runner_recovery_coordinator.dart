@@ -439,7 +439,17 @@ class RunnerRecoveryCoordinator {
           final activeBoundary = getIt<ModelProjectionBuilder>()
               .buildForSession(host.sessionId)
               .activeBoundary;
-          final contextWindow = await host.getContextTokens() ?? 128_000;
+          final contextWindow =
+              await host.getContextTokens() ??
+              (getIt.isRegistered<AgentRuntimeService>()
+                  ? getIt<AgentRuntimeService>()
+                        .resolveUnresolvedContextWindow(
+                          providerId: providerInstanceId,
+                          modelId: modelId,
+                          unknownCloudFallback: 128_000,
+                        )
+                        .tokens
+                  : 128_000);
           final policy = getIt.isRegistered<Config>()
               ? getIt<Config>().compactionPolicyForModel(modelId ?? '')
               : const CompactionPolicy(threshold: 0.90, targetRatio: 0.10);

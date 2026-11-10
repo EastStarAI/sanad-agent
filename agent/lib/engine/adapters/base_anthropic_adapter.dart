@@ -10,12 +10,12 @@ import '../../core/models/tool_call.dart';
 import '../../core/models/llm_provider_state.dart';
 import '../../capabilities/models/tool_schema.dart';
 import 'llm_adapter.dart';
-import '../../core/models/model_metadata.dart';
 import '../../core/di.dart';
 import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_model_id.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
 import '../../core/provider_runtime/route_capability_resolver.dart';
+import 'anthropic/anthropic_model_options.dart';
 import 'provider_profile.dart';
 import 'llm_http_exception.dart';
 import '../../core/provider_thinking/anthropic_thinking_wire_codec.dart';
@@ -91,26 +91,8 @@ class BaseAnthropicAdapter
       return liveModels;
     }
 
-    final List<ModelOption> options = [];
-    final models = _fallbackModelIds();
-
-    for (var m in models) {
-      options.add(
-        ModelOption(
-          value: ProviderModelId.normalize(
-            templateId: profile.name,
-            protocol: profile.effectiveProtocol,
-            rawModelId: m,
-          ),
-          label: _formatModelLabel(m),
-          provider: 'anthropic',
-          contextWindow: ModelMetadata.getLimitForModel(m) ?? 200000,
-          supportsReasoning: false,
-        ),
-      );
-    }
     _availableModelsSource = 'fallback';
-    return options;
+    return AnthropicModelOptions.fallback(_fallbackModelIds(), _modelRoute);
   }
 
   Future<List<ModelOption>> _fetchLiveModels() async {
@@ -149,29 +131,10 @@ class BaseAnthropicAdapter
         }
 
         _lastModelsException = null;
-        return data
-            .whereType<Map>()
-            .map((entry) {
-              final rawId = entry['id']?.toString() ?? '';
-              final normalized = ProviderModelId.normalize(
-                templateId: profile.name,
-                protocol: profile.effectiveProtocol,
-                rawModelId: rawId,
-              );
-              return ModelOption(
-                value: normalized,
-                label: _formatModelLabel(normalized),
-                provider: 'anthropic',
-                contextWindow:
-                    ModelMetadata.getLimitForModel(normalized) ?? 200000,
-                supportsReasoning: false,
-                modelMetadata: Map<String, Object?>.from(
-                  entry.map((k, v) => MapEntry(k.toString(), v)),
-                ),
-              );
-            })
-            .where((model) => model.value.isNotEmpty)
-            .toList(growable: false);
+        return AnthropicModelOptions.fromLiveEntries(
+          data.whereType<Map>(),
+          _modelRoute,
+        );
       } catch (e) {
         _logger.fine('Failed to fetch Anthropic-compatible models: $e');
         _lastModelsException = e;
@@ -228,21 +191,17 @@ class BaseAnthropicAdapter
     return merged;
   }
 
-  String _formatModelLabel(String name) {
-    String capitalize(String s) =>
-        s.isEmpty ? '' : '${s[0].toUpperCase()}${s.substring(1)}';
-    return name.split('-').map(capitalize).join(' ');
-  }
-
   @override
-  Future<int> getContextLimit([String? modelOverride]) async {
-    final resolvedModel = _resolveModel(modelOverride);
-    final configuredLimit = config.contextModelLimit(resolvedModel);
-    if (configuredLimit != null) return configuredLimit;
-    final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
-    if (catalogLimit != null) return catalogLimit;
-    return ModelMetadata.getLimitForModel(resolvedModel) ?? 200000;
-  }
+  Future<int> getContextLimit([String? modelOverride]) async =>
+      _modelRoute.effectiveWindow(_resolveModel(modelOverride));
+
+  /// The policy inputs shared by the model list and the runtime.
+  AnthropicModelRoute get _modelRoute => AnthropicModelRoute(
+    config: config,
+    profile: profile,
+    baseUrl: _baseUrl,
+    catalog: modelContextLimitLookup,
+  );
 
   String _resolveModel(String? override) {
     if (override == null || override.isEmpty) {

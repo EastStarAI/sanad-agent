@@ -8,7 +8,9 @@ import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:yaml/yaml.dart';
 
+import 'builtin_policy_defaults.dart';
 import 'compaction_policy.dart';
+import 'context_window_policy.dart';
 import 'request_dump_retention_policy.dart';
 import 'thinking_control_override.dart';
 
@@ -42,6 +44,17 @@ class ModelAwareRuntimePolicy {
   );
 
   final Map<String, int> contextModelLimits;
+
+  /// User `context.maxLimit`: the global window cap. `null` means the user set
+  /// nothing, so `ContextWindowPolicy.builtInMaxLimit` applies; `0` disables
+  /// the cap.
+  final int? maxLimit;
+
+  /// Project built-in per-model window defaults. They merge key by key with
+  /// [contextModelLimits] (a user entry wins for its own key) and are always
+  /// subject to the cap, unlike user entries.
+  final BuiltinModelPolicyDefaults<int> builtinContextModelLimits;
+
   final ModelAwareCompactionPolicy compaction;
   final Map<String, ModelCapabilityOverride> modelCapabilities;
 
@@ -50,6 +63,8 @@ class ModelAwareRuntimePolicy {
 
   const ModelAwareRuntimePolicy({
     required this.contextModelLimits,
+    this.maxLimit,
+    this.builtinContextModelLimits = ContextWindowPolicy.builtinModelLimits,
     required this.compaction,
     this.modelCapabilities = const {},
     this.requestDumpRetention = const RequestDumpRetentionPolicy(),
@@ -57,6 +72,40 @@ class ModelAwareRuntimePolicy {
 
   ModelCapabilityOverride? capabilityOverrideFor(String modelId) {
     return modelCapabilities[modelId];
+  }
+
+  /// The global window cap in force: the user's `context.maxLimit`, else the
+  /// project built-in. `0` means no cap.
+  int get effectiveContextMaxLimit =>
+      maxLimit ?? ContextWindowPolicy.builtInMaxLimit;
+
+  /// The effective per-model windows: project built-in defaults merged key by
+  /// key with the user's `context.modelLimits` (user wins for its own key).
+  Map<String, int> get mergedContextModelLimits =>
+      builtinContextModelLimits.mergedOver(contextModelLimits);
+
+  /// The one place a model's effective context window is decided.
+  ///
+  /// [providerEvidence] is what the route's provider reported (catalog cache,
+  /// live probe, models.dev, known static metadata) or `null` when nothing is
+  /// known. [unknownCloudFallback] is the caller's conservative value for a
+  /// cloud route with no evidence while the cap is disabled; it never applies
+  /// while a cap is in force.
+  ContextWindowResolution resolveContextWindow({
+    required String modelId,
+    ProviderContextWindow? providerEvidence,
+    required int unknownCloudFallback,
+    bool localProvider = false,
+  }) {
+    return ContextWindowPolicy.resolveForNormalizedId(
+      normalizedModelId: normalizeModelId(modelId),
+      userModelLimits: contextModelLimits,
+      builtinModelLimits: builtinContextModelLimits,
+      maxLimit: maxLimit,
+      providerEvidence: providerEvidence,
+      unknownCloudFallback: unknownCloudFallback,
+      localProvider: localProvider,
+    );
   }
 
   /// Normalizes a model id to the exact-key form this policy is keyed by.
@@ -101,7 +150,8 @@ class ModelAwareRuntimePolicy {
     }
     final root = _stringMap(decoded, 'root');
     final context = _optionalMap(root['context'], 'context');
-    rejectUnknownKeys(context, const {'modelLimits'}, 'context');
+    rejectUnknownKeys(context, const {'modelLimits', 'maxLimit'}, 'context');
+    final maxLimit = _contextMaxLimit(context['maxLimit']);
     final rawLimits = _optionalMap(
       context['modelLimits'],
       'context.modelLimits',
@@ -230,6 +280,7 @@ class ModelAwareRuntimePolicy {
 
     return ModelAwareRuntimePolicy(
       contextModelLimits: Map.unmodifiable(limits),
+      maxLimit: maxLimit,
       compaction: ModelAwareCompactionPolicy(
         threshold: threshold,
         targetRatio: targetRatio,
@@ -243,6 +294,27 @@ class ModelAwareRuntimePolicy {
       modelCapabilities: Map.unmodifiable(capabilities),
       requestDumpRetention: _requestDumpRetention(root),
     );
+  }
+
+  /// Parses `context.maxLimit`: `0` disables the cap, a value below
+  /// `ContextWindowPolicy.minimumMaxLimit` is a configuration error rather than
+  /// a very aggressive pressure dial, and an absent key keeps the built-in cap.
+  static int? _contextMaxLimit(dynamic value) {
+    if (value == null) return null;
+    if (value is! num || value < 0 || value != value.toInt()) {
+      throw const FormatException(
+        'context.maxLimit must be a non-negative integer',
+      );
+    }
+    final limit = value.toInt();
+    if (limit == 0) return 0;
+    if (limit < ContextWindowPolicy.minimumMaxLimit) {
+      throw FormatException(
+        'context.maxLimit must be 0 (no cap) or at least '
+        '${ContextWindowPolicy.minimumMaxLimit}',
+      );
+    }
+    return limit;
   }
 
   /// Parses the diagnostic-retention block.

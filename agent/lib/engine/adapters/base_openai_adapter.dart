@@ -26,11 +26,13 @@ import '../../core/provider_runtime/provider_instance_repository.dart';
 import '../../core/provider_runtime/provider_endpoint_resolver.dart';
 import '../../core/provider_runtime/route_capability_resolver.dart';
 import '../../interfaces/platforms/sanad_gateway/capabilities.dart';
+import 'context_window_evidence.dart';
 import 'provider_profile.dart';
 import 'models_dev_service.dart';
 import 'llm_http_exception.dart';
 import 'opencode_session_affinity.dart';
 import 'llm_request_options.dart';
+import 'openai_compatible/context_window_probes.dart';
 import 'openai_compatible/model_discovery.dart';
 import 'openai_compatible/thinking_control_discovery.dart';
 import 'package:crypto/crypto.dart';
@@ -272,13 +274,23 @@ class BaseOpenAIAdapter
                 profile,
                 normalizedId,
               );
+          final rawContextWindow = contextLimit;
+          final resolvedContextWindow = ContextWindowEvidence.resolve(
+            config: config,
+            modelId: normalizedId,
+            profile: profile,
+            baseUrl: baseUrl,
+            unknownCloudFallback: ModelMetadata.unknownContextLimit,
+            evidence: ContextWindowEvidence.metadata(rawContextWindow),
+          );
 
           options.add(
             ModelOption(
               value: normalizedId,
               label: label,
               provider: profile.name,
-              contextWindow: contextLimit,
+              contextWindow: resolvedContextWindow,
+              contextWindowRaw: rawContextWindow,
               supportsReasoning: supportsReasoning,
               modelMetadata: item is Map
                   ? Map<String, Object?>.from(
@@ -343,79 +355,51 @@ class BaseOpenAIAdapter
       config: config,
       profile: profile,
       defaultModelOverride: defaultModelOverride,
+      baseUrl: baseUrl,
     );
   }
 
   @override
   Future<int> getContextLimit([String? modelOverride]) async {
     final resolvedModel = _resolveModel(modelOverride);
-    final configuredLimit = config.contextModelLimit(resolvedModel);
-    if (configuredLimit != null) return configuredLimit;
+    return ContextWindowEvidence.resolve(
+      config: config,
+      modelId: resolvedModel,
+      profile: profile,
+      baseUrl: baseUrl,
+      unknownCloudFallback: ModelMetadata.unknownContextLimit,
+      evidence: await providerContextWindow(resolvedModel),
+    );
+  }
 
+  /// What the provider itself reports for [resolvedModel]'s window, or `null`
+  /// when nothing is known. Policy (user override, built-in default, cap) is
+  /// never applied here: [Config.resolveContextWindow] owns it.
+  @protected
+  Future<ProviderContextWindow?> providerContextWindow(
+    String resolvedModel,
+  ) async {
     final catalogLimit = modelContextLimitLookup?.call(resolvedModel);
-    if (catalogLimit != null) return catalogLimit;
-
-    // 1. LM Studio local probe (reference-style)
-    if (profile.name == 'lm-studio') {
-      try {
-        final cleanBase = _lmStudioNativeBase;
-        final url = Uri.parse('$cleanBase/api/v1/models');
-        final response = await _get(url, timeout: const Duration(seconds: 2));
-        if (response.statusCode == 200) {
-          final data = jsonDecode(response.body);
-          final models = data['models'] as List?;
-          if (models != null) {
-            for (var model in models) {
-              if (model is Map) {
-                final key = model['key'] ?? model['id'];
-                if (key == resolvedModel) {
-                  final loadedInstances = model['loaded_instances'] as List?;
-                  if (loadedInstances != null && loadedInstances.isNotEmpty) {
-                    final config = loadedInstances.first['config'];
-                    if (config is Map) {
-                      final ctxLen = config['context_length'];
-                      if (ctxLen is num && ctxLen > 0) {
-                        return ctxLen.toInt();
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      } catch (e) {
-        _logger.warning('Failed to probe LM Studio context limit: $e');
-      }
+    if (catalogLimit != null && catalogLimit > 0) {
+      return ProviderContextWindow(
+        tokens: catalogLimit,
+        source: ContextWindowSource.providerCatalog,
+      );
     }
 
-    // 2. llama.cpp local probe (reference-style)
-    if (profile.name == 'llama-cpp') {
-      try {
-        final cleanBase = baseUrl.replaceAll('/v1', '').replaceAll('/v1/', '');
-        final urls = [
-          Uri.parse('$baseUrl/props'),
-          Uri.parse('$cleanBase/v1/props'),
-          Uri.parse('$cleanBase/props'),
-        ];
-        for (final url in urls) {
-          try {
-            final response = await _get(
-              url,
-              timeout: const Duration(seconds: 2),
-            );
-            if (response.statusCode == 200) {
-              final data = jsonDecode(response.body);
-              final nCtx = data['default_generation_settings']?['n_ctx'];
-              if (nCtx is num && nCtx > 0) {
-                return nCtx.toInt();
-              }
-            }
-          } catch (_) {}
-        }
-      } catch (e) {
-        _logger.warning('Failed to probe llama.cpp context limit: $e');
-      }
+    // 1-2. Local engine probes (LM Studio native API, llama.cpp props).
+    final probed = await ContextWindowProbes.forTemplate(
+      templateId: profile.name,
+      baseUrl: profile.name == 'lm-studio' ? _lmStudioNativeBase : baseUrl,
+      model: resolvedModel,
+      get: (url) => _get(url, timeout: ContextWindowProbes.timeout),
+      onWarning: (message) => _logger.warning(message),
+    );
+    if (probed != null) {
+      return ProviderContextWindow(
+        tokens: probed,
+        source: ContextWindowSource.providerMetadata,
+      );
     }
 
     if (modelsDevService != null) {
@@ -423,13 +407,23 @@ class BaseOpenAIAdapter
         profile.name,
         resolvedModel,
       );
-      if (limit != null) return limit;
+      if (limit != null && limit > 0) {
+        return ProviderContextWindow(
+          tokens: limit,
+          source: ContextWindowSource.providerMetadata,
+        );
+      }
     }
 
     final metadataLimit = ModelMetadata.getLimitForModel(resolvedModel);
-    if (metadataLimit != null) return metadataLimit;
+    if (metadataLimit != null) {
+      return ProviderContextWindow(
+        tokens: metadataLimit,
+        source: ContextWindowSource.providerMetadata,
+      );
+    }
 
-    return ModelMetadata.unknownContextLimit;
+    return null;
   }
 
   /// Retained test-facing entry point; the rules live in

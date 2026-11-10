@@ -1,5 +1,12 @@
 # Non-secret daemon policy. Copy to $SANAD_HOME/config.yaml and restart Sanad.
 context:
+  # Global ceiling for every resolved model window (shipped defaults and
+  # provider/catalog/models.dev values alike). Built-in default 358000.
+  # 0 = no cap. A value between 1 and 8191 is rejected.
+  maxLimit: 358000
+  # Strongest layer: applied as written and never capped. Merged key by key with
+  # the shipped per-model defaults (gpt-6.1-sol 258000,
+  # deepseek-v4.1-flash 358000).
   modelLimits:
     gpt-5.6-sol: 258000
 

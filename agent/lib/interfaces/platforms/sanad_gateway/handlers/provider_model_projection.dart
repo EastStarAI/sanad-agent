@@ -41,7 +41,11 @@ class ProviderModelProjection {
 
   /// Projects one cached model onto the `model.snapshot_result` contract.
   static Map<String, dynamic> normalizeModelEntry(Map<String, dynamic> map) {
-    final normalized = Map<String, dynamic>.from(map)..remove('model_metadata');
+    final normalized = Map<String, dynamic>.from(map)
+      // The pre-policy provider window is internal evidence only; the snapshot
+      // carries the single effective `context_window`.
+      ..remove('context_window_raw')
+      ..remove('model_metadata');
     final value = normalized['value']?.toString();
     if (value != null && value.isNotEmpty) {
       normalized['id'] ??= value;

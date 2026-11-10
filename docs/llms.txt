@@ -161,6 +161,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [معمارية تشغيل الوكيل المحلي](docs/technical/agent_runtime.md): تصميم محرك تشغيل الوكيل (sanad-agent) وتركيب موجه النظام (System Prompt) للـ KV-Cache والتأمين الأمني.
 - [Context Compaction Architecture](docs/technical/context_compaction.md): Durable goal-preserving compaction ownership, vocabulary, and wire-safety rules (Plan 53).
 - [Context Compaction Engine Design](docs/agent_engine/context_compaction_design.md): Engine pipeline, pressure budgeting, goal-preservation sections, and verification fixtures (Plan 53c).
+- [Context Window Resolution and the Global Cap](docs/technical/context_window_resolution.md): Precedence between user and shipped per-model windows, provider evidence and the global `context.maxLimit` cap, local-route fallback, single user-facing value, and diagnostics.
 - [Context Compaction QA](docs/qa_maintenance/context_compaction_qa.md): Automated suites and manual integration scenarios (Plan 53f).
 - [Background Terminal Task Runtime](docs/technical/background_terminal_task_runtime.md): العقد التقني للمهام الطرفية الخلفية المملوكة، والنقل الذري من الجولة، والـPTY والمخرجات، والإيقاظ، والتفاعل الآمن، والتعافي.
 - [Bound Client and Agent Authentication](docs/technical/client_authentication.md): PKCE-bound Flutter login and P-256-bound Headless Agent authorization through Sanad Portal.
