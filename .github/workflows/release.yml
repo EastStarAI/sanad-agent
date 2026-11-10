@@ -21,9 +21,17 @@ on:
 permissions:
   contents: read
 
+# A release run is only cancellable when it cannot publish anything. A
+# `validation_only` dispatch builds the matrix and stops; a newer validation makes
+# the older one worthless, so it is cancelled in place. A tagged run and any
+# dispatch that can reach `publish` (validation, build, signing, the private Draft
+# and the protected publication environment) live in a separate group and are
+# never cancelled: they are serialized, and a newer run waits instead of
+# destroying in-flight signing or publication work.
 concurrency:
-  group: release-candidate-${{ github.ref }}
-  cancel-in-progress: false
+  group: >-
+    release-candidate-${{ github.event_name == 'workflow_dispatch' && inputs.validation_only == true && inputs.request_publication != true && format('validation-{0}', github.ref) || format('protected-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_only == true && inputs.request_publication != true }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true

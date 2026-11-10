@@ -127,6 +127,30 @@ matrix before a tag exists, so for them the same evidence is reported as a
 warning. Publication from a dispatch (`request_publication`) and any tagged run
 are the two paths the gate enforces.
 
+### Release run concurrency
+
+A release run is cancellable only when it cannot publish anything.
+
+| Run | Concurrency group | Cancellable |
+| --- | --- | --- |
+| Tagged run (`push` of `v*`) | `protected-<ref name>` | never |
+| Dispatch with `request_publication` | `protected-<ref name>` | never |
+| Dispatch with `validation_only` | `validation-<ref>` | superseded by a newer one |
+
+The two conditions are the same three-part test, so a run that can reach
+`publish` can never land in the cancellable group: it must be a
+`workflow_dispatch`, with `validation_only` true and `request_publication` not
+true. A contradictory dispatch (`validation_only` with `request_publication`)
+stays in the protected group and then fails at `validate`, where that combination
+is already rejected.
+
+The separation matters because a validation dispatch and a publishable run can
+share a ref: before this split both were `release-candidate-<ref>`, so a fresh
+validation dispatch could cancel a run that was in the middle of signing a DMG or
+waiting on the `release-publication` environment. Publishing runs are now
+serialized instead: a newer run waits for the older one and supersedes only a
+*pending* run, never a running one.
+
 The suite a release lane *does* run must stay priced: a fixed per-case
 `dart run` compilation is the largest avoidable cost on the slowest runner, so
 real-CLI tests spawn one compiled kernel artifact per suite

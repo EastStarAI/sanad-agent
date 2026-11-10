@@ -95,10 +95,10 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ### G6 — Protected release concurrency
 
-- [ ] Cancel only superseded `workflow_dispatch` + `validation_only` runs.
-- [ ] Separate the concurrency group so a validation run can never cancel a
+- [x] Cancel only superseded `workflow_dispatch` + `validation_only` runs.
+- [x] Separate the concurrency group so a validation run can never cancel a
       tagged or publishing run.
-- [ ] Document the policy in the release doc.
+- [x] Document the policy in the release doc.
 
 ### G7 — Verification and delivery
 
@@ -141,5 +141,5 @@ boundary, over-broad lane triggers, and cancellable protected release runs.
 
 ## Current status
 
-G0–G5 complete. G6–G7 are open; delivery stays on hold until the timing
+G0–G6 complete. G7 (verification and delivery) is open; delivery stays on hold until the timing
 constraint is lifted.
