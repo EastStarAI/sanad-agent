@@ -121,6 +121,11 @@ Two details matter for reading the failure:
   account cap. Wait for the suite to finish, then re-run the workflow: the same
   refusal is what keeps a candidate from being dispatched on top of a running
   suite.
+- **No surviving run on the commit.** When every run on the release commit was
+  cancelled because `main` moved on, dispatch the suite on a ref whose head is
+  exactly that commit (the release tag itself, `gh workflow run
+  macos-full-suite.yml --ref <tag>`); its concurrency group is per ref, so later
+  `main` pushes do not cancel it. Then re-run the release workflow.
 
 `validation_only` dispatches publish nothing and are the normal way to build the
 matrix before a tag exists, so for them the same evidence is reported as a
@@ -133,8 +138,8 @@ A release run is cancellable only when it cannot publish anything.
 
 | Run | Concurrency group | Cancellable |
 | --- | --- | --- |
-| Tagged run (`push` of `v*`) | `protected-<ref name>` | never |
-| Dispatch with `request_publication` | `protected-<ref name>` | never |
+| Tagged run (`push` of `v*`) | `protected-<ref name>` | never while running; a pending one only by a newer protected run on the same ref |
+| Dispatch with `request_publication` | `protected-<ref name>` | never while running; a pending one only by a newer protected run on the same ref |
 | Dispatch with `validation_only` | `validation-<ref>` | superseded by a newer one |
 
 The two conditions are the same three-part test, so a run that can reach
@@ -145,11 +150,12 @@ stays in the protected group and then fails at `validate`, where that combinatio
 is already rejected.
 
 The separation matters because a validation dispatch and a publishable run can
-share a ref: before this split both were `release-candidate-<ref>`, so a fresh
-validation dispatch could cancel a run that was in the middle of signing a DMG or
-waiting on the `release-publication` environment. Publishing runs are now
-serialized instead: a newer run waits for the older one and supersedes only a
-*pending* run, never a running one.
+share a ref: before this split both were `release-candidate-<ref>` with
+`cancel-in-progress: false`, so a validation dispatch queued behind a running
+publishable run, and a fresh validation dispatch replaced any publishable run
+still *pending* in that group. Publishing runs are now serialized only against
+each other: a newer one waits for the older one and supersedes only a *pending*
+run, never a running one, and a validation dispatch can no longer touch either.
 
 The suite a release lane *does* run must stay priced: a fixed per-case
 `dart run` compilation is the largest avoidable cost on the slowest runner, so
