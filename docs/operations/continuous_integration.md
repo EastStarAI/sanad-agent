@@ -210,7 +210,7 @@ the guard suite reads the `entry` lines. Nothing else may restate them.
 | Lane | Real inputs |
 | --- | --- |
 | `native-stt` | `agent/lib/infrastructure/stt/`, `agent/packages/stt_sherpa/`, `agent/packages/stt_sherpa_stub/`, `agent/test/stt/`, `agent/tool/ensure_native_stt.dart`, `agent/tool/stt_native_archive.dart`, `agent/tool/stt_native_runtime.dart`, `agent/tool/pubspec_overrides.no_sherpa.yaml` |
-| `sanad-dev` | `scripts/sanad_dev/`, `scripts/install.ps1`, `client/release/windows/` |
+| `sanad-dev` | `scripts/sanad_dev/`, `scripts/sanad-dev`, `scripts/sanad-dev.ps1`, `client/config/`, `scripts/install.ps1`, `client/release/windows/` |
 
 Everything else keeps its component gate. `CLI automation` is deliberately **not**
 gated by an input set: the import closure of `bin/sanad_agent.dart` plus
@@ -248,7 +248,10 @@ lane. Both holes are closed by the declaration above.
    ordinary Agent shard, on the pull request that introduced it. The suite also
    reads the `Native dictation` job in `ci.yml` and fails when a Dart file the job
    runs is not declared as an `entry`, so a suite added to the lane cannot run
-   outside the closure check.
+   outside the closure check. For `sanad-dev` it resolves every `'../…'`
+   path literal in the package's tests (the bootstrap wrappers they copy and run,
+   the Client configs they parse) and fails when an existing repository file read
+   that way matches no `sanad-dev` or `all` glob.
 2. **The same suite asserts the always-run triggers**, so narrowing a lane cannot
    quietly drop one.
 3. **The complement run covers the merged commit.** A lane a pull request skipped

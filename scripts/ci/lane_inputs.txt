@@ -61,8 +61,10 @@ glob native-stt agent/tool/pubspec_overrides.no_sherpa.yaml
 # ---- sanad-dev bootstrap ----------------------------------------------------
 # The lane runs the `sanad_dev` package's bootstrap, journal, terminal, option,
 # and cloud-endpoint suites on three operating systems, and parses the Windows
-# installer scripts. Its inputs are that package, the two Windows script
-# locations the job reads, and the shared packages the package depends on by
+# installer scripts. Its inputs are that package, the `scripts/sanad-dev`
+# bootstrap wrappers the suites copy and execute, the Client configs the
+# cloud-endpoint suite parses, the two Windows script locations the job reads,
+# and the shared packages the package depends on by
 # path (`shared/auth_lock`, `shared/windows_path`,
 # `shared/public_service_endpoints` - all covered by the `all` trigger above).
 entry sanad-dev scripts/sanad_dev/test/cli/sanad_dev_bootstrap_test.dart
@@ -71,5 +73,8 @@ entry sanad-dev scripts/sanad_dev/test/infrastructure/sanad_dev_terminal_launche
 entry sanad-dev scripts/sanad_dev/test/cli/sanad_dev_command_options_test.dart
 entry sanad-dev scripts/sanad_dev/test/infrastructure/sanad_dev_cloud_endpoints_test.dart
 glob sanad-dev scripts/sanad_dev/*
+glob sanad-dev scripts/sanad-dev
+glob sanad-dev scripts/sanad-dev.ps1
+glob sanad-dev client/config/*
 glob sanad-dev scripts/install.ps1
 glob sanad-dev client/release/windows/*

@@ -52,6 +52,12 @@ const List<String> _requiredAllGlobs = <String>[
 
 final String _repoRootPath = p.normalize(p.absolute(_repositoryRoot));
 
+/// `import`/`export`/`part` directives, which are not file reads.
+final RegExp _directive = RegExp(
+  r'^\s*(?:import|export|part)\s.*$',
+  multiLine: true,
+);
+
 void main() {
   final declarations = _readDeclarations();
   final globs = <String, List<String>>{};
@@ -228,6 +234,30 @@ void main() {
               'sanad-dev lane (or every lane).',
         );
       }
+    });
+
+    test('every repository file the suites read by path is covered', () {
+      // The suites run from scripts/sanad_dev, so a `'../…'` literal names a
+      // repository file outside the package (the bootstrap scripts, the
+      // Client configs) that no import graph shows.
+      final literal = RegExp(r'''['"]((?:\.\./)+[\w./-]+)['"]''');
+      final reads = <String>{
+        for (final file in Directory(
+          p.join(_repoRootPath, 'scripts/sanad_dev/test'),
+        ).listSync(recursive: true).whereType<File>())
+          if (file.path.endsWith('.dart'))
+            for (final match in literal.allMatches(
+              file.readAsStringSync().replaceAll(_directive, ''),
+            ))
+              p.posix.normalize(p.url.join('scripts/sanad_dev', match.group(1))),
+      }..removeWhere((path) => !File(p.join(_repoRootPath, path)).existsSync());
+      expect(reads, isNotEmpty);
+      final coveredBy = <String>[...?globs['sanad-dev'], ...?globs['all']];
+      expect(
+        reads.where((path) => !coveredBy.any((g) => _matches(g, path))),
+        isEmpty,
+        reason: 'Add a `glob sanad-dev` line for each file listed above.',
+      );
     });
   });
 }
