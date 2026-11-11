@@ -22,10 +22,10 @@
 //    tail on a 1.62 GB artifact, and a synchronous flush only re-serialized the
 //    two phases). The writer is held to two windows ahead of the last completed
 //    flush, which is what bounds the dirty page cache and paces a slow disk.
-// 5. **The isolate hop is the shipped one, and it is cheap.** The default
-//    factory is asserted structurally, and the hop is timed against the same
-//    file sink in-process so a regression that serialises on it shows up as a
-//    ratio rather than as a slow download nobody measures again.
+// 5. **The isolate hop is the shipped one.** The default factory is asserted
+//    structurally. What the hop costs is a ratio, and a ratio measured beside
+//    another suite is charged for that suite's contention, so it lives in its own
+//    process (`stt_pipeline_cost_test.dart`); this file keeps the structure.
 
 import 'dart:async';
 import 'dart:io';

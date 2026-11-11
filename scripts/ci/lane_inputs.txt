@@ -40,14 +40,15 @@ glob all shared/*
 # ---- Native dictation -------------------------------------------------------
 # The lane builds, verifies, loads, and stages the whisper and sherpa runtimes on
 # five runners, so its real inputs are the smoke suites that load them, the
-# OS digest and download-pipeline suites, the builder tool, and everything those
-# import. The guard test keeps this list honest: every Dart file the job runs
-# must be an entry below, and the import closure of the entries must be covered
-# by the globs.
+# OS digest and download-pipeline suites, the two cost gates that own their own
+# processes, the builder tool, and everything those import. The guard test keeps
+# this list honest: every Dart file the job runs must be an entry below, and the
+# import closure of the entries must be covered by the globs.
 entry native-stt agent/test/stt/native_runtime_smoke_test.dart
 entry native-stt agent/test/stt/sherpa_runtime_smoke_test.dart
 entry native-stt agent/tool/ensure_native_stt.dart
 entry native-stt agent/test/stt/stt_digest_test.dart
+entry native-stt agent/test/stt/stt_digest_cost_test.dart
 entry native-stt agent/test/stt/stt_download_pipeline_test.dart
 entry native-stt agent/test/stt/stt_pipeline_cost_test.dart
 glob native-stt agent/lib/infrastructure/stt/*

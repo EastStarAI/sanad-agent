@@ -83,14 +83,17 @@ per `dart test` process and then the two together with `--concurrency 1`:
 
 | Invocation | Wall time | Reported case time |
 | --- | --- | --- |
-| `test/stt/stt_digest_test.dart` | 1.8–1.9 s | < 1 s |
+| `test/stt/stt_digest_test.dart` | 1.0 s | < 1 s |
 | `test/stt/stt_download_pipeline_test.dart` | 2.5–2.6 s | ~1 s |
 | both, `--concurrency 1` | 3.6–3.9 s | ~1 s |
+| `test/stt/stt_digest_cost_test.dart` | 6.4 s | 3.0 s |
+| `test/stt/stt_pipeline_cost_test.dart` | 1.3 s | ~0.3 s |
 
-The wall time is `dart test` bootstrap plus compilation; the cases themselves are
-about a second. Estimated per lane, using the measured 2.4–3.0× per-unit factor
-of `macos-15-intel` against arm64 and allowing for JIT/process overhead on
-Windows:
+The digest file lost 0.8–0.9 s when its ratio case moved out: that case hashed
+64 MiB three times inside the suite, and the cost gate below does the same work
+once, alone.
+
+The wall time is `dart test` bootstrap plus compilation; the correctness cases\nthemselves are about a second. Estimated per lane for the two correctness files,\nusing the measured 2.4–3.0× per-unit factor of `macos-15-intel` against arm64 and\nallowing for JIT/process overhead on Windows:
 
 | Lane | Estimated added wall |
 | --- | --- |
@@ -103,13 +106,19 @@ About 27–32 seconds of runner time across the five lanes, in exchange for prov
 the shipped OS crypto backend and the real write pipeline on every operating
 system the Agent is published for.
 
-**Concurrency is part of the contract.** `production pipeline costs little against
-the same sink in-process` compares the isolate hop against an in-process sink and
-requires the isolate path to cost less than 2× the in-process path. Run
-concurrently with the digest file it measured 2.18× and failed once in four
-attempts on an idle machine; run alone with `--concurrency 1` it passed 5/5 with
-the same assertions. The step therefore always passes `--concurrency 1`, and a
-failure there is a real cost regression rather than CPU contention.
+**Each ratio owns a process.** Two cost gates run beside those suites, and neither
+may share a process with anything else: `test/stt/stt_digest_cost_test.dart`
+(native SHA-256 against pure Dart, median at 2.5×) and
+`test/stt/stt_pipeline_cost_test.dart` (the isolate hop against the same sink
+in-process, median at 0.5, so the isolate may cost up to twice the in-process
+sink). Both warm both arms, run five alternating paired trials, assert the same
+output on every trial, and judge the median. Run beside another suite — or always
+in the same order — one arm is charged for the other's contention: the pipeline
+ratio measured 2.18× and failed once in four attempts on an idle machine, and the
+digest ratio measured 2.14 on `macos-15-intel` while the native backend was
+selected and correct. The correctness pair still passes `--concurrency 1`, which
+no longer protects an assertion there. A failure in either gate is a real cost
+regression, and neither bound is lowered, skipped, or retried to meet a lane.
 
 ## Performance regression gates
 
