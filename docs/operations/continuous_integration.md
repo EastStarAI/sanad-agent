@@ -1,14 +1,14 @@
 ---
-title: "Public CI Pipeline and Merge Queue"
-description: "Job layout, cross-component path classification, test sharding, toolchain caching, required-check aggregate, slow-test evidence, and the protected merge-queue runbook for Public CI."
+title: "Public CI Pipeline and Up-to-date Merges"
+description: "Job layout, cross-component path classification, test sharding, toolchain caching, required-check aggregate, slow-test evidence, and the protected up-to-date merge runbook for Public CI."
 ---
 
-# Public CI Pipeline and Merge Queue
+# Public CI Pipeline and Up-to-date Merges
 
 Public CI (`.github/workflows/ci.yml`) is the only producer of the required
 branch-protection check `All required checks pass`. This page owns its job
-layout, the reasons behind the shard and cache design, and the merge-queue
-runbook the repository owner and merge agent follow.
+layout, the reasons behind the shard and cache design, and the merge runbook the
+repository owner and merge agent follow.
 
 ## Pipeline Model
 
@@ -16,7 +16,7 @@ Classification (`classify`) reads the changed paths and enables only the lanes
 that the change touches. It publishes **one output per lane**, not one per
 component, because a component and a lane are not the same set: the client
 component feeds four lanes and the post-merge complement run has to be able to
-skip exactly the lanes the merge queue already proved.
+skip exactly the lanes a proof run already proved.
 
 A classification failure, a `workflow_dispatch` run, a changed path that matches
 no class at all, or a changed path that matches one of the always-run triggers in
@@ -161,21 +161,19 @@ classification only decides which lanes run, never whether the consumer agrees.
 
 ## Post-Merge Complement Run
 
-A merge through the queue fast-forwards `main` to the exact commit the queue just
-built. Between 2026-11-08 and 2026-11-10 that was true for **46 of 46** pushes to
-`main`, so the `push` run of Public CI was re-proving a tree that had already
-passed every lane the classifier selected for it. What the `push` run added was
-the lanes the queue *skipped*, plus roughly 60 runner-minutes per merge of
-repeated work — four macOS jobs among them, against an account cap of five
-concurrent macOS jobs. That repeat is what turned a normal merge into a 33-minute
-post-merge run: with `macOS full suite` and a release candidate starting minutes
-later, the four duplicate jobs waited 28–30 minutes for a runner.
+A merge through the queue fast-forwarded `main` to the exact commit the queue had\njust built. Between 2026-11-08 and 2026-11-10 — while the queue was the live merge\npath — that was true for **46 of 46** pushes to `main`, so the `push` run of\nPublic CI was re-proving a tree that had already passed every lane the classifier\nselected for it. What the `push` run added was the lanes the proof run *skipped*,
+plus roughly 60 runner-minutes per merge of repeated work — four macOS jobs among
+them, against an account cap of five concurrent macOS jobs. That repeat is what
+turned a normal merge into a 33-minute post-merge run: with `macOS full suite` and
+a release candidate starting minutes later, the four duplicate jobs waited 28–30
+minutes for a runner.
 
 On `push` to `main`, classification therefore runs the **complement** of a proof:
 
-**Proof A — the merge queue.** Ask the Actions API for the runs of this workflow
-with `event=merge_group` and `head_sha` equal to this commit, and keep the most
-recent one whose conclusion is `success`.
+**Proof A — the merge queue (dormant).** Ask the Actions API for the runs of this
+workflow with `event=merge_group` and `head_sha` equal to this commit, and keep the
+most recent one whose conclusion is `success`. No such run exists while merges are
+up-to-date merges, so this source is the rollback path.
 
 **Proof B — the merged pull request's own run.** Accept only when *all* of these
 hold: the commit resolves to exactly one pull request **merged into `main`**; that
@@ -190,12 +188,15 @@ The commit-to-pull-request endpoint lists open and merged pull requests for a
 commit outside the default branch; a closed, unmerged duplicate is the residual
 case it may omit.
 
-Proof B exists because the merge queue is a repository setting rather than a
-property of this workflow: if the queue is replaced by "require branches to be up
-to date", the pull request's own run is still the proof that this tree passed. A
-squash merge lands the head's content, so identical trees plus a contained base is
-the same guarantee the queue provides. A and B are tried in that order; the first
-one that yields proof is used.
+Proof B is the source the live merge model relies on. The merge path is a
+repository setting rather than a property of this workflow: with **require
+branches to be up to date** enforced, a pull-request head always contains the
+`main` tip it will land on, the pull request's own run tested exactly that
+content, and a squash merge lands the head's tree. Identical trees plus a
+contained base is therefore the same guarantee the queue provided, and it is what
+[Up-to-date Merges](#up-to-date-merges) depends on. A and B are tried in that
+order, so a `merge_group` run still wins if the queue is re-enabled; the first
+source that yields proof is used.
 
 Then:
 
@@ -225,6 +226,16 @@ lane a pull request skipped still executes on the merged commit, and the release
 workflow additionally refuses to publish without a green `macOS full suite` run on
 the release commit (see
 [Release, Signing, and Deployment Architecture](release_and_signing.md#release-gate-on-the-macos-full-suite)).
+
+The selector itself is guarded, because a weakened selector silently drops
+coverage from `main`. `scripts/ci/test_post_merge_proof.sh` extracts the two
+proof functions and the `push` caller out of `ci.yml`, runs them against the
+fixtures in `scripts/ci/fixtures/post_merge_proof/cases.json` with a fake `gh`,
+and covers both sources, the ordering between them, and every mismatch listed
+above. `agent/test/tool/ci_post_merge_proof_test.dart` asserts the same
+invariants directly on the workflow text and runs that harness wherever `bash`
+and `jq` exist. Moving either function fails the harness's own extraction check
+instead of quietly narrowing the guard.
 
 ## Lane Input Sets
 
@@ -262,7 +273,7 @@ lane. Declared in the `all` section of the same file:
 | Trigger | Why every lane |
 | --- | --- |
 | `.github/workflows/*`, `.github/actions/*` | the workflow graph and the composite actions every lane runs |
-| `scripts/ci/*` | the shard listing, the event counters, the SDK pin, and this declaration itself |
+| `scripts/ci/*` | the shard listing, the event counters, the SDK pin, the proof-selector fixtures, and this declaration itself |
 | `.fvmrc`, any `pubspec.yaml`, any `pubspec.lock` | toolchain and dependency resolution |
 | `agent/native/*` | the shipped native sources and their checksums |
 | `shared/*` | the runtime packages the Agent, the Client, and `sanad_dev` all consume |
@@ -348,7 +359,7 @@ unit than the arm64 lane, and set the critical path of the workflow because
 `assemble` waits for it. Two structural facts made that spend redundant:
 
 - `ci.yml` already runs every one of those files on four Ubuntu shards for every
-  pull request, every push to `main`, and every merge-queue entry.
+  pull request and every push to `main`.
 - Every test that runs only on macOS — the two Keychain cases in
   `test/core/agent_secret_store_test.dart:500,527`, the launchd cases in
   `test/core/setup/service_manager_test.dart`, and the vault interaction policy —
@@ -434,56 +445,122 @@ are display-only for this model; only the aggregate name must stay stable, and
 the protected-label workflow re-runs the job names `Verify protected review
 labels` and `All required checks pass`, so those two names are fixed.
 
-## Merge Queue
+## Up-to-date Merges
 
-The workflow also triggers on `merge_group`. When a queued entry is built,
-classification and every lane run against the merge-group diff, and the same
-aggregate check reports the result that gates the queue.
+`main` requires every pull-request head to contain the current `main` tip
+(**Require branches to be up to date before merging**, strict mode) and gates the
+merge on one check, `All required checks pass`. The merge queue is not deleted, it
+is disabled and left dormant: the ruleset stays in place, the `merge_group:`
+trigger stays in the workflow, and the post-merge complement run accepts either
+proof, so [the two settings calls below](#owner-settings) are the only switch
+between the two merge paths.
 
-A merge group has no pull-request payload. `Verify protected review labels`
-reads the queued pull request number from the queue head ref
-(`gh-readonly-queue/<base>/pr-<number>-<sha>`) and re-checks that pull
-request's labels against the merge-group diff. A group that cannot be
-attributed to exactly one pull request fails closed instead of passing
-vacuously, so keep the queue at one pull request per build (build concurrency 1,
-no batching).
+Strict mode keeps the tested tree and the merged tree identical. PR CI runs on
+`refs/pull/N/merge`, whose tree equals the head tree exactly when the head
+contains the base, and a squash merge lands that head tree. The
+[post-merge complement run](#post-merge-complement-run) relies on that identity
+and therefore starts from the pull request's own run (proof B).
+
+**Cost when `main` moves.** In the reviewed population, `main` moved after the
+last PR CI for 28% of merges. Each of those needs `gh pr update-branch`, a full PR
+CI (median 6m55s, p90 11m00s), and then the merge — the same minutes the queue
+spent on the rebuild, but driven by the merge agent. The other 72% skip the
+second run entirely, which puts expected merge latency near 2.5 minutes against
+the queue's 7m54s median enqueue→merged. Back-to-back merges now serialize
+instead of speculating in parallel, about 7 minutes each; the queue becomes worth
+revisiting above roughly 25% back-to-back merges.
+
+### Protected labels just before merge
+
+A queued run re-read protected labels on the merge commit. Strict mode has no
+queued run, so the merge agent performs that re-check itself, seconds before the
+merge instead of minutes:
+
+1. Read the latest Public CI run for the head SHA and the `completed_at` of its
+   `Verify protected review labels` job.
+2. Read `GET /issues/N/events` for `labeled` and `unlabeled` events on
+   `maintainer-reviewed`, `security-reviewed`, or `release-reviewed` after that
+   time.
+3. If any exist — or the data is ambiguous — dispatch
+   `gh workflow run protected-labels.yml -f pr_number=N`, wait for it, and
+   require a green `All required checks pass` on the same head.
+4. Merge with `gh pr merge N --squash --match-head-commit <sha>`.
+
+The residual race is a label removed between step 2 and step 4, which is seconds
+wide; the queue's window was the minutes between enqueue and merge.
 
 ### Owner settings
 
-Enabling the queue is a repository-settings change and stays with the
-repository owner. Apply it only after this pipeline is merged to `main`, in this
-order:
+Both settings are repository-settings changes and stay with the repository owner.
+Apply them in this order, and only after the change that documents them is on
+`main`:
 
-1. Merge the pull request that introduces the `merge_group` trigger.
-2. Settings → General → Pull Requests: enable **Allow auto-merge** and keep
-   **Allow squash merging** as the only merge method.
-3. Settings → Rules → `main` ruleset (or branch protection): keep the required
-   check `All required checks pass`, then enable **Require merge queue**.
-4. Merge queue settings: **Merge method** squash, **Build concurrency** 1,
-   **Minimum group size** 1, **Maximum group size** 1, **Wait time** 5 minutes,
-   **Check timeout** 60 minutes, and keep **Only merge non-failing pull
-   requests** enabled.
-5. After the queue is required, turn off **Require branches to be up to date
-   before merging**: the queue already rebuilds each entry on the current
-   `main`, and keeping both makes every merge wait for a second full CI run.
-6. Verify with a throwaway pull request: enqueue it, confirm a `merge_group`
-   Public CI run starts, confirm its `All required checks pass` is green, and
-   confirm the merge lands and deletes the branch.
+1. Settings → General → Pull Requests: keep **Allow auto-merge** enabled, keep
+   **Allow squash merging** as the only merge method, and keep
+   **Automatically delete head branches** on.
+2. Settings → Rules → `main` ruleset (or branch protection): keep the single
+   required check `All required checks pass` and enable **Require branches to be
+   up to date before merging**. `.github/branch-protection.yml` already declares
+   `strict: true`, so this clears the recorded drift instead of adding one.
+3. Once the merge queue is empty, **disable** — do not delete — the
+   `main-merge-queue` ruleset. Disabling it first would leave a window with
+   neither guard.
+4. Leave **Require merge queue** off.
+5. Verify with a throwaway pull request: an up-to-date one merges directly, and a
+   second one whose `main` moved is blocked until it is updated.
+
+Unchanged: the single context `All required checks pass`, the protected-review
+label model, conversation resolution, admin enforcement, and the force-push and
+deletion blocks.
 
 ### Merge agent flow
 
-The merge agent owns branch freshness and conflicts; the coordinator only
-reviews and dispatches. For each authorized merge:
+The merge agent owns branch freshness, conflicts, and the label re-check; the
+coordinator only reviews and dispatches. For each authorized merge:
 
-1. Update the branch from current `main` and resolve conflicts with the
-   repository's fail-closed merge procedure.
+1. Update the branch from current `main` with `gh pr update-branch <number>`, and
+   resolve conflicts with the repository's fail-closed merge procedure.
 2. Verify the head commit, the complete diff, resolved conversations, and the
    mandatory non-protected label set.
-3. Enqueue instead of merging directly:
+3. Re-check the protected labels against the current head as described above.
+4. Merge:
 
    ```bash
    gh pr merge <number> --squash --match-head-commit <sha>
    ```
 
-   `--match-head-commit` refuses the enqueue if the head moved after review.
-4. Confirm the `merge_group` run of Public CI and the resulting merge commit.
+   `--match-head-commit` refuses the merge if the head moved after review. When
+   GitHub rejects the merge because the branch is behind, update it, wait for the
+   new PR CI run on the new head, and retry — at most three times before stopping
+   and reporting the blocker.
+5. Confirm the resulting `push` run of Public CI, the merge commit, and the branch
+   deletion.
+
+### Rollback appendix: the merge queue
+
+The `merge_group:` trigger and the merge-group code paths are kept in `ci.yml`, so
+a rollback changes no workflow. Apply these two calls in this order, so the guards
+overlap instead of leaving a gap:
+
+```bash
+# 1. Re-enable the queue ruleset (disable, never delete, is what makes this one call).
+gh api --method PUT repos/EastStarAI/sanad-agent/rulesets/26634537 \
+  --input - <<<'{"enforcement": "active"}'
+
+# 2. Drop strict mode: the queue rebuilds each entry against current `main`.
+gh api --method PATCH \
+  repos/EastStarAI/sanad-agent/branches/main/protection/required_status_checks \
+  --input - <<<'{"strict": false}'
+```
+
+Then restore the queue settings — with one correction. The live ruleset has been
+observed at **build concurrency 5 and maximum group size 5** with a 2-minute wait,
+which contradicts this page's earlier 1/1 recommendation and the label invariant:
+a merge group carries no pull-request payload, so a group that cannot be
+attributed to exactly one pull request fails `Verify protected review labels`
+closed. Set **Build concurrency** and **Maximum group size** to 1 when the queue
+is re-enabled, and keep **Merge method** squash, **Wait time** 5 minutes,
+**Check timeout** 60 minutes, and **Only merge non-failing pull requests**
+enabled. Verify the rollback with a throwaway pull request: enqueue it, confirm a
+`merge_group` Public CI run starts, confirm its `All required checks pass` is
+green, and confirm the merge lands and deletes the branch.

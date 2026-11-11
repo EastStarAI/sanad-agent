@@ -1,0 +1,677 @@
+{
+  "about": [
+    "Fixtures for scripts/ci/test_post_merge_proof.sh, which runs the real",
+    "post-merge proof selector from .github/workflows/ci.yml against a fake gh.",
+    "",
+    "Placeholders are replaced by the harness with real object ids from a",
+    "throwaway git repository: __BASE__ (the pushed commit's parent), __HEAD__",
+    "(the pull-request head), __HEAD_TREE__ (the head's tree), __SAME__ (a squash",
+    "commit whose tree equals the head's), __DIFF__ (a squash commit with other",
+    "content) and __DIFF_TREE__.",
+    "",
+    "Proof source A is a successful merge_group run for the pushed commit. Source",
+    "B is the merged pull request's own final successful pull_request run, and it",
+    "is accepted only when the tree and the parent relationship both hold. Every",
+    "mismatch must leave complement=false with no proven lane.",
+    "",
+    "Each mismatch case carries the accepting answers for every check that follows",
+    "the one it breaks, so deleting that check turns a refusal into a proof and the",
+    "case fails. A mismatch case that stopped at the first missing route would pass",
+    "even after the guard it describes was removed."
+  ],
+  "cases": [
+    {
+      "name": "source-a",
+      "description": "a successful merge-queue run for the pushed commit proves the lanes it executed",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 500, "head_sha": "__SAME__", "conclusion": "success", "run_started_at": "2026-11-10T10:00:00Z"},
+              {"id": 501, "head_sha": "__SAME__", "conclusion": "failure", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/500/jobs\\?filter=all&per_page=100$",
+          "body": {
+            "jobs": [
+              {"name": "Test agent (ubuntu-24.04, shard 1/4)", "conclusion": "success"},
+              {"name": "CLI automation", "conclusion": "success"},
+              {"name": "Analyze client", "conclusion": "failure"},
+              {"name": "Validate docs and governance", "conclusion": "skipped"}
+            ]
+          }
+        }
+      ],
+      "expect": {"complement": true, "proof": "merge-queue run 500", "proven": "agent-tests cli-automation"}
+    },
+    {
+      "name": "source-a-jobs-unreadable",
+      "description": "a proof run whose jobs cannot be read proves nothing",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 500, "head_sha": "__SAME__", "conclusion": "success", "run_started_at": "2026-11-10T10:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/500/jobs\\?",
+          "error": true
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b",
+      "description": "the merged pull request's own run proves the lanes when the tree and the parent both match",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {
+            "jobs": [
+              {"name": "Analyze client", "conclusion": "success"},
+              {"name": "Validate docs and governance", "conclusion": "success"},
+              {"name": "Native dictation", "conclusion": "failure"}
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "complement": true,
+        "proof": "pull-request run 700 for pull request head __HEAD__",
+        "proven": "client-analyze docs-governance"
+      }
+    },
+    {
+      "name": "source-b-identical-base",
+      "description": "a head identical to the replaced base is still a contained base",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "identical"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {
+        "complement": true,
+        "proof": "pull-request run 700 for pull request head __HEAD__",
+        "proven": "client-analyze"
+      }
+    },
+    {
+      "name": "source-b-tree-mismatch",
+      "description": "a different tree is not the tree that was tested",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__DIFF_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-parent-not-ancestor",
+      "description": "a head that does not contain the replaced base was tested against other content",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "diverged"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-head-behind-base",
+      "description": "a head behind the replaced base was tested against a different base",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "behind"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-not-merged",
+      "description": "a commit that only looks like a merged pull request head proves nothing",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": null}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-other-base",
+      "description": "a pull request merged into another base is not proof for main",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "release"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-two-pull-requests",
+      "description": "a commit that resolves to several pull requests is ambiguous",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"},
+            {"number": 43, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-shared-head",
+      "description": "a head branch with another pull request owns a run that tested a different merge",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/__SAME__/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/__HEAD__/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"},
+            {"number": 43, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "beta"}, "merged_at": null}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-no-successful-run",
+      "description": "a pull request without a successful run of its own proves nothing",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "failure", "run_started_at": "2026-11-10T11:00:00Z"},
+              {"id": 701, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "cancelled", "run_started_at": "2026-11-10T11:30:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-run-for-another-branch",
+      "description": "a run recorded for another head branch is not this pull request's run",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/other", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "source-b-skipped-lane",
+      "description": "a lane whose job was skipped is not proven",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {
+            "jobs": [
+              {"name": "Analyze client", "conclusion": "success"},
+              {"name": "Test client (macos-15, shard 2/4)", "conclusion": "skipped"},
+              {"name": "Agent contract checks and analyze", "conclusion": "cancelled"}
+            ]
+          }
+        }
+      ],
+      "expect": {
+        "complement": true,
+        "proof": "pull-request run 700 for pull request head __HEAD__",
+        "proven": "client-analyze"
+      }
+    },
+    {
+      "name": "failed-queue-run-falls-to-pull-request",
+      "description": "a failed merge-queue run does not block the pull-request proof",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 501, "head_sha": "__SAME__", "conclusion": "failure", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Validate docs and governance", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {
+        "complement": true,
+        "proof": "pull-request run 700 for pull request head __HEAD__",
+        "proven": "docs-governance"
+      }
+    },
+    {
+      "name": "api-error",
+      "description": "an unreadable pull-request lookup keeps every lane",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "error": true
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "no-proof",
+      "description": "a push with neither proof source keeps every lane",
+      "sha": "__SAME__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": []
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    },
+    {
+      "name": "unrelated-squash-commit",
+      "description": "a squash commit whose content differs from the pull-request head keeps every lane",
+      "sha": "__DIFF__",
+      "routes": [
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=merge_group&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {"workflow_runs": []}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/commits/[0-9a-f]{40}/pulls$",
+          "body": [
+            {"number": 42, "head": {"sha": "__HEAD__", "ref": "docs/example"}, "base": {"ref": "main"}, "merged_at": "2026-11-10T12:00:00Z"}
+          ]
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/git/commits/[0-9a-f]{40}$",
+          "body": {"tree": {"sha": "__HEAD_TREE__"}}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/compare/[0-9a-f]{40}\\.\\.\\.[0-9a-f]{40}$",
+          "body": {"status": "ahead"}
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/workflows/ci\\.yml/runs\\?event=pull_request&head_sha=[0-9a-f]{40}&per_page=100$",
+          "body": {
+            "workflow_runs": [
+              {"id": 700, "head_sha": "__HEAD__", "head_branch": "docs/example", "event": "pull_request", "conclusion": "success", "run_started_at": "2026-11-10T11:00:00Z"}
+            ]
+          }
+        },
+        {
+          "match": "^repos/[^/]+/[^/]+/actions/runs/700/jobs\\?filter=all&per_page=100$",
+          "body": {"jobs": [{"name": "Analyze client", "conclusion": "success"}]}
+        }
+      ],
+      "expect": {"complement": false, "proof": "", "proven": ""}
+    }
+  ]
+}
