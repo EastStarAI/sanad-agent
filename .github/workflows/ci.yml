@@ -7,8 +7,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  # The merge queue re-runs this workflow on the queued merge commit, so the
-  # aggregate check below gates the queue exactly as it gates a pull request.
+  # The merge queue is disabled in favour of "require branches to be up to date".
+  # This trigger and the merge-group paths below are kept dormant so a rollback to
+  # the queue needs no workflow change (see docs/operations/continuous_integration.md).
   merge_group:
   workflow_dispatch:
 
@@ -28,12 +29,13 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      # The post-merge complement run reads the merge-queue run, or the merged
-      # pull request's own run, for the exact tree `main` fast-forwarded to.
+      # The post-merge complement run reads a proof run for the exact tree `main`
+      # received: the merge-queue run if the queue is enabled, otherwise the
+      # merged pull request's own run.
       actions: read
       pull-requests: read
     # One output per lane, not one per component: the post-merge complement run
-    # has to skip exactly the lanes the merge queue already proved, and two
+    # has to skip exactly the lanes a proof run already proved, and two
     # lanes that share a component cannot express that.
     outputs:
       agent: ${{ steps.paths.outputs.agent }}
@@ -172,23 +174,24 @@ jobs:
 
           # ---- Post-merge complement run -------------------------------------
           # The tree `main` just received may already have been proved. Between
-          # 2026-11-08 and 2026-11-10 that was true for 46 of 46 pushes: the
-          # queue fast-forwarded `main` to the commit a `merge_group` run had
-          # just built and passed. Repeating every lane on the same tree bought
-          # no coverage and cost ~60 runner-minutes per merge, including four
-          # macOS jobs against a five-job account cap.
+          # 2026-11-08 and 2026-11-10, while merges went through the queue, that
+          # was true for 46 of 46 pushes: the queue fast-forwarded `main` to the
+          # commit a `merge_group` run had just built and passed. Repeating every
+          # lane on the same tree bought no coverage and cost ~60 runner-minutes
+          # per merge, including four macOS jobs against a five-job account cap.
           #
           # Two proof sources are accepted, in order, and only on `push`:
           #
-          # A. `merge_group` run - the queue built this exact commit.
+          # A. `merge_group` run - the queue built this exact commit. This is the
+          #    rollback path; no such run exists while merges are up-to-date merges.
           # B. the merged pull request's own `pull_request` run - accepted only
           #    when all of these hold: the commit resolves to exactly one merged
           #    pull request, that pull request's head tree is byte-identical to
           #    this commit's tree, and the head contains this commit's parent so
           #    the run was made against the same base as well as the same content.
-          #    Source B exists because the queue is a repository setting: if it is
-          #    replaced by "branch must be up to date", the pull request's own run
-          #    is still the proof that this tree passed.
+          #    Source B is what the live model relies on: `main` requires the head
+          #    to contain the current `main` tip, so the pull request's own run is
+          #    the proof that this tree passed, and a squash merge lands that tree.
           #
           # A lane counts as proven only when a job for it actually executed and
           # succeeded; a job the run skipped proves nothing. Anything else - no
@@ -233,7 +236,7 @@ jobs:
             done <<< "$jobs"
             return 0
           }
-          # A. Proof from the merge queue.
+          # A. Proof from the merge queue (dormant; kept for rollback).
           prove_from_merge_queue() {
             local runs_json run_id
             if ! runs_json="$(gh api \
