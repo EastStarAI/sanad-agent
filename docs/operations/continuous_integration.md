@@ -107,8 +107,8 @@ cache keyed by the runner label.
 SHA-256 the download verifies is a per-OS native binding and the write pipeline
 opens a second file handle for writeback; both fall back silently where the
 binding is missing, so a single Linux lane would prove neither. The two files run
-with `--concurrency 1` because the pipeline suite asserts a cost ratio against an
-in-process sink, and
+with `--concurrency 1`, which no longer guards an assertion — both cost ratios own
+their own processes below — so the flag only keeps this step's shape stable, and
 [Test Suite Performance and Ownership QA](../qa_maintenance/test_suite_performance_qa.md#native-dictation-lane-additions)
 owns the measured cost.
 
@@ -120,15 +120,29 @@ The lane then analyzes the engine package it selected, because
 resolve). A lane that forgets the overlay fails at `pub get` instead of shipping
 a half-configured build.
 
-`Native dictation` also runs the write pipeline's cost gate
-(`agent/test/stt/stt_pipeline_cost_test.dart`) on every OS lane. The gate owns a
-file so it owns a process: it measures the isolate hop against the same sink
-in-process, warms both arms, runs five alternating paired trials, and judges the
-median ratio against `0.5`, printing every trial so a lane log carries the
-evidence rather than only a verdict. The shape is the contract — a ratio measured
-beside another suite, or always in the same order, charges one arm for the other's
-contention, which is how `windows-2025` charged the isolate 2.78x on a run where
-the pipeline had not regressed.
+`Native dictation` also runs two cost gates, each in its own file and therefore
+its own process. A ratio measured beside another suite, or always in the same
+order, charges one arm for the other's contention and warm-up; both gates
+therefore warm both arms, run five alternating paired trials, judge the **median**
+paired ratio, and print every trial so a lane log carries the evidence rather
+than only a verdict.
+
+`agent/test/stt/stt_digest_cost_test.dart` is the digest's speed claim: one 64 MiB
+buffer, both arms fed in download-sized chunks, the native SHA-256 against the
+pure-Dart one, both arms asserted to return the reference digest on every trial,
+and the median gated at the unchanged `2.5`. It ran inside `stt_digest_test.dart`
+until that concurrent copy measured 2.14 on `macos-15-intel` while the native
+backend was selected and correct; a slower lane now reports its own numbers
+instead of borrowing its neighbours' load.
+
+`agent/test/stt/stt_pipeline_cost_test.dart` is the write pipeline's: it measures
+the isolate hop against the same sink in-process and judges the median against
+`0.5`, so the isolate may cost up to twice the in-process sink. The shape is the
+contract — `windows-2025` charged the isolate 2.78x on a run where the pipeline had
+not regressed.
+
+Neither bound moves to meet a lane. A lane below its bound is reported with its
+numbers and the change stops for an explicit performance-policy decision.
 
 ### Cross-Component Contract Fixtures
 
