@@ -55,6 +55,41 @@ one final human decision is requested only when the complete signed candidate,
 metadata, attestations, and private Draft have succeeded and the sole pending
 protected deployment is `release-publication`.
 
+### The tag run publishes the validated candidate
+
+A release is not built twice. The tag run's `candidate` job looks for the newest
+`workflow_dispatch` run of `release.yml` on `main` for the tag's exact commit and
+proves, before using anything from it, that the run built this commit on `main`
+with this workflow file, that `validate`, every `agent` lane, every `client-*`
+lane and `assemble` succeeded in its latest attempt, that exactly one
+`<channel>-release-candidate` artifact appears in a bounded one-page response and
+is unexpired with more than an hour left, and that the downloaded bytes still
+match the manifest, the release contract at
+this commit, `SHA256SUMS` and one attestation per attested subject that names
+that run, that workflow, `refs/heads/main` and this commit on a GitHub-hosted
+runner. The file-set proof also requires the SBOM, every private contract
+artifact, exactly the sidecars declared by the manifest, and exactly the native
+staging tree declared by its per-target descriptors; hidden entries, missing
+entries, symlinks, special files, and any extra file or directory are refused.
+It then re-uploads the verified bytes into the tag run under the same
+artifact name, so the Draft, the Client-alias job and the Production deployment
+read one artifact from `github.run_id` exactly as before.
+
+The rollout switch is the repository variable `RELEASE_CANDIDATE_PROMOTION`:
+`enabled` promotes, `shadow` runs every check and reports `would-promote` in the
+job summary but always rebuilds, and unset or any other value skips selection
+entirely. Any failure — an unreadable API, candidate-job infrastructure, a
+missing or expired artifact, a mismatched manifest, a changed byte, a failed
+attestation, or a defect in `scripts/release/promote_release_candidate.sh` —
+leaves the tag run on its ordinary rebuild path. Promotion alone requires the
+candidate job to succeed; rebuild assembly instead requires every producing
+Agent and Client job explicitly, so selector failure cannot suppress the normal
+release. Deleting the variable is the instant rollback and needs
+no pull request. Because the credential scan, the tag-equals-commit check, the
+macOS full-suite gate, `--verify-tag`, the single `release-publication` approval,
+the alias verification and every `deploy.yml` check still run, promotion removes
+a duplicate build rather than a gate.
+
 ## Platform-stable release surface gates
 
 The Agent job validates the same release surface on macOS, Linux, and Windows,
@@ -264,6 +299,29 @@ claim to reproduce GitHub attestation verification. When Authenticode becomes
 available, a separately reviewed transition changes the centralized contract to
 signed-only and rejects newly produced unsigned artifacts; the two policies are
 never accepted concurrently by default.
+
+### Verifying a published asset
+
+Published assets carry the Sigstore attestation of the run that built them. When
+the release was promoted on tag, that run is the `workflow_dispatch` validation
+run on `main`, not the tag run: promotion publishes the proved bytes rather than
+rebuilding them, so the provenance names `refs/heads/main` together with the
+commit the tag points at. Both cases verify with the same command, and the commit
+is always the tag's commit:
+
+```bash
+gh attestation verify <file> \
+  --repo EastStarAI/sanad-agent \
+  --signer-workflow EastStarAI/sanad-agent/.github/workflows/release.yml \
+  --source-digest <tag commit>
+```
+
+`SHA256SUMS`, the manifest and the Appcast are attested the same way. A
+non-reproducible artifact (the macOS and Windows Agents, the DMG, the Windows
+exe, the APK) has one attestation per releasing run, so a file that was built and
+published twice keeps the earlier attestation only when its bytes were
+identical. The tag-run promotion path never adds a second, unproved build to
+these assets.
 
 Android debug builds never require or consume the release keystore. Gradle only
 requires the external `android/key.properties` file when the requested task is
@@ -491,7 +549,7 @@ It requires an exact public `main` commit, inventories existing `v1` tags and
 Releases before the gate, has no write permission, and never creates a candidate.
 Probe approval is not Release publication approval.
 
-The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and uploads only that bounded include through the Production forced-command deployment broker. The broker verifies the exact byte count and digest, and the root-owned controller invokes the fixed alias validator with the verified payload. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
+The candidate workflow creates a private Draft and fails if the tag already owns any Draft or published Release. On a tag whose commit already carries a proved `workflow_dispatch` candidate, the Draft is built from that candidate's exact bytes (see [The tag run publishes the validated candidate](#the-tag-run-publishes-the-validated-candidate)); otherwise the tag run builds them itself. A separate least-privilege publication job can make that reviewed Draft public only after the required owner approval on `release-publication`. Rejected or cancelled approval leaves no partial public Release. Public release files use published checksums. After an approved Stable publication, the protected Client-download job downloads the public manifest, checksum file, and three desktop Client artifacts; verifies canonical URLs, byte sizes, SHA-256 values, and GitHub attestations; generates a deterministic Nginx redirect include; and uploads only that bounded include through the Production forced-command deployment broker. The broker verifies the exact byte count and digest, and the root-owned controller invokes the fixed alias validator with the verified payload. The Stable release then calls the reusable Production asset workflow with Web, Appcast, and installers enabled and its own release run ID. This ordering serializes the redirect deployment before the remaining Production assets and prevents an asset handoff when publication or redirect verification fails. RC and validation-only runs never enter either Production path. The server remains a redirector rather than an artifact mirror and owns candidate validation, atomic activation, public regression verification, and automatic rollback.
 
 Every static-surface job captures the preceding identity before activation and
 must enter the same verified rollback path when the controller activation
