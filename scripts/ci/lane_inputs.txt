@@ -49,6 +49,7 @@ entry native-stt agent/test/stt/sherpa_runtime_smoke_test.dart
 entry native-stt agent/tool/ensure_native_stt.dart
 entry native-stt agent/test/stt/stt_digest_test.dart
 entry native-stt agent/test/stt/stt_download_pipeline_test.dart
+entry native-stt agent/test/stt/stt_pipeline_cost_test.dart
 glob native-stt agent/lib/infrastructure/stt/*
 glob native-stt agent/packages/stt_sherpa/*
 glob native-stt agent/packages/stt_sherpa_stub/*
