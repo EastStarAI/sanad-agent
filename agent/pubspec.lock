@@ -503,7 +503,7 @@ packages:
       path: "../release/contract"
       relative: true
     source: path
-    version: "1.0.23"
+    version: "1.0.24"
   sanad_stt_sherpa:
     dependency: "direct main"
     description:
