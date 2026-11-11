@@ -835,6 +835,26 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           fvm dart test --concurrency 1 test/stt/stt_digest_test.dart test/stt/stt_download_pipeline_test.dart
+      # The write pipeline's cost gate owns this file so it owns a process. What
+      # it asserts is a ratio — the isolate hop against the same sink in-process —
+      # and a ratio measured beside another suite, or always in the same order,
+      # charges one arm for the other's contention: `windows-2025` charged the
+      # isolate 2.78x that way on a run where the pipeline had not regressed. The
+      # file warms both arms, runs five alternating pairs, and judges the median;
+      # it dumps every trial so the lane log carries the evidence, not just red.
+      - name: Verify the download pipeline cost gate
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: ${{ env.DART }} test test/stt/stt_pipeline_cost_test.dart
+      - name: Verify the download pipeline cost gate
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/stt_pipeline_cost_test.dart
 
   client-analyze:
     name: Analyze client
