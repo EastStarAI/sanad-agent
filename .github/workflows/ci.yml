@@ -815,8 +815,8 @@ jobs:
       # shipped operating system instead of on one Linux shard. They skip - not
       # fail - where the host genuinely has no OS implementation.
       #
-      # `--concurrency 1` runs the two files one after the other: the pipeline
-      # suite times its isolate hop against an in-process sink, and a second file
+      # `--concurrency 1` runs these files one after the other: the cost gate
+      # pairs its isolate trials against an in-process sink, and a second file
       # holding a CPU would be charged to that ratio.
       - name: Verify the OS digest and the download write pipeline
         if: runner.os != 'Windows'
@@ -825,7 +825,8 @@ jobs:
         run: |-
           ${{ env.DART }} test --concurrency 1 \
             test/stt/stt_digest_test.dart \
-            test/stt/stt_download_pipeline_test.dart
+            test/stt/stt_download_pipeline_test.dart \
+            test/stt/stt_pipeline_cost_test.dart
       - name: Verify the OS digest and the download write pipeline
         if: runner.os == 'Windows'
         working-directory: agent
@@ -833,7 +834,7 @@ jobs:
         run: |-
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
-          fvm dart test --concurrency 1 test/stt/stt_digest_test.dart test/stt/stt_download_pipeline_test.dart
+          fvm dart test --concurrency 1 test/stt/stt_digest_test.dart test/stt/stt_download_pipeline_test.dart test/stt/stt_pipeline_cost_test.dart
 
   client-analyze:
     name: Analyze client

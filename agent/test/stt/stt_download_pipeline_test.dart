@@ -778,31 +778,13 @@ void main() {
       // The store maps a full volume from this shape, so the round trip has to
       // survive the isolate boundary it exists for.
       expect(failure.toFileSystemException().osError?.errorCode, 28);
-    });
 
-    test('closing a refused write releases the handle it opened', () async {
-      // The same failure, taken one step further: a caller that closes what it
-      // opened must get the typed error back *and* its handle released. This is
-      // the path the store takes in a `finally` after a refused write, and the
-      // next attempt resumes from that very file.
-      final file = File('${dir.path}/refused-close.bin');
-      final sink = _RefusingSink(
-        await file.open(mode: FileMode.write),
-        const FileSystemException(
-          'Cannot write to file',
-          '/tmp/refused.bin',
-          OSError('No space left on device', 28),
-        ),
-      );
-      final pipeline = InProcessWritePipeline(sink);
-      await pipeline.add(_block(0));
-      await expectLater(pipeline.drain(), throwsA(isA<SttWriteFailure>()));
-
-      // Reaches the caller through the same channel a caller that only closes
-      // uses, and releases the sink even though the write already failed.
+      // A refused write must not leak the handle the next attempt resumes from.
+      // The store closes the pipeline in a `finally` even after this failure, and
+      // on Windows an unclosed sink keeps the whole temp directory undeletable —
+      // which is exactly what the per-OS lane reported before this line existed.
       await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
       expect(await _holdsOpenHandle(file.path), isFalse);
-      expect(file.existsSync(), isTrue, reason: 'the bytes are resumable');
       file.deleteSync();
       expect(file.existsSync(), isFalse);
     });
@@ -1149,55 +1131,6 @@ void main() {
       final expected = <int>[for (final block in blocks) ...block];
       expect(file.lengthSync(), expected.length);
       expect(file.readAsBytesSync(), expected);
-    });
-
-    test('costs little against the same sink in-process', () async {
-      // 64 MiB through each pipeline: the in-process one is the shape the old
-      // loop had (write awaited in the reader's isolate), so the ratio is what
-      // the isolate buys on this host. It is a regression guard, not the win:
-      // the win is against network latency (29.1 -> 61.2 MB/s measured on the
-      // Neoverse host), which a loopback test cannot reproduce.
-      //
-      // The transfer deliberately stops one block short of the writeback window
-      // so neither path forces page cache out mid-transfer: this guard compares
-      // the isolate hop against the same sink, and a 64 MiB fsync on a CI runner
-      // is disk latency that would swamp it. The flush cadence has its own tests
-      // above, and the close flush both paths still pay is unchanged.
-      const int total = kSttFlushWindowBytes - _chunk;
-      final block = _block(0);
-
-      Future<Duration> run(bool isolate) async {
-        final file = File('${dir.path}/ratio-${isolate ? 'i' : 'p'}.bin');
-        final stopwatch = Stopwatch()..start();
-        final pipeline = isolate
-            ? await IsolateWritePipeline.open(file, FileMode.write)
-            : await inProcessPipeline()(file, FileMode.write);
-        for (var written = 0; written < total; written += block.length) {
-          await pipeline.add(block);
-        }
-        await pipeline.drain();
-        await pipeline.close();
-        stopwatch.stop();
-        expect(file.lengthSync(), total);
-        await file.delete();
-        return stopwatch.elapsed;
-      }
-
-      await run(true); // warm the isolate spawn and the page cache
-      await run(false);
-      final inProcess = await run(false);
-      final isolate = await run(true);
-      final ratio =
-          inProcess.inMicroseconds /
-          (isolate.inMicroseconds == 0 ? 1 : isolate.inMicroseconds);
-      expect(
-        ratio,
-        greaterThan(0.5),
-        reason:
-            'the isolate pipeline ran at ${(1 / ratio).toStringAsFixed(2)}x the '
-            'in-process cost (${isolate.inMilliseconds} ms vs '
-            '${inProcess.inMilliseconds} ms for 64 MiB)',
-      );
     });
   });
 }
