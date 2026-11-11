@@ -341,6 +341,8 @@ cmd_select() {
       { failures+="run $id: the artifacts API is unavailable; "; continue; }
     jq -e '.artifacts | type == "array"' >/dev/null <<<"$artifacts_json" ||
       { failures+="run $id: the artifacts API returned an unexpected response; "; continue; }
+    jq -e '(.total_count // 0) <= 100' >/dev/null <<<"$artifacts_json" ||
+      { failures+="run $id: the artifacts API returned more artifacts than one page; "; continue; }
     artifact_fields="$(jq -r --arg name "$artifact_name" '
       [.artifacts[]? | select(.name == $name)]
       | if length == 0 then "missing"
@@ -417,6 +419,11 @@ cmd_verify() {
 
   local dist
   dist="$(cd "$DIR" 2>/dev/null && pwd)" || die "the artifact directory $DIR is unavailable"
+  local unsafe_entry
+  unsafe_entry="$(find "$dist" -mindepth 1 \( -type l -o \( ! -type f ! -type d \) \) -print -quit)" ||
+    die 'the candidate file set cannot be inspected'
+  [[ -z "$unsafe_entry" ]] ||
+    die "the candidate carries unsafe or unaccounted files: ${unsafe_entry#"$dist/"}"
   local manifest_path="$dist/$MANIFEST"
   [[ -f "$manifest_path" ]] || die "the candidate has no $MANIFEST"
 
@@ -455,28 +462,41 @@ cmd_verify() {
   fi
 
   # 3b. Nothing beyond the release is in the directory. `assemble` writes more
-  # than `SHA256SUMS` can cover: the manifest, the SBOM and the Appcast are
-  # metadata, each update-signature sidecar belongs to a listed artifact, and
-  # the contract adds the artifacts it does not publish plus one dictation
-  # runtime descriptor per Agent target. `native/` is the staged runtime the
-  # Agent lanes upload; nothing under it is published, checksummed or attested.
-  # Any other file or directory is refused, which can only cost the saving.
+  # than `SHA256SUMS` can cover: the manifest, SBOM, private contract artifacts,
+  # declared update-signature sidecars and one dictation descriptor per Agent
+  # target. Those descriptors bound the exact `native/` staging tree. Every
+  # expected entry must exist as a regular file; hidden extras, extra directories,
+  # symlinks and special files are refused, which can only cost the saving.
   local listed_names sidecars contract_metadata allowed_extra
   listed_names="$(awk '{ sub(/^[0-9a-f]+[ \t]+\*?/, ""); print }' "$dist/SHA256SUMS")" ||
     die 'SHA256SUMS is unreadable'
-  sidecars="$(printf '%s\n' "$listed_names" | sed 's/$/.update-signature/')" ||
-    die 'SHA256SUMS is unreadable'
+  sidecars="$(jq -r '.artifacts[]? | select(.update_signature != null) | .filename + ".update-signature"' "$manifest_path")" ||
+    die "$MANIFEST does not declare its update-signature sidecars"
   contract_metadata="$(contract_metadata_filenames)"
   allowed_extra="SHA256SUMS"$'\n'"$MANIFEST"$'\n'"sanad-$ARTIFACT_VERSION.spdx.json"
-  if [[ -n "$sidecars" ]]; then
-    allowed_extra="$allowed_extra"$'\n'"$sidecars"
-  fi
-  if [[ -n "$contract_metadata" ]]; then
-    allowed_extra="$allowed_extra"$'\n'"$contract_metadata"
-  fi
+  [[ -z "$sidecars" ]] || allowed_extra="$allowed_extra"$'\n'"$sidecars"
+  [[ -z "$contract_metadata" ]] || allowed_extra="$allowed_extra"$'\n'"$contract_metadata"
+
+  local required
+  while IFS= read -r required; do
+    [[ -z "$required" || -f "$dist/$required" ]] ||
+      die "the candidate is missing required release file $required"
+  done <<<"sanad-$ARTIFACT_VERSION.spdx.json"$'\n'"$sidecars"$'\n'"$contract_metadata"
+
+  local native_expected native_actual
+  native_expected="$(while IFS= read -r required; do
+    [[ "$required" == stt-runtime-*.json ]] || continue
+    jq -r '(.native_directory // "") as $dir | .files | keys[]? | "native/\($dir)/\(.)"' "$dist/$required"
+  done <<<"$contract_metadata" | awk -F/ '{ path=$1; for (i=2; i<NF; i++) { path=path "/" $i; print path }; print }' | sort -u)" ||
+    die 'the native staging manifests are unreadable'
+  native_actual="$(cd "$dist" && find native -mindepth 1 -print | sort)" ||
+    die 'the candidate native staging directory is unavailable'
+  [[ "$native_actual" == "$native_expected" ]] ||
+    die 'the candidate native staging file set does not match its manifests'
 
   local entry name unexpected=''
   local unexpected_count=0
+  shopt -s dotglob nullglob
   for entry in "$dist"/*; do
     [[ -e "$entry" ]] || continue
     name="${entry##*/}"

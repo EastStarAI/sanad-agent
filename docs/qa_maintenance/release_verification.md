@@ -194,9 +194,14 @@ checksums, SBOM, attestations, and private Draft creation succeed.
 A tag run that promotes a validated candidate replaces "all builds" with the
 proof that they already succeeded on this exact commit: the `candidate` job
 re-verifies the dispatch run's jobs, its artifact, the manifest identity, the
-release contract, `SHA256SUMS` and every attestation, and only then does the
-Draft exist. The approval is therefore still reached after the same evidence;
-the build steps it used to wait for are the ones the dispatch run already ran.
+release contract, `SHA256SUMS`, the complete regular-file set and every
+attestation, and only then does the Draft exist. File-set negatives cover missing
+SBOM/private outputs, hidden or extra entries, undeclared sidecars, native-tree
+drift, symlinks and special files. Candidate-job failure must select the rebuild
+path, whose assembler names every producing job as a required success; only a
+successful candidate job may pair promotion with a skipped assembler. The
+approval is therefore still reached after the same evidence; the build steps it
+used to wait for are the ones the dispatch run already ran.
 The approval decision itself, its Environment and its single-owner reviewer are
 unchanged, and a promotion that cannot be proved rebuilds instead.
 `client-downloads-production` remains non-interactive and tag-restricted so an

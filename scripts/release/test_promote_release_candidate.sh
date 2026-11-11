@@ -187,7 +187,8 @@ write_manifest() {
     repository: "EastStarAI/sanad-agent",
     artifacts: [
       {component: "agent", platform: "linux", architecture: "x64", format: "executable",
-       filename: ("sanad-agent-" + $version + "-linux-x64"), public: true}
+       filename: ("sanad-agent-" + $version + "-linux-x64"), public: true,
+       update_signature: "update signature"}
     ]
   }' >"$dir/dist/release-manifest.json"
 }
@@ -205,9 +206,10 @@ make_candidate() {
   printf 'private ipa\n' >"$dir/dist/sanad-client-$VERSION-ios-universal.ipa"
   printf 'spdx\n' >"$dir/dist/sanad-$VERSION.spdx.json"
   printf 'appcast\n' >"$dir/dist/appcast.xml"
-  printf 'runtime\n' >"$dir/dist/stt-runtime-linux-x64.json"
   mkdir -p "$dir/dist/native/linux-x64"
   printf 'library\n' >"$dir/dist/native/linux-x64/libsanad_whisper.so"
+  jq -n '{native_directory: "linux-x64", files: {"libsanad_whisper.so": {}}}' \
+    >"$dir/dist/stt-runtime-linux-x64.json"
   write_manifest "$dir"
   write_sums "$dir"
   write_contract "$dir"
@@ -480,6 +482,12 @@ select_case 'select: the candidate artifact is duplicated' "$dir" fail 'more tha
 
 dir="$(new_fixture)"
 make_promotable "$dir"
+jq '.total_count = 101' "$dir/artifacts-$RUN_ID.json" >"$dir/artifacts.tmp"
+mv "$dir/artifacts.tmp" "$dir/artifacts-$RUN_ID.json"
+select_case 'select: a paginated artifact list is ambiguous' "$dir" fail 'more artifacts than one page'
+
+dir="$(new_fixture)"
+make_promotable "$dir"
 write_artifacts "$dir" "$RUN_ID" expired=true
 select_case 'select: the candidate artifact is expired' "$dir" fail 'is expired'
 
@@ -569,8 +577,58 @@ verify_case 'verify: an unlisted file is refused' "$dir" fail 'does not account 
 dir="$(new_fixture)"
 make_candidate "$dir"
 write_attestation "$dir"
+printf 'smuggled\n' >"$dir/dist/.unexpected"
+verify_case 'verify: a hidden unlisted file is refused' "$dir" fail 'does not account for: .unexpected'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
 mkdir "$dir/dist/scratch"
 verify_case 'verify: an unexpected directory is refused' "$dir" fail 'does not account for: scratch/'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+rm "$dir/dist/sanad-$VERSION.spdx.json"
+verify_case 'verify: the required SBOM may not be missing' "$dir" fail 'missing required release file'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+rm "$dir/dist/sanad-client-$VERSION-ios-universal.ipa"
+verify_case 'verify: a private contract artifact may not be missing' "$dir" fail 'missing required release file'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+printf 'extra\n' >"$dir/dist/native/linux-x64/unexpected.so"
+verify_case 'verify: an extra native staging file is refused' "$dir" fail 'native staging file set'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+mkdir "$dir/dist/native/unexpected-empty-directory"
+verify_case 'verify: an extra native staging directory is refused' "$dir" fail 'native staging file set'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+mv "$dir/dist/sanad-$VERSION.spdx.json" "$dir/sbom.json"
+ln -s "$dir/sbom.json" "$dir/dist/sanad-$VERSION.spdx.json"
+verify_case 'verify: a symlink is refused' "$dir" fail 'unsafe or unaccounted files'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+rm "$dir/dist/sanad-$VERSION.spdx.json"
+mkfifo "$dir/dist/sanad-$VERSION.spdx.json"
+verify_case 'verify: a special file is refused' "$dir" fail 'unsafe or unaccounted files'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+printf 'unexpected signature\n' >"$dir/dist/appcast.xml.update-signature"
+verify_case 'verify: an undeclared update-signature sidecar is refused' "$dir" fail 'does not account for: appcast.xml.update-signature'
 
 dir="$(new_fixture)"
 make_candidate "$dir"

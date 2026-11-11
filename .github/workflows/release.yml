@@ -1218,11 +1218,10 @@ jobs:
 
   assemble:
     needs: [validate, candidate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
-    # `always()` is required for two reasons: a skipped `candidate` on a
-    # non-tag run must not skip the assembler, and a promotion must skip it
-    # deliberately. `contains(needs.*.result, 'failure')` keeps every failed
-    # build from reaching the manifest, exactly as the implicit `success()` did.
-    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.candidate.outputs.mode != 'promote' && !contains(needs.*.result, 'failure') }}
+    # `always()` lets a skipped or failed candidate selector fall back to a
+    # rebuild. Every producing job must still succeed explicitly; only the
+    # candidate result is ignored in rebuild mode.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.candidate.outputs.mode != 'promote' && needs.agent.result == 'success' && needs.client-linux-web.result == 'success' && needs.client-android.result == 'success' && needs.client-macos.result == 'success' && needs.client-windows.result == 'success' && needs.client-ios.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1279,11 +1278,10 @@ jobs:
   draft:
     name: Create immutable Draft candidate
     needs: [validate, candidate, assemble]
-    # A promotion publishes the artifact the `candidate` job re-uploaded, so
-    # `assemble` must have been skipped and `candidate` must have succeeded. Any
-    # other shape - including a failed candidate job after a partial upload -
-    # leaves no Draft and therefore no publication.
-    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.validation_only != 'true' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success') && ((needs.candidate.outputs.mode == 'promote' && needs.assemble.result == 'skipped') || (needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success')) }}
+    # Promotion requires a successful candidate job and a skipped assembler.
+    # Otherwise a successful rebuilt assembly may proceed even when candidate
+    # selection infrastructure failed before it could emit a mode.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.validation_only != 'true' && ((needs.candidate.outputs.mode == 'promote' && needs.candidate.result == 'success' && needs.assemble.result == 'skipped') || (needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

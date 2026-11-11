@@ -61,22 +61,30 @@ A release is not built twice. The tag run's `candidate` job looks for the newest
 `workflow_dispatch` run of `release.yml` on `main` for the tag's exact commit and
 proves, before using anything from it, that the run built this commit on `main`
 with this workflow file, that `validate`, every `agent` lane, every `client-*`
-lane and `assemble` succeeded in its latest attempt, that its
-`<channel>-release-candidate` artifact is unexpired with more than an hour left,
-and that the downloaded bytes still match the manifest, the release contract at
+lane and `assemble` succeeded in its latest attempt, that exactly one
+`<channel>-release-candidate` artifact appears in a bounded one-page response and
+is unexpired with more than an hour left, and that the downloaded bytes still
+match the manifest, the release contract at
 this commit, `SHA256SUMS` and one attestation per attested subject that names
 that run, that workflow, `refs/heads/main` and this commit on a GitHub-hosted
-runner. It then re-uploads the verified bytes into the tag run under the same
+runner. The file-set proof also requires the SBOM, every private contract
+artifact, exactly the sidecars declared by the manifest, and exactly the native
+staging tree declared by its per-target descriptors; hidden entries, missing
+entries, symlinks, special files, and any extra file or directory are refused.
+It then re-uploads the verified bytes into the tag run under the same
 artifact name, so the Draft, the Client-alias job and the Production deployment
 read one artifact from `github.run_id` exactly as before.
 
 The rollout switch is the repository variable `RELEASE_CANDIDATE_PROMOTION`:
 `enabled` promotes, `shadow` runs every check and reports `would-promote` in the
 job summary but always rebuilds, and unset or any other value skips selection
-entirely. Any failure — an unreadable API, a missing or expired artifact, a
-mismatched manifest, a changed byte, a failed attestation, or a defect in
-`scripts/release/promote_release_candidate.sh` — leaves the tag run on its
-ordinary rebuild path. Deleting the variable is the instant rollback and needs
+entirely. Any failure — an unreadable API, candidate-job infrastructure, a
+missing or expired artifact, a mismatched manifest, a changed byte, a failed
+attestation, or a defect in `scripts/release/promote_release_candidate.sh` —
+leaves the tag run on its ordinary rebuild path. Promotion alone requires the
+candidate job to succeed; rebuild assembly instead requires every producing
+Agent and Client job explicitly, so selector failure cannot suppress the normal
+release. Deleting the variable is the instant rollback and needs
 no pull request. Because the credential scan, the tag-equals-commit check, the
 macOS full-suite gate, `--verify-tag`, the single `release-publication` approval,
 the alias verification and every `deploy.yml` check still run, promotion removes

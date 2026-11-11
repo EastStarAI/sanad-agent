@@ -1021,7 +1021,9 @@ jobs:
           grep -F 'name: Select and verify validated candidate' .github/workflows/release.yml
           grep -F 'name: Publish the verified candidate into this run' .github/workflows/release.yml
           grep -F 'vars.RELEASE_CANDIDATE_PROMOTION' .github/workflows/release.yml
-          grep -F "(needs.candidate.outputs.mode == 'promote' && needs.assemble.result == 'skipped')" .github/workflows/release.yml
+          grep -F "(needs.candidate.outputs.mode == 'promote' && needs.candidate.result == 'success' && needs.assemble.result == 'skipped')" .github/workflows/release.yml
+          grep -F "needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success'" .github/workflows/release.yml
+          grep -F "needs.agent.result == 'success'" .github/workflows/release.yml
           grep -F 'case "$mode" in' .github/workflows/release.yml
           # Only the exact word promotes, and every failure of the selector
           # rebuilds. The verifier's provenance pins must stay exactly these.

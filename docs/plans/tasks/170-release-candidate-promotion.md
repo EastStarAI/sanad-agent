@@ -60,10 +60,13 @@ second build.
 - [x] `scripts/release/promote_release_candidate.sh` with `select`, `verify` and
       the pure `verdict` decision, using only `gh`, `jq`, `sha256sum`, `fvm`.
 - [x] Selection rules 1–4 (newest-first, at most 3; run identity; latest-attempt
-      job conclusions; unexpired artifact with more than 1 h remaining).
+      job conclusions; one unambiguous artifact page containing exactly one
+      named candidate, unexpired with more than 1 h remaining).
 - [x] Verification rules 1–4 (manifest identity; `verify-manifest`;
-      `sha256sum -c --strict` plus a bounded file set; attestation per attested
-      subject pinned to workflow, ref, commit, run and hosted runners).
+      `sha256sum -c --strict` plus an exact regular-file set, including private
+      contract outputs, declared sidecars and descriptor-bounded native staging;
+      attestation per attested subject pinned to workflow, ref, commit, run and
+      hosted runners).
 
 ### G2 — Workflow wiring
 
@@ -71,7 +74,9 @@ second build.
       promote-mode re-upload, and the `needs`/`if` edits on `agent`, the
       `client-*` jobs, `assemble`, `draft`, `publish`, `client-download-aliases`
       and `production-assets`, each with explicit `!cancelled()` and result
-      checks so a skipped ancestor cannot silently skip publication.
+      checks so a skipped ancestor cannot silently skip publication. Candidate
+      infrastructure failure falls back to rebuild assembly, while promotion
+      still requires the candidate job itself to succeed.
 
 ### G3 — Fixture coverage
 
@@ -96,8 +101,10 @@ second build.
       candidate artifact is missing, duplicated, expired or under 1 h from
       expiry.
 - [x] `verify` rejects a manifest with any of tag, channel, commit, version or
-      build different from the tag run, a flipped byte, an extra file, a failed
-      attestation and an attestation naming another run.
+      build different from the tag run, a flipped byte, missing SBOM or private
+      artifact, hidden/extra file or directory, undeclared sidecar, native-tree
+      drift, symlink, special file, failed attestation, or attestation naming
+      another run.
 - [x] `verdict` maps `enabled` to `promote` only when selection **and**
       verification succeed, maps `shadow` to `would-promote` with mode
       `rebuild`, and maps unset/unknown to `skipped` with mode `rebuild`.
