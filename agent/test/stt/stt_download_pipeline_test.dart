@@ -201,6 +201,63 @@ class _RefusingSink implements SttWriteSink {
   Future<void> close() => _handle.close();
 }
 
+/// Every path this process currently has a descriptor on, as the OS reports it.
+///
+/// Windows exposes no descriptor table, so it contributes nothing here and its
+/// guards use the rename probe in [_holdsOpenHandle] instead; Linux lists
+/// `/proc/self/fd` and macOS prints one `n<path>` record per descriptor with
+/// `lsof -F n`.
+Future<List<String>> _descriptorTargets() async {
+  if (Platform.isLinux) {
+    final fds = Directory('/proc/self/fd');
+    if (!fds.existsSync()) return const <String>[];
+    final targets = <String>[];
+    for (final entry in fds.listSync(followLinks: false)) {
+      if (entry is! Link) continue;
+      try {
+        targets.add(entry.targetSync());
+      } on FileSystemException {
+        continue;
+      }
+    }
+    return targets;
+  }
+  if (Platform.isMacOS) {
+    final lsof = Process.runSync('lsof', <String>['-n', '-F', 'n', '-p', '$pid']);
+    return '${lsof.stdout}'
+        .split('\n')
+        .where((String line) => line.startsWith('n') && line.length > 1)
+        .map((String line) => line.substring(1))
+        .toList();
+  }
+  return const <String>[];
+}
+
+/// Whether this process still holds an open descriptor on [path].
+///
+/// The property `close()` has to leave behind is the same everywhere — the
+/// artifact can be renamed or deleted the moment it returns — but each platform
+/// answers it through the channel it has. Windows refuses to delete or rename a
+/// file that any handle has open, and a rename is used because it fails exactly
+/// like a delete and can be undone; macOS and Linux are asked through their
+/// descriptor table. A host that offers neither reports `false`, and the lane
+/// that owns that platform still covers it.
+Future<bool> _holdsOpenHandle(String path) async {
+  if (!File(path).existsSync()) return false;
+  final resolved = File(path).resolveSymbolicLinksSync();
+  if (Platform.isWindows) {
+    final probe = '$resolved.handle-probe';
+    try {
+      File(resolved).renameSync(probe);
+    } on FileSystemException {
+      return true;
+    }
+    File(probe).renameSync(resolved);
+    return false;
+  }
+  return (await _descriptorTargets()).contains(resolved);
+}
+
 void main() {
   late Directory dir;
 
@@ -624,6 +681,15 @@ void main() {
       expect(file.lengthSync(), expected.length);
       expect(file.readAsBytesSync(), expected);
 
+      // A refused open still leaves an isolate running, and ending it is part of
+      // the close contract even though it holds no file. Read synchronously: an
+      // awaited future would concede the event-loop turn the exit needs.
+      expect(
+        pipeline.flusherIsolateEnded,
+        isTrue,
+        reason: 'the refused-open flusher outlived close()',
+      );
+
       await logged.future.timeout(const Duration(seconds: 5));
       expect(
         records,
@@ -712,6 +778,33 @@ void main() {
       // The store maps a full volume from this shape, so the round trip has to
       // survive the isolate boundary it exists for.
       expect(failure.toFileSystemException().osError?.errorCode, 28);
+    });
+
+    test('closing a refused write releases the handle it opened', () async {
+      // The same failure, taken one step further: a caller that closes what it
+      // opened must get the typed error back *and* its handle released. This is
+      // the path the store takes in a `finally` after a refused write, and the
+      // next attempt resumes from that very file.
+      final file = File('${dir.path}/refused-close.bin');
+      final sink = _RefusingSink(
+        await file.open(mode: FileMode.write),
+        const FileSystemException(
+          'Cannot write to file',
+          '/tmp/refused.bin',
+          OSError('No space left on device', 28),
+        ),
+      );
+      final pipeline = InProcessWritePipeline(sink);
+      await pipeline.add(_block(0));
+      await expectLater(pipeline.drain(), throwsA(isA<SttWriteFailure>()));
+
+      // Reaches the caller through the same channel a caller that only closes
+      // uses, and releases the sink even though the write already failed.
+      await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
+      expect(await _holdsOpenHandle(file.path), isFalse);
+      expect(file.existsSync(), isTrue, reason: 'the bytes are resumable');
+      file.deleteSync();
+      expect(file.existsSync(), isFalse);
     });
 
     test('close after a stalled write drains what was accepted', () async {
@@ -824,6 +917,167 @@ void main() {
         'probe.bin',
       );
       expect(mapped.code, 'download_failed');
+    });
+  });
+
+  group('handles', () {
+    test('close releases the artifact so it can be renamed and deleted', () async {
+      // The store activates a download by renaming its `.partial` the moment the
+      // pipeline closes (stt_model_store.dart), and deletes it when the bytes
+      // cannot be trusted. Windows refuses both while any handle is open —
+      // including the writeback handle, which lives in its own isolate — so
+      // `close()` must have every handle closed before it returns, not merely
+      // ended the isolates that held them: a killed isolate releases nothing.
+      final file = File('${dir.path}/release.bin');
+      final pipeline = await IsolateWritePipeline.open(
+        file,
+        FileMode.write,
+        flushWindowBytes: _chunk,
+      );
+      for (var i = 0; i < 8; i++) {
+        await pipeline.add(_block(i));
+      }
+      await pipeline.drain();
+      await pipeline.close();
+
+      expect(
+        await _holdsOpenHandle(file.path),
+        isFalse,
+        reason: 'close() is the handle boundary, not just the durability one',
+      );
+      final activated = File('${dir.path}/release.activated');
+      file.renameSync(activated.path);
+      expect(activated.lengthSync(), 8 * _chunk);
+      activated.deleteSync();
+      expect(activated.existsSync(), isFalse);
+    });
+
+    test('a pipeline that already failed still tears down and closes twice', () async {
+      // A deterministic writer failure: the destination's directory does not
+      // exist, so the writer isolate reports the refusal and ends on its own.
+      // That is the state `close()` used to short-circuit on, leaving the
+      // writeback isolate and its handle to the daemon's lifetime.
+      final missing = File('${dir.path}/missing/deep/artifact.bin');
+      final pipeline = await IsolateWritePipeline.open(missing, FileMode.write);
+
+      await expectLater(() async {
+        await pipeline.add(_block(0));
+        await pipeline.drain();
+      }(), throwsA(isA<SttWriteFailure>()));
+
+      // The writer reports the refusal and then ends. The state this guards
+      // against — a pipeline whose writer already exited — only exists once that
+      // isolate is gone, so wait for the exact lifecycle event and not for a
+      // duration: the deadline is a failure bound, never the synchronization.
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
+
+      await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
+      // Idempotent: a second close is a no-op, not a second teardown.
+      await pipeline.close();
+
+      expect(missing.existsSync(), isFalse);
+      expect(await _holdsOpenHandle(missing.path), isFalse);
+    });
+
+    test('an immediate close never strands the flusher handle', () async {
+      // Cancel-right-away: `open()` returns before the flusher has sent its
+      // command channel, so `close()` runs while that message is still in
+      // flight. Reading the channel once and treating "not here yet" as "no
+      // handle" stranded the append descriptor on roughly one close in twelve
+      // (17/200 measured by review, 63/200 on another host), and a killed
+      // isolate does not release it — so on Windows the `.partial` stayed
+      // undeletable and a resumed install could never repair it.
+      final root = Directory(dir.path).resolveSymbolicLinksSync();
+      for (var i = 0; i < 64; i++) {
+        final pipeline = await IsolateWritePipeline.open(
+          File('${dir.path}/immediate-$i.bin'),
+          FileMode.write,
+        );
+        await pipeline.close();
+      }
+
+      final leaked = (await _descriptorTargets())
+          .where((String path) => path.startsWith(root))
+          .toList();
+      expect(
+        leaked,
+        isEmpty,
+        reason: 'close() returned with these descriptors still open: $leaked',
+      );
+      // The same property as the user feels it: every artifact is removable, and
+      // on Windows that is only true when no handle survived the close.
+      for (final entity in Directory(root).listSync()) {
+        expect(entity.deleteSync, returnsNormally);
+      }
+    });
+
+    test('a concurrent close waits for the same teardown', () async {
+      // Two callers must not race: the one that arrives second may not treat the
+      // first one's work as done, or it renames or deletes while the flusher is
+      // still inside `closeSync`.
+      final file = File('${dir.path}/concurrent.bin');
+      final pipeline = await IsolateWritePipeline.open(file, FileMode.write);
+      await pipeline.add(_block(0));
+
+      var firstSettled = false;
+      final first = pipeline.close().whenComplete(() => firstSettled = true);
+      await pipeline.close();
+
+      expect(
+        firstSettled,
+        isTrue,
+        reason: 'a concurrent close must not return before the shared teardown',
+      );
+      await first;
+      expect(await _holdsOpenHandle(file.path), isFalse);
+      // Sequential closes stay no-ops rather than repeating the teardown.
+      await pipeline.close();
+    });
+
+    test('a concurrent failed close rethrows its typed failure once', () async {
+      final missing = File('${dir.path}/missing-concurrent/artifact.bin');
+      final pipeline = await IsolateWritePipeline.open(missing, FileMode.write);
+      await expectLater(() async {
+        await pipeline.add(_block(0));
+        await pipeline.drain();
+      }(), throwsA(isA<SttWriteFailure>()));
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
+
+      final first = pipeline.close();
+      final second = pipeline.close();
+      await expectLater(first, throwsA(isA<SttWriteFailure>()));
+      await expectLater(second, completes);
+      // A later sequential close remains a no-op.
+      await pipeline.close();
+    });
+
+    test('close ends the flusher isolate, not only its handle', () async {
+      // The writer is already gone before `close()` runs, so nothing else in the
+      // teardown can mask the flusher's own exit: the zero timeout asks exactly
+      // "has this already completed?" with no delay and no room for scheduling
+      // luck. A close that only waited for the `gone` message fails here.
+      final missing = File('${dir.path}/missing-exit/artifact.bin');
+      final pipeline = await IsolateWritePipeline.open(missing, FileMode.write);
+      await expectLater(() async {
+        await pipeline.add(_block(0));
+        await pipeline.drain();
+      }(), throwsA(isA<SttWriteFailure>()));
+      await pipeline.writerIsolateExited.timeout(const Duration(seconds: 10));
+
+      await expectLater(pipeline.close(), throwsA(isA<SttWriteFailure>()));
+      // Read synchronously, at the instant close() returned: awaiting a future
+      // here would give the exit event the very turn it needs, which is what made
+      // this unobservable before.
+      expect(
+        pipeline.flusherIsolateEnded,
+        isTrue,
+        reason: 'close() returned before the flusher isolate had ended',
+      );
+      expect(
+        pipeline.writerIsolateEnded,
+        isTrue,
+        reason: 'close() returned before the writer isolate had ended',
+      );
     });
   });
 
