@@ -67,7 +67,13 @@ is unexpired with more than an hour left, and that the downloaded bytes still
 match the manifest, the release contract at
 this commit, `SHA256SUMS` and one attestation per attested subject that names
 that run, that workflow, `refs/heads/main` and this commit on a GitHub-hosted
-runner. The file-set proof also requires the SBOM, every private contract
+runner. The manifest identity is the one a tag run would itself produce: `.tag`,
+`.channel`, `.commit` and `.build_number` equal this tag run's, and `.version`
+equals the tag without its leading `v` — `1.0.24` for `v1.0.24` and
+`1.0.24-rc.1` for `v1.0.24-rc.1`, because `generate-manifest` derives it from the
+tag and not from the contract's marketing version. That contract version must
+equal the tag's marketing version, which is what still binds the candidate to
+this commit's release contract. The file-set proof also requires the SBOM, every private contract
 artifact, exactly the sidecars declared by the manifest, and exactly the native
 staging tree declared by its per-target descriptors; hidden entries, missing
 entries, symlinks, special files, and any extra file or directory are refused.

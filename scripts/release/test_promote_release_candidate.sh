@@ -24,15 +24,42 @@ trap 'rm -rf "$fixture_root"' EXIT
 readonly REPO='EastStarAI/sanad-agent'
 readonly SHA='5456598c365d2731c47c1609824b6d561432c6c0'
 readonly OTHER_SHA='8c814889d47c73b1575c6b8b09f8dca568568cf8'
-readonly TAG='v1.0.23'
-readonly VERSION='1.0.23'
-readonly BUILD=24
-readonly CHANNEL='stable'
 readonly WORKFLOW_ID=325185514
 readonly RUN_ID=42645260900
 readonly WORKFLOW_PATH='.github/workflows/release.yml'
 # A fixed instant keeps every expiry comparison deterministic.
 readonly NOW_EPOCH=1794355200
+
+# The release identity a case runs under. `use_identity` mirrors the workflow:
+# the tag is the single input, `release_tool.dart` derives the manifest version
+# from it (so a prerelease carries 1.0.24-rc.1, not the contract's 1.0.24), and
+# the channel and feed names follow from whether the tag is a prerelease.
+use_identity() {
+  TAG="$1"
+  BUILD="$2"
+  VERSION="${TAG#v}"
+  MARKETING="${VERSION%%-*}"
+  case "$VERSION" in
+    *-*) CHANNEL=rc ;;
+    *) CHANNEL=stable ;;
+  esac
+  if [[ "$CHANNEL" == rc ]]; then
+    MANIFEST='release-manifest-rc.json'
+    APPCAST='appcast-rc.xml'
+  else
+    MANIFEST='release-manifest.json'
+    APPCAST='appcast.xml'
+  fi
+}
+
+TAG=''
+VERSION=''
+MARKETING=''
+BUILD=''
+CHANNEL=''
+MANIFEST=''
+APPCAST=''
+use_identity 'v1.0.23' 24
 
 passed=0
 failed=0
@@ -155,10 +182,10 @@ new_fixture() {
 
 write_contract() {
   local dir="$1"
-  jq -n --arg version "$VERSION" '{
+  jq -n --arg version "$MARKETING" --argjson build "$BUILD" '{
     schema_version: 1,
     version: $version,
-    build_number: 24,
+    build_number: $build,
     tag: ("v" + $version),
     channel: "stable",
     repository: "EastStarAI/sanad-agent",
@@ -190,13 +217,13 @@ write_manifest() {
        filename: ("sanad-agent-" + $version + "-linux-x64"), public: true,
        update_signature: "update signature"}
     ]
-  }' >"$dir/dist/release-manifest.json"
+  }' >"$dir/dist/$MANIFEST"
 }
 
 # Reproduces what `assemble` produces: public artifact checksums plus the Appcast.
 write_sums() {
   local dir="$1"
-  ( cd "$dir/dist" && sha256sum "sanad-agent-$VERSION-linux-x64" appcast.xml >SHA256SUMS )
+  ( cd "$dir/dist" && sha256sum "sanad-agent-$VERSION-linux-x64" "$APPCAST" >SHA256SUMS )
 }
 
 make_candidate() {
@@ -205,7 +232,7 @@ make_candidate() {
   printf 'update signature\n' >"$dir/dist/sanad-agent-$VERSION-linux-x64.update-signature"
   printf 'private ipa\n' >"$dir/dist/sanad-client-$VERSION-ios-universal.ipa"
   printf 'spdx\n' >"$dir/dist/sanad-$VERSION.spdx.json"
-  printf 'appcast\n' >"$dir/dist/appcast.xml"
+  printf 'appcast\n' >"$dir/dist/$APPCAST"
   mkdir -p "$dir/dist/native/linux-x64"
   printf 'library\n' >"$dir/dist/native/linux-x64/libsanad_whisper.so"
   jq -n '{native_directory: "linux-x64", files: {"libsanad_whisper.so": {}}}' \
@@ -386,8 +413,8 @@ verify_case() {
   run_case "$description" "$expectation" "$expected_text" \
     env PATH="$dir/bin:$PATH" PROMOTE_FIXTURE="$dir" \
     "$subject" verify --repo "$REPO" --sha "$SHA" --channel "$CHANNEL" \
-    --run-id "$RUN_ID" --tag "$TAG" --version "$VERSION" --build "$BUILD" \
-    --manifest release-manifest.json --dir "$dir/dist" --agent-dir "$dir/agent" \
+    --run-id "$RUN_ID" --tag "$TAG" --artifact-version "$VERSION" --build "$BUILD" \
+    --manifest "$MANIFEST" --dir "$dir/dist" --agent-dir "$dir/agent" \
     --contract "$dir/release/release-contract.json" "$@"
 }
 
@@ -651,6 +678,70 @@ make_candidate "$dir"
 write_attestation "$dir"
 rm "$dir/release/release-contract.json"
 verify_case 'verify: a missing release contract fails closed' "$dir" fail 'release contract'
+
+# ------------------------------------------------- release identity (RC/Stable)
+#
+# `generate-manifest` writes the manifest version as the tag without its leading
+# `v`, so an RC candidate carries `1.0.24-rc.1` while the contract's marketing
+# version is `1.0.24`. Comparing against the marketing version made every RC
+# candidate unprovable (live shadow run on v1.0.24-rc.1); these cases pin the
+# tag-derived identity and keep the contract check as the binding proof.
+use_identity 'v1.0.24-rc.1' 25
+
+rc_tag="$TAG" rc_version="$VERSION" rc_marketing="$MARKETING" rc_manifest="$MANIFEST"
+
+if [[ "$rc_version" == '1.0.24-rc.1' && "$rc_marketing" == '1.0.24' && "$rc_manifest" == 'release-manifest-rc.json' ]]; then
+  pass_case 'identity: an RC tag resolves to its release version, channel and feed'
+else
+  fail_case 'identity: an RC tag resolves to its release version, channel and feed' \
+    "got tag=$rc_tag version=$rc_version marketing=$rc_marketing manifest=$rc_manifest"
+fi
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+verify_case 'verify: a validated RC candidate promotes' "$dir" pass "candidate-verified=$RUN_ID"
+
+# The defect this change fixes: the manifest as the tool actually writes it for
+# an RC tag is accepted, and the same manifest forced back to the contract's
+# marketing version is refused.
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_manifest "$dir" "$TAG" "$CHANNEL" "$SHA" "$MARKETING" "$BUILD"
+write_attestation "$dir"
+verify_case 'verify: an RC manifest carrying the contract marketing version is refused' \
+  "$dir" fail 'version 1.0.24 is not 1.0.24-rc.1'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+verify_case 'verify: an artifact version that is the contract marketing version is refused' \
+  "$dir" fail 'is not the version of v1.0.24-rc.1, which is 1.0.24-rc.1' \
+  --artifact-version "$MARKETING"
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+printf '{"version":"1.0.23","build_number":25,"artifacts":[]}\n' \
+  >"$dir/release/release-contract.json"
+verify_case 'verify: a contract for another release is refused' \
+  "$dir" fail 'the release contract at this commit is for 1.0.23, not 1.0.24'
+
+# A Stable tag derives the same version the contract declares, so its identity
+# logic is unchanged; the symmetric mismatch must still be refused.
+use_identity 'v1.0.23' 24
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_manifest "$dir" "$TAG" "$CHANNEL" "$SHA" '1.0.23-rc.1' "$BUILD"
+write_attestation "$dir"
+verify_case 'verify: a Stable manifest carrying an RC version is refused' \
+  "$dir" fail 'version 1.0.23-rc.1 is not 1.0.23'
+
+dir="$(new_fixture)"
+make_candidate "$dir"
+write_attestation "$dir"
+verify_case 'verify: a Stable candidate still promotes' "$dir" pass "candidate-verified=$RUN_ID"
 
 # ------------------------------------------------------------- verdict cases
 
