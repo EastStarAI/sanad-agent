@@ -29,8 +29,11 @@ internal partial/final contract the client already understands.
 - Normalization: interim events become partials for the current segment; a
   committed/final event replaces that segment; a late partial after a final is
   discarded.
-- Mode is a template fact: a transcription template declares streaming or batch,
-  and the catalog row carries that mode for the UI indicator.
+- Mode is a model fact: inside one vendor some models are realtime-only and
+  refuse server-side turn detection, others are batch and emit one final. The
+  catalog row carries the mode; the template only declares what its adapter can
+  speak. A realtime-only model is never offered a turn-detection configuration it
+  rejects, and a batch model is never presented as streaming.
 - Bounded behavior: first-audio timeout, idle timeout, session byte and duration
   caps, single reconnect policy that never silently resumes a finished utterance.
 - Failure mapping identical in shape to 167e, with vendor-neutral reason codes.
@@ -41,6 +44,8 @@ internal partial/final contract the client already understands.
   that decided and the vendor-neutral code only.
 - Audio format sent to each vendor is declared by its adapter, not guessed at the
   call site.
+- Wire facts come from the pinned per-vendor reference source; no vendor SDK
+  becomes a dependency, and any copied block obeys the plan's copied-code rules.
 - Segment identity is stable: a final for a segment is terminal and never mutates.
 - Cancellation tears down the socket in order; no orphan connection survives a
   session.
@@ -80,10 +85,10 @@ internal partial/final contract the client already understands.
 
 ### G4 — Mode projection
 
-- [ ] Catalog rows expose streaming vs batch, and the instance's declared mode
-      matches the adapter used.
-- [ ] A batch vendor is never presented as streaming, even when both are
-      configured.
+- [ ] Catalog rows expose the mode of the model, not of the vendor.
+- [ ] A realtime-only model never receives a turn-detection configuration it
+      refuses, and a batch model is never presented as streaming.
+- [ ] The adapter used matches the mode its row advertises.
 
 ## 5. Definition of Done
 

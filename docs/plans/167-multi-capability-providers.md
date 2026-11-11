@@ -55,6 +55,9 @@ dimension of the provider model so that:
 | D7 | One default per capability; delete/disable of a default is refused | Owner, 2026-11-11 |
 | D8 | Readiness and test are per capability, not per card | Owner, 2026-11-11 |
 | D9 | No migration of the legacy search key; DuckDuckGo stays the default | Owner, 2026-11-11 |
+| D10 | No vendor SDK becomes a dependency; adapters are ours | Owner, 2026-11-11 |
+| D11 | Reference hierarchy: neutral multi-vendor runtime first, vendor SDKs second, docs last | Owner, 2026-11-11 |
+| D12 | Transcription mode is a model fact, not a template fact | Verified vendor model behavior |
 
 ## 4. Capability model
 
@@ -99,6 +102,47 @@ capability binds to. Everything else is a vendor adapter.
 
 Consequence for the design: a template carries vendor identity and binding data,
 never a guessed wire. Adding a vendor later is code plus one catalog entry.
+
+**Mode is a model fact, not a template fact.** Inside one vendor, models differ:
+some are realtime-only and reject server-side turn detection, others are batch
+and emit a single final. The catalog row therefore carries the mode, and the
+template only declares what its adapter can speak.
+
+**One engine seam, two shapes.** The recognition seam exposes a full-batch
+recognizer and a streaming recognizer over the same events. A batch-only vendor
+is presented as streaming by a wrapper that segments with the local speech gate
+and VAD, exactly as the local batch mode already behaves. That keeps one
+downstream path for session, lease, caps, and insertion.
+
+### 5.1 Reference hierarchy
+
+1. **Architectural reference:** a neutral multi-vendor agent runtime — one base
+   contract, batch and streaming on the same seam, a vendor-neutral transcript
+   event, per-model capability flags, and a batch-to-stream wrapper built on VAD.
+   It answers *how to unify*, never *what a vendor expects*.
+2. **Wire reference:** per-vendor official SDKs — exact field names, auth headers,
+   message envelopes, audio contract, and event-to-text mapping. They track the
+   vendor API as it changes.
+3. **Confirmation only:** vendor documentation pages. They confirm behavior but
+   are not pinnable evidence.
+
+### 5.2 Copied-code rules
+
+- Leaf mechanics only: field names, envelope shapes, event mapping, audio
+  encoding. Never a session manager, retry policy, or logging layer — those
+  conflict with our caps and our logging law.
+- At most one self-contained function, converted to Dart and tested here. Code
+  whose failure mode we cannot diagnose is not copied.
+- A short attribution note above any copied block, and the source pinned to a
+  revision in the evidence store.
+
+### 5.3 Dependency decision
+
+Evaluated and rejected: no vendor SDK becomes a dependency of the agent. The
+available Dart clients are unofficial single-maintainer packages, Flutter-only,
+or larger than the task they serve, and none of them removes the work that
+matters — per-vendor normalization, session bounds, and capability state. The
+agent keeps using only the HTTP and WebSocket support it already has.
 
 ## 6. Delivery tasks
 

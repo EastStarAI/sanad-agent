@@ -22,11 +22,13 @@ final text per utterance, and the local model remains the default source.
 
 ## 2. Scope
 
-- A cloud engine that satisfies the existing recognition contract (audio in,
-  partial/final events out) so session, lease, buffer, and insertion behavior are
-  unchanged downstream.
-- One batch adapter for the OpenAI-compatible family: multipart upload of the
-  buffered utterance at its end, single final result.
+- One cloud recognition seam with two shapes over the same events: a full-batch
+  recognizer and a streaming recognizer. Session, lease, buffer, caps, and
+  insertion stay unchanged downstream because they see one seam.
+- A batch recognizer for the OpenAI-compatible family: multipart upload of one
+  utterance at its end, single final result. A batch-only vendor is presented as
+  streaming by the local speech gate plus VAD segmenting the audio into
+  utterances — the same behavior the local batch mode already has.
 - Local speech gating and VAD stay local; only the utterance is uploaded.
 - Source selection: dictation source becomes `local` or `instance+model`, with
   one selection authority; local is the default when nothing is chosen.
@@ -45,6 +47,10 @@ final text per utterance, and the local model remains the default source.
   download.
 - Language/dialect is sent explicitly with every request; the provider default is
   never relied upon.
+- No vendor SDK becomes a dependency; wire facts come from the pinned reference
+  source, and any copied block is a single function with an attribution note.
+- The utterance boundary is ours: in batch mode the vendor never decides when a
+  Sanad segment ends.
 - Credentials are resolved at session start through the existing resolver; the
   client never sees a key.
 
@@ -58,6 +64,8 @@ final text per utterance, and the local model remains the default source.
 
 ### G1 — Engine seam
 
+- [ ] The seam exposes a batch recognizer and a streaming recognizer; a batch-only
+      vendor reaches the client through the wrapper, never through a second path.
 - [ ] The cloud engine satisfies the same contract as a local engine and is
       selected per session, not per process.
 - [ ] A session bound to a cloud source never loads a local model.

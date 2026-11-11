@@ -27,6 +27,11 @@ existing environment-based configuration keeps working untouched.
 - One adapter per vendor with its own auth form, request shape, and response
   normalization into the existing result contract (title, url, snippet, optional
   direct answer).
+- No search SDK as a dependency: the available Dart clients are per-vendor
+  community packages that wrap a single POST, so the adapters are ours.
+- The self-hosted engine's source is read for its response shape only. Its
+  license forbids copying code into this repository, so no block is taken from it
+  and no derivative of it is embedded.
 - Routing: the search tool resolves a default search instance when one exists;
   otherwise it keeps today's ordered built-in behavior, including the
   environment-configured path. No migration, no rewriting of stored keys.
