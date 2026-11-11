@@ -1059,6 +1059,14 @@ jobs:
           grep -F -- '--deny-self-hosted-runners' scripts/release/promote_release_candidate.sh
           grep -F "readonly SIGNER_REF='refs/heads/main'" scripts/release/promote_release_candidate.sh
           bash -n scripts/release/promote_release_candidate.sh
+          # The candidate identity comes from the tag alone. `generate-manifest`
+          # writes 1.0.24-rc.1 for v1.0.24-rc.1, so comparing against the
+          # contract's marketing version made every RC candidate unprovable.
+          grep -F 'local tag_version="${TAG#v}"' scripts/release/promote_release_candidate.sh
+          grep -F 'local tag_marketing="${tag_version%%-*}"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--artifact-version "$ARTIFACT_VERSION"' .github/workflows/release.yml
+          ! grep -Fq -- '--version' scripts/release/promote_release_candidate.sh
+          ! grep -Fq -- '--version "$VERSION"' .github/workflows/release.yml
           grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml

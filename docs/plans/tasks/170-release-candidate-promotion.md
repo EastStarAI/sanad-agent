@@ -100,11 +100,11 @@ second build.
       whose `head_sha`/branch/event/repository/path/workflow differ, or whose
       candidate artifact is missing, duplicated, expired or under 1 h from
       expiry.
-- [x] `verify` rejects a manifest with any of tag, channel, commit, version or
-      build different from the tag run, a flipped byte, missing SBOM or private
-      artifact, hidden/extra file or directory, undeclared sidecar, native-tree
-      drift, symlink, special file, failed attestation, or attestation naming
-      another run.
+- [x] `verify` rejects a manifest whose tag, channel, commit, build or tag-derived
+      version (`v1.0.24` → `1.0.24`, `v1.0.24-rc.1` → `1.0.24-rc.1`) differs from the
+      tag run, a flipped byte, missing SBOM or private artifact, hidden/extra file
+      or directory, undeclared sidecar, native-tree drift, symlink, special file,
+      failed attestation, or attestation naming another run.
 - [x] `verdict` maps `enabled` to `promote` only when selection **and**
       verification succeed, maps `shadow` to `would-promote` with mode
       `rebuild`, and maps unset/unknown to `skipped` with mode `rebuild`.
@@ -128,9 +128,27 @@ second build.
 
 ## Current status
 
-Gates G0–G4 are implemented and locally verified. The pull request is open and
-awaits CI plus independent security review of the selector. No tag, release,
-repository variable or Environment was changed by this task.
+Gates G0–G4 are implemented and locally verified, and the change merged as PR
+#411. The live shadow run on `v1.0.24-rc.1` (tag run `42960836966`, candidate job
+`130326981532`) found one defect and it is fixed on `fix/release-candidate-rc-identity`:
+
+- **Defect.** `verify` compared the manifest `.version` with the contract's
+  marketing version. `generate-manifest` writes `.version` as the tag without
+  its leading `v`, so an RC candidate carries `1.0.24-rc.1` while the contract
+  says `1.0.24`; every RC tag therefore ended `would-rebuild`. Stable was not
+  affected, because there the two strings are identical.
+- **Fix.** The tag is now the only identity input: `.version` must equal the tag
+  without its leading `v`, an explicit `--artifact-version` must agree with the
+  tag, and a new guard requires the contract at this commit to declare that
+  tag's marketing version. `--version` is gone, so no caller can supply a
+  marketing version as the identity again.
+- **Proof.** The merged script reproduces the live reason exactly on the real
+  candidate (`version 1.0.24-rc.1 is not 1.0.24`); the fixed script verifies that
+  same artifact (`24 attested subjects, 16 checksummed files`) and still verifies
+  the real `v1.0.23` Stable candidate against its own contract.
+
+One follow-up remains open for the owner: `RELEASE_CANDIDATE_PROMOTION` is still
+unset, so the next RC must run in `shadow` before `enabled`.
 
 ## Rollout and rollback
 

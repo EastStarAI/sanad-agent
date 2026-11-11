@@ -272,7 +272,7 @@ jobs:
           SELECTION_REASON: ${{ steps.select.outputs.reason }}
           CHANNEL: ${{ needs.validate.outputs.channel }}
           TAG: ${{ needs.validate.outputs.tag }}
-          VERSION: ${{ needs.validate.outputs.version }}
+          ARTIFACT_VERSION: ${{ needs.validate.outputs.artifact_version }}
           BUILD: ${{ needs.validate.outputs.build }}
           MANIFEST: ${{ needs.validate.outputs.manifest }}
         run: |
@@ -289,7 +289,7 @@ jobs:
               --channel "$CHANNEL" \
               --run-id "$SELECTED_RUN_ID" \
               --tag "$TAG" \
-              --version "$VERSION" \
+              --artifact-version "$ARTIFACT_VERSION" \
               --build "$BUILD" \
               --manifest "$MANIFEST" \
               --dir dist \

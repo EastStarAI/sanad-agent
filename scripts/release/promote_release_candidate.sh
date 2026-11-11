@@ -59,7 +59,6 @@ WORKFLOW_ID=''
 DIR=''
 RUN_ID=''
 TAG=''
-VERSION=''
 BUILD=''
 MANIFEST=''
 ARTIFACT_VERSION=''
@@ -93,7 +92,7 @@ Usage:
       [--workflow-path PATH] [--workflow-id ID] [--contract FILE]
       [--min-remaining-seconds N] [--now EPOCH]
   promote_release_candidate.sh verify --repo OWNER/REPO --sha COMMIT --channel stable|rc
-      --run-id ID --tag TAG --version X.Y.Z --build N --manifest FILE --dir DIR
+      --run-id ID --tag TAG --build N --manifest FILE --dir DIR
       [--artifact-version V] [--workflow-path PATH] [--contract FILE]
       [--agent-dir DIR]
   promote_release_candidate.sh verdict --switch VALUE --selection ok|failed
@@ -117,7 +116,6 @@ parse_arguments() {
       --dir) require_value "$@"; DIR="$2"; shift 2 ;;
       --run-id) require_value "$@"; RUN_ID="$2"; shift 2 ;;
       --tag) require_value "$@"; TAG="$2"; shift 2 ;;
-      --version) require_value "$@"; VERSION="$2"; shift 2 ;;
       --build) require_value "$@"; BUILD="$2"; shift 2 ;;
       --manifest) require_value "$@"; MANIFEST="$2"; shift 2 ;;
       --artifact-version) require_value "$@"; ARTIFACT_VERSION="$2"; shift 2 ;;
@@ -387,11 +385,15 @@ cmd_select() {
 # Filenames the release assembly writes that `SHA256SUMS` cannot cover: the
 # private iOS IPA and the Android AAB (contract artifacts that are not public),
 # and the per-target dictation runtime metadata each Agent lane stages. All of
-# them are part of the candidate and none of them is published.
+# them are part of the candidate and none of them is published. The contract
+# names its artifacts with the marketing version while a prerelease replaces it
+# with the release version, so this applies exactly the substitution that
+# `releaseArtifactFilename` applies.
 contract_metadata_filenames() {
   [[ -f "$CONTRACT" ]] ||
     die "the release contract $CONTRACT is unavailable, so the candidate file set cannot be bounded"
-  jq -r --arg marketing "$VERSION" --arg release "$ARTIFACT_VERSION" '
+  jq -r --arg release "$ARTIFACT_VERSION" '
+    (.version // "") as $marketing |
     [
       (.artifacts[]? | select(.public != true) | (.filename // "") |
         split($marketing) | join($release)),
@@ -411,10 +413,29 @@ cmd_verify() {
   [[ -n "$RUN_ID" && "$RUN_ID" =~ ^[1-9][0-9]*$ ]] || usage_error '--run-id must be numeric'
   [[ -n "$MANIFEST" ]] || usage_error '--manifest is required'
   [[ -n "$TAG" ]] || usage_error '--tag is required'
-  [[ -n "$VERSION" ]] || usage_error '--version is required'
   [[ "$BUILD" =~ ^[1-9][0-9]*$ ]] || usage_error '--build must be a positive integer'
-  if [[ -z "$ARTIFACT_VERSION" ]]; then
-    ARTIFACT_VERSION="${TAG#v}"
+
+  # The tag is the identity a tag run itself would produce. `generate-manifest`
+  # writes `version` as the tag without its leading `v` - `1.0.24` for `v1.0.24`
+  # and `1.0.24-rc.1` for `v1.0.24-rc.1` - and only a Stable tag's version is
+  # also the contract's marketing version. Comparing the manifest against the
+  # marketing version made every RC candidate unprovable; the contract check
+  # below is what still binds the candidate to this commit's release contract.
+  [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]] ||
+    die "the release tag $TAG is not a Stable or prerelease release tag"
+  local tag_version="${TAG#v}"
+  local tag_marketing="${tag_version%%-*}"
+  if [[ -n "$ARTIFACT_VERSION" && "$ARTIFACT_VERSION" != "$tag_version" ]]; then
+    die "--artifact-version $ARTIFACT_VERSION is not the version of $TAG, which is $tag_version"
+  fi
+  ARTIFACT_VERSION="$tag_version"
+  [[ -f "$CONTRACT" ]] ||
+    die "the release contract $CONTRACT is unavailable, so the candidate identity cannot be checked"
+  local contract_marketing
+  contract_marketing="$(jq -r '.version // ""' "$CONTRACT")" ||
+    die "the release contract $CONTRACT is not readable JSON"
+  if [[ "$contract_marketing" != "$tag_marketing" ]]; then
+    die "the release contract at this commit is for $contract_marketing, not $tag_marketing"
   fi
 
   local dist
@@ -433,7 +454,7 @@ cmd_verify() {
   local identity_error
   identity_error="$(jq -r \
     --arg tag "$TAG" --arg channel "$CHANNEL" --arg commit "$SHA" \
-    --arg version "$VERSION" --argjson build "$BUILD" '
+    --arg version "$ARTIFACT_VERSION" --argjson build "$BUILD" '
     [
       (if .tag == $tag then empty else "tag \(.tag // "missing") is not \($tag)" end),
       (if .channel == $channel then empty else "channel \(.channel // "missing") is not \($channel)" end),
