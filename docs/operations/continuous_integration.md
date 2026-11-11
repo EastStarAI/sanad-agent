@@ -92,6 +92,16 @@ The lane then analyzes the engine package it selected, because
 resolve). A lane that forgets the overlay fails at `pub get` instead of shipping
 a half-configured build.
 
+`Native dictation` also runs the write pipeline's cost gate
+(`agent/test/stt/stt_pipeline_cost_test.dart`) on every OS lane. The gate owns a
+file so it owns a process: it measures the isolate hop against the same sink
+in-process, warms both arms, runs five alternating paired trials, and judges the
+median ratio against `0.5`, printing every trial so a lane log carries the
+evidence rather than only a verdict. The shape is the contract — a ratio measured
+beside another suite, or always in the same order, charges one arm for the other's
+contention, which is how `windows-2025` charged the isolate 2.78x on a run where
+the pipeline had not regressed.
+
 ### Cross-Component Contract Fixtures
 
 A path is classified by the component that *consumes* it, not only by the
