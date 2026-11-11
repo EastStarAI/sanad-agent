@@ -36,6 +36,12 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RELEASE_ARTIFACT_RETENTION_DAYS: 14
+  # Rollout switch for candidate promotion (design item A). `enabled` publishes
+  # the exact bytes a `workflow_dispatch` validation run on `main` already
+  # built, signed, notarized, tested, manifested, SBOM-ed and attested; `shadow`
+  # proves the candidate and reports it but still rebuilds; unset or any other
+  # value skips selection. Deleting the variable is the instant rollback.
+  RELEASE_CANDIDATE_PROMOTION: ${{ vars.RELEASE_CANDIDATE_PROMOTION }}
   # One signing identifier for every released Agent executable. It must never
   # carry the release version or the architecture: macOS stores a signed code
   # requirement in the Keychain ACL of every item the Agent creates, so a
@@ -183,8 +189,185 @@ jobs:
           }
           exit 1
 
-  agent:
+  # The release is built twice today: a `workflow_dispatch` validation run on
+  # `main` proves a complete signed candidate, and the tag run rebuilds all of
+  # it. This job refuses to accept that second build when the first one can be
+  # proved byte for byte, so the published artifacts are the artifacts that were
+  # proved. It runs on tags only and can only ever *offer* a candidate: every
+  # check lives in `scripts/release/promote_release_candidate.sh`, any failure
+  # (including an unreadable API or a defect in the script) becomes `mode=rebuild`,
+  # and both script calls are wrapped so the job itself never fails a release.
+  candidate:
+    name: Select and verify validated candidate
     needs: validate
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Reading the candidate's jobs and its artifact from the dispatch run.
+      actions: read
+      # Proving every published byte carries that run's attestation.
+      attestations: read
+    outputs:
+      mode: ${{ steps.decide.outputs.mode }}
+      verdict: ${{ steps.decide.outputs.verdict }}
+      candidate_run_id: ${{ steps.decide.outputs.candidate_run_id }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Select the validated candidate
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        run: |
+          set -uo pipefail
+          # The workflow-level env carries the rollout switch into every step.
+          promotion_switch="${RELEASE_CANDIDATE_PROMOTION:-}"
+          attempt=no
+          candidate_run_id=""
+          promotion_reason=""
+          if [[ "$promotion_switch" != enabled && "$promotion_switch" != shadow ]]; then
+            promotion_reason="RELEASE_CANDIDATE_PROMOTION is '${promotion_switch:-unset}', so this tag run rebuilds"
+          elif output="$(scripts/release/promote_release_candidate.sh select \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$GITHUB_SHA" \
+            --channel "$CHANNEL" \
+            --contract release/release-contract.json 2>&1)"; then
+            printf '%s\n' "$output"
+            attempt=yes
+            candidate_run_id="$(sed -n 's/^candidate_run_id=//p' <<<"$output")"
+          else
+            printf '%s\n' "$output"
+            promotion_reason="$(sed -n 's/^promotion-reason: //p' <<<"$output" | tail -1)"
+          fi
+          {
+            echo "attempt=$attempt"
+            echo "candidate_run_id=$candidate_run_id"
+            echo "reason=$promotion_reason"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download the validated candidate
+        if: steps.select.outputs.attempt == 'yes'
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
+          run-id: ${{ steps.select.outputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Resolve the release tool dependencies
+        if: steps.select.outputs.attempt == 'yes'
+        working-directory: agent
+        run: fvm flutter pub get
+      # `mode=promote` is written only after every selection and verification
+      # rule passed. Any earlier failure leaves `mode=rebuild`, and a failed
+      # upload is caught by `draft`, which then never sees a complete artifact.
+      - name: Verify the validated candidate and decide the mode
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTEMPT: ${{ steps.select.outputs.attempt }}
+          SELECTED_RUN_ID: ${{ steps.select.outputs.candidate_run_id }}
+          SELECTION_REASON: ${{ steps.select.outputs.reason }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          BUILD: ${{ needs.validate.outputs.build }}
+          MANIFEST: ${{ needs.validate.outputs.manifest }}
+        run: |
+          set -uo pipefail
+          promotion_switch="${RELEASE_CANDIDATE_PROMOTION:-}"
+          selection=failed
+          verification=failed
+          promotion_reason="$SELECTION_REASON"
+          if [[ "$ATTEMPT" == yes ]]; then
+            selection=ok
+            if output="$(scripts/release/promote_release_candidate.sh verify \
+              --repo "$GITHUB_REPOSITORY" \
+              --sha "$GITHUB_SHA" \
+              --channel "$CHANNEL" \
+              --run-id "$SELECTED_RUN_ID" \
+              --tag "$TAG" \
+              --version "$VERSION" \
+              --build "$BUILD" \
+              --manifest "$MANIFEST" \
+              --dir dist \
+              --agent-dir agent \
+              --contract release/release-contract.json 2>&1)"; then
+              printf '%s\n' "$output"
+              verification=ok
+              promotion_reason=""
+            else
+              printf '%s\n' "$output"
+              promotion_reason="$(sed -n 's/^promotion-reason: //p' <<<"$output" | tail -1)"
+            fi
+          fi
+          if ! decision="$(scripts/release/promote_release_candidate.sh verdict \
+            --switch "$promotion_switch" \
+            --selection "$selection" \
+            --verification "$verification" \
+            --reason "$promotion_reason")"; then
+            echo "::error::The promotion decision could not be computed; this tag run rebuilds instead."
+            decision="$(printf 'verdict=rebuild\nmode=rebuild\nreason=the promotion verdict could not be computed')"
+          fi
+          printf '%s\n' "$decision"
+          mode="$(sed -n 's/^mode=//p' <<<"$decision")"
+          verdict="$(sed -n 's/^verdict=//p' <<<"$decision")"
+          decided_reason="$(sed -n 's/^reason=//p' <<<"$decision")"
+          # Only the exact word promotes. An unreadable or unexpected mode, or a
+          # missing one, is the rebuild path - never a promotion.
+          case "$mode" in
+            promote) ;;
+            *)
+              mode=rebuild
+              ;;
+          esac
+          {
+            echo "mode=$mode"
+            echo "verdict=$verdict"
+            echo "candidate_run_id=$SELECTED_RUN_ID"
+            echo "reason=$decided_reason"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release candidate promotion"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| \`RELEASE_CANDIDATE_PROMOTION\` | \`${promotion_switch:-unset}\` |"
+            echo "| verdict | **$verdict** |"
+            echo "| mode | **$mode** |"
+            if [[ -n "$SELECTED_RUN_ID" ]]; then
+              echo "| candidate run | [$SELECTED_RUN_ID](https://github.com/$GITHUB_REPOSITORY/actions/runs/$SELECTED_RUN_ID) |"
+            else
+              echo "| candidate run | none |"
+            fi
+            echo "| reason | $decided_reason |"
+            echo
+            if [[ "$promotion_switch" == shadow ]]; then
+              echo "Shadow mode never changes what is published. This tag run rebuilds and publishes its own bytes, and the verdict above is evidence for the next rollout step."
+            fi
+            if [[ "$mode" == promote ]]; then
+              echo "The Agent, Client and assemble jobs are skipped: this run publishes the exact bytes the candidate run built, signed, notarized, tested and attested."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The tag run must hold the same artifact name that `draft`,
+      # `client-download-aliases` and `deploy.yml` already read from
+      # `github.run_id`, so promotion changes no downstream contract.
+      - name: Publish the verified candidate into this run
+        if: steps.decide.outputs.mode == 'promote'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
+          path: dist/*
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: error
+
+  agent:
+    needs: [validate, candidate]
+    # A skipped `candidate` (every non-tag run) must not skip the build, and a
+    # failed one must fall back to the rebuild rather than fail the release.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     strategy:
       fail-fast: false
       matrix:
@@ -735,7 +918,8 @@ jobs:
           if-no-files-found: error
 
   client-linux-web:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
@@ -797,7 +981,8 @@ jobs:
           if-no-files-found: error
 
   client-android:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: android-signing
@@ -843,7 +1028,8 @@ jobs:
           if-no-files-found: error
 
   client-macos:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: macos-26
     timeout-minutes: 60
     environment: apple-signing
@@ -908,7 +1094,8 @@ jobs:
           if-no-files-found: error
 
   client-windows:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: windows-2025
     timeout-minutes: 60
     environment: windows-update-signing
@@ -972,7 +1159,8 @@ jobs:
           if-no-files-found: error
 
   client-ios:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
@@ -1029,7 +1217,12 @@ jobs:
           if-no-files-found: error
 
   assemble:
-    needs: [validate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
+    needs: [validate, candidate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
+    # `always()` is required for two reasons: a skipped `candidate` on a
+    # non-tag run must not skip the assembler, and a promotion must skip it
+    # deliberately. `contains(needs.*.result, 'failure')` keeps every failed
+    # build from reaching the manifest, exactly as the implicit `success()` did.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.candidate.outputs.mode != 'promote' && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1085,8 +1278,12 @@ jobs:
 
   draft:
     name: Create immutable Draft candidate
-    needs: [validate, assemble]
-    if: needs.validate.outputs.validation_only != 'true'
+    needs: [validate, candidate, assemble]
+    # A promotion publishes the artifact the `candidate` job re-uploaded, so
+    # `assemble` must have been skipped and `candidate` must have succeeded. Any
+    # other shape - including a failed candidate job after a partial upload -
+    # leaves no Draft and therefore no publication.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.validation_only != 'true' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success') && ((needs.candidate.outputs.mode == 'promote' && needs.assemble.result == 'skipped') || (needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1127,7 +1324,7 @@ jobs:
   publish:
     name: Publish approved immutable release
     needs: [validate, draft]
-    if: needs.validate.outputs.validation_only != 'true' && (github.ref_type == 'tag' || inputs.request_publication == true)
+    if: ${{ always() && !cancelled() && needs.draft.result == 'success' && needs.validate.outputs.validation_only != 'true' && (github.ref_type == 'tag' || inputs.request_publication == true) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release-publication
@@ -1159,7 +1356,7 @@ jobs:
   client-download-aliases:
     name: Verify and deploy Stable Client aliases
     needs: [validate, publish]
-    if: needs.validate.outputs.channel == 'stable'
+    if: ${{ always() && !cancelled() && needs.publish.result == 'success' && needs.validate.outputs.channel == 'stable' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: client-downloads-production
@@ -1230,7 +1427,7 @@ jobs:
   production-assets:
     name: Deploy Stable Production assets
     needs: [validate, publish, client-download-aliases]
-    if: needs.validate.outputs.channel == 'stable'
+    if: ${{ always() && !cancelled() && needs.client-download-aliases.result == 'success' && needs.validate.outputs.channel == 'stable' }}
     permissions:
       contents: read
       attestations: read

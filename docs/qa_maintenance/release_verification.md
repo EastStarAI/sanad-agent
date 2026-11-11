@@ -190,6 +190,15 @@ and exact custom release-ref policies but have no required reviewers.
 `release-publication` retains the repository owner as required reviewer and is
 reachable only after all builds, signing, notarization, tests, metadata,
 checksums, SBOM, attestations, and private Draft creation succeed.
+
+A tag run that promotes a validated candidate replaces "all builds" with the
+proof that they already succeeded on this exact commit: the `candidate` job
+re-verifies the dispatch run's jobs, its artifact, the manifest identity, the
+release contract, `SHA256SUMS` and every attestation, and only then does the
+Draft exist. The approval is therefore still reached after the same evidence;
+the build steps it used to wait for are the ones the dispatch run already ran.
+The approval decision itself, its Environment and its single-owner reviewer are
+unchanged, and a promotion that cannot be proved rebuilds instead.
 `client-downloads-production` remains non-interactive and tag-restricted so an
 approved Stable publication can deploy aliases and Production assets without a
 second human decision. Any missing signing ref restriction, reviewer on a
@@ -319,7 +328,7 @@ self-removal. That wait is deadline-based and generous for slow runners (up to
 60 seconds) while still exiting as soon as both observations hold, so the gate
 never depends on how fast a hosted runner starts PowerShell.
 
-Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
+Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. That retained `stable-release-candidate` or `rc-release-candidate` artifact is exactly what a later tag run may promote, and it stays promotable for the artifact retention window: 14 days. A tag cut later than that falls back to a full rebuild. Promotion itself is controlled by the repository variable `RELEASE_CANDIDATE_PROMOTION` (`enabled`, `shadow`, or unset); the tag run's `candidate` job summarises its verdict and reason, and in `shadow` it must report `would-promote` while the run still publishes only its own build. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
 
 Flutter Web acceptance is runtime evidence, not compilation or HTTP evidence.
 The release build must start in a clean browser, create a non-empty Flutter

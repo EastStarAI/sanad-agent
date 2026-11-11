@@ -1014,7 +1014,24 @@ jobs:
             .github/workflows/release.yml scripts/install.ps1 client/release/windows/release.ps1
           grep -F 'environment: release-publication' .github/workflows/release.yml
           grep -F 'validation_only:' .github/workflows/release.yml
-          grep -F "if: needs.validate.outputs.validation_only != 'true'" .github/workflows/release.yml
+          # Candidate promotion (task 170). The tag run may publish the dispatch
+          # run's proved bytes only through the guarded path, and the draft job
+          # must require both halves of that pairing: promotion with a skipped
+          # assembler, or a rebuild with a successful one.
+          grep -F 'name: Select and verify validated candidate' .github/workflows/release.yml
+          grep -F 'name: Publish the verified candidate into this run' .github/workflows/release.yml
+          grep -F 'vars.RELEASE_CANDIDATE_PROMOTION' .github/workflows/release.yml
+          grep -F "(needs.candidate.outputs.mode == 'promote' && needs.assemble.result == 'skipped')" .github/workflows/release.yml
+          grep -F 'case "$mode" in' .github/workflows/release.yml
+          # Only the exact word promotes, and every failure of the selector
+          # rebuilds. The verifier's provenance pins must stay exactly these.
+          grep -F 'mode=rebuild' scripts/release/promote_release_candidate.sh
+          grep -F -- '--signer-workflow "$REPO/$WORKFLOW_PATH"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--source-ref "$SIGNER_REF"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--source-digest "$SHA"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--deny-self-hosted-runners' scripts/release/promote_release_candidate.sh
+          grep -F "readonly SIGNER_REF='refs/heads/main'" scripts/release/promote_release_candidate.sh
+          bash -n scripts/release/promote_release_candidate.sh
           grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml
@@ -1086,6 +1103,7 @@ jobs:
           scripts/release/test_generate_client_download_redirects.sh
           scripts/release/test_deploy_production_asset.sh
           scripts/release/test_verify_metadata_release_diff.sh
+          scripts/release/test_promote_release_candidate.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
