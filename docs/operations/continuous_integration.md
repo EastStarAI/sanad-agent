@@ -13,9 +13,17 @@ runbook the repository owner and merge agent follow.
 ## Pipeline Model
 
 Classification (`classify`) reads the changed paths and enables only the lanes
-that the change touches. A classification failure, a `push` to `main`, or a
-`workflow_dispatch` run enables every lane, so a broken classifier can never
-silently skip validation.
+that the change touches. It publishes **one output per lane**, not one per
+component, because a component and a lane are not the same set: the client
+component feeds four lanes and the post-merge complement run has to be able to
+skip exactly the lanes the merge queue already proved.
+
+A classification failure, a `workflow_dispatch` run, a changed path that matches
+no class at all, or a changed path that matches one of the always-run triggers in
+[`scripts/ci/lane_inputs.txt`](../../scripts/ci/lane_inputs.txt) enables every
+lane, so a broken classifier can never silently skip validation. A `push` to
+`main` also enables every lane — and then reduces that set to the complement
+described in the next section, which is the only reduction a `push` ever applies.
 
 Every lane is an independent job. The client and agent test lanes are matrices
 with one job per shard, so the critical path is the setup cost plus the
@@ -24,24 +32,34 @@ slowest single shard instead of the whole suite.
 | Lane | Job names | Runs when |
 | --- | --- | --- |
 | History | `Verify branch history` | always |
-| Client analysis | `Analyze client` | `client` paths |
-| Client tests | `Test client (1/4)`, `Test client (2/4)`, `Test client (3/4)`, `Test client (4/4)` | `client` paths |
-| Client Web guard | `Web startup composition` | `client` paths |
-| Agent checks | `Agent contract checks and analyze` | `agent` paths |
-| Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent` paths |
-| Supervisor skill tests | `Supervisor skill tests` | `agent` paths |
-| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `agent` paths |
-| Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `agent` paths |
-| `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `client` or `docs` paths |
-| Docs and governance | `Validate docs and governance` | `docs` paths |
-| Release and security | `Validate release and security boundaries` | `release` or `security` paths |
+| Client analysis | `Analyze client` | `client_analyze` |
+| Client tests | `Test client (1/4)`, `Test client (2/4)`, `Test client (3/4)`, `Test client (4/4)` | `client_tests` |
+| Client Web guard | `Web startup composition` | `client_web` |
+| Agent checks | `Agent contract checks and analyze` | `agent_checks` |
+| Agent tests | `Test agent (1/4)`, `Test agent (2/4)`, `Test agent (3/4)`, `Test agent (4/4)` | `agent_tests` |
+| Supervisor skill tests | `Supervisor skill tests` | `supervisor_skill` |
+| CLI automation | `CLI automation (ubuntu-24.04)`, `CLI automation (ubuntu-24.04-arm)`, `CLI automation (macos-26)`, `CLI automation (windows-2025)` | `cli_automation` |
+| Native dictation | `Native dictation (ubuntu-24.04)`, `Native dictation (ubuntu-24.04-arm)`, `Native dictation (macos-26)`, `Native dictation (macos-15-intel)`, `Native dictation (windows-2025)` | `native_stt` |
+| `sanad-dev` bootstrap | `sanad-dev bootstrap (<os>)` | `sanad_dev` |
+| Docs and governance | `Validate docs and governance` | `docs_governance` |
+| Release and security | `Validate release and security boundaries` | `release_security` |
 | Protected review | `Verify protected review labels` | always |
 | Aggregate | `All required checks pass` | always |
 
+Each lane output is its component's classification, except `native_stt` and
+`sanad_dev`, which are decided by their declared input sets (see
+[Lane Input Sets](#lane-input-sets)), and `release_security`, which is never
+reduced by the post-merge complement run because its credential scan covers the
+pushed range.
+
+
 `All required checks pass` depends on every lane and on every shard of a
 matrix, and it fails unless each dependency succeeded or was skipped by
-classification. A new lane that is not added to its `needs` and to its result
-check is a coverage hole, so both edits belong to the same change.
+classification. It reads the classifier's per-lane outputs alongside the results:
+a lane the classifier marked `true` must end `success`, so a required lane that
+ends `skipped` (or a missing output) fails the aggregate instead of passing. A new
+lane that is not added to its `needs`, its result list, and the matching `REQUIRED`
+position is a coverage hole, so all three edits belong to the same change.
 
 ### Supervisor Skill Tests
 
@@ -84,6 +102,16 @@ whisper runtime on arm64 Linux for the same reason: the release matrix publishes
 from an x64 host. It uses the same per-lane `DART` selector and a whisper build
 cache keyed by the runner label.
 
+`Native dictation` also runs `test/stt/stt_digest_test.dart` and
+`test/stt/stt_download_pipeline_test.dart` on every operating system, because the
+SHA-256 the download verifies is a per-OS native binding and the write pipeline
+opens a second file handle for writeback; both fall back silently where the
+binding is missing, so a single Linux lane would prove neither. The two files run
+with `--concurrency 1` because the pipeline suite asserts a cost ratio against an
+in-process sink, and
+[Test Suite Performance and Ownership QA](../qa_maintenance/test_suite_performance_qa.md#native-dictation-lane-additions)
+owns the measured cost.
+
 Both arm64 lanes first copy `agent/tool/pubspec_overrides.no_sherpa.yaml` to
 `agent/pubspec_overrides.yaml`: `sherpa_onnx` requires the Flutter SDK, which
 those lanes do not install, so the Agent links the whisper-only engine stand-in.
@@ -116,6 +144,150 @@ Client consumer unverified, which is how a stale relay table reached `main`.
 Client-to-Agent contracts follow the inverse rule and belong in the `agent`
 case. A new consumer also needs a test in the consuming component, because
 classification only decides which lanes run, never whether the consumer agrees.
+
+## Post-Merge Complement Run
+
+A merge through the queue fast-forwards `main` to the exact commit the queue just
+built. Between 2026-11-08 and 2026-11-10 that was true for **46 of 46** pushes to
+`main`, so the `push` run of Public CI was re-proving a tree that had already
+passed every lane the classifier selected for it. What the `push` run added was
+the lanes the queue *skipped*, plus roughly 60 runner-minutes per merge of
+repeated work — four macOS jobs among them, against an account cap of five
+concurrent macOS jobs. That repeat is what turned a normal merge into a 33-minute
+post-merge run: with `macOS full suite` and a release candidate starting minutes
+later, the four duplicate jobs waited 28–30 minutes for a runner.
+
+On `push` to `main`, classification therefore runs the **complement** of a proof:
+
+**Proof A — the merge queue.** Ask the Actions API for the runs of this workflow
+with `event=merge_group` and `head_sha` equal to this commit, and keep the most
+recent one whose conclusion is `success`.
+
+**Proof B — the merged pull request's own run.** Accept only when *all* of these
+hold: the commit resolves to exactly one pull request **merged into `main`**; that
+pull request is the only one the API associates with its head SHA (a second pull
+request with the same head, for example one targeting another base branch, would
+own a run that tested a different merge, and a run is keyed by head SHA only); that
+pull request's head tree is byte-identical to this commit's tree; the head contains
+this commit's parent, so the run was made against the same `main` as well as the
+same content; and there is a successful run with event `pull_request`, that head
+SHA, and that head branch. Zero or several candidate pull requests mean no proof.
+The commit-to-pull-request endpoint lists open and merged pull requests for a
+commit outside the default branch; a closed, unmerged duplicate is the residual
+case it may omit.
+
+Proof B exists because the merge queue is a repository setting rather than a
+property of this workflow: if the queue is replaced by "require branches to be up
+to date", the pull request's own run is still the proof that this tree passed. A
+squash merge lands the head's content, so identical trees plus a contained base is
+the same guarantee the queue provides. A and B are tried in that order; the first
+one that yields proof is used.
+
+Then:
+
+1. Read that run's jobs. A lane counts as **proven** only when a job for it
+   actually executed and succeeded; a job the run skipped proves nothing.
+2. Set a proven lane to `false` and leave every other lane as classified.
+
+The reduction is fail-closed by construction. No matching run, a run that is not
+successful, a tree that differs, a commit that maps to several pull requests, or
+an unreadable API all leave the full lane set in place, so the worst case of this
+step is today's behaviour. A `workflow_dispatch` run and any event other than
+`push` never reduce anything.
+
+These jobs never participate in the reduction, because their work is genuinely
+post-merge:
+
+- `Verify branch history` — the pushed range is the merge itself.
+- `Verify protected review labels` — the label check belongs to the merge
+  decision; on `push` the job still runs, but its label step is limited to
+  `pull_request` and `merge_group`, so it is a no-op there rather than a re-check.
+- `Validate release and security boundaries` — its credential scan is bounded to
+  `BEFORE..AFTER` on a push and to `BASE...HEAD` on a pull request, so it is the
+  one lane that scans the merged commit as pushed.
+
+The complement run is also what keeps per-pull-request lane selection honest: a
+lane a pull request skipped still executes on the merged commit, and the release
+workflow additionally refuses to publish without a green `macOS full suite` run on
+the release commit (see
+[Release, Signing, and Deployment Architecture](release_and_signing.md#release-gate-on-the-macos-full-suite)).
+
+## Lane Input Sets
+
+Two lanes do not follow a component. `Native dictation` builds, verifies, loads,
+and stages the whisper and sherpa runtimes on five runners, and it consumes a
+small slice of the Agent rather than the Agent. `sanad-dev bootstrap` exercises
+the `sanad_dev` package and the Windows installer scripts, and it consumes a
+developer tool that no component class names. Both used to be gated by a
+component — `agent/**` and `client` or `docs` respectively — which cost real
+money: across the 48 merged pull requests of the reviewed population, Native
+dictation ran on 38 and `sanad-dev bootstrap` on 47, while their actual inputs
+changed far less often.
+
+`scripts/ci/lane_inputs.txt` is the single declaration of what each of them
+consumes. The `classify` job reads the `glob` lines with bash `case` semantics;
+the guard suite reads the `entry` lines. Nothing else may restate them.
+
+| Lane | Real inputs |
+| --- | --- |
+| `native-stt` | `agent/lib/infrastructure/stt/`, `agent/packages/stt_sherpa/`, `agent/packages/stt_sherpa_stub/`, `agent/test/stt/`, `agent/tool/ensure_native_stt.dart`, `agent/tool/stt_native_archive.dart`, `agent/tool/stt_native_runtime.dart`, `agent/tool/pubspec_overrides.no_sherpa.yaml` |
+| `sanad-dev` | `scripts/sanad_dev/`, `scripts/sanad-dev`, `scripts/sanad-dev.ps1`, `client/config/`, `scripts/install.ps1`, `client/release/windows/` |
+
+Everything else keeps its component gate. `CLI automation` is deliberately **not**
+gated by an input set: the import closure of `bin/sanad_agent.dart` plus
+`tool/cli_aot_smoke.dart` is 575 of 585 `agent/lib` files, so a narrower trigger
+would save nothing while adding a way to miss a change. The Linux agent and
+client suites are not gated either — they are the coverage everything else
+assumes.
+
+### Always-run triggers
+
+A path that can change the meaning of a lane it does not touch enables every
+lane. Declared in the `all` section of the same file:
+
+| Trigger | Why every lane |
+| --- | --- |
+| `.github/workflows/*`, `.github/actions/*` | the workflow graph and the composite actions every lane runs |
+| `scripts/ci/*` | the shard listing, the event counters, the SDK pin, and this declaration itself |
+| `.fvmrc`, any `pubspec.yaml`, any `pubspec.lock` | toolchain and dependency resolution |
+| `agent/native/*` | the shipped native sources and their checksums |
+| `shared/*` | the runtime packages the Agent, the Client, and `sanad_dev` all consume |
+
+The previous classifier named only `.github/workflows/*`, and only as a
+`release` path, so a pull request that edited a lane in `ci.yml` did not run that
+lane before merge. `shared/windows_path/`, `shared/public_service_endpoints/`,
+and `scripts/sanad_dev/` matched no class at all, so alone they fell back to
+running everything while mixed with an Agent change they skipped the `sanad-dev`
+lane. Both holes are closed by the declaration above.
+
+### Why this cannot lose coverage
+
+1. **The guard fails the build, not the reviewer.** `agent/test/tool/ci_lane_inputs_test.dart`
+   resolves the Dart import closure of every declared `native-stt` entrypoint
+   through the package configuration and fails when any file in it matches none of
+   that lane's globs. A new `lib/` file a smoke test imports therefore fails in the
+   ordinary Agent shard, on the pull request that introduced it. The suite also
+   reads the `Native dictation` job in `ci.yml` and fails when a Dart file the job
+   runs is not declared as an `entry`, so a suite added to the lane cannot run
+   outside the closure check. For `sanad-dev` it resolves every `'../…'`
+   path literal in the package's tests (the bootstrap wrappers they copy and run,
+   the Client configs they parse) and fails when an existing repository file read
+   that way matches no `sanad-dev` or `all` glob.
+2. **The same suite asserts the always-run triggers**, so narrowing a lane cannot
+   quietly drop one.
+3. **The complement run covers the merged commit.** A lane a pull request skipped
+   still runs on `push` to `main` unless a proof run executed and passed it on the
+   same tree.
+4. **The release gate covers the release commit.** `release.yml` refuses to build
+   or publish without a green `macOS full suite` on that exact commit, and the
+   macOS suite's definition comes from `list_test_shard.sh`, not from this
+   classifier.
+
+What this relaxation does **not** protect against is a dependency no import graph
+shows: a suite that reads a fixture by path, an FFI library loaded by name, or a
+runner-image change with no repository diff. Those are caught after merge by the
+complement run and before release by the gate — not before merge. That is the
+accepted trade: two lanes stop running on pull requests that cannot affect them.
 
 ## Test Sharding
 
@@ -205,6 +377,41 @@ The client test shards and the Web guard install `libgtk-3-dev` and
 `libasound2-dev` because the `nativeapi` build hook compiles against GTK 3, X11,
 and Xi with `pkg-config`, and the image only ships those runtime libraries. The
 analysis and agent lanes do not build native assets and install nothing.
+
+### Bounded package installs
+
+Every `apt-get` in `ci.yml` and `release.yml` goes through
+`.github/actions/apt-install`, which owns the retry and timeout policy for
+package installation, and every calling step declares its own
+`timeout-minutes`.
+
+`apt-get` has no timeout of its own: a mirror that accepts the connection and
+then stops answering holds the step until the *job* timeout kills it. That is
+not hypothetical here. On 2026-11-10 the `apt-get update` half of the client
+shard dependency install in `Test client (3/4)` hung for 19m49s, was killed by
+the 20-minute job timeout, and the clean re-run finished the same install in
+17 seconds. The same step was slow or stalled 11 times in 2.5 days, across the
+client shards, the Web guard, and the post-merge run.
+
+The action therefore:
+
+- bounds the acquire phase per command (`Acquire::Retries=3`,
+  `Acquire::http::Timeout=20`, `Acquire::https::Timeout=20`, plus
+  `Acquire::ForceIPv4=true` so an unroutable IPv6 path fails instead of
+  blackholing);
+- retries the whole `update` + `install` pair at most three times with a 10s
+  then 20s backoff, so one late or truncated index costs seconds instead of the
+  lane;
+- fails with a single actionable error after the last attempt, and
+- skips the install entirely when its `skip-if-command` input already resolves,
+  which is how the instruction-set disassembler stays a no-op on runners that
+  ship `objdump`.
+
+A caller's `timeout-minutes` (8 minutes for the dependency installs and the
+disassembler, 10 for the release Linux build dependencies) is the last bound: a
+stall that survives three bounded attempts fails fast instead of consuming a
+20–45 minute job budget. Nothing about which packages are installed, or on
+which lane, changed — only how a stalled mirror is handled.
 
 ## Required Checks and Protected Labels
 
