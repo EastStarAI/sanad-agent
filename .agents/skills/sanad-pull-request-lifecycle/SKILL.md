@@ -29,6 +29,7 @@ An unlabeled pull request is an incomplete deliverable, not a cosmetic gap: with
    ```
 
    A protected label that was never followed by a dispatch leaves the aggregate check stale, so report it instead of treating the previous green result as current.
+7. Re-check protected labels against the current head immediately before the merge. `main` requires the head to contain the current `main` tip and merges never wait for a queued run, so nothing re-reads a label after a green run: read the `completed_at` of the latest Public CI run's `Verify protected review labels` job, read `GET /issues/N/events` for `labeled` and `unlabeled` events on a protected label after that time, and dispatch the re-verification above when any exist or the data is ambiguous. Require a green `All required checks pass` on the same head before merging.
 
 ## Prepare
 
@@ -102,5 +103,7 @@ No broad merge framework is introduced here: these are the smallest fail-closed 
 ## Pre-Merge Handoff
 
 Before merge, update the branch from current `main`, inspect the complete resulting diff, rerun affected checks, resolve review conversations, and confirm the mandatory non-protected label set (exactly one `type/*`, at least one `comp/*`, plus any `platform/*` or `size/*` that reflects the change) together with the protected labels and `All required checks pass`. Preserve human attribution through Git authorship, appropriate `Co-authored-by` trailers, and release notes.
+
+A branch that falls behind cannot merge, because `main` requires the head to contain the current `main` tip. **If BEHIND:** `gh pr update-branch <number>` → wait for Public CI on the new head → retry the merge, at most three times; then stop and report the blocker rather than looping.
 
 Squash merge only after the required human decision. Then verify the final commit and linked Issue state, and delete the branch only when authorized. No lifecycle step that merges, closes work, or changes protection may run without explicit authorization.
