@@ -351,18 +351,26 @@ Sanad Home, Agent port, and every attached Client survive unchanged: the
 ordinary path performs no supervisor handoff, no fresh launcher, and no Client
 restart. Restarting from inside one of the daemon's own sessions is the same
 transport with the requester's session and tool-call identity attached, so the
-conversations that were running continue after the daemon returns and the
-requesting tool call resolves through its deferred result.
+conversations that were running continue after the daemon returns. That origin
+cannot be proven by a blocking probe: the daemon exits only after the
+requesting tool result is durable, and the result cannot be persisted until the
+CLI returns, so a requester-bound restart reports the accepted handoff with the
+pre-restart owner pid instead of waiting on itself. The supervisor journal at
+`<home>/logs/agent-supervisor.log` and `sanad-dev status` own the replacement
+proof for that call. Only the source-switch flow emits a requester-bound
+deferred result; a plain restart has none.
 
 The CLI's restart transport is `POST /restart`. `force`, `permanent`, and
 `timeout_seconds` are validated before anything moves (`invalid_force`,
 `invalid_permanent`, `invalid_timeout`), `timeout_seconds` is bounded to
 1–3600, and an omitted timeout falls back to
 `SessionRunOrchestrator.controlledRestartCheckpointTimeout` — one minute, which
-is also the default of `sanad-dev restart agent --timeout`. After acceptance the
-CLI waits for the authenticated `/health` endpoint of the same port and
+is also the default of `sanad-dev restart agent --timeout`. After acceptance
+the CLI waits for the authenticated `/health` endpoint of the same port and
 workspace hash for at most that timeout, so a restart that never returns is
-reported instead of assumed.
+reported instead of assumed. The one exception is a request that carries the
+Agent-tool requester identity: it returns as soon as the daemon accepts, for
+the reason above.
 
 An accepted request crosses the same all-session admission drain as a resumable
 shutdown: `beginControlledRestartDrain()` followed by
