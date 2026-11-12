@@ -224,6 +224,7 @@ These files are mandatory execution contracts governing subdirectories. Always r
 - [Mobile New-Account Onboarding Task](docs/plans/tasks/152-mobile-new-account-onboarding.md): Task 152 record: the shared shell chrome and sidebar scope, onboarding routing only from the live top route, the post-create install page, the ungated model picker, the clamped provider gate, and the deferred picker-header overflow.
 - [Dedicated Service Account Installed-Home Task](docs/plans/tasks/156-dedicated-account-installed-home.md): Issue 353 root cause in Home selection, the ordered `--home` → `SANAD_HOME` → install-record → `$HOME/.sanad` resolver, the metadata-only record probe, and the dedicated-account Linux status/restart gates.
 - [Provider Composer Catalog Freshness QA](docs/qa_maintenance/provider_composer_catalog_freshness.md): Snapshot-generation authority, stale-response/clear-device races, composer label refresh and approval-gated live acceptance.
+- [Multi-Capability Providers Plan](docs/plans/167-multi-capability-providers.md): Planned shared provider model for chat, cloud transcription, search, and Codex/OpenAI image generation; provider-declared image support without per-account eligibility probes, durable generated media, and tasks 167a–167m.
 - [Implementation Plans](docs/plans/): Architectural blueprints, milestones, and step-by-step implementation plans for project development phases.
 
 ## Reference Projects

@@ -1,10 +1,9 @@
 ---
 title: "Task 167h: Search Capability — Curated Providers and Routing"
-description: "قدرة بحث بمزودين محفوظين ومحوّل لكل مزود وافتراضي بحث مستقل، مع بقاء المحرك المدمج هو الافتراضي وعدم لمس المسار القديم."
+description: "Curated search bindings with independent defaults and routing, preserving the built-in engine and legacy environment path."
 status: "pending"
 current_gate: "Ready for 167h-R0"
 priority: "medium"
-depends_on: "167b, 167c"
 parent_plan: "docs/plans/167-multi-capability-providers.md"
 issue: "https://github.com/EastStarAI/sanad-agent/issues/414"
 reference_grounding: "required"
@@ -48,6 +47,8 @@ existing environment-based configuration keeps working untouched.
 - A search provider failure degrades to the next configured source and then to
   the built-in engine; it never surfaces a raw vendor error to the agent.
 - No API key is ever logged, echoed, or stored outside the vault.
+- Search probes/fallback never verify images or become an image execution path;
+  non-idempotent image generation cannot inherit search's fallback policy.
 - Domain restriction and result limits keep their current semantics for every
   adapter.
 
@@ -102,4 +103,4 @@ existing environment-based configuration keeps working untouched.
 ## 7. Out of scope
 
 Custom search providers and any mapping language; search UI beyond the provider
-list; transcription work.
+list; transcription work; image generation and image retry/failover policies.

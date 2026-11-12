@@ -1,10 +1,9 @@
 ---
 title: "Task 167g: Dictation Settings — Local/Cloud Sources"
-description: "فلتر محلي/سحابي في إعدادات التفريغ، صفوف سحابية بلا تنزيل، اختيار المصدر مع بقاء المحلي افتراضيًا، وإضافة مزود من نفس الصفحة."
+description: "Local/cloud dictation settings with cloud rows, explicit source selection, and the existing filtered provider picker."
 status: "pending"
 current_gate: "Ready for 167g-G1"
 priority: "high"
-depends_on: "167e, 167f, 167d"
 parent_plan: "docs/plans/167-multi-capability-providers.md"
 issue: "https://github.com/EastStarAI/sanad-agent/issues/414"
 file_budget: 16
@@ -44,6 +43,8 @@ default, and adding a provider happens through the existing picker.
 - The local source stays the default; a cloud source is only active when the user
   selected it.
 - The dictation surface never becomes a second provider editor.
+- A multi-capability provider contributes only its transcription models here;
+  image generation never becomes a dictation source or model row.
 - An unknown readiness reason falls back to a neutral sentence, never raw text.
 
 ## 4. Gates
@@ -100,4 +101,4 @@ default, and adding a provider happens through the existing picker.
 
 ## 7. Out of scope
 
-Provider editing itself (167d); engine behavior (167e/167f); search (167h).
+Provider editing itself, engine behavior, search, and image generation.

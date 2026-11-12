@@ -1,10 +1,9 @@
 ---
 title: "Task 167e: Cloud Transcription — Batch Family and Source Selection"
-description: "محرك تفريغ سحابي دفعي عبر العائلة المتوافقة مع OpenAI، واختيار مصدر التفريغ مع بقاء المحلي افتراضيًا."
+description: "OpenAI-compatible cloud batch transcription and source selection while local dictation remains the default."
 status: "pending"
 current_gate: "Ready for 167e-R0"
 priority: "high"
-depends_on: "167b, 167c"
 parent_plan: "docs/plans/167-multi-capability-providers.md"
 issue: "https://github.com/EastStarAI/sanad-agent/issues/414"
 reference_grounding: "required"
@@ -53,6 +52,8 @@ final text per utterance, and the local model remains the default source.
   Sanad segment ends.
 - Credentials are resolved at session start through the existing resolver; the
   client never sees a key.
+- Transcription readiness/probes stay scoped to transcription; they neither
+  verify nor gate the same instance's image-generation capability.
 
 ## 4. Gates
 
@@ -111,5 +112,5 @@ final text per utterance, and the local model remains the default source.
 
 ## 7. Out of scope
 
-Streaming partials (167f); dictation settings UI (167g); search (167h); any new
+Streaming partials, dictation settings UI, search, image generation, and any new
 local model.

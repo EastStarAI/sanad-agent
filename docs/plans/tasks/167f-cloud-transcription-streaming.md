@@ -1,10 +1,9 @@
 ---
 title: "Task 167f: Cloud Transcription — Streaming Adapters"
-description: "محوّل تدفقي لكل مزود (OpenAI Realtime وDeepgram وAssemblyAI) مع توحيد الأحداث إلى جزئي/نهائي وتمييز الوضع في الكتالوج."
+description: "OpenAI, Deepgram, and AssemblyAI streaming adapters normalized to shared partial/final events with per-model mode facts."
 status: "pending"
 current_gate: "Ready for 167f-R0"
 priority: "high"
-depends_on: "167e"
 parent_plan: "docs/plans/167-multi-capability-providers.md"
 issue: "https://github.com/EastStarAI/sanad-agent/issues/414"
 reference_grounding: "required"
@@ -49,7 +48,8 @@ internal partial/final contract the client already understands.
 - Segment identity is stable: a final for a segment is terminal and never mutates.
 - Cancellation tears down the socket in order; no orphan connection survives a
   session.
-- A vendor refusal never marks the instance ready for transcription.
+- A vendor refusal never marks the instance ready for transcription and never
+  rewrites provider-declared image support or adds an image-account probe.
 
 ## 4. Gates
 
@@ -114,5 +114,5 @@ internal partial/final contract the client already understands.
 
 ## 7. Out of scope
 
-Batch family (167e); dictation settings UI (167g); search (167h); any change to
-local engines.
+Batch-family behavior, dictation settings UI, search, image generation, and any
+change to local engines.
