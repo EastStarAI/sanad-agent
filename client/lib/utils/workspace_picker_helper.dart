@@ -44,7 +44,13 @@ class WorkspacePickerHelper {
       if (debugOverride != null) {
         return debugOverride();
       }
-      return getDirectoryPath(confirmButtonText: confirmButtonText);
+      // macOS `NSOpenPanel` defaults `canCreateDirectories` to false and
+      // `file_selector_macos` only forwards a non-null value, so the request
+      // must be explicit or the panel hides the New Folder affordance.
+      return getDirectoryPath(
+        confirmButtonText: confirmButtonText,
+        canCreateDirectories: true,
+      );
     }
 
     final browser = remoteBrowser;
