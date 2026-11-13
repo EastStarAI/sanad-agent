@@ -9,6 +9,8 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
 import 'package:sanad_client/features/notifications/infrastructure/darwin_action_categories.dart';
 import 'package:sanad_client/features/notifications/infrastructure/notification_action_labels.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_bundle.dart';
+import 'package:sanad_client/features/notifications/infrastructure/web_push_client_unsupported.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -567,4 +569,10 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
   }
 }
 
-NotificationPlatformAdapter createNotificationAdapter() => FlutterLocalNotificationsAdapter();
+/// A native build pairs its OS adapter with an inert web push client: desktop
+/// and mobile never register a browser endpoint.
+NotificationPlatformBundle createNotificationBundle() => NotificationPlatformBundle(
+      adapter: FlutterLocalNotificationsAdapter(),
+      webPush: const UnsupportedWebPushClient(),
+      dispose: () async {},
+    );

@@ -91,6 +91,17 @@ class AppConfig {
     'ENABLE_CLOUD_GATEWAY',
     defaultValue: true,
   );
+
+  /// The VAPID public key a browser push subscription is bound to.
+  ///
+  /// Public by design: it only proves that a subscription was created for this
+  /// application. The private key stays on the hosted relay and never enters a
+  /// Client build. An empty value means this build does not offer web push, and
+  /// Settings states that instead of offering a permission that cannot work.
+  static const String webPushVapidPublicKey = String.fromEnvironment(
+    'SANAD_WEB_PUSH_VAPID_PUBLIC_KEY',
+  );
+
   static const String sanadHome = String.fromEnvironment('SANAD_HOME');
   static const String sanadServiceInstance = String.fromEnvironment(
     'SANAD_SERVICE_INSTANCE',

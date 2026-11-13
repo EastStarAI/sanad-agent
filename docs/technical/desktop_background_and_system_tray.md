@@ -283,8 +283,11 @@ are accepted, so a producer can attach the block to an existing event.
 | **Windows** | None | WinRT toast under the app's AUMID | No (see 7.3) | No on an unpackaged build |
 
 The plugin is `flutter_local_notifications`, reached only through
-`notification_backend_native.dart`. Web resolves a total no-op through a
-conditional import, so the Web build links no native notification library.
+`notification_backend_native.dart`. A web target selects a browser adapter and a
+push client through a conditional import, so the Web build links no native
+notification library; the browser surface, its owned service worker, and its
+subscription lifecycle are documented in
+[web_push_delivery.md](web_push_delivery.md).
 
 macOS initialization explicitly disables the permission prompt
 (`requestAlertPermission`, `requestSoundPermission`, `requestBadgePermission`
