@@ -165,6 +165,7 @@ focused unit and widget tests above.
 | Item | Owner | Note |
 | :--- | :--- | :--- |
 | Remaining device-chrome English copy around the settings rail (`Loading devices…`, `No devices`, `Device selector`, `Device Settings`) | devices / conversations features | Pre-existing and outside the notifications owner. The two strings the Arabic capture showed (`This device`, `local`) are fixed; localizing the rest of that widget is its own change. |
+| `ConnectionStatusExtension.displayName` in `client/lib/features/devices/domain/models/device_config.dart` holds Arabic string literals in Dart source, which the localization contract forbids | devices feature | Pre-existing and currently unreferenced; found while touching the model for L7. It should either be deleted or resolved through `AppLocalizations` by whoever owns that status projection. |
 | Device-name copy on the devices settings pages (`providers_page.dart`, `skills_page.dart`, `workspace_page.dart`, `device_overview_page.dart` render `device.name` inside hard-coded English sentences) | devices + settings features | A localized `displayName` resolver now exists; those pages need their own copy pass before they can use it. |
 | Live re-capture of the enabled page (dark/light, EN/AR, menu open, row off, banner-only) | orchestrator | See §6. |
 | Agent-raised delivery end to end, click routing, and cross-device isolation | orchestrator live pass | Unchanged by this task. |
