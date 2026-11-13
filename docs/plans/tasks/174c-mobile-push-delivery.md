@@ -311,7 +311,7 @@ What the code guarantees now, and what it no longer claims:
 
 - [x] `fvm flutter analyze` passes in `client/`.
 - [x] Focused tests pass, and the real-device evidence is recorded in this file.
-- [x] `docs/technical/communication_protocols.md` §7.10 and
+- [x] `docs/technical/communication_protocols.md` §7.11 and
       [docs/technical/mobile_push_delivery.md](../../technical/mobile_push_delivery.md)
       describe the mobile behavior.
 - [x] All new strings are localized; no Arabic literal exists in Dart source.
@@ -341,7 +341,7 @@ Run from the repository root with `fvm` on `PATH`:
    signing time. Reversible: removing the entitlement disables iOS push and leaves
    the rest of the app unchanged.
 3. **Relay side of `174e`.** `push.register_token` / `push.revoke_token` and the
-   provider payload shape are specified in §7.10; the hosted service must
+   provider payload shape are specified in §7.11; the hosted service must
    implement them before any device case can be exercised.
 4. **iOS `remote-notification` background mode** is deliberately not enabled: the
    relay sends a display payload, so background and terminated presentation need

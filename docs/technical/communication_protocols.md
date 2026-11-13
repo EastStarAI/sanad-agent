@@ -1368,7 +1368,95 @@ transport for a device it cannot reach.
   redacted copy from the payload alone. Either way the canonical `event_id`
   collapses the socket copy and the push copy into one notification.
 
-### 7.10 Mobile registration and provider payload
+### 7.10 Per-device notification preferences
+
+A notification preference belongs to **the device**, not the account, because a
+phone and a desktop tolerate a different number of interruptions. A device's
+choice is stored on that device and is never shared with, or written by, another
+device of the same account.
+
+**Storage owner per platform.** The Client stores the choice in its own
+preferences file and nothing else holds it: `NSUserDefaults` on macOS and iOS,
+the application's registry-backed file on Windows, a file under the user's local
+share directory on Linux, `SharedPreferences` on Android, and `localStorage` on
+the web. Keys are `notifications_enabled` (global switch),
+`notifications_kinds_disabled` (kind tokens turned off), and
+`notifications_kinds_urgency` (`kind:urgency` entries the user lowered). Only
+deliberate changes are stored, so a kind the Agent adds later starts enabled
+instead of arriving silent.
+
+**Declaration on the wire.** A Client declares its choices in its own
+authenticated registration envelope — the local `client.hello`, and the client
+identity the hosted service already relays for a cloud connection:
+
+```json
+"notifications": {
+  "enabled": true,
+  "kinds": {"completed": "off", "failed": "normal"}
+}
+```
+
+- `kinds` carries only a deliberate choice: `off` for a muted kind, and the
+  lower urgency token (`low` or `normal`) for a kind the user quietened.
+  `high` is the product default and is therefore absent by construction.
+- A kind appears **once**, and `off` wins. A Client stores its off choice and its
+  ceiling separately so that unmuting restores the ceiling, so both can be true
+  for one kind at the same time; the declaration states only the off token then.
+  The order the two choices were made in cannot change the result, and the Agent
+  reads the same rule: a muted kind has no ceiling, so `ceilingFor` answers the
+  product default instead of a stale urgency.
+- An absent key is not a reset. A well-formed but empty declaration is: it
+  restores the product default for that instance.
+- An unknown kind token is kept as a typed token so a newer Client is not
+  stripped of its choice; an unreadable urgency token or mute value is ignored
+  rather than guessed.
+- The Agent holds the declaration per Client instance id in memory. Nothing is
+  persisted: a reconnecting Client re-declares, and an unregistered device is
+  treated as the product default.
+
+**Applying it.** `NotificationDispatcher` applies the target device's
+declaration at the step that names that device:
+
+- a `client_instance` step for a kind that device muted is not published at all,
+  so no payload is spent on a device that asked not to be interrupted; the
+  escalation timer is still armed and the account step still reaches the other
+  devices, which is what keeps one device's choice from affecting another;
+- the payload's `urgency` and its `platform_hints.android_channel_id` are
+  composed with the lower of the Agent decision and the device ceiling, so a
+  quietened kind selects the quieter channel instead of the default one.
+
+**Relay obligation: none.** The relay carries `notifications` as one opaque
+field of the client identity it already transports. It does not read a choice,
+resolve one, or filter a delivery by one.
+
+**OS revocation.** The in-app switch is never rewritten by the Agent or by a
+permission read. When the operating system refuses or revokes permission while
+the switch is on, Settings reports the contradiction and offers the system
+notification pane as the only fix path (macOS never shows a second prompt), and
+`NotificationDisplayPolicy` refuses to raise anything until the permission is
+actually granted.
+
+**Test notification.** Settings offers one explicit test action. It composes an
+ordinary envelope and runs the real parser, collapse identity, display policy,
+and platform adapter, so its result reflects the global switch, the kind, the
+urgency ceiling, and the OS permission. It is the only event the Client
+fabricates, and its copy names it as a test. It is not deduplicated against the
+transports, ignores the post-connect quiet window, and ignores window presence,
+because a user-pressed probe is not an arrival. A platform that refuses the
+presentation call is reported as a failure, never as a notification that was
+shown.
+
+**Account-scoped steps stay unfiltered at the Agent.** An `account`-scoped step
+names no device, so applying a per-device preference to it would require a
+fan-out list the relay has to interpret. Every recipient therefore applies its
+own stored declaration before display: the desktop and mobile Clients through
+`NotificationDisplayPolicy`, and a browser tab through the display policy its
+Client publishes to the worker. This is the same gate for every route, so one
+device's choice can neither silence nor interrupt another's. An addressable
+`client_instance` step is still filtered by the Agent as described above, and
+`174e` owns the relay side of any future addressable fan-out.
+
+### 7.11 Mobile registration and provider payload
 
 Mobile Clients are a delivery target the Agent never addresses directly: the
 Agent names a Client instance or the whole account, and the relay resolves that to
@@ -1428,7 +1516,7 @@ policy key, credential, or submitted secret value.
 - Resolve every action through `tool_permission_response`, exactly as an in-app
   answer does.
 
-### 7.11 Web subscription registration (Client to relay)
+### 7.12 Web subscription registration (Client to relay)
 
 A browser subscription is an account credential, so its registration is a
 separate authenticated contract from the instruction above. The Client publishes

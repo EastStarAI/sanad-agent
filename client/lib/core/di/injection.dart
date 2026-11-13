@@ -197,6 +197,7 @@ Future<void> configureDependencies({
         clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
         clientMetadata: getIt<ClientDisplayMetadata>(),
         accessToken: getIt<AuthService>().accessToken,
+        notificationDeclaration: _notificationDeclarationProvider,
       ),
       instanceName: 'cloudSocketService',
     );
@@ -210,6 +211,7 @@ Future<void> configureDependencies({
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
         clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
         clientMetadata: getIt<ClientDisplayMetadata>(),
+        notificationDeclaration: _notificationDeclarationProvider,
       ),
       instanceName: 'localSocketService',
     );
@@ -648,3 +650,11 @@ Future<void> configureDependencies({
     );
   }
 }
+
+/// The device-scoped notification choices this Client registers with every Agent
+/// connection.
+///
+/// It is read lazily at registration time, so a change made in Settings is
+/// carried by the next hello without the socket holding a copy of its own.
+Map<String, dynamic> _notificationDeclarationProvider() =>
+    getIt<NotificationPreferencesStore>().read().toAgentDeclaration();

@@ -1,5 +1,6 @@
 import 'package:sanad_agent/interfaces/notifications/client_instance_profiles.dart';
 import 'package:sanad_agent/interfaces/notifications/notification_copy.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_kind.dart';
 import 'package:test/test.dart';
 
 const _instance = '11111111-1111-4111-8111-111111111111';
@@ -190,5 +191,110 @@ void main() {
       profiles.localeFor('00000003-0000-4000-8000-000000000000'),
       NotificationLocale.arabic,
     );
+  });
+
+  group('per-device notification preferences', () {
+    test('a hello declaration is stored for that instance alone', () {
+      final profiles = ClientInstanceProfiles();
+      const other = '22222222-2222-4222-8222-222222222222';
+
+      profiles.registerFromHello(const {
+        'client_instance_id': _instance,
+        'notifications': {
+          'enabled': true,
+          'kinds': {'completed': 'off', 'failed': 'normal'},
+        },
+      });
+      profiles.registerFromHello(const {'client_instance_id': other});
+
+      expect(profiles.allows(_instance, NotificationKind.completed), isFalse);
+      expect(profiles.allows(other, NotificationKind.completed), isTrue,
+          reason: 'one device lowering a kind never changes another device');
+      expect(
+        profiles.urgencyFor(_instance, NotificationKind.failed, NotificationUrgency.high),
+        NotificationUrgency.normal,
+      );
+      expect(
+        profiles.urgencyFor(other, NotificationKind.failed, NotificationUrgency.high),
+        NotificationUrgency.high,
+        reason: 'the other device keeps the product default',
+      );
+    });
+
+    test('an unregistered instance keeps the product default', () {
+      final profiles = ClientInstanceProfiles();
+
+      expect(profiles.allows(null, NotificationKind.completed), isTrue);
+      expect(profiles.allows('33333333-3333-4333-8333-333333333333', NotificationKind.blocked), isTrue);
+      expect(
+        profiles.urgencyFor(null, NotificationKind.completed, NotificationUrgency.high),
+        NotificationUrgency.high,
+      );
+    });
+
+    test('a re-registration that declares nothing keeps the stored choice', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.register(
+        clientInstanceId: _instance,
+        notifications: const {
+          'kinds': {'completed': 'off'},
+        },
+      );
+
+      profiles.registerFromHello(const {'client_instance_id': _instance});
+
+      expect(profiles.allows(_instance, NotificationKind.completed), isFalse,
+          reason: 'a reconnect without a declaration is not a reset');
+    });
+
+    test('a declaration nested in display metadata is accepted too', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.registerFromHello(const {
+        'client_instance_id': _instance,
+        'metadata': {
+          'notifications': {
+            'kinds': {'blocked': 'off'},
+          },
+        },
+      });
+
+      expect(profiles.allows(_instance, NotificationKind.blocked), isFalse);
+    });
+
+    test('a muted kind is read as muted and never as a quietened one', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.registerFromHello(const {
+        'client_instance_id': _instance,
+        'notifications': {
+          'enabled': true,
+          'kinds': {'completed': 'off'},
+        },
+      });
+
+      expect(profiles.allows(_instance, NotificationKind.completed), isFalse,
+          reason: 'the Agent reads the declaration as a ceiling, so a mute must gate delivery');
+      expect(
+        profiles.urgencyFor(_instance, NotificationKind.completed, NotificationUrgency.high),
+        NotificationUrgency.high,
+        reason: 'a muted kind has no ceiling to lower an Agent decision with',
+      );
+    });
+
+    test('a well-formed empty declaration resets to the product default', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.register(
+        clientInstanceId: _instance,
+        notifications: const {
+          'kinds': {'completed': 'off'},
+        },
+      );
+
+      profiles.register(
+        clientInstanceId: _instance,
+        notifications: const <String, dynamic>{'enabled': true, 'kinds': <String, dynamic>{}},
+      );
+
+      expect(profiles.allows(_instance, NotificationKind.completed), isTrue);
+    });
   });
 }

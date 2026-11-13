@@ -230,6 +230,20 @@ class NotificationDispatcher {
     NotificationDispatchStep step,
     NotificationTarget target,
   ) {
+    final targetInstanceId = target.clientInstanceId;
+    // A named target carries its own declaration, so a device that turned this
+    // kind off is not sent a notification at all. An account-wide step names no
+    // device: the Agent cannot filter it per device without inventing a fan-out
+    // list the relay would have to interpret, so each recipient applies its own
+    // stored choice there.
+    if (targetInstanceId != null &&
+        !_profiles.allows(targetInstanceId, pending.ask.kind)) {
+      _logger.fine(
+        'Notification step for ${pending.ask.kind.value} skipped by the '
+        'target device preference',
+      );
+      return;
+    }
     final dispatchedAt = _now();
     final payload = _composer.composeDispatch(
       ask: pending.ask,
@@ -237,6 +251,13 @@ class NotificationDispatcher {
       target: target,
       step: step,
       dispatchedAt: dispatchedAt,
+      urgencyCeiling: targetInstanceId == null
+          ? null
+          : _profiles.urgencyFor(
+              targetInstanceId,
+              pending.ask.kind,
+              pending.ask.effectiveUrgency,
+            ),
     );
     _publish(
       NotificationInstructionMessage(

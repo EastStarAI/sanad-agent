@@ -34,6 +34,14 @@ enum NotificationDisplayOutcome {
 
   /// This build has no OS notification surface for the current platform.
   dropUnsupported,
+
+  /// The decision was to display, but the platform refused the call.
+  ///
+  /// This is the only outcome that is not a policy choice: the policy said
+  /// `display`, and the adapter threw before a notification existed. It exists
+  /// so a caller — in practice the Settings test action — can report the real
+  /// result instead of claiming a notification that was never shown.
+  presentationFailed,
 }
 
 /// One decision plus the reason token used by logs and tests.

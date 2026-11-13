@@ -64,7 +64,7 @@ the in-page experience authoritative when the tab is open.
    {backend}/api/notifications/web-push/subscriptions`, bearer-authenticated.
    `404/405/501` leaves the browser permission intact and reports that delivery
    is not registered. Owned by 174e on the hosted side; recorded in
-   [communication_protocols.md](../../technical/communication_protocols.md) §7.11.
+   [communication_protocols.md](../../technical/communication_protocols.md) §7.12.
 
 ## Gates
 
