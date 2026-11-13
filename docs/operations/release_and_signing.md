@@ -291,7 +291,7 @@ result, so it keeps its own exit-code handling.
 | Client | Windows x64 | GitHub Release | Temporarily unsigned Windows build for every release; WinSparkle DSA plus canonical manifest/URL/size/SHA-256 and protected GitHub provenance |
 | Client | Android universal APK | GitHub Release | Android release signature; not a supported user install channel |
 | Client | Android AAB | Google Play (`com.eaststarai.sanad`) | Android upload signature plus Play App Signing |
-| Client | iOS | Internal TestFlight only | Apple Distribution and provisioning profile |
+| Client | iOS | App Store public release; Internal TestFlight remains the pre-release lane | Apple Distribution and provisioning profile |
 | Client | Web | EastStar AI server | Manifest checksum and atomic deployment |
 
 The exact filenames are defined in `release/release-contract.json`. Generated
@@ -516,9 +516,9 @@ Apple signing and Internal TestFlight distribution use the NanoSoft LY LLC
 team. The display name is `Sanad` and the bundle identifier is
 `com.eaststarai.sanad`. The App Store Connect record is named `Sanad Remote`
 because the shorter product names were unavailable; this does not change the
-installed display name. Internal TestFlight is the only iOS distribution
-channel for the first release; external testing and App Store review are a
-separate future decision.
+installed display name. The App Store is the public iOS/iPadOS distribution
+channel; Internal TestFlight remains the pre-release lane for signed builds that
+have not reached App Store review yet.
 
 ## Google Play publisher
 
@@ -707,8 +707,8 @@ The following remain live-release gates:
   passed. Windows 10 clean-machine validation is not part of the `1.0.0` release
   gate and must not be represented as tested;
 - use the completed App Store Connect API key and application record for
-  Internal TestFlight upload; hosted notarization, staple, and Gatekeeper
-  verification have passed;
+  Internal TestFlight uploads and App Store submission; hosted notarization,
+  staple, and Gatekeeper verification have passed;
 - build and review tagged RC candidates, publish each immutable Release only
   after its separate owner approval, stage Web/Appcast/installers, and exercise
   clean installation, real upgrade, failure recovery, and rollback paths.

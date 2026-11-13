@@ -72,6 +72,7 @@ safely carry out the path you choose. Then let Sanad handle the rest.
   <a href="https://downloads.sanad.eaststarai.com/client/windows"><img src="https://img.shields.io/badge/Download_for-Windows-2563EB?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4OCA4OCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNDB2NDBIMHptNDggMGg0MHY0MEg0OHpNMCA0OGg0MHY0MEgwem00OCAwaDQwdjQwSDQ4eiIvPjwvc3ZnPg==" alt="Download Sanad Client for Windows"></a>
   <a href="https://downloads.sanad.eaststarai.com/client/linux"><img src="https://img.shields.io/badge/Download_for-Linux-2563EB?style=for-the-badge&logo=linux&logoColor=white" alt="Download Sanad Client for Linux"></a>
   <a href="https://play.google.com/store/apps/details?id=com.eaststarai.sanad"><img src="https://img.shields.io/badge/Get_it_on-Google_Play-2563EB?style=for-the-badge&logo=googleplay&logoColor=white" alt="Get Sanad Client on Google Play"></a>
+  <a href="https://apps.apple.com/app/sanad-remote/id6794974223"><img src="https://img.shields.io/badge/Download_on-the_App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download Sanad Client on the App Store"></a>
 </p>
 
 1. Download and launch Sanad Client for your desktop platform.
@@ -82,9 +83,10 @@ safely carry out the path you choose. Then let Sanad handle the rest.
 A Sanad account and pairing token are not required for this local-only path.
 On Android, install Sanad Client from
 [Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad)
-(the listing uses the store display name `Sanad Remote`). On iOS, use the
-[Web Client](https://app.sanad.eaststarai.com) until a stable public app is
-available.
+(the listing uses the store display name `Sanad Remote`). On iPhone and iPad,
+install Sanad Client from the
+[App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (the listing
+uses the same store display name).
 
 > **Unsigned Windows build:** The current Windows release is unsigned. Download it
 > only through the official button above and follow the verification guidance in
@@ -344,7 +346,7 @@ definitions take priority over user-level capabilities with the same name.
 | Component | Platforms |
 |---|---|
 | Sanad Agent | macOS, Linux, and Windows, including headless operation |
-| Sanad Client | macOS, Windows, Linux, Android (Google Play), iOS (Internal TestFlight for the first release), and Web |
+| Sanad Client | macOS, Windows, Linux, Android (Google Play), iOS/iPadOS (App Store), and Web |
 
 ## Feature status and constraints
 
