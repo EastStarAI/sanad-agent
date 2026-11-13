@@ -1363,3 +1363,27 @@ transport for a device it cannot reach.
 - Raise the OS notification locally on desktop. Desktop never uses a push
   provider: both the local and the cloud route deliver the event to a running
   Client, which raises the notification itself.
+- A web Client treats a push as a wake-up only. With a visible tab, the worker
+  forwards the envelope and the page decides; with none, the worker renders the
+  redacted copy from the payload alone. Either way the canonical `event_id`
+  collapses the socket copy and the push copy into one notification.
+
+### 7.10 Web subscription registration (Client to relay)
+
+A browser subscription is an account credential, so its registration is a
+separate authenticated contract from the instruction above. The Client publishes
+the endpoint it was given; the relay resolves targets to endpoints. See
+[web_push_delivery.md](web_push_delivery.md) §6 for the lifecycle and failure
+handling.
+
+| Request | Body | Meaning |
+|---|---|---|
+| `POST {backend}/api/notifications/web-push/subscriptions` | `platform`, `client_instance_id`, `endpoint`, `keys{p256dh,auth}`, `created_at` | Register or refresh one browser endpoint for the signed-in account. |
+| `DELETE {backend}/api/notifications/web-push/subscriptions` | `endpoint` | Remove an endpoint the account no longer owns. |
+
+Both carry `Authorization: Bearer <access token>`. The endpoint is a capability
+and is never logged. The relay must preserve the instruction envelope's
+`event_id` when it delivers a push, because the Client deduplicates on it. This
+contract is the public Client's half of Plan 174e; a deployment that does not
+serve it answers `404`/`405`, which the Client reports as unavailable delivery
+without discarding the browser permission.

@@ -160,4 +160,14 @@ Planning complete. The plan is accepted.
   redacted payload, and the withdrawal, and
   [docs/technical/communication_protocols.md](../technical/communication_protocols.md)
   §7 is the wire contract.
-- `174b`–`174f` are authored and unstarted.
+- `174b` (Desktop OS notifications on macOS, Windows, and Linux) is
+  implemented on the desktop foundation: `NotificationService`,
+  `NotificationDisplayPolicy`, collapse identity, dedupe, the quiet window, the
+  action router, and Settings.
+- `174d` (Web push and installable PWA) is implemented on `task/174d-web-push`:
+  the web Client owns `client/web/sw.js` and registers it through an authored
+  `client/web/flutter_bootstrap.js`, runs the browser permission and
+  account-bound subscription lifecycle from the explicit Settings action,
+  revokes on logout, and treats push as a wake-up so a visible tab stays
+  authoritative. Live browser and installed-iOS evidence is still unexecuted.
+- `174b`–`174f` are authored; `174c`, `174e`, and `174f` remain unstarted.

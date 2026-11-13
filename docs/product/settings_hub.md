@@ -32,6 +32,30 @@ The font family choice offers System Default, Cairo, Inter, and Roboto. **Cairo 
 
 The selected font applies to every text surface in the Client: conversation content, tool cards, composer chips, dialogs, overlays, settings pages, and empty states. Code blocks, diffs, terminals, paths, shell commands, and raw JSON stay monospace by design and do not follow the selection. Cairo covers Arabic and Latin, so the same default serves the English and Arabic interfaces.
 
+## Notifications
+
+Settings → Notifications states the platform's notification permission and owns
+the global plus per-kind switches. Every Agent-owned kind is on by default; a
+kind the user turns off is silenced on this Client but never cancels the Agent's
+escalation to their other devices.
+
+Desktop shows a native OS notification for an ask that is still news. The browser
+Client follows the same rules with one extra condition: **on iPhone and iPad, web
+notifications work only in the Sanad app installed from the Safari share menu
+(Add to Home Screen)**. A Safari tab cannot request notification permission, so
+the page explains the install requirement and offers no permission button
+instead of pretending it can work. The same page states when a build carries no
+push configuration, when this browser has no notification surface, when the
+browser blocked notifications for the site (the user allows them in the site
+settings; the Client cannot open that pane for them), and when delivery could not
+be registered with the account.
+
+Turning browser notifications on is always an explicit action on this page.
+Turning them off, or signing out, withdraws the browser subscription from the
+account. Browser and operating-system settings — including Focus and
+Notification Summary on iOS — always win; the product documents that instead of
+trying to override it.
+
 ## Privacy & Security
 
 Selecting a device reveals Overview, Providers, MCP Servers, Skills, **Privacy & Security**, and its Workspaces. Privacy & Security currently contains **Secrets** (Task 140).
