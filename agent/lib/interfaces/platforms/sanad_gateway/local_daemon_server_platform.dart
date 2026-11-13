@@ -17,6 +17,7 @@ import 'package:sanad_agent/core/utils/logger.dart';
 import 'package:sanad_agent/infrastructure/stt/dictation_service.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/notifications/client_instance_profiles.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
@@ -51,6 +52,12 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
   final ColocatedAuthCoupling? _injectedAuthCoupling;
   final Future<void> Function()? beforeUpgradeAuthentication;
   final DeliveryPresenceController? deliveryPresence;
+
+  /// Per-instance display facts registered by an authenticated `client.hello`:
+  /// the interface locale notification copy is rendered in, and whether the
+  /// instance can raise a notification at all.
+  final ClientInstanceProfiles? clientProfiles;
+
   final ViewImageMediaHistoryLoader? viewImageMediaHistoryLoader;
 
   @override
@@ -165,6 +172,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     ColocatedAuthCoupling? authCoupling,
     this.beforeUpgradeAuthentication,
     this.deliveryPresence,
+    this.clientProfiles,
     this.viewImageMediaHistoryLoader,
     PlatformRuntimeBridge? platformRuntimeBridge,
   }) : _security = security,
@@ -354,7 +362,7 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       onDone: () {
         _clients.remove(socket);
         _socketDeviceIds.remove(socket);
-        _clientInstances.remove(socket);
+        clientProfiles?.forget(_clientInstances.remove(socket));
         _clientOrigins.remove(socket);
         deliveryPresence?.removeLocalMember(socket);
         _platformRuntimeBridge.unregisterChannel(
@@ -413,6 +421,10 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         return;
       }
       _clientInstances[socket] = instanceId;
+      // Display facts only: the locale notification copy is rendered in and
+      // whether this instance can notify at all. Absent values keep the
+      // documented fallback; they never grant or deny anything.
+      clientProfiles?.registerFromHello(envelope);
       _clientOrigins[socket] = AuthenticatedCommandOrigin.fromLocalHello(
         envelope,
       );
@@ -525,8 +537,14 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
     }
 
     final commandName = commandEnvelope['command'] ?? 'unknown';
+    // The local envelope has no authenticated origin block, so the instance id
+    // bound by this socket's `client.hello` travels with the command. It is
+    // routing identity for notification targeting, never an authority.
+    final clientInstanceId = _clientInstances[socket];
     final gatewayEvent = _protocolBridge.translateCommand(
-      commandEnvelope,
+      clientInstanceId == null
+          ? commandEnvelope
+          : {...commandEnvelope, 'client_instance_id': clientInstanceId},
       platformId,
     );
     if (gatewayEvent == null) {

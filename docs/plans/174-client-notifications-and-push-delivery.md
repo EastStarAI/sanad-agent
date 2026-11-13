@@ -152,5 +152,12 @@ with `174e`, then `174c` and `174d` once the relay boundary exists, then `174f`.
 
 ## Status
 
-Planning complete. `174a`–`174f` are authored and unstarted. No implementation
-has begun, and no task may start before the plan is accepted.
+Planning complete. The plan is accepted.
+
+- `174a` (Agent notification contract, policy, copy, and redaction) is
+  implemented on `task/174a-agent-contract`: the Agent owns the kinds, the
+  localized copy, the origin-first policy with the 90-second escalation, the
+  redacted payload, and the withdrawal, and
+  [docs/technical/communication_protocols.md](../technical/communication_protocols.md)
+  §7 is the wire contract.
+- `174b`–`174f` are authored and unstarted.

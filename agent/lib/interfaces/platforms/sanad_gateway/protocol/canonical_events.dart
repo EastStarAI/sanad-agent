@@ -204,6 +204,13 @@ class CanonicalEventTypes {
   static const String platformToolCall = 'platform_tool_call';
   static const String platformToolResult = 'platform_tool_result';
 
+  // ── Plan 174: Agent-owned notification delivery ────────────────────────
+  /// One dispatch step of the notification policy, addressed to one target.
+  static const String notificationDispatch = 'notification.dispatch';
+
+  /// Withdrawal of a notification the account may already show.
+  static const String notificationWithdraw = 'notification.withdraw';
+
   // ── Provider Runtime (Plan 19) ────────────────────────────────────────
   static const String providerSetupStatus = 'provider.setup_status';
   static const String providerRuntimeCheck = 'provider.runtime_check';

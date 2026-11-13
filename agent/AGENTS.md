@@ -24,6 +24,7 @@ This contract applies to `agent/`.
 
 - `agent/tool/` owns release preparation and contract tooling. It is the single writer of tracked release-identity literals, including the `sanad-client` CLI version constant, so release identity is never advanced by hand.
 - Generated-source tooling stays platform-neutral: manifest paths are validated in the POSIX context and joined with the platform separator, and every generated file or embedded asset is compared and hashed as canonical LF text, so Windows `core.autocrlf` checkout behavior can never report a clean tree as stale or embed different bytes per platform. `.gitattributes` pins `eol=lf` for those byte-sensitive paths.
+- `agent/lib/interfaces/notifications/` owns every notification decision: which session event notifies, its kind and default urgency, the localized copy and its Client-key parity, the target, the escalation timer, and the withdrawal. One composer is the only writer of a notification payload, and every text field crosses the existing secret-redaction path and a bound there. The relay transports a finished, redacted instruction plus one target and reads no other field.
 - `agent/lib/plugins/` owns generic lifecycle hooks only.
 
 ## Critical Cross-Domain Invariants
