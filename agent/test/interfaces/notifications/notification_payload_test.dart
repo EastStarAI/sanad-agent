@@ -159,6 +159,45 @@ void main() {
       expect(jsonEncode(payload), isNot(contains('supersecretvalue1')));
       expect(_notificationOf(payload)['title'], 'Rotate token: ***');
     });
+
+    test('cloud credential shapes and flag secrets never reach the body', () {
+      final payload = _composer.composeDispatch(
+        ask: _permissionAsk(
+          excerpt:
+              'shell_execute: aws s3 cp . s3://bucket --profile deploy '
+              'with AKIAIOSFODNN7EXAMPLE and '
+              'ghp_16C7e42F292c6912E7710c838347Ae178B4a and '
+              'glpat-ABCDEFGHIJKLMNOPQRST then mysql --password=hunt4 '
+              'and curl --token abc123',
+        ),
+        locale: NotificationLocale.english,
+        target: NotificationTarget.account,
+        step: NotificationDispatchStep.immediate,
+        dispatchedAt: _dispatchedAt,
+      );
+
+      final encoded = jsonEncode(payload);
+      for (final canary in [
+        'AKIAIOSFODNN7EXAMPLE',
+        'ghp_16C7e42F292c6912E7710c838347Ae178B4a',
+        'glpat-ABCDEFGHIJKLMNOPQRST',
+        'hunt4',
+        'abc123',
+      ]) {
+        expect(
+          encoded,
+          isNot(contains(canary)),
+          reason:
+              'the notification body is a relay and lock-screen surface: '
+              '$canary must not survive composition',
+        );
+      }
+
+      final body = _notificationOf(payload)['body']! as String;
+      expect(body, contains('AKIA***'));
+      expect(body, contains('ghp_***'));
+      expect(body, contains('glpat-***'));
+    });
   });
 
   group('bounds', () {

@@ -188,6 +188,17 @@ class SessionManager {
     return _db.getSessionRecord(sessionId);
   }
 
+  /// The session title, read from the single session row.
+  ///
+  /// This is the only title lookup a display-only caller needs. It must never
+  /// route through [getSession]: that read decodes the whole message history
+  /// and inserts or evicts an entry of the bounded history snapshot cache, so
+  /// asking for a title would perturb the cache the conversation read depends
+  /// on.
+  String? getSessionTitle(String sessionId) {
+    return _db.getSessionRecord(sessionId)?.title;
+  }
+
   SessionState? getSession(String sessionId) {
     final record = _db.getSessionRecord(sessionId);
     if (record == null) {

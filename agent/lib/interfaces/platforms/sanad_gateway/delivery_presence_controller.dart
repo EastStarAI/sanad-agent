@@ -74,8 +74,16 @@ class DeliveryPresenceController {
     return _cloudInstances!.contains(normalized);
   }
 
-  bool claimCloudEgress() {
-    final emit = shouldEmitCloud;
+  /// Claims cloud egress for one event and records the outcome.
+  ///
+  /// [always] is the explicit override for an event that must leave the device
+  /// whether or not the live interest set names a cloud-only recipient. A
+  /// notification instruction is the one such event: the hosted relay owns the
+  /// push tokens, so suppressing the copy because every known recipient is
+  /// local strands exactly the device that is offline, which is the case an
+  /// account-wide escalation exists for. Ordinary family events keep the gate.
+  bool claimCloudEgress({bool always = false}) {
+    final emit = always || shouldEmitCloud;
     if (emit) {
       _cloudEvents += 1;
     } else {

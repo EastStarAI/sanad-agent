@@ -27,6 +27,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 - `DeliveryPresenceController` owns bounded in-memory event-local delivery results. The Cloud adapter consumes each result once, intersects it with the fresh Gateway-authored Cloud instance lease, and emits sorted `local_delivery_client_instance_ids` only for instances that received the same canonical `event_id` locally.
 - Local delivery results and Local membership never leave Agent memory except for that one event-local exclusion list; missing/expired/ambiguous state preserves Cloud egress.
 - Delivery-interest suppression applies only to uncorrelated egress. A reply that carries the `request_id` of a command received on the Cloud socket has a known Cloud requester and is always emitted to Cloud: right after a Client Cloud reconnect the Gateway interest set can still omit that requester, and a suppressed reply is never retried.
+- A notification instruction (`notification.dispatch` / `notification.withdraw`) is always eligible for Cloud egress and bypasses the interest gate through `claimCloudEgress(always: true)`. The account-scoped step exists for the device the live interest set cannot see, so suppressing it strands a run that is waiting on a human. No other event gains that exemption.
 
 ## Local Runtime Context
 - Rebuild per-turn workspace tools before assembling fresh runtime-owned system context for the runner.

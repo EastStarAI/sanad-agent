@@ -38,6 +38,12 @@ final class ClientInstanceProfile {
 /// lowercased. Nothing in this registry is persisted or published: a reconnecting
 /// Client re-registers, and an unregistered instance renders in the fallback
 /// locale.
+///
+/// Registration is scoped to the connection that announced it, because instance
+/// identity outlives one socket: a Client that reconnects, or two Clients that
+/// report the same instance id, hold the same registration. Forgetting one
+/// connection therefore drops only that connection's claim and keeps the facts
+/// for as long as another connection still holds the instance.
 class ClientInstanceProfiles {
   ClientInstanceProfiles({this.capacity = defaultCapacity}) {
     if (capacity <= 0) {
@@ -52,17 +58,26 @@ class ClientInstanceProfiles {
 
   final Map<String, ClientInstanceProfile> _profiles = {};
 
+  /// Connections holding each registered instance, keyed by the instance id.
+  ///
+  /// A connection key is the transport's own socket handle; it is carried only
+  /// so [forget] can tell "this socket is gone" from "this instance is gone".
+  final Map<String, Set<Object>> _connections = {};
+
   /// Number of remembered instances.
   int get length => _profiles.length;
 
   /// Reads a locale and notification capability from an authenticated
-  /// `client.hello` envelope and registers them.
+  /// `client.hello` envelope and registers them for [connectionKey].
   ///
   /// The envelope's top-level `locale` is authoritative. `metadata.locale` and
   /// the cloud `origin_client.locale` shape are accepted as the same value so a
   /// transport that nests display metadata does not lose it. Returns the
   /// registered profile, or `null` when the envelope names no valid instance.
-  ClientInstanceProfile? registerFromHello(Map<String, dynamic> hello) {
+  ClientInstanceProfile? registerFromHello(
+    Map<String, dynamic> hello, {
+    Object? connectionKey,
+  }) {
     final instanceId = hello['client_instance_id'];
     if (instanceId is! String || instanceId.trim().isEmpty) return null;
     final metadata = hello['metadata'];
@@ -73,18 +88,23 @@ class ClientInstanceProfiles {
       canNotify:
           hello['notification_capable'] ??
           (metadata is Map ? metadata['notification_capable'] : null),
+      connectionKey: connectionKey,
     );
   }
 
   /// Registers display facts for [clientInstanceId], keeping previously known
   /// values for the fields [locale] and [canNotify] leave unstated.
   ///
-  /// A malformed or unsupported locale is ignored rather than stored, so the
-  /// instance keeps a defined fallback.
+  /// [connectionKey] names the connection that announced the facts, when the
+  /// caller has one; it is what lets [forget] release one connection without
+  /// erasing an instance another connection still holds. A malformed or
+  /// unsupported locale is ignored rather than stored, so the instance keeps a
+  /// defined fallback.
   ClientInstanceProfile? register({
     required String clientInstanceId,
     Object? locale,
     Object? canNotify,
+    Object? connectionKey,
   }) {
     final normalizedId = _normalize(clientInstanceId);
     if (normalizedId == null) return null;
@@ -98,8 +118,15 @@ class ClientInstanceProfiles {
     );
     _profiles.remove(normalizedId);
     _profiles[normalizedId] = profile;
+    if (connectionKey != null) {
+      _connections
+          .putIfAbsent(normalizedId, () => <Object>{})
+          .add(connectionKey);
+    }
     while (_profiles.length > capacity) {
-      _profiles.remove(_profiles.keys.first);
+      final evicted = _profiles.keys.first;
+      _profiles.remove(evicted);
+      _connections.remove(evicted);
     }
     return profile;
   }
@@ -126,15 +153,33 @@ class ClientInstanceProfiles {
   bool canNotify(String? clientInstanceId) =>
       profileFor(clientInstanceId)?.canNotify ?? true;
 
-  /// Forgets [clientInstanceId]; called when its last connection is gone.
-  void forget(String? clientInstanceId) {
+  /// Forgets [clientInstanceId] for one connection, or for every connection.
+  ///
+  /// When [connectionKey] is supplied, only that connection's claim is
+  /// released: the registration survives while another live connection still
+  /// holds the same instance id, because a reconnect or a second window with
+  /// the same identity is the same Client and its locale and capability are
+  /// still true. Without a key the call cannot prove the instance is gone, so
+  /// it erases nothing while a connection still holds it; [clear] is the
+  /// explicit "forget everything" path.
+  void forget(String? clientInstanceId, {Object? connectionKey}) {
     final normalizedId = _normalize(clientInstanceId);
     if (normalizedId == null) return;
+    final holders = _connections[normalizedId];
+    if (holders != null && connectionKey != null) {
+      holders.remove(connectionKey);
+    }
+    if (holders != null && holders.isNotEmpty) return;
+    _connections.remove(normalizedId);
     _profiles.remove(normalizedId);
   }
 
-  /// Drops every registration. Used when identity changes or the runtime stops.
-  void clear() => _profiles.clear();
+  /// Drops every registration, for every connection. Used when identity changes
+  /// or the runtime stops.
+  void clear() {
+    _profiles.clear();
+    _connections.clear();
+  }
 
   static String? _normalize(String? value) {
     final normalized = value?.trim().toLowerCase() ?? '';
