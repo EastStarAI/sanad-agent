@@ -418,6 +418,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
+              key: const Key('provider_credential_actions_button'),
               onPressed: () => setState(() => _showCredentialActions = true),
               icon: const Icon(Icons.key),
               label: Text(
@@ -427,6 +428,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           ),
         if (isApiKey && _showCredentialActions) ...[
           DropdownButtonFormField<String>(
+            key: const Key('provider_credential_action_field'),
             initialValue: _credentialAction,
             decoration: const InputDecoration(
               labelText: 'Credential Action',
@@ -473,6 +475,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
+              key: const Key('provider_credential_reconnect_button'),
               onPressed: () => _reconnect(instance),
               icon: const Icon(Icons.login),
               label: const Text('Reconnect account'),

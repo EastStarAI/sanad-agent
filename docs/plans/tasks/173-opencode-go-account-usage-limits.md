@@ -142,9 +142,11 @@ Recovery check:
    `97% remaining`, `Resets in 1 h`; Weekly and Monthly remained `55% used` /
    `45% remaining`.
 
-The edit-mode `New API Key` field received the stable key
-`provider_new_api_key_field` so this recovery path stays interactively
-testable.
+The edit-mode credential controls received stable keys
+(`provider_credential_actions_button`, `provider_credential_action_field`,
+`provider_new_api_key_field`, and `provider_credential_reconnect_button` for
+account instances) so interactive acceptance stays key-addressed and visual
+screenshots are reserved for rendering checks.
 
 ## Definition of Done
 

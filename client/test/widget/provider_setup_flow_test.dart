@@ -1157,12 +1157,20 @@ void main() {
       expect(find.byKey(const Key('change_provider_model_button')), findsOneWidget);
       expect(find.byKey(const Key('delete_provider_from_edit_button')), findsOneWidget);
 
-      // Click "Add API Key" text button since there is no secret
-      await tester.tap(find.text('Add API Key'));
+      // Click the keyed "Add API Key" action since there is no secret.
+      expect(
+        find.byKey(const Key('provider_credential_actions_button')),
+        findsOneWidget,
+      );
+      await tester.tap(find.byKey(const Key('provider_credential_actions_button')));
       await tester.pumpAndSettle();
 
       // The credential action dropdown should be displayed and default to a
       // non-mutating choice even when no secret is stored yet.
+      expect(
+        find.byKey(const Key('provider_credential_action_field')),
+        findsOneWidget,
+      );
       expect(find.text('Credential Action'), findsOneWidget);
       expect(find.text('Keep as-is (no key stored)'), findsOneWidget);
       expect(find.text('New API Key'), findsNothing);
@@ -1217,8 +1225,65 @@ void main() {
       expect(find.text('OpenAI API Compatible'), findsOneWidget);
       expect(find.text('openai_compatible'), findsNothing);
       expect(find.text('Replace or remove key'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_credential_actions_button')),
+        findsOneWidget,
+      );
       expect(find.text('Not set'), findsNothing);
       expect(find.text('Add API Key'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'edit-mode replace reveals the keyed new API key field',
+    (tester) async {
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: [
+          ProviderInstanceDto.fromJson(const {
+            'id': 'api-instance',
+            'template_id': 'openai',
+            'display_name': 'OpenAI Work',
+            'protocol': 'openai_compatible',
+            'auth_method': 'api_key',
+            'status': 'ready',
+            'is_default': true,
+            'credential': {
+              'configured': true,
+              'auth_method': 'api_key',
+              'status': 'authenticated',
+              'masked_key_hint': 'sk-p••••9X2A',
+              'relogin_required': false,
+            },
+          }),
+        ],
+      );
+
+      await tester.pumpWidget(
+        _wrap(ProviderSetupFlow(client: fake, autoLoad: false)),
+      );
+      await tester.pump();
+      final cubit = tester.element(find.byType(AnimatedSwitcher)).read<ProviderSetupCubit>();
+      await cubit.load(forcePicker: false);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Edit'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(
+        find.byKey(const Key('provider_credential_actions_button')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const Key('provider_credential_action_field')),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Replace with new key').last);
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('provider_new_api_key_field')),
+        findsOneWidget,
+      );
     },
   );
 
@@ -1274,6 +1339,10 @@ void main() {
       expect(find.text('User Name'), findsOneWidget);
       expect(find.text('Disconnected'), findsNothing);
       expect(find.text('Reconnect account'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_credential_reconnect_button')),
+        findsOneWidget,
+      );
     },
   );
 
