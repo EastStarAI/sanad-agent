@@ -90,6 +90,30 @@ confirmation, count visibility, and authoritative snapshot replacement.
 - Repeat with two configured ChatGPT accounts and verify credentials, snapshots, confirmation tokens, and resets never cross instance ids.
 
 
+## Live OpenCode Go acceptance
+
+Use a matched managed runtime with an isolated Sanad Home and a driver-enabled
+Client. Store the OpenCode Go API key in the Agent vault; never paste it into a
+command, log, or screenshot. The acceptance surface is Settings → Providers.
+
+1. Open `Usage & limits` for a READY API-key instance. Expect Session, Weekly,
+   and Monthly with used/remaining values and reset text; expect no reset action
+   when the snapshot reports zero reset credits.
+2. Edit the instance, choose `Replace or remove key` → `Replace with new key`,
+   store a deliberately invalid key, and save.
+3. Expect `NEEDS_AUTH`, the credential-rejected message, and a disclosure that
+   says `Update this provider's API key to view usage limits.` with an
+   `Update API key` action. No `Reconnect` action or OAuth flow may start.
+4. Activate `Update API key`. Expect `Edit Provider Instance`; replace the key
+   with the valid vault value and save.
+5. Expect `READY` and `Key accepted: <n> models`; reopen `Usage & limits` and
+   expect all three windows to return. A later refresh may move a window's used
+   percentage while the page stays on the same instance.
+
+Acceptance run on 2026-11-13 observed Session `2%` → `3%` used, Weekly `55%`,
+Monthly `55%`, resets of `2 h`, `2 d`, and `Mon, Nov 23, 17:03`, and no reset
+action at zero credits. The API-key recovery path behaved exactly as above.
+
 ## Automated daemon-backed fixture
 
 `client/e2e_test/local_dual_connection_e2e_test.dart` spawns the real daemon

@@ -1,7 +1,7 @@
 ---
 title: "Task 173: OpenCode Go account usage limits"
 description: "Show OpenCode Go account usage windows in the existing instance-scoped Usage & limits surface, with API-key-correct recovery."
-status: "active"
+status: "in_review"
 priority: "medium"
 scope: "Sanad agent provider usage adapter, Client usage recovery action, documentation and QA"
 depends_on: "Task 55 provider account usage limits"
@@ -13,7 +13,7 @@ packet_fingerprint: "sha256:fb380adeb8f4f69dce4bae180d66b8833ec11e3a07b86fcfdf46
 
 # Task 173 — OpenCode Go account usage limits
 
-**Status:** implemented — draft PR #425; all required CI checks pass
+**Status:** implemented and live-verified — draft PR #425; all required CI checks pass
 **Owners:** `agent/lib/core/provider_usage/` and
 `client/lib/features/provider_setup/`
 **Contract:** [provider protocol](../../technical/provider_protocol.md),
@@ -92,23 +92,59 @@ action correct for an API-key provider.
 
 ## Acceptance Criteria
 
-- [ ] Given an OpenCode Go instance with a valid API key, when usage is
+- [x] Given an OpenCode Go instance with a valid API key, when usage is
       requested, then the snapshot contains exactly the provider-returned
       Session, Weekly, and Monthly windows with used percentages and UTC reset
       timestamps.
-- [ ] Given a payload missing one window or containing a non-numeric percent,
+- [x] Given a payload missing one window or containing a non-numeric percent,
       when usage is requested, then only valid windows cross the protocol and no
       placeholder appears.
-- [ ] Given a `401` or `403`, when usage is requested, then the result is
+- [x] Given a `401` or `403`, when usage is requested, then the result is
       `auth_required` and the instance status is unchanged.
-- [ ] Given an API-key instance in `auth_required`, when the disclosure renders,
+- [x] Given an API-key instance in `auth_required`, when the disclosure renders,
       then it offers `Update API key` and never starts OAuth reconnect.
-- [ ] Given an account instance in `auth_required`, when the disclosure renders,
+- [x] Given an account instance in `auth_required`, when the disclosure renders,
       then it still offers `Reconnect`.
-- [ ] Given an available snapshot with zero reset credits, when the disclosure
+- [x] Given an available snapshot with zero reset credits, when the disclosure
       renders, then no reset action appears.
-- [ ] Automated coverage proves the mapping, omission, clamping, failure
+- [x] Automated coverage proves the mapping, omission, clamping, failure
       containment, capability registration, and both recovery actions.
+
+## Live acceptance (2026-11-13)
+
+Run from worktree `173-opencode-go-account-usage` with the managed runtime,
+isolated Sanad Home, Xvfb display, and the Flutter driver. The provider used the
+real OpenCode Go API key from the Agent vault; the key was injected into the
+interactive field through the vault and was never printed in command output or
+logs.
+
+Observed on the first valid-key snapshot:
+
+- Session: `2% used`, `98% remaining`, `Resets in 2 h`.
+- Weekly: `55% used`, `45% remaining`, `Resets in 2 d`.
+- Monthly: `55% used`, `45% remaining`, `Resets on Mon, Nov 23, 17:03`.
+- No reset action was rendered at zero reset credits.
+
+Recovery check:
+
+1. Opened `Edit Provider Instance`, chose `Replace with new key`, stored an
+   invalid key, and saved.
+2. The instance became `NEEDS_AUTH`, showed
+   `The provider rejected this credential. Update the API key, then test the
+   connection again.`, and the disclosure showed
+   `Update this provider's API key to view usage limits.` with an
+   `Update API key` action. No `Reconnect` action and no OAuth flow started.
+3. `Update API key` opened `Edit Provider Instance`, confirming the API-key
+   recovery path.
+4. Replaced the invalid key with the valid vault key and saved. The instance
+   returned to `READY` (`Key accepted: 30 models`), and the disclosure restored
+   Session, Weekly, and Monthly. The refreshed Session reading was `3% used`,
+   `97% remaining`, `Resets in 1 h`; Weekly and Monthly remained `55% used` /
+   `45% remaining`.
+
+The edit-mode `New API Key` field received the stable key
+`provider_new_api_key_field` so this recovery path stays interactively
+testable.
 
 ## Definition of Done
 
@@ -129,8 +165,10 @@ fvm dart test test/core/provider_usage    # 61 passed
 fvm dart test test/interfaces/sanad_bridge_provider_usage_test.dart  # 9 passed
 fvm flutter analyze                       # client: no issues
 fvm flutter test test/features/provider_setup/widgets/provider_usage_section_test.dart
-  # local host: blocked before test discovery (cnativeapi native asset needs
-  # pkg-config + GTK 3 / X11 / Xi development packages)
+  # 10 passed after installing host GTK 3 / X11 / Xi development packages
+sanad-dev run --background --driver --no-cloud  # matched agent/client runtime
+sanad-dev ui ...                        # live OpenCode Go usage + auth_required
+                                        # recovery acceptance (values above)
 GitHub Actions PR #425                  # 24 checks passed, 0 failed
-  # Test client (1/4)-(4/4) passed
+  # Test client (1/4)-(4/4) passed; rerun on the final keyed-field commit
 ```
