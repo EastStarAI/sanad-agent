@@ -8,11 +8,15 @@
 //    checksum does not degrade a download, it fails every install, so this is
 //    asserted across every block boundary the SHA-256 padding cares about
 //    (0, 1, 63, 64, 65, 4095, 4096, 4097) and across three feeding patterns.
-// 2. **The fast path is actually taken, and is actually fast.** Measuring only
-//    the shipped factory cannot tell a working accelerator from a silent
-//    fallback, so the native implementation is timed against the pure-Dart one
-//    in the same process on the same buffer. The ratio is self-calibrating: a
-//    slow host slows both, and only a fallback (ratio ~1) fails it.
+// 2. **The fast path is actually taken.** Measuring only the shipped factory
+//    cannot tell a working accelerator from a silent fallback, so the factory's
+//    implementation is asserted on a host that has an OS backend. How fast that
+//    path is belongs to a *ratio*, and a ratio measured beside other suites
+//    charges the shorter arm for whatever the host did during it: this file's
+//    own copy of it measured 2.14 on `macos-15-intel` while the host was busy.
+//    The speed claim therefore has its own process
+//    (`stt_digest_cost_test.dart`), and this file keeps the byte-for-byte and
+//    selection claims that no amount of host load can change.
 
 import 'dart:typed_data';
 
@@ -181,41 +185,6 @@ void main() {
         digest.close();
         digest.close();
       }
-    });
-
-    test('costs a fraction of pure Dart per byte', () {
-      if (!sttNativeDigestAvailable) {
-        markTestSkipped('no OS SHA-256 on this host');
-        return;
-      }
-      // 64 MiB is ~330 ms of pure-Dart work and ~25 ms native on an M4: long
-      // enough that timer noise cannot move the ratio, short enough to stay a
-      // unit test. Warm-up absorbs the first-call FFI lookup and page faults.
-      final bytes = _pattern(64 * 1024 * 1024);
-      _feed(PureDartSttDigest(), bytes, 1 << 20);
-      _feed(createSttDigest(), bytes, 1 << 20);
-
-      final pureStopwatch = Stopwatch()..start();
-      _feed(PureDartSttDigest(), bytes, 64 * 1024);
-      pureStopwatch.stop();
-
-      final nativeStopwatch = Stopwatch()..start();
-      _feed(createSttDigest(), bytes, 64 * 1024);
-      nativeStopwatch.stop();
-
-      final ratio =
-          pureStopwatch.elapsedMicroseconds /
-          nativeStopwatch.elapsedMicroseconds.clamp(1, 1 << 30);
-      // Turn-1 measured 13x on an M4; 2.5x is the point below which the
-      // accelerator is not the thing being measured.
-      expect(
-        ratio,
-        greaterThanOrEqualTo(2.5),
-        reason:
-            'native SHA-256 was only ${ratio.toStringAsFixed(2)}x the pure-Dart '
-            'path (${nativeStopwatch.elapsedMilliseconds} ms vs '
-            '${pureStopwatch.elapsedMilliseconds} ms for 64 MiB)',
-      );
     });
   });
 }

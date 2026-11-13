@@ -21,13 +21,27 @@ on:
 permissions:
   contents: read
 
+# A release run is only cancellable when it cannot publish anything. A
+# `validation_only` dispatch builds the matrix and stops; a newer validation makes
+# the older one worthless, so it is cancelled in place. A tagged run and any
+# dispatch that can reach `publish` (validation, build, signing, the private Draft
+# and the protected publication environment) live in a separate group and are
+# never cancelled: they are serialized, and a newer run waits instead of
+# destroying in-flight signing or publication work.
 concurrency:
-  group: release-candidate-${{ github.ref }}
-  cancel-in-progress: false
+  group: >-
+    release-candidate-${{ github.event_name == 'workflow_dispatch' && inputs.validation_only == true && inputs.request_publication != true && format('validation-{0}', github.ref) || format('protected-{0}', github.ref_name) }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_dispatch' && inputs.validation_only == true && inputs.request_publication != true }}
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   RELEASE_ARTIFACT_RETENTION_DAYS: 14
+  # Rollout switch for candidate promotion (design item A). `enabled` publishes
+  # the exact bytes a `workflow_dispatch` validation run on `main` already
+  # built, signed, notarized, tested, manifested, SBOM-ed and attested; `shadow`
+  # proves the candidate and reports it but still rebuilds; unset or any other
+  # value skips selection. Deleting the variable is the instant rollback.
+  RELEASE_CANDIDATE_PROMOTION: ${{ vars.RELEASE_CANDIDATE_PROMOTION }}
   # One signing identifier for every released Agent executable. It must never
   # carry the release version or the architecture: macOS stores a signed code
   # requirement in the Keychain ACL of every item the Agent creates, so a
@@ -39,6 +53,10 @@ jobs:
   validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
+    permissions:
+      contents: read
+      # The release gate reads the `macOS full suite` runs for this commit.
+      actions: read
     outputs:
       version: ${{ steps.contract.outputs.version }}
       artifact_version: ${{ steps.contract.outputs.artifact_version }}
@@ -108,9 +126,248 @@ jobs:
             echo "Release already exists; published and Draft releases are immutable candidates." >&2
             exit 1
           fi
+      # The release boundary must prove macOS, not inherit it. PR385 moved the
+      # complete Agent suite off the release path onto `macOS full suite`, which
+      # runs on every push to `main`, is deliberately not a required check, and
+      # cancels superseded runs. So a red, cancelled, or never-started suite
+      # blocked nothing, and "the release is green" only ever proved the macOS
+      # platform subset. This gate closes that hole: publication requires a
+      # successful run of that workflow on this exact commit.
+      #
+      # `draft` and `publish` both need this job, so a failure here stops the
+      # release before any artifact is built. A `validation_only` run publishes
+      # nothing, so for it the same evidence is reported and not enforced - that
+      # is the one path where a missing suite is a warning.
+      - name: Require a green macOS full suite on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          VALIDATION_ONLY: ${{ steps.contract.outputs.validation_only }}
+        run: |
+          set -euo pipefail
+          runs_url="repos/$GITHUB_REPOSITORY/actions/workflows/macos-full-suite.yml/runs?head_sha=$HEAD_SHA&per_page=100"
+          # An unreadable API and a reply that is not a run list are the same
+          # missing evidence: reported for validation_only, refused otherwise.
+          if ! runs_json="$(gh api "$runs_url" 2>"$RUNNER_TEMP/macos-suite.err")" ||
+            ! jq -e '.workflow_runs | type == "array"' >/dev/null 2>>"$RUNNER_TEMP/macos-suite.err" <<< "$runs_json"; then
+            cat "$RUNNER_TEMP/macos-suite.err" >&2 || true
+            if [[ "$VALIDATION_ONLY" == true ]]; then
+              echo "::warning::Could not read the macOS full suite runs for $HEAD_SHA; a validation_only run reports this instead of failing."
+              exit 0
+            fi
+            echo "::error::Could not read the macOS full suite runs for $HEAD_SHA; refusing to publish on unproven macOS coverage."
+            exit 1
+          fi
+          # Any successful run on this exact commit is the evidence, even when a
+          # later run on the same commit was cancelled by a newer push: cancelling
+          # a `main` run only removes a duplicate, it does not un-prove the commit.
+          green="$(jq -r --arg sha "$HEAD_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+            | sort_by(.created_at) | reverse | (.[0].html_url // empty)' <<< "$runs_json")"
+          if [[ -n "$green" ]]; then
+            echo "macOS full suite is green on $HEAD_SHA: $green"
+            exit 0
+          fi
+          read -r status conclusion url event <<< "$(jq -r --arg sha "$HEAD_SHA" '
+            [.workflow_runs[] | select(.head_sha == $sha)]
+            | sort_by(.created_at) | reverse | (.[0] // {})
+            | "\(.status // "missing") \(.conclusion // "none") \(.html_url // "none") \(.event // "none")"' <<< "$runs_json")"
+          if [[ "$status" == missing ]]; then
+            reason="no macOS full suite run exists for $HEAD_SHA"
+          elif [[ "$status" != completed ]]; then
+            reason="the macOS full suite run for $HEAD_SHA is still $status ($event, $url)"
+          else
+            reason="the newest macOS full suite run for $HEAD_SHA concluded $conclusion ($event, $url)"
+          fi
+          if [[ "$VALIDATION_ONLY" == true ]]; then
+            echo "::warning::macOS full suite evidence is not satisfied: $reason. This run publishes nothing, so it is reported and not enforced."
+            exit 0
+          fi
+          {
+            echo "::error::Refusing to release: $reason."
+            echo "Wait for a green macOS full suite run on this exact commit, then re-run this workflow."
+          }
+          exit 1
+
+  # The release is built twice today: a `workflow_dispatch` validation run on
+  # `main` proves a complete signed candidate, and the tag run rebuilds all of
+  # it. This job refuses to accept that second build when the first one can be
+  # proved byte for byte, so the published artifacts are the artifacts that were
+  # proved. It runs on tags only and can only ever *offer* a candidate: every
+  # check lives in `scripts/release/promote_release_candidate.sh`, any failure
+  # (including an unreadable API or a defect in the script) becomes `mode=rebuild`,
+  # and both script calls are wrapped so the job itself never fails a release.
+  candidate:
+    name: Select and verify validated candidate
+    needs: validate
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      # Reading the candidate's jobs and its artifact from the dispatch run.
+      actions: read
+      # Proving every published byte carries that run's attestation.
+      attestations: read
+    outputs:
+      mode: ${{ steps.decide.outputs.mode }}
+      verdict: ${{ steps.decide.outputs.verdict }}
+      candidate_run_id: ${{ steps.decide.outputs.candidate_run_id }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+      - name: Select the validated candidate
+        id: select
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+        run: |
+          set -uo pipefail
+          # The workflow-level env carries the rollout switch into every step.
+          promotion_switch="${RELEASE_CANDIDATE_PROMOTION:-}"
+          attempt=no
+          candidate_run_id=""
+          promotion_reason=""
+          if [[ "$promotion_switch" != enabled && "$promotion_switch" != shadow ]]; then
+            promotion_reason="RELEASE_CANDIDATE_PROMOTION is '${promotion_switch:-unset}', so this tag run rebuilds"
+          elif output="$(scripts/release/promote_release_candidate.sh select \
+            --repo "$GITHUB_REPOSITORY" \
+            --sha "$GITHUB_SHA" \
+            --channel "$CHANNEL" \
+            --contract release/release-contract.json 2>&1)"; then
+            printf '%s\n' "$output"
+            attempt=yes
+            candidate_run_id="$(sed -n 's/^candidate_run_id=//p' <<<"$output")"
+          else
+            printf '%s\n' "$output"
+            promotion_reason="$(sed -n 's/^promotion-reason: //p' <<<"$output" | tail -1)"
+          fi
+          {
+            echo "attempt=$attempt"
+            echo "candidate_run_id=$candidate_run_id"
+            echo "reason=$promotion_reason"
+          } >> "$GITHUB_OUTPUT"
+      - name: Download the validated candidate
+        if: steps.select.outputs.attempt == 'yes'
+        uses: actions/download-artifact@v5
+        with:
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
+          run-id: ${{ steps.select.outputs.candidate_run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+      - name: Resolve the release tool dependencies
+        if: steps.select.outputs.attempt == 'yes'
+        working-directory: agent
+        run: fvm flutter pub get
+      # `mode=promote` is written only after every selection and verification
+      # rule passed. Any earlier failure leaves `mode=rebuild`, and a failed
+      # upload is caught by `draft`, which then never sees a complete artifact.
+      - name: Verify the validated candidate and decide the mode
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTEMPT: ${{ steps.select.outputs.attempt }}
+          SELECTED_RUN_ID: ${{ steps.select.outputs.candidate_run_id }}
+          SELECTION_REASON: ${{ steps.select.outputs.reason }}
+          CHANNEL: ${{ needs.validate.outputs.channel }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          ARTIFACT_VERSION: ${{ needs.validate.outputs.artifact_version }}
+          BUILD: ${{ needs.validate.outputs.build }}
+          MANIFEST: ${{ needs.validate.outputs.manifest }}
+        run: |
+          set -uo pipefail
+          promotion_switch="${RELEASE_CANDIDATE_PROMOTION:-}"
+          selection=failed
+          verification=failed
+          promotion_reason="$SELECTION_REASON"
+          if [[ "$ATTEMPT" == yes ]]; then
+            selection=ok
+            if output="$(scripts/release/promote_release_candidate.sh verify \
+              --repo "$GITHUB_REPOSITORY" \
+              --sha "$GITHUB_SHA" \
+              --channel "$CHANNEL" \
+              --run-id "$SELECTED_RUN_ID" \
+              --tag "$TAG" \
+              --artifact-version "$ARTIFACT_VERSION" \
+              --build "$BUILD" \
+              --manifest "$MANIFEST" \
+              --dir dist \
+              --agent-dir agent \
+              --contract release/release-contract.json 2>&1)"; then
+              printf '%s\n' "$output"
+              verification=ok
+              promotion_reason=""
+            else
+              printf '%s\n' "$output"
+              promotion_reason="$(sed -n 's/^promotion-reason: //p' <<<"$output" | tail -1)"
+            fi
+          fi
+          if ! decision="$(scripts/release/promote_release_candidate.sh verdict \
+            --switch "$promotion_switch" \
+            --selection "$selection" \
+            --verification "$verification" \
+            --reason "$promotion_reason")"; then
+            echo "::error::The promotion decision could not be computed; this tag run rebuilds instead."
+            decision="$(printf 'verdict=rebuild\nmode=rebuild\nreason=the promotion verdict could not be computed')"
+          fi
+          printf '%s\n' "$decision"
+          mode="$(sed -n 's/^mode=//p' <<<"$decision")"
+          verdict="$(sed -n 's/^verdict=//p' <<<"$decision")"
+          decided_reason="$(sed -n 's/^reason=//p' <<<"$decision")"
+          # Only the exact word promotes. An unreadable or unexpected mode, or a
+          # missing one, is the rebuild path - never a promotion.
+          case "$mode" in
+            promote) ;;
+            *)
+              mode=rebuild
+              ;;
+          esac
+          {
+            echo "mode=$mode"
+            echo "verdict=$verdict"
+            echo "candidate_run_id=$SELECTED_RUN_ID"
+            echo "reason=$decided_reason"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release candidate promotion"
+            echo
+            echo "| field | value |"
+            echo "|---|---|"
+            echo "| \`RELEASE_CANDIDATE_PROMOTION\` | \`${promotion_switch:-unset}\` |"
+            echo "| verdict | **$verdict** |"
+            echo "| mode | **$mode** |"
+            if [[ -n "$SELECTED_RUN_ID" ]]; then
+              echo "| candidate run | [$SELECTED_RUN_ID](https://github.com/$GITHUB_REPOSITORY/actions/runs/$SELECTED_RUN_ID) |"
+            else
+              echo "| candidate run | none |"
+            fi
+            echo "| reason | $decided_reason |"
+            echo
+            if [[ "$promotion_switch" == shadow ]]; then
+              echo "Shadow mode never changes what is published. This tag run rebuilds and publishes its own bytes, and the verdict above is evidence for the next rollout step."
+            fi
+            if [[ "$mode" == promote ]]; then
+              echo "The Agent, Client and assemble jobs are skipped: this run publishes the exact bytes the candidate run built, signed, notarized, tested and attested."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      # The tag run must hold the same artifact name that `draft`,
+      # `client-download-aliases` and `deploy.yml` already read from
+      # `github.run_id`, so promotion changes no downstream contract.
+      - name: Publish the verified candidate into this run
+        if: steps.decide.outputs.mode == 'promote'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.validate.outputs.channel }}-release-candidate
+          path: dist/*
+          retention-days: ${{ env.RELEASE_ARTIFACT_RETENTION_DAYS }}
+          if-no-files-found: error
 
   agent:
-    needs: validate
+    needs: [validate, candidate]
+    # A skipped `candidate` (every non-tag run) must not skip the build, and a
+    # failed one must fall back to the rebuild rather than fail the release.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     strategy:
       fail-fast: false
       matrix:
@@ -298,20 +555,22 @@ jobs:
           cmake --build build/windows-launcher --config Release
           fvm dart compile exe "-DSANAD_AGENT_VERSION=${{ needs.validate.outputs.version }}" bin/sanad_agent.dart -o "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe"
           fvm dart run tool/package_windows_launcher.dart --agent "../dist/sanad-agent-${{ needs.validate.outputs.artifact_version }}-windows-x64.exe" --launcher "build/windows-launcher/out/sanad-launcher.exe"
+      # `--verify` disassembles the staged libraries and fails on any
+      # instruction above the declared baseline. Installing the disassembler
+      # when it is absent keeps the gate from skipping on the lane that
+      # actually ships the payload; the bounded action makes a stalled mirror a
+      # fast failure instead of a lost release lane.
       - name: Install the disassembler the instruction-set guard needs
         if: matrix.platform == 'linux'
-        shell: bash
-        # `--verify` disassembles the staged libraries and fails on any
-        # instruction above the declared baseline. Installing the disassembler
-        # when it is absent keeps the gate from skipping on the lane that
-        # actually ships the payload.
-        run: |
-          set -euo pipefail
-          if ! command -v objdump >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq binutils
-          fi
-          objdump --version | head -1
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: binutils
+          options: ''
+          skip-if-command: objdump
+      - name: Report the disassembler
+        if: matrix.platform == 'linux'
+        run: objdump --version | head -1
       # Audit D9: the packaged Agent must carry the native dictation runtime
       # beside its executable. It is built in the same matrix entry as the
       # executable, so one platform's payload cannot silently receive another
@@ -659,16 +918,19 @@ jobs:
           if-no-files-found: error
 
   client-linux-web:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: ubuntu-22.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
       - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev xvfb
+        timeout-minutes: 10
+        uses: ./.github/actions/apt-install
+        with:
+          packages: clang cmake ninja-build pkg-config libgtk-3-dev liblzma-dev libasound2-dev xvfb
+          options: ''
       - name: Build Linux and Web
         working-directory: client
         run: |
@@ -719,7 +981,8 @@ jobs:
           if-no-files-found: error
 
   client-android:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: android-signing
@@ -765,7 +1028,8 @@ jobs:
           if-no-files-found: error
 
   client-macos:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: macos-26
     timeout-minutes: 60
     environment: apple-signing
@@ -830,7 +1094,8 @@ jobs:
           if-no-files-found: error
 
   client-windows:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: windows-2025
     timeout-minutes: 60
     environment: windows-update-signing
@@ -894,7 +1159,8 @@ jobs:
           if-no-files-found: error
 
   client-ios:
-    needs: validate
+    needs: [validate, candidate]
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && (needs.candidate.result == 'skipped' || needs.candidate.result == 'success' || needs.candidate.result == 'failure') && needs.candidate.outputs.mode != 'promote' }}
     runs-on: macos-26
     timeout-minutes: 60
     environment: apple-testflight
@@ -951,7 +1217,11 @@ jobs:
           if-no-files-found: error
 
   assemble:
-    needs: [validate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
+    needs: [validate, candidate, agent, client-linux-web, client-android, client-macos, client-windows, client-ios]
+    # `always()` lets a skipped or failed candidate selector fall back to a
+    # rebuild. Every producing job must still succeed explicitly; only the
+    # candidate result is ignored in rebuild mode.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.candidate.outputs.mode != 'promote' && needs.agent.result == 'success' && needs.client-linux-web.result == 'success' && needs.client-android.result == 'success' && needs.client-macos.result == 'success' && needs.client-windows.result == 'success' && needs.client-ios.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
@@ -1007,8 +1277,11 @@ jobs:
 
   draft:
     name: Create immutable Draft candidate
-    needs: [validate, assemble]
-    if: needs.validate.outputs.validation_only != 'true'
+    needs: [validate, candidate, assemble]
+    # Promotion requires a successful candidate job and a skipped assembler.
+    # Otherwise a successful rebuilt assembly may proceed even when candidate
+    # selection infrastructure failed before it could emit a mode.
+    if: ${{ always() && !cancelled() && needs.validate.result == 'success' && needs.validate.outputs.validation_only != 'true' && ((needs.candidate.outputs.mode == 'promote' && needs.candidate.result == 'success' && needs.assemble.result == 'skipped') || (needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -1049,7 +1322,7 @@ jobs:
   publish:
     name: Publish approved immutable release
     needs: [validate, draft]
-    if: needs.validate.outputs.validation_only != 'true' && (github.ref_type == 'tag' || inputs.request_publication == true)
+    if: ${{ always() && !cancelled() && needs.draft.result == 'success' && needs.validate.outputs.validation_only != 'true' && (github.ref_type == 'tag' || inputs.request_publication == true) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release-publication
@@ -1081,7 +1354,7 @@ jobs:
   client-download-aliases:
     name: Verify and deploy Stable Client aliases
     needs: [validate, publish]
-    if: needs.validate.outputs.channel == 'stable'
+    if: ${{ always() && !cancelled() && needs.publish.result == 'success' && needs.validate.outputs.channel == 'stable' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: client-downloads-production
@@ -1152,7 +1425,7 @@ jobs:
   production-assets:
     name: Deploy Stable Production assets
     needs: [validate, publish, client-download-aliases]
-    if: needs.validate.outputs.channel == 'stable'
+    if: ${{ always() && !cancelled() && needs.client-download-aliases.result == 'success' && needs.validate.outputs.channel == 'stable' }}
     permissions:
       contents: read
       attestations: read
