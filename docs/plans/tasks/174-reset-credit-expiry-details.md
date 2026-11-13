@@ -1,7 +1,7 @@
 ---
 title: "Task 174: Reset credit expiry details"
 description: "Show each available ChatGPT reset credit separately with its local expiration time instead of a single combined count."
-status: "in_progress"
+status: "in_review"
 priority: "medium"
 scope: "Agent ChatGPT usage adapter and snapshot model, Client reset controls, localization, protocol, QA and task documentation"
 depends_on: "Task 55 provider account usage limits"
@@ -10,7 +10,7 @@ coordinates_with: "Task 55"
 
 # Task 174 — Reset credit expiry details
 
-**Status:** in progress
+**Status:** in review — draft PR #441
 **Owners:** `agent/lib/core/provider_usage/` and
 `client/lib/features/provider_setup/`
 **Contract:** [provider protocol](../../technical/provider_protocol.md),
@@ -78,8 +78,8 @@ single `N resets available` line. The reset action stays one shared control.
 
 ### G4 — Delivery
 
-- [ ] Commit with a task-referenced message and push the branch.
-- [ ] Open a draft pull request with the mandatory labels and exact
+- [x] Commit with a task-referenced message and push the branch.
+- [x] Open a draft pull request with the mandatory labels and exact
       verification.
 
 ## Acceptance Criteria
@@ -108,7 +108,7 @@ single `N resets available` line. The reset action stays one shared control.
 - [x] `client` analyzer and focused widget tests pass.
 - [x] Protocol, product, QA, and this task document are current.
 - [x] No live UI test is run for this task.
-- [ ] A draft pull request is open with the mandatory labels and exact
+- [x] A draft pull request is open with the mandatory labels and exact
       verification results.
 
 ## Verification log
@@ -122,4 +122,6 @@ fvm flutter test test/features/provider_setup/widgets/provider_usage_section_tes
   # 12 passed
 fvm flutter test test/features/provider_setup/bloc/provider_usage_cubit_test.dart  # 26 passed
 # No live UI test was run for this task, per scope.
+Draft PR #441                            # type/feature, comp/agent, comp/client,
+                                        # comp/providers, comp/docs, size/medium
 ```
