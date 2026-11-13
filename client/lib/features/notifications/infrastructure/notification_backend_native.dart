@@ -449,14 +449,7 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
               ? approvalCategoryFor(request)
               : null,
         ),
-        linux: LinuxNotificationDetails(
-          urgency: _linuxUrgency(request.urgency),
-          icon: ThemeLinuxIcon(linuxIconName),
-          actions: <LinuxNotificationAction>[
-            for (final action in request.actions)
-              LinuxNotificationAction(key: action.id, label: action.label),
-          ],
-        ),
+        linux: linuxDetailsFor(request),
         windows: WindowsNotificationDetails(
           duration: request.urgency.isInterruptive
               ? WindowsNotificationDuration.long
@@ -472,6 +465,25 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
         ),
       ),
       payload: request.payload,
+    );
+  }
+
+  /// The freedesktop presentation of one notification.
+  ///
+  /// The action array is built per notification rather than registered once, so
+  /// the open button is the label the Client resolved for the language in use:
+  /// a language change inside a running session reaches the OS button without a
+  /// restart. A request that carries no label keeps the copy `initialize`
+  /// registered, because a blank button would be worse than a stale one.
+  static LinuxNotificationDetails linuxDetailsFor(NotificationPresentationRequest request) {
+    return LinuxNotificationDetails(
+      urgency: _linuxUrgency(request.urgency),
+      icon: ThemeLinuxIcon(linuxIconName),
+      defaultActionName: request.openActionLabel,
+      actions: <LinuxNotificationAction>[
+        for (final action in request.actions)
+          LinuxNotificationAction(key: action.id, label: action.label),
+      ],
     );
   }
 

@@ -2,6 +2,15 @@
 class DeviceConfig {
   static const int maxNameLength = 255;
 
+  /// The placeholder name of the row this Client synthesizes for the machine it
+  /// runs on.
+  ///
+  /// The Agent has no name for a device it has not registered yet, so the Client
+  /// creates the row itself. The model keeps a locale-independent placeholder
+  /// and the UI resolves it through the localization system, because a stored
+  /// English name would surface in an Arabic interface.
+  static const String localPlaceholderName = 'This device';
+
   final String id;
   final String name;
   final String? hardwareId; // For Sanad Agent - device ID
@@ -164,28 +173,5 @@ class DeviceConfig {
     if (metadata == null || metadata.isEmpty) return 0;
     final entries = metadata.entries.toList()..sort((a, b) => a.key.compareTo(b.key));
     return Object.hashAll(entries.map((entry) => Object.hash(entry.key, entry.value)));
-  }
-}
-
-/// Enum representing connection status
-enum ConnectionStatus {
-  disconnected,
-  connecting,
-  connected,
-  error,
-}
-
-extension ConnectionStatusExtension on ConnectionStatus {
-  String get displayName {
-    switch (this) {
-      case ConnectionStatus.connected:
-        return 'متصل';
-      case ConnectionStatus.connecting:
-        return 'جاري الاتصال';
-      case ConnectionStatus.disconnected:
-        return 'غير متصل';
-      case ConnectionStatus.error:
-        return 'خطأ';
-    }
   }
 }

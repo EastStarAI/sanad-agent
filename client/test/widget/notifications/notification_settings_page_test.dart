@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
@@ -11,6 +12,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
+import 'package:sanad_client/features/notifications/presentation/notification_copy_source.dart';
 import 'package:sanad_client/features/settings/presentation/widgets/settings_navigation.dart';
 import 'package:sanad_client/features/settings/presentation/widgets/settings_pages/notifications_page.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -266,6 +268,163 @@ void main() {
     );
   });
 
+  testWidgets('the urgency control states its value and changes with it', (tester) async {
+    // Plan 174g (M3): the affordance used to be an unlabeled glyph, so `Alert`
+    // and `Banner only` rendered identically and the control did not read as a
+    // control at rest.
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final l10n = lookupAppLocalizations(const Locale('en'));
+    final valueKey = ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency_value');
+    await tester.ensureVisible(find.byKey(valueKey));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<Text>(find.byKey(valueKey)).data,
+      l10n.notificationsUrgencyAlert,
+      reason: 'the control names the ceiling it will apply',
+    );
+
+    final urgency = find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency'),
+    );
+    final pill = tester.widget<Container>(
+      find.descendant(of: urgency, matching: find.byType(Container)).first,
+    );
+    expect(
+      (pill.decoration as BoxDecoration?)?.border,
+      isNotNull,
+      reason: 'the affordance needs a surface to read as a control, not as an icon',
+    );
+
+    await tester.tap(urgency);
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency_normal'),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(
+      tester.widget<Text>(find.byKey(valueKey)).data,
+      l10n.notificationsUrgencyBannerOnly,
+      reason: 'the control shows the state instead of only being able to change it',
+    );
+    expect(
+      tester.widget<Icon>(
+        find.descendant(of: urgency, matching: find.byIcon(Icons.volume_off_outlined)),
+      ).icon,
+      Icons.volume_off_outlined,
+      reason: 'the glyph changes with the ceiling',
+    );
+  });
+
+  testWidgets('the urgency control is exposed as a button to a screen reader', (tester) async {
+    // Plan 174g (S4): `PopupMenuButton.child` drops the `button: true` role the
+    // icon form emitted through `IconButton`, so the pill states it itself.
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final node = tester.getSemantics(find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency'),
+    ));
+    // The row merges its children, so the role lands on the pill's own node
+    // inside the merged tile rather than on the tile's outer node.
+    final button = _firstButtonNode(node);
+
+    expect(button, isNotNull,
+        reason: 'a pill a screen reader cannot identify as a control is not a control');
+    expect(button!.getSemanticsData().hasAction(SemanticsAction.tap), isTrue,
+        reason: 'the pill is activated by the same tap the menu opens with');
+
+    // The framework verifies handles before tear-downs run, so it is released
+    // here rather than from a tear-down.
+    semantics.dispose();
+  });
+
+  testWidgets('the urgency menu uses the vocabulary the row states', (tester) async {
+    // Plan 174g (L4): the menu said `Alert` / `Banner only` while the rows said
+    // `Banner and sound` / `Banner without sound`, so the user had to translate
+    // between two names for one setting.
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final l10n = lookupAppLocalizations(const Locale('en'));
+    final urgency = find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency'),
+    );
+    await tester.ensureVisible(urgency);
+    await tester.pumpAndSettle();
+    await tester.tap(urgency);
+    await tester.pumpAndSettle();
+
+    final high = find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency_high'),
+    );
+    final normal = find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency_normal'),
+    );
+
+    expect(find.descendant(of: high, matching: find.text(l10n.notificationsUrgencyAlert)), findsOneWidget);
+    expect(
+      find.descendant(of: high, matching: find.text(l10n.notificationsUrgencyAlertHint)),
+      findsOneWidget,
+      reason: 'the menu states the delivery in the words the row uses',
+    );
+    expect(find.descendant(of: normal, matching: find.text(l10n.notificationsUrgencyBannerOnly)), findsOneWidget);
+    expect(
+      find.descendant(of: normal, matching: find.text(l10n.notificationsUrgencyBannerOnlyHint)),
+      findsOneWidget,
+      reason: 'the same vocabulary, with the delivery that makes it meaningful',
+    );
+
+    // Plan 174g (L5): the unselected item starts where the selected one starts.
+    final highOffset = tester.getTopLeft(
+      find.descendant(of: high, matching: find.text(l10n.notificationsUrgencyAlert)),
+    ).dx;
+    final normalOffset = tester.getTopLeft(
+      find.descendant(of: normal, matching: find.text(l10n.notificationsUrgencyBannerOnly)),
+    ).dx;
+    expect(normalOffset, highOffset,
+        reason: 'the check slot is reserved, so nothing shifts when the selection moves');
+  });
+
+  testWidgets('the test card names the kind the probe follows', (tester) async {
+    // Plan 174g (L6): the probe borrows a real kind, so a quietened row produced
+    // a quieter test with no explanation of why.
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+    cubit.attachTestSender(
+      () async => NotificationDisplayOutcome.display,
+      kind: NotificationKind.completed,
+    );
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final l10n = lookupAppLocalizations(const Locale('en'));
+    final kindLabel = NotificationCopySource(l10n).labelFor(NotificationKind.completed);
+    final notice = find.byKey(const ValueKey('notification_test_kind_notice'));
+    await tester.ensureVisible(notice);
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.notificationsTestKindNotice(kindLabel)), findsOneWidget);
+  });
+
   testWidgets('reports a revoked OS permission while the in-app switch stays on', (tester) async {
     final adapter = _FakeAdapter();
     adapter.permission = NotificationPermissionStatus.denied;
@@ -422,4 +581,15 @@ void main() {
 
     expect(selected, <SettingsDestination>[SettingsDestination.notifications]);
   });
+}
+
+/// The first node in [root]'s subtree that is a button, including [root].
+SemanticsNode? _firstButtonNode(SemanticsNode root) {
+  if (root.getSemanticsData().flagsCollection.isButton) return root;
+  SemanticsNode? found;
+  root.visitChildren((SemanticsNode child) {
+    found = found ?? _firstButtonNode(child);
+    return found != null;
+  });
+  return found;
 }

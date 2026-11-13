@@ -112,6 +112,16 @@ class NotificationService {
   /// How long a test notification stays meaningful.
   static const Duration testLifetime = Duration(minutes: 1);
 
+  /// The kind the test notification borrows, so its result describes a real
+  /// delivery instead of a second decision.
+  ///
+  /// A probe needs a kind to run the real pipeline: the global switch, the
+  /// per-kind switch, the ceiling, the collapse identity, and the platform all
+  /// key on one. It therefore inherits that kind's loudness, which is why
+  /// Settings names the kind it uses rather than letting a quietened row look
+  /// like a broken test.
+  static const NotificationKind testNotificationKind = NotificationKind.completed;
+
   int _testSequence = 0;
 
   bool _started = false;
@@ -132,7 +142,14 @@ class NotificationService {
   NotificationColdStartOutcome get coldStartOutcome => _coldStartOutcome;
 
   /// Prepares the platform channel and starts consuming both transports.
-  Future<void> start() async {
+  ///
+  /// [onPlatformReady] runs after the adapter has initialized and before any
+  /// event is consumed. The composition uses it for the two things that must
+  /// happen exactly there: releasing the first permission read (a platform only
+  /// builds the objects that answer one inside `initialize`) and publishing that
+  /// read, so no arriving event can be decided against a permission nobody has
+  /// read yet. A failure in it is logged and never stops the pipeline.
+  Future<void> start({Future<void> Function()? onPlatformReady}) async {
     if (_started || _disposed) return;
     _started = true;
     try {
@@ -143,6 +160,11 @@ class NotificationService {
       );
     } catch (error, stack) {
       _logger.warning('notification platform initialization failed', error, stack);
+    }
+    try {
+      await onPlatformReady?.call();
+    } catch (error, stack) {
+      _logger.warning('notification permission could not be published', error, stack);
     }
     for (final stream in _eventStreams) {
       _subscriptions.add(stream.listen(
@@ -273,6 +295,9 @@ class NotificationService {
       urgency: _readPreferences().urgencyFor(payload.kind, payload.urgency),
       payload: jsonEncode(payload.toPresentationPayload()),
       actions: actions,
+      // Resolved per presentation, not at initialization: a language change
+      // inside a running session must reach the OS button too.
+      openActionLabel: _openActionLabel(),
       offersApprovalActions: payload.kind.supportsApprovalActions,
       threadId: payload.sessionId,
       androidChannelId: MobileNotificationCatalog.channelIdFor(payload),
@@ -287,6 +312,17 @@ class NotificationService {
       _logger.warning('could not raise ${payload.kind.wire} notification', error, stack);
       return false;
     }
+  }
+
+  /// The localized label for this notification's open action.
+  ///
+  /// The copy is resolved from the current locale on every presentation, which
+  /// is what lets a language change reach the OS button without a restart. An
+  /// empty or absent label leaves the platform's registered copy in place,
+  /// because a blank button would be worse than a stale one.
+  String? _openActionLabel() {
+    final label = _readApprovalActionLabels()[NotificationActionIntent.open]?.trim();
+    return label == null || label.isEmpty ? null : label;
   }
 
   /// Raises one user-initiated test notification through the real pipeline.
@@ -352,14 +388,14 @@ class NotificationService {
       'event': 'notification',
       'event_id': 'test-${at.microsecondsSinceEpoch}-$_testSequence',
       'payload': <String, dynamic>{
-        'kind': NotificationKind.completed.wire,
+        'kind': testNotificationKind.wire,
         'urgency': NotificationUrgency.defaultUrgency.wire,
         'title': title,
         'body': body,
         'deep_link': <String, String>{'session_id': testSessionId},
         'collapse_key': NotificationCollapseKey.forAsk(
           sessionId: testSessionId,
-          kind: NotificationKind.completed,
+          kind: testNotificationKind,
         ),
         'expires_at': at.toUtc().add(testLifetime).toIso8601String(),
       },

@@ -18,6 +18,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/notifications/application/notification_action_router.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
 import 'package:sanad_client/features/notifications/application/notification_service.dart';
 import 'package:sanad_client/features/notifications/application/notification_session_opener.dart';
@@ -156,13 +157,57 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       askRegistry: _askRegistry,
       actionRouter: _actionRouter,
     );
-    unawaited(_service!.start());
     // Settings owns the button; the pipeline owns the action. Attaching the
     // probe here keeps one path to the platform and lets the test result honour
     // the same permission and preference gates a real alert would.
-    settings.attachTestSender(_sendTestNotification);
+    settings.attachTestSender(
+      _sendTestNotification,
+      kind: NotificationService.testNotificationKind,
+    );
     _listenToTransportLifecycle();
+    unawaited(_startPushAfterPipeline(settings));
+  }
+
+  /// Starts the push wake-up path once the display pipeline can answer.
+  ///
+  /// Push has no ordering of its own: a push arrival is handed straight to
+  /// [NotificationService.handleEvent], outside the socket subscriptions the
+  /// pipeline start drains. Starting it only after that start returns is what
+  /// keeps a push that lands during boot from being decided against a permission
+  /// nobody has read yet.
+  Future<void> _startPushAfterPipeline(NotificationSettingsCubit settings) async {
+    try {
+      await _startPipeline(settings);
+    } catch (error, stack) {
+      // Push still starts: a display path that exists is better than one that
+      // silently never mounts, and the failure is already logged by the caller
+      // that observed it.
+      _logger.warning('notification pipeline start failed before push', error, stack);
+    }
+    if (!mounted) return;
     _startMobilePush();
+  }
+
+  /// Starts the pipeline and publishes the permission it is allowed to read.
+  ///
+  /// A platform builds the objects that answer a permission read inside
+  /// `initialize`, so the read is released only once that call has returned, and
+  /// it is published before any event is consumed. Before this ordering the
+  /// first read threw against an object that did not exist yet, was reported as
+  /// `unavailable`, and the display policy dropped Agent-raised notifications
+  /// until something else refreshed it — the Settings page being the very
+  /// surface that cleared it.
+  Future<void> _startPipeline(NotificationSettingsCubit settings) async {
+    await _service!.start(
+      onPlatformReady: () async {
+        // A container without the readiness signal has a cubit with no gate to
+        // release, so the release is skipped instead of thrown.
+        if (getIt.isRegistered<NotificationPlatformReadiness>()) {
+          getIt<NotificationPlatformReadiness>().complete();
+        }
+        await settings.load();
+      },
+    );
   }
 
   /// Mounts the push wake-up path on a platform that has a provider.

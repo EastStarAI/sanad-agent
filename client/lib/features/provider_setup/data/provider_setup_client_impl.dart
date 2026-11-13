@@ -632,7 +632,7 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
         agent ??
         DeviceConfig(
           id: _connectionCoordinator.currentDeviceId,
-          name: 'This device',
+          name: DeviceConfig.localPlaceholderName,
           hardwareId: _connectionCoordinator.currentDeviceId,
           isOnline: _connectionCoordinator.localSocketService.isConnected,
         );

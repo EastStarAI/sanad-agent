@@ -41,6 +41,7 @@ class NotificationSettingsState extends Equatable {
     this.webPush = const WebPushSettings(),
     this.sendingTest = false,
     this.testSenderAttached = false,
+    this.testKind,
     this.testOutcome,
     this.testSequence = 0,
   });
@@ -77,6 +78,11 @@ class NotificationSettingsState extends Equatable {
   /// Settings cannot raise a notification itself, so a probe without this
   /// pipeline could only report a failure it did not cause.
   final bool testSenderAttached;
+
+  /// The kind the attached test action borrows, so the page can name the alert
+  /// style the result describes instead of leaving a quietened kind looking
+  /// broken.
+  final NotificationKind? testKind;
 
   /// The outcome of the last test notification, for the result line.
   final NotificationTestOutcome? testOutcome;
@@ -126,6 +132,7 @@ class NotificationSettingsState extends Equatable {
     WebPushSettings? webPush,
     bool? sendingTest,
     bool? testSenderAttached,
+    NotificationKind? testKind,
     NotificationTestOutcome? testOutcome,
     bool clearTestOutcome = false,
     int? testSequence,
@@ -141,6 +148,7 @@ class NotificationSettingsState extends Equatable {
       webPush: webPush ?? this.webPush,
       sendingTest: sendingTest ?? this.sendingTest,
       testSenderAttached: testSenderAttached ?? this.testSenderAttached,
+      testKind: testKind ?? this.testKind,
       testOutcome: clearTestOutcome ? null : (testOutcome ?? this.testOutcome),
       testSequence: testSequence ?? this.testSequence,
     );
@@ -158,6 +166,7 @@ class NotificationSettingsState extends Equatable {
     webPush,
     sendingTest,
     testSenderAttached,
+    testKind,
     testOutcome,
     testSequence,
   ];

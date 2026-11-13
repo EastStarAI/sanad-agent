@@ -30,6 +30,7 @@ class NotificationPresentationRequest extends Equatable {
     required this.payload,
     this.actions = const <NotificationPresentationAction>[],
     this.offersApprovalActions = false,
+    this.openActionLabel,
     this.threadId,
     this.androidChannelId,
     this.iosCategoryId,
@@ -52,6 +53,15 @@ class NotificationPresentationRequest extends Equatable {
   /// supports notification categories can attach its approval category.
   final bool offersApprovalActions;
 
+  /// The localized label for the notification's own open/default action, or
+  /// `null` to keep the copy the platform registered at initialization.
+  ///
+  /// Linux builds the freedesktop action array per notification, so this is the
+  /// one label that can follow a language change inside a running session
+  /// instead of waiting for the next launch. A platform that fixes its copy when
+  /// it registers a category ignores it.
+  final String? openActionLabel;
+
   /// Groups related notifications on platforms that support threads (macOS,
   /// iOS).
   final String? threadId;
@@ -71,6 +81,7 @@ class NotificationPresentationRequest extends Equatable {
         payload,
         actions,
         offersApprovalActions,
+        openActionLabel,
         threadId,
         androidChannelId,
         iosCategoryId,

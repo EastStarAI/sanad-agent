@@ -59,6 +59,7 @@ import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
 import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
 import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
 import 'package:sanad_client/features/notifications/data/http_web_push_subscription_registrar.dart';
@@ -565,6 +566,15 @@ Future<void> configureDependencies({
   if (!getIt.isRegistered<NotificationPlatformAdapter>()) {
     getIt.registerLazySingleton<NotificationPlatformAdapter>(
       () => getIt<NotificationPlatformBundle>().adapter,
+    );
+  }
+
+  // The one readiness signal a permission read waits on: the pipeline releases
+  // it once the platform objects exist, so a cold start cannot report a working
+  // notification service as unavailable.
+  if (!getIt.isRegistered<NotificationPlatformReadiness>()) {
+    getIt.registerLazySingleton<NotificationPlatformReadiness>(
+      () => NotificationPlatformReadiness(),
     );
   }
 

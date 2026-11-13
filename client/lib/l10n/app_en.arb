@@ -91,6 +91,11 @@
   "deleteConversation": "Delete conversation",
   "deleteConversationConfirm": "Are you sure you want to delete this conversation?",
   "devices": "Devices",
+  "devicesSelectorLabel": "Device selector",
+  "devicesSettingsMenuItem": "Device Settings",
+  "devicesNone": "No devices",
+  "devicesThisDevice": "This device",
+  "devicesLocalBadge": "local",
   "addDevice": "Add Device",
   "connected": "Connected",
   "disconnected": "Disconnected",
@@ -1357,6 +1362,15 @@
   "notificationsPermissionDeniedWhileEnabled": "Notifications are on in Sanad but blocked by the system. Nothing will be shown until you allow them in the system settings.",
   "notificationsTestTitle": "Test notification",
   "notificationsTestSubtitle": "Runs the same delivery path as a real notification on this device, so the result reflects your permission and these settings.",
+  "notificationsTestKindNotice": "The test follows your {kind} alert style.",
+  "@notificationsTestKindNotice": {
+    "description": "Names the kind whose alert style the test notification borrows.",
+    "placeholders": {
+      "kind": {
+        "type": "String"
+      }
+    }
+  },
   "notificationsTestButton": "Send test notification",
   "notificationsTestSending": "Sending...",
   "notificationsTestNotificationTitle": "Test notification",

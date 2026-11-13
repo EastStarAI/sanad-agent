@@ -28,6 +28,7 @@ import 'package:sanad_client/features/voice/domain/services/voice_stream_service
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
 import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
@@ -92,14 +93,20 @@ class AppProviders extends StatelessWidget {
               store: getIt<NotificationPreferencesStore>(),
               adapter: getIt<NotificationPlatformAdapter>(),
               webPush: getIt<WebPushSubscriptionService>(),
-              // A change belongs to this device, so it is re-declared to the
+              // The pipeline releases the first permission read once the
+              // platform objects exist, so the cold-start probe reports the real
+              // answer instead of a race with initialization.
+              platformReadiness: getIt<NotificationPlatformReadiness>(),
+              // A change belongs to this device, so it is also re-declared to the
               // Agent this Client is attached to. It never travels through the
               // account: no other device's choices change, and the relay only
               // forwards an opaque registration field.
               publishPreferences: (_) => connectionCoordinator.localSocketService
                   .publishNotificationPreferences(),
             );
-            unawaited(cubit.load());
+            // The first load is driven by the pipeline, not here: it must run
+            // after the platform has initialized, and the bridge is what starts
+            // that pipeline (see NotificationBridge._startPipeline).
             return cubit;
           },
         ),

@@ -131,7 +131,11 @@ class SettingsNavigation extends StatelessWidget {
             ),
           const SizedBox(height: 18),
           if (selectedDevice != null) ...[
-            NavigationLabel(AppLocalizations.of(context)!.deviceSettings(selectedDevice!.name)),
+            NavigationLabel(
+              AppLocalizations.of(context)!.deviceSettings(
+                selectedDevice!.displayName(AppLocalizations.of(context)!),
+              ),
+            ),
             for (final item in [
               (SettingsDestination.overview, Icons.dashboard_outlined, AppLocalizations.of(context)!.overview, 'overview'),
               (SettingsDestination.providers, Icons.hub_outlined, AppLocalizations.of(context)!.providers, 'providers'),

@@ -123,9 +123,13 @@ field the relay is expected to interpret.
 - `174e` — Hosted delivery boundary. Owned and tracked by the hosted service;
   this plan obliges it only through the wire contract above.
 - `174f` — Preferences, localization, and multi-platform verification.
+- `174g` — Surface fixes found by the enabled-state live review (cold-start
+  permission ordering, the OS action label under a locale change, the urgency
+  control, copy drift, and the device chrome around the page).
 
 Ordering: `174a` first because it freezes the payload, then `174b` in parallel
-with `174e`, then `174c` and `174d` once the relay boundary exists, then `174f`.
+with `174e`, then `174c` and `174d` once the relay boundary exists, then `174f`,
+then `174g` as the remediation pass over the surfaces `174f` produced.
 
 ## Out of scope
 
@@ -178,4 +182,14 @@ Planning complete. The plan is accepted.
   authoritative. Live browser and installed-iOS evidence is still unexecuted,
   and the delivery contract is documented in
   [Web Push Delivery](../technical/web_push_delivery.md).
+- `174g` (notification surface fixes) is implemented on `task/174g-ui-fixes`,
+  including the independent review's follow-up on the cold-start/mobile-push
+  ordering, the bounded readiness wait, the device-header copy, and the
+  accessibility role of the urgency control:
+  the cold-start permission read is ordered after platform initialization
+  (`NotificationPlatformReadiness`), the freedesktop open action follows the live
+  language instead of the launch language, the urgency control states its value
+  inside one vocabulary, the test probe names the kind it borrows, and the device
+  chrome around the page is localized. The task file records the fail-before
+  evidence, the open items, and the live acceptance steps.
 - `174e`–`174f` are authored and unstarted.

@@ -1,8 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 extension DeviceConfigUI on DeviceConfig {
+  /// The name to show for this device.
+  ///
+  /// A row the Client synthesized for its own machine carries
+  /// [DeviceConfig.localPlaceholderName] instead of an Agent-reported name, so
+  /// it is the one name the interface must translate: every other device name
+  /// is the user's own text and is shown exactly as the Agent stored it.
+  String displayName(AppLocalizations localizations) =>
+      name == DeviceConfig.localPlaceholderName
+          ? localizations.devicesThisDevice
+          : name;
+
   IconData get icon {
     final platform = metadata?['platform'] as String?;
     switch (platform?.toLowerCase()) {

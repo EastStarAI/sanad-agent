@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../../devices/presentation/utils/device_ui_mapper.dart';
@@ -11,7 +12,7 @@ import '../../../../devices/presentation/utils/device_ui_mapper.dart';
 /// from [DeviceCubit]. It emits a [onDeviceSelected] intent and a
 /// [onSettingsTapped] intent; it never opens screens or mutates cache itself.
 /// Device switching is always available — an offline device still shows its
-/// cached sidebar (Plan 32c §السلوك).
+/// cached sidebar (Plan 32c §behavior).
 class SidebarDeviceHeaderBar extends StatelessWidget {
   final List<DeviceConfig> devices;
   final DeviceConfig? activeDevice;
@@ -32,13 +33,14 @@ class SidebarDeviceHeaderBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
       child: Row(
         children: [
           Expanded(
             child: Semantics(
-              label: 'Device selector',
+              label: l10n.devicesSelectorLabel,
               child: _DeviceDropdown(
                 devices: devices,
                 activeDevice: activeDevice,
@@ -72,6 +74,7 @@ class _DeviceDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
 
     // Show loading state while fetching from backend
     if (devices.isEmpty && isLoadingFromBackend) {
@@ -86,7 +89,7 @@ class _DeviceDropdown extends StatelessWidget {
           ),
           const SizedBox(width: 8),
           Text(
-            'Loading devices…',
+            l10n.devicesLoading,
             style: TextStyle(
               color: theme.colorScheme.onSurfaceVariant,
               fontSize: 13,
@@ -98,7 +101,7 @@ class _DeviceDropdown extends StatelessWidget {
 
     if (devices.isEmpty) {
       return Text(
-        'No devices',
+        l10n.devicesNone,
         style: TextStyle(
           color: theme.colorScheme.onSurfaceVariant,
           fontSize: 13,
@@ -114,7 +117,7 @@ class _DeviceDropdown extends StatelessWidget {
         ],
         Expanded(
           child: Text(
-            activeDevice?.name ?? 'No devices',
+            activeDevice?.displayName(l10n) ?? l10n.devicesNone,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: theme.colorScheme.onSurface,
@@ -176,6 +179,8 @@ class _DeviceDropdown extends StatelessWidget {
           ...devices.map((device) {
             final isSelected = device.id == activeDevice?.id;
             return PopupMenuItem<Object?>(
+              // The key stays on the stored name, never the translated label, so
+              // it does not change identity with the interface language.
               key: Key('sidebar_device_item_${device.name}'),
               value: device,
               height: 32,
@@ -186,7 +191,7 @@ class _DeviceDropdown extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      device.name,
+                      device.displayName(l10n),
                       style: TextStyle(
                         color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
                         fontSize: 12,
@@ -225,7 +230,7 @@ class _DeviceDropdown extends StatelessWidget {
                 ),
                 const SizedBox(width: 8),
                 Text(
-                  'Device Settings',
+                  l10n.devicesSettingsMenuItem,
                   style: TextStyle(
                     color: theme.colorScheme.onSurfaceVariant,
                     fontSize: 12,
@@ -270,7 +275,7 @@ class _LocalBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        'local',
+        AppLocalizations.of(context)!.devicesLocalBadge,
         style: TextStyle(
           fontSize: 9,
           fontWeight: FontWeight.w600,
