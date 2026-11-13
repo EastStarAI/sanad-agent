@@ -85,7 +85,10 @@ is `distinct()`, so a coalesced transition would never repeat, and one lost
 transition was enough to announce a token whose own withdrawal was still owed —
 which then revoked the live binding on the next reconnect. A readiness or
 rotation request that arrives while a flight is running therefore makes that
-flight take another pass before it settles.
+flight take another pass before it settles. The token that pass announces is the
+one it holds **after** the settle, not the one it read before it: the provider can
+rotate while the settle is suspended, and promoting the earlier snapshot back over
+the rotation would announce an abandoned token and leave the new one unannounced.
 
 `registered` is a claim about the relay, not about intent: the state is set only
 for a token the relay accepted and has not been asked to withdraw since. A
@@ -95,6 +98,14 @@ instead of being sent, because withdrawing an accepted binding is the one
 outcome that kills push silently. If a withdrawal for the live token ever does
 reach the relay, the state moves off `registered` instead of staying behind a
 dead binding, and the next accepted registration restores it.
+
+A registration the relay accepts after the session ended, or after the provider
+rotated away, has to be withdrawn again, and that compensating withdrawal is
+durable on the same terms as a logout: its record is written before the attempt,
+and the branch that makes the attempt removes it only when the relay acknowledges
+the withdrawal. A socket that drops on acceptance therefore leaves a withdrawal
+the next authenticated connection retries, rather than a binding the relay holds
+with nothing left to retire it.
 
 The single visible consequence is that a revocation of a token the socket could
 not reach is delivered one session late. That is the safe direction: the device
@@ -235,11 +246,14 @@ flushed on the next authenticated connection, and delivered before the same
 installation announces its token again; a readiness transition that arrives while
 the authentication flight is suspended still settles the record before the
 announcement; a transition that arrives inside a refused registration is not lost
-and is retried by the same flight; a stale record never withdraws a token the
-relay already accepted; and a rotation never announces a token that is still owed
-its own withdrawal. A logout observed while a registration is being accepted
-withdraws that binding again instead of leaving it live. Device behavior has not
-been executed on this host:
+and is retried by the same flight; a rotation that arrives while the withdrawal
+flush is suspended is the token that gets announced, instead of being overwritten
+by the token the pass read before the flush; a stale record never withdraws a
+token the relay already accepted; and a rotation never announces a token that is
+still owed its own withdrawal. A logout observed while a registration is being
+accepted withdraws that binding again instead of leaving it live, and a socket
+that drops on that acceptance leaves a record the next session settles. Device
+behavior has not been executed on this host:
 
 - `[!]` Android background and terminated display: no Android runtime here; owner
   is the platform/release pipeline, and it also needs the provider module.

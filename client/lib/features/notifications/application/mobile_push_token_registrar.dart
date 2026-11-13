@@ -60,7 +60,10 @@ enum MobilePushRegistrationState {
 ///   announced while its own withdrawal is still owed. The check happens inside
 ///   the flight immediately before the announcement, not only when the flight
 ///   starts, because the socket can become reachable while the flight is
-///   suspended.
+///   suspended. The token that is announced is the one this pipeline holds after
+///   the settle, not the one read before it, so a rotation that lands while the
+///   settle is suspended is announced in the same pass instead of being discarded
+///   by the snapshot the pass started with.
 /// - **Never lose a transition.** A readiness or rotation request that arrives
 ///   while a flight is running makes that flight take another pass before it
 ///   settles. The readiness stream is `distinct()`, so a transition that is
@@ -226,8 +229,8 @@ class MobilePushTokenRegistrar {
   /// was waiting still settles the record before the token it names is sent.
   Future<void> _settleThenAnnounce() async {
     if (_disposed || !_authenticated) return;
-    final token = _token ?? await _transport.currentToken();
-    if (token == null) {
+    final snapshot = _token ?? await _transport.currentToken();
+    if (snapshot == null) {
       // The provider may still be registering; the rotation stream delivers it.
       await _transport.ensureRegistration();
       if (_disposed || !_authenticated) return;
@@ -237,6 +240,12 @@ class MobilePushTokenRegistrar {
     }
     final owed = await _flushPendingRevocations();
     if (_disposed || !_authenticated) return;
+    // A rotation can land while the settle is suspended, and it replaces `_token`
+    // with a newer value. Announcing `snapshot` then would claim a token the
+    // provider has abandoned, and the newer one would wait for another pass that
+    // finds `_state == registered` and returns. A non-null `_token` is never older
+    // than the snapshot, so this is the token to announce.
+    final token = _token ?? snapshot;
     if (_state == MobilePushRegistrationState.registered && _acknowledged == token) {
       return;
     }
@@ -331,7 +340,10 @@ class MobilePushTokenRegistrar {
   }
 
   Future<void> _register(MobilePushToken token) async {
-    _token = token;
+    // `_token` holds the newest token this pipeline knows, and only an ended
+    // session clears it. So this fills in the token when the pass read it from the
+    // platform, and never overwrites a rotation that landed after that read.
+    _token ??= token;
     _state = MobilePushRegistrationState.registering;
     final bool accepted;
     try {
@@ -353,8 +365,7 @@ class MobilePushTokenRegistrar {
     // The session ended, or the provider rotated away, while the relay was
     // accepting this registration. The relay now holds a binding this device no
     // longer wants, so `registered` would be a lie: drop the claim first (the
-    // state must never outlive the intent), then withdraw it. A failed withdrawal
-    // stays owed as a record the next authenticated connection settles.
+    // state must never outlive the intent), then withdraw it.
     _logger.info(
       'withdrew ${token.fingerprint}: the binding was superseded while it was accepted',
     );
@@ -363,6 +374,23 @@ class MobilePushTokenRegistrar {
     _state = _authenticated
         ? MobilePushRegistrationState.idle
         : MobilePushRegistrationState.revoked;
+    // The relay holds this binding until the compensating withdrawal is
+    // acknowledged, and the socket can drop between the acceptance and this emit.
+    // The record is written first so that drop leaves a withdrawal the next
+    // authenticated connection retries, instead of a live binding nothing
+    // remembers; this branch clears it only when the relay acknowledges the
+    // withdrawal. The device is unknown here, and the field is correlation only.
+    try {
+      await _pendingRevocations.write(
+        MobilePushPendingRevocation(
+          token: token,
+          deviceId: '',
+          requestedAt: DateTime.now().toUtc(),
+        ),
+      );
+    } catch (error) {
+      _logger.warning('could not record the pending device token revocation', error);
+    }
     final acknowledged = await _sendRevocation(
       token,
       MobilePushRevocationReason.sessionRevoked,

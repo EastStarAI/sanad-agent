@@ -96,6 +96,10 @@ class _FakeRelay implements MobilePushTokenRelay {
   /// not finished authenticating does.
   bool refusesNextRegistration = false;
 
+  /// Drops the socket at the instant a registration is accepted, so the
+  /// compensating withdrawal that follows meets a disconnected socket.
+  bool dropAfterAccepting = false;
+
   Completer<void>? _registerGate;
 
   /// Suspends the next registration call, so a test can report a readiness
@@ -138,6 +142,10 @@ class _FakeRelay implements MobilePushTokenRelay {
     if (!_ready) return false;
     registered.add(token);
     events.add('register:${token.value}');
+    if (dropAfterAccepting) {
+      dropAfterAccepting = false;
+      _ready = false;
+    }
     return true;
   }
 
@@ -154,8 +162,21 @@ class _FakeRelay implements MobilePushTokenRelay {
 class _MemoryPendingStore implements MobilePushPendingRevocationStore {
   final List<MobilePushPendingRevocation> records = <MobilePushPendingRevocation>[];
 
+  Completer<void>? _readGate;
+
+  /// Suspends the next read, so a test can move the pipeline while the registrar
+  /// is inside its withdrawal flush instead of between two passes.
+  void holdNextRead(Completer<void> gate) => _readGate = gate;
+
   @override
-  Future<List<MobilePushPendingRevocation>> read() async => List.of(records);
+  Future<List<MobilePushPendingRevocation>> read() async {
+    final gate = _readGate;
+    if (gate != null) {
+      _readGate = null;
+      await gate.future;
+    }
+    return List.of(records);
+  }
 
   @override
   Future<void> write(MobilePushPendingRevocation record) async {
@@ -474,6 +495,46 @@ void main() {
       expect(registrar.state, MobilePushRegistrationState.registered);
     });
 
+    test('a rotation during the settle flush is the token that gets announced', () async {
+      // Regression for N2. The pass read the token before the flush and then
+      // overwrote `_token` with that snapshot, so a rotation that landed while the
+      // flush was suspended was discarded. The queued pass then saw the old token
+      // with `_state == registered` and returned, leaving the relay on a token the
+      // provider had abandoned.
+      final transport = _FakeTransport();
+      final relay = _FakeRelay();
+      final store = _MemoryPendingStore();
+      final registrar = _registrar(transport, relay, store);
+
+      final flush = Completer<void>();
+      store.holdNextRead(flush);
+      final flight = registrar.onAuthenticated();
+      await pumpEventQueue();
+      expect(relay.registered, isEmpty, reason: 'the pass is still settling');
+
+      // The provider rotates while the settle is suspended inside the store read.
+      transport.rotate(_rotated);
+      await pumpEventQueue();
+      expect(registrar.currentToken?.value, _rotated.value);
+      expect(relay.registered, isEmpty, reason: 'the rotation landed inside the flush');
+
+      flush.complete();
+      await flight;
+      await pumpEventQueue();
+
+      // The relay ends holding exactly the rotated token: the snapshot taken before
+      // the flush is never promoted back over it.
+      expect(
+        relay.registered.map((token) => token.value).toSet()
+            .difference(relay.revoked.map((token) => token.value).toSet()),
+        <String>{_rotated.value},
+      );
+      expect(relay.registered.last.value, _rotated.value);
+      expect(registrar.currentToken?.value, _rotated.value);
+      expect(registrar.state, MobilePushRegistrationState.registered);
+      expect(store.records, isEmpty);
+    });
+
     test('a logout during a registration leaves no live binding behind', () async {
       final transport = _FakeTransport();
       final relay = _FakeRelay();
@@ -506,6 +567,55 @@ void main() {
       expect(registrar.state, MobilePushRegistrationState.revoked);
       expect(registrar.currentToken, isNull);
       expect(store.records, isEmpty);
+    });
+
+    test('a socket drop on acceptance leaves a withdrawal the next session settles', () async {
+      // Regression for N3. A registration accepted after the session ended has to
+      // be withdrawn again. If the socket dies at that instant, the withdrawal
+      // reaches nothing, and without a record the relay keeps a token this device
+      // asked it to retire with nothing left to retry it.
+      final transport = _FakeTransport();
+      final relay = _FakeRelay();
+      final store = _MemoryPendingStore();
+      final registrar = _registrar(transport, relay, store);
+
+      final registration = Completer<void>();
+      relay.holdNextRegistration(registration);
+      final flight = registrar.onAuthenticated();
+      await pumpEventQueue();
+
+      // The session ends while the relay is accepting the registration. This
+      // withdrawal is acknowledged on the still-ready socket, so nothing is owed.
+      await registrar.revoke(reason: MobilePushRevocationReason.logout, deviceId: 'device-1');
+      expect(store.records, isEmpty);
+      final before = relay.events.length;
+
+      // The socket drops on acceptance, so the compensating withdrawal meets a
+      // disconnected socket and the acceptance is all the relay ever sees.
+      relay.dropAfterAccepting = true;
+      registration.complete();
+      await flight;
+      await pumpEventQueue();
+
+      expect(
+        relay.events.skip(before),
+        <String>['register:${_tokenValue.value}'],
+        reason: 'the compensating withdrawal never reached the relay',
+      );
+      expect(store.records.single.token.value, _tokenValue.value);
+      expect(registrar.state, MobilePushRegistrationState.revoked);
+
+      // The next authenticated session retires the binding the drop left behind.
+      relay.connect();
+      await registrar.onAuthenticated();
+      await pumpEventQueue();
+
+      expect(
+        relay.events.skip(before + 1),
+        <String>['revoke:${_tokenValue.value}', 'register:${_tokenValue.value}'],
+      );
+      expect(store.records, isEmpty);
+      expect(registrar.state, MobilePushRegistrationState.registered);
     });
 
     test('a withdrawal the relay will not acknowledge stays recorded', () async {

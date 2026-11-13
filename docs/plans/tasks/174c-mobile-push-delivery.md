@@ -130,6 +130,31 @@ ordering gates are `[x]` **only** for what the tests now prove, and the ordering
 claim in `docs/technical/mobile_push_delivery.md` was rewritten to match. Device
 and relay-side behavior is still `[!]`.
 
+The third review accepted N1 and rejected the head for two narrower defects:
+
+1. **A rotation during the settle flush was discarded (N2).** The pass read the
+   token before flushing the pending withdrawals and `_register` wrote that
+   snapshot back into `_token` unconditionally. A rotation that arrived while the
+   flush was suspended was therefore overwritten, and the queued pass then saw the
+   old token with `_state == registered` and returned, so the relay stayed on a
+   token the provider had abandoned.
+2. **The compensating withdrawal was not durable (N3).** The comment on the
+   post-accept branch claimed that a failed withdrawal "stays owed as a record",
+   but only `revoke()` wrote a record. A socket that dropped on acceptance left the
+   relay holding the token with nothing that could retire it.
+
+What the code guarantees now, and what it no longer claims:
+
+- **The announced token is read after the settle.** `_settleThenAnnounce` keeps
+  its pre-flush read only as the value to fall back to, and `_register` fills
+  `_token` with `??=`, so a newer `_token` is never clobbered by a snapshot and a
+  rotation observed mid-flush is announced in the pass that observed it.
+- **Every withdrawal an acceptance creates is recorded before it is sent.** The
+  post-accept branch writes the pending record, and the record is cleared in that
+  branch only when the relay acknowledges the withdrawal. The comment there now
+  says exactly that, and the socket-drop test proves the next session settles the
+  record.
+
 ## Gates
 
 ### G0 — Platform discovery
@@ -171,10 +196,14 @@ and relay-side behavior is still `[!]`.
 - [x] Ordering is per token and no request is dropped (unit-proven): a readiness
       transition that lands inside the authentication flight still settles the
       record first, a transition that lands inside a refused registration makes
-      the flight take another pass, a stale record never withdraws the token the
-      relay accepted, and a rotation never announces a token that is still owed
-      its own withdrawal. `registered` is claimed only for a token the relay
-      accepted and has not been asked to withdraw since.
+      the flight take another pass, a rotation that lands inside the withdrawal
+      flush is the token that gets announced, a stale record never withdraws the
+      token the relay accepted, and a rotation never announces a token that is
+      still owed its own withdrawal. `registered` is claimed only for a token the
+      relay accepted and has not been asked to withdraw since. An acceptance that
+      has to be withdrawn again records the withdrawal before it sends it, so a
+      socket drop on acceptance leaves a record the next session settles rather
+      than a live binding nothing remembers.
 - [!] Account deletion as a distinct reason: the deletion flow calls
       `AuthCubit.logout()`, so the Client emits the `logout` revocation and takes
       the durable path above. `MobilePushRevocationReason.accountDeleted`
@@ -250,6 +279,8 @@ and relay-side behavior is still `[!]`.
 | Stale record after an accepted registration | PASS (unit) | Same suite: no withdrawal of the live token, record settled, state stays `registered` |
 | Per-token rule under rotation | PASS (unit) | Same suite: a rotated token whose own withdrawal is owed is not announced until that withdrawal is accepted |
 | Logout during a registration | PASS (unit) | Same suite: the binding the relay accepted is withdrawn again, no record is left, and the state stays `revoked` |
+| Rotation during the settle flush (N2) | PASS (unit) | Same suite: the store read is suspended, the provider rotates inside it; the relay ends holding exactly the rotated token, and a registration of the earlier token, if one is accepted, is withdrawn |
+| Socket drop on acceptance (N3) | PASS (unit) | Same suite: the relay accepts with the socket dropping on that acceptance; the pending record survives the unacknowledged withdrawal, and the next authenticated session sends `revoke:` then `register:` and clears it |
 | Pending withdrawal durability | PASS (unit) | `mobile_push_pending_revocation_store_test.dart`: round trip, one record per token, bounded store, unreadable store discarded |
 | Token never logged in the clear | PASS (unit) | `toString`/`fingerprint` assertions on the token and on the pending record |
 | Channels all high, categories per kind | PASS (unit) | `mobile_notification_catalog_test.dart` |
@@ -296,7 +327,7 @@ Run from the repository root with `fvm` on `PATH`:
 | Command | Result |
 |---|---|
 | `cd client && fvm flutter analyze` | `No issues found!` |
-| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (154 tests)` |
+| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (156 tests)` |
 
 ## Open items
 
