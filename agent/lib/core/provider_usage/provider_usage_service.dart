@@ -305,6 +305,7 @@ class ProviderUsageService {
   String _snapshotFingerprint(ProviderUsageSnapshot snapshot) => jsonEncode({
     'fetched_at': snapshot.fetchedAt.toUtc().toIso8601String(),
     'resets': snapshot.availableResets,
+    'reset_credits': snapshot.resetCredits.map((c) => c.toMap()).toList(),
     'windows': snapshot.windows.map((w) => w.toMap()).toList(),
   });
 

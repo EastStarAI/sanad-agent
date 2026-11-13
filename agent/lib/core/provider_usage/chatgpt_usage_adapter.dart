@@ -13,6 +13,9 @@
 //     label, and is covered by fixtures for missing/combined windows.
 //   • Parses `rate_limit_reset_credits.available_count` into
 //     `availableResets` (non-negative int; 0 hides the Reset button).
+//   • Parses available `rate_limit_reset_credits.credits[]` entries into
+//     display-safe reset credits with UTC `expires_at`/`granted_at`; provider
+//     titles and identifiers never leave the adapter.
 //   • Ignores unknown fields for forward compatibility.
 //   • Never logs the URL query, headers, raw response, token, or account id.
 //   • Throws typed exceptions; messages are display-safe and never include the
@@ -262,6 +265,9 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     final availableResets = _parseResetCount(
       payload['rate_limit_reset_credits'],
     );
+    final resetCredits = _parseResetCredits(
+      payload['rate_limit_reset_credits'],
+    );
     final extraDetails = _parseExtraDetails(payload, availableResets);
 
     if (windows.isEmpty && extraDetails.isEmpty && planName == null) {
@@ -280,6 +286,7 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       planName: planName,
       windows: windows,
       availableResets: availableResets,
+      resetCredits: resetCredits,
       extraDetails: extraDetails,
     );
   }
@@ -356,6 +363,37 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       return v < 0 ? 0 : v;
     }
     return 0;
+  }
+
+  /// Parses per-credit detail from `rate_limit_reset_credits.credits[]`.
+  ///
+  /// Only credits that are available and carry a valid expiry cross the
+  /// protocol. The list is sorted by earliest expiry so the Client can render
+  /// the most urgent credit first. The provider's `title`, `description`, and
+  /// profile identifiers are deliberately discarded.
+  List<ProviderUsageResetCredit> _parseResetCredits(Object? raw) {
+    if (raw is! Map<String, dynamic>) return const [];
+    final credits = raw['credits'];
+    if (credits is! List) return const [];
+
+    final parsed = <ProviderUsageResetCredit>[];
+    for (final item in credits) {
+      if (item is! Map<String, dynamic>) continue;
+      final status = item['status']?.toString().trim().toLowerCase();
+      if (status != null && status.isNotEmpty && status != 'available') {
+        continue;
+      }
+      final expiresAt = _parseResetAt(item['expires_at']);
+      if (expiresAt == null) continue;
+      parsed.add(
+        ProviderUsageResetCredit(
+          expiresAt: expiresAt,
+          grantedAt: _parseResetAt(item['granted_at']),
+        ),
+      );
+    }
+    parsed.sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
+    return parsed;
   }
 
   List<String> _parseExtraDetails(Map<String, dynamic> payload, int resets) {

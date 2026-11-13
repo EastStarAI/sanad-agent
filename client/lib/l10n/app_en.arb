@@ -1322,6 +1322,15 @@
     }
   },
   "providerUsageResetAvailableSingle": "1 reset available",
+  "providerUsageResetCreditLabel": "Reset credit",
+  "providerUsageResetCreditExpires": "Expires {when}",
+  "@providerUsageResetCreditExpires": {
+    "placeholders": {
+      "when": {
+        "type": "String"
+      }
+    }
+  },
   "providerUsageResetLimits": "Reset limits",
   "providerUsageCancel": "Cancel",
   "providerUsageResetDialogTitle": "Reset usage limits?",

@@ -37,6 +37,21 @@ class ProviderUsageWindowDto {
   }
 }
 
+/// One display-safe banked reset credit (Task 174).
+class ProviderUsageResetCreditDto {
+  final DateTime? expiresAt;
+  final DateTime? grantedAt;
+
+  const ProviderUsageResetCreditDto({this.expiresAt, this.grantedAt});
+
+  factory ProviderUsageResetCreditDto.fromJson(Map<String, dynamic> json) {
+    return ProviderUsageResetCreditDto(
+      expiresAt: json['expires_at'] is String ? DateTime.tryParse(json['expires_at'] as String) : null,
+      grantedAt: json['granted_at'] is String ? DateTime.tryParse(json['granted_at'] as String) : null,
+    );
+  }
+}
+
 /// A unified usage snapshot for a single provider instance (Task 55 §3.2).
 class ProviderUsageSnapshotDto {
   final String providerInstanceId;
@@ -46,6 +61,7 @@ class ProviderUsageSnapshotDto {
   final String? planName;
   final List<ProviderUsageWindowDto> windows;
   final int availableResets;
+  final List<ProviderUsageResetCreditDto> resetCredits;
   final List<String> extraDetails;
   final String? unavailableReason;
 
@@ -57,6 +73,7 @@ class ProviderUsageSnapshotDto {
     this.planName,
     this.windows = const [],
     this.availableResets = 0,
+    this.resetCredits = const [],
     this.extraDetails = const [],
     this.unavailableReason,
   });
@@ -72,6 +89,10 @@ class ProviderUsageSnapshotDto {
           .map((w) => ProviderUsageWindowDto.fromJson(w as Map<String, dynamic>))
           .toList(),
       availableResets: (json['available_resets'] as num?)?.toInt() ?? 0,
+      resetCredits: (json['reset_credits'] as List? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(ProviderUsageResetCreditDto.fromJson)
+          .toList(),
       extraDetails: (json['extra_details'] as List? ?? []).map((d) => d.toString()).toList(),
       unavailableReason: json['unavailable_reason'] as String?,
     );
