@@ -32,6 +32,16 @@ class NotificationCopySource {
         actionLabels: approvalActionLabels,
       );
 
+  /// Copy for the user-pressed test notification.
+  ///
+  /// It says what it is, so a probe can never be mistaken for an Agent decision,
+  /// and it offers no buttons because there is nothing to answer.
+  NotificationCopy get testNotificationCopy => NotificationCopy(
+        title: _localizations.notificationsTestNotificationTitle,
+        body: _localizations.notificationsTestNotificationBody,
+        actionLabels: const <NotificationActionIntent, String>{},
+      );
+
   String _title(NotificationKind kind) => switch (kind) {
         NotificationKind.permissionRequest => _localizations.notificationPermissionRequestTitle,
         NotificationKind.userQuestion => _localizations.notificationUserQuestionTitle,

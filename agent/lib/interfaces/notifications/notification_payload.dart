@@ -161,6 +161,7 @@ class NotificationPayloadComposer {
     required NotificationTarget target,
     required NotificationDispatchStep step,
     required DateTime dispatchedAt,
+    NotificationUrgency? urgencyCeiling,
   }) {
     final text = NotificationCopy.render(
       kind: ask.kind,
@@ -168,6 +169,12 @@ class NotificationPayloadComposer {
       sessionTitle: ask.sessionTitle,
       ask: ask.excerpt,
     );
+    // A device's own choice can only lower the Agent's decision, and the
+    // lowered value rides the payload so a platform channel, an Apple category,
+    // and a Windows duration all follow the same answer.
+    final urgency = urgencyCeiling == null
+        ? ask.effectiveUrgency
+        : NotificationUrgency.lowerOf(ask.effectiveUrgency, urgencyCeiling);
     final expiresAt = dispatchedAt.toUtc().add(lifetime);
     return {
       'protocol': NotificationWire.protocol,
@@ -179,7 +186,7 @@ class NotificationPayloadComposer {
         'event_id': _identifier(ask.eventId),
         'request_id': _identifier(ask.requestId),
         'kind': ask.kind.value,
-        'urgency': ask.effectiveUrgency.wireName,
+        'urgency': urgency.wireName,
         'target': target.toJson(),
         'locale': locale.code,
         'title': _text(text.title, maxTitleLength),
@@ -200,7 +207,7 @@ class NotificationPayloadComposer {
         'expires_at': _timestamp(expiresAt),
         'platform_hints': platformHintsFor(
           kind: ask.kind,
-          urgency: ask.effectiveUrgency,
+          urgency: urgency,
           sessionId: ask.sessionId,
         ),
       },

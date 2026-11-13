@@ -35,6 +35,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/web_push_subscription.dart';
 import 'package:sanad_client/features/notifications/domain/services/mobile_foreground_policy.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_ask_registry.dart';
+import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
 import 'package:sanad_client/features/notifications/domain/services/web_push_client.dart';
 import 'package:sanad_client/features/notifications/infrastructure/mobile_push_token_relay.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
@@ -156,6 +157,10 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       actionRouter: _actionRouter,
     );
     unawaited(_service!.start());
+    // Settings owns the button; the pipeline owns the action. Attaching the
+    // probe here keeps one path to the platform and lets the test result honour
+    // the same permission and preference gates a real alert would.
+    settings.attachTestSender(_sendTestNotification);
     _listenToTransportLifecycle();
     _startMobilePush();
   }
@@ -425,6 +430,18 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
   NotificationCopySource get _copy {
     final locale = mounted ? context.read<LocaleCubit>().state : const Locale('en');
     return NotificationCopySource(lookupAppLocalizations(locale));
+  }
+
+  /// Runs the user's test notification through the mounted pipeline.
+  Future<NotificationDisplayOutcome?> _sendTestNotification() async {
+    final service = _service;
+    if (service == null) return null;
+    final copy = _copy.testNotificationCopy;
+    final decision = await service.raiseTestNotification(
+      title: copy.title,
+      body: copy.body,
+    );
+    return decision?.outcome;
   }
 
   NotificationCopy _resolveCopy(NotificationKind kind) => _copy.copyFor(kind);
