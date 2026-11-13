@@ -13,7 +13,7 @@ packet_fingerprint: "sha256:fb380adeb8f4f69dce4bae180d66b8833ec11e3a07b86fcfdf46
 
 # Task 173 — OpenCode Go account usage limits
 
-**Status:** active — implementation and docs complete; Client widget execution is blocked by the host toolchain; delivery pending
+**Status:** implemented — draft PR #425; all required CI checks pass
 **Owners:** `agent/lib/core/provider_usage/` and
 `client/lib/features/provider_setup/`
 **Contract:** [provider protocol](../../technical/provider_protocol.md),
@@ -80,17 +80,15 @@ action correct for an API-key provider.
 - [x] Update product, protocol, provider-runtime, Client, and QA documentation.
 - [x] Run the agent analyzer and focused tests.
 - [x] Run the Client analyzer.
-- [ ] Execute the Client widget test locally (blocked: this host has no GTK 3 /
-      X11 / Xi development headers or `pkg-config`, so the `cnativeapi` native
-      asset hook cannot build). CI is authoritative for this suite.
+- [x] Execute the Client widget suite on a desktop-capable host. CI's `Test client` lanes passed; this host still cannot build the `cnativeapi` native asset (no GTK 3 / X11 / Xi development headers or `pkg-config`).
 - [x] Record the audit result against the evidence packet obligations.
 - [ ] Update the graph (no `graphify` CLI or graph output exists in this
       checkout).
 
 ### G4 — Delivery
 
-- [ ] Commit with a plan-referenced message and push the branch.
-- [ ] Open a draft pull request with problem, changes, and exact verification.
+- [x] Commit with a plan-referenced message and push the branch.
+- [x] Open a draft pull request with problem, changes, and exact verification.
 
 ## Acceptance Criteria
 
@@ -116,12 +114,12 @@ action correct for an API-key provider.
 
 - [x] `agent` analyzer and focused usage/provider tests pass.
 - [x] `client` analyzer passes.
-- [ ] Client widget tests pass on a host with the desktop build toolchain.
+- [x] Client widget tests pass (CI `Test client` lanes).
 - [x] Documentation and owning contracts describe the new adapter and the
       API-key recovery rule.
 - [x] The evidence-packet obligations are audited in the local run record.
 - [ ] `graphify update .` completes (tool unavailable in this checkout).
-- [ ] A draft pull request is open with the exact verification results.
+- [x] A draft pull request is open with the exact verification results.
 
 ## Verification log
 
@@ -131,6 +129,8 @@ fvm dart test test/core/provider_usage    # 61 passed
 fvm dart test test/interfaces/sanad_bridge_provider_usage_test.dart  # 9 passed
 fvm flutter analyze                       # client: no issues
 fvm flutter test test/features/provider_setup/widgets/provider_usage_section_test.dart
-  # blocked before test discovery: cnativeapi native asset build needs
-  # pkg-config + GTK 3 / X11 / Xi development packages, absent on this host
+  # local host: blocked before test discovery (cnativeapi native asset needs
+  # pkg-config + GTK 3 / X11 / Xi development packages)
+GitHub Actions PR #425                  # 24 checks passed, 0 failed
+  # Test client (1/4)-(4/4) passed
 ```
