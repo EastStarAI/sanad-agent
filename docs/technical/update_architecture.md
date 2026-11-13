@@ -61,6 +61,41 @@ Windows types are not accepted together. Acquiring Authenticode requires a
 separate policy transition that rejects unsigned artifacts for subsequent
 releases.
 
+### Release transport trust
+
+Artifact trust assumes the release metadata and bytes were fetched over a
+verified TLS connection. On macOS, iOS, and Android `dart:io`'s default
+`SecurityContext` takes roots from the platform store; on Windows and Linux it
+uses the Mozilla list bundled into the Dart SDK. A machine that inspects TLS
+(antivirus HTTPS scanning, a network proxy, a partial root store, or a skewed
+clock) therefore fails the handshake with `CERTIFICATE_VERIFY_FAILED: unable to
+get local issuer certificate` while the release surfaces themselves are healthy.
+
+`VerifiedAgentBootstrapInstaller` reports that as
+`AgentBootstrapStatus.tlsTrustFailed`, which the Client maps to
+`AgentLifecycleStatus.tlsTrustFailed` and renders from
+`agentInstallTlsTrustFailed`. The BoringSSL text never becomes the user-facing
+message; it stays in the Client log. Reachability failures keep the separate
+`networkFailed` outcome because retrying cannot repair a trust set.
+
+`SANAD_EXTRA_CA_BUNDLE` names a PEM bundle of roots the machine's owner chooses
+to trust, which is how an inspected environment is unblocked without weakening
+verification:
+
+- The bundle is additive. `createReleaseTrustHttpClient()` keeps
+  `SecurityContext(withTrustedRoots: true)` and adds the bundle on top, so
+  platform roots stay in effect and every existing version, size, SHA-256, and
+  platform-trust requirement still applies.
+- There is no bypass path. No `badCertificateCallback`, no certificate pinning
+  exemption, no plain-HTTP fallback, and no unverified download.
+- An unreadable or malformed bundle is logged and ignored; it never fails an
+  install, because the request still verifies against the platform roots. The
+  path itself is never logged.
+- A mirrored manifest host is deliberately absent. A machine that cannot build a
+trusted chain to the release host cannot build one to our own host either, so a
+mirror would only add a second trusted fetch surface without fixing the reported
+failure.
+
 ## Exact Client–Agent pairing
 
 Packaged Desktop releases pair Client and Agent with one exact release version.

@@ -51,6 +51,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 - Packaged client self-update is distinct from `sanad update`, which updates only the standalone agent.
 - macOS and Windows consume the signed Appcast; Linux and Android use user-approved system flows; iOS uses Internal TestFlight for v1; Web uses the deployed version marker.
 - Source/FVM execution must disable packaged self-update and must never mutate the developer checkout.
+- Release fetches (Agent bootstrap and Client self-update) share `release_trust_http_client.dart`. TLS verification is never disabled: `SANAD_EXTRA_CA_BUNDLE` may only add trusted roots on top of `SecurityContext(withTrustedRoots: true)`, an unreadable bundle is logged and ignored instead of failing an install, and a refused chain is reported as `tlsTrustFailed` rather than as a raw transport exception. A mirrored manifest host must not be added as a trust fallback.
 
 ## Local Filesystem Authority (Plan 25)
 - **Local tools/ directory hosts client-side infrastructure only for capabilities the local daemon does not own.** The local daemon (`sanad-agent`) is the **sole source of truth** for any state that the user expects to persist across devices and platforms.

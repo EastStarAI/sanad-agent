@@ -7,6 +7,7 @@ import 'package:http/http.dart' as http;
 import 'package:logging/logging.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:sanad_client/core/config/app_config.dart';
+import 'package:sanad_client/infrastructure/platform/release_trust_http_client.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -87,7 +88,9 @@ class AutoUpdateService {
 
   AutoUpdateService({FutureOr<void> Function()? beforeQuitForUpdate})
     : _native = AutoUpdaterAdapter(),
-      _client = http.Client(),
+      // Self-update reads the same release surface as the Agent bootstrap, so it
+      // honors the same explicit extra trust instead of a separate client.
+      _client = createReleaseTrustHttpClient(),
       _platform = AppPlatform.name,
       _sourceRun = AppConfig.isSourceRun,
       _currentVersion = _packageVersion,

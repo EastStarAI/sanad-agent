@@ -1,13 +1,23 @@
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:logging/logging.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/devices/data/daemon/agent_runtime_archive.dart';
+import 'package:sanad_client/infrastructure/platform/release_trust_http_client.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 
 enum AgentBootstrapStatus {
   installed,
   networkFailed,
+
+  /// The release host's chain could not be verified on this computer.
+  ///
+  /// Distinct from [networkFailed] because the transport worked and the
+  /// certificate was refused: the cause is the machine's trust set (antivirus
+  /// or proxy TLS inspection, a partial root store, or a skewed clock), not
+  /// reachability, and no automatic retry can fix it.
+  tlsTrustFailed,
   manifestInvalid,
   targetMismatch,
   unsupportedTarget,
@@ -76,6 +86,8 @@ class AgentBootstrapResult {
 }
 
 class VerifiedAgentBootstrapInstaller {
+  static final _logger = Logger('VerifiedAgentBootstrapInstaller');
+
   VerifiedAgentBootstrapInstaller({
     required this.targetPath,
     http.Client? client,
@@ -85,7 +97,7 @@ class VerifiedAgentBootstrapInstaller {
     PlatformArtifactVerifier? platformVerifier,
     PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Uri? artifactMirrorUri,
-  }) : _client = client ?? http.Client(),
+  }) : _client = client ?? createReleaseTrustHttpClient(),
        manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _architecture(),
@@ -126,6 +138,8 @@ class VerifiedAgentBootstrapInstaller {
         AgentBootstrapStatus.manifestInvalid,
         message: error.message,
       );
+    } on TlsException catch (error) {
+      return _tlsTrustFailure('release manifest', error);
     } catch (error) {
       return AgentBootstrapResult(
         AgentBootstrapStatus.networkFailed,
@@ -215,6 +229,8 @@ class VerifiedAgentBootstrapInstaller {
           message: 'Could not install the verified agent: $error',
         );
       }
+    } on TlsException catch (error) {
+      return _tlsTrustFailure('agent artifact', error);
     } catch (error) {
       return AgentBootstrapResult(
         AgentBootstrapStatus.downloadFailed,
@@ -360,6 +376,22 @@ class VerifiedAgentBootstrapInstaller {
       if (stagedArchive.existsSync()) await stagedArchive.delete();
       if (stagedDir.existsSync()) await stagedDir.delete(recursive: true);
     }
+  }
+
+  /// Reports an untrusted release chain without echoing the BoringSSL text.
+  ///
+  /// The exception stays in the log because it names the refused certificate
+  /// stage; the outcome stays actionable because every caller can render a
+  /// localized cause and remedy for [AgentBootstrapStatus.tlsTrustFailed].
+  static AgentBootstrapResult _tlsTrustFailure(
+    String surface,
+    TlsException error,
+  ) {
+    _logger.warning(
+      'TLS trust verification failed for the $surface '
+      '(${error.runtimeType}).',
+    );
+    return const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
   }
 
   static String _architecture() {

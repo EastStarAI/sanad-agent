@@ -358,6 +358,57 @@ void main() {
     expect(File(target).readAsBytesSync(), bytes);
   });
 
+  test('a refused release chain is reported as a trust failure', () async {
+    // The reported Windows failure: the transport reaches the release host and
+    // the certificate is refused, so nothing may be downloaded and the raw
+    // BoringSSL text must never become the user-facing message.
+    final target = '${temporaryDirectory.path}/bin/sanad';
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target,
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient(
+        (request) async => throw const HandshakeException(
+          'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+        ),
+      ),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.tlsTrustFailed);
+    expect(result.message, isNull);
+    expect(File(target).existsSync(), isFalse);
+  });
+
+  test('a refused artifact chain keeps the verified executable in place', () async {
+    final previous = utf8.encode('previous-agent');
+    final target = File('${temporaryDirectory.path}/bin/sanad')..createSync(recursive: true);
+    await target.writeAsBytes(previous);
+    final bytes = utf8.encode('verified-agent');
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: _sha256OfBytes(bytes),
+    );
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target.path,
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient(
+        (request) async => request.url.path.endsWith('release-manifest.json')
+            ? http.Response(jsonEncode(manifest), 200)
+            : throw const HandshakeException(
+                'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+              ),
+      ),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.tlsTrustFailed);
+    expect(await target.readAsBytes(), previous);
+  });
+
   test('isolated artifact mirror keeps canonical manifest trust metadata', () async {
     final bytes = utf8.encode('mirrored-agent');
     final artifactFile = File('${temporaryDirectory.path}/artifact')..writeAsBytesSync(bytes);
