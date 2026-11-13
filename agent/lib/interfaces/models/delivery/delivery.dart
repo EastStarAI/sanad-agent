@@ -343,6 +343,15 @@ class OriginContext {
   /// Hardware identity of the originating connection, if known.
   final String? hardwareId;
 
+  /// Authenticated Client instance identity of the connection that started the
+  /// turn, when the transport could prove it (the local `client.hello` instance
+  /// id or the cloud `origin_client.client_instance_id`).
+  ///
+  /// This is internal routing identity for notification targeting. It is
+  /// deliberately not serialized: the canonical origin envelope is unchanged,
+  /// and no existing event gains a field.
+  final String? clientInstanceId;
+
   final String? requestId;
   final String? sessionId;
   final String? deviceId;
@@ -354,6 +363,7 @@ class OriginContext {
     this.routeId,
     this.platformId,
     this.hardwareId,
+    this.clientInstanceId,
     this.requestId,
     this.sessionId,
     this.deviceId,

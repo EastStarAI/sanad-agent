@@ -13,6 +13,15 @@ final _clientInstancePattern = RegExp(
   caseSensitive: false,
 );
 
+/// Whether [value] is a well-formed Client instance identity.
+///
+/// One owner for the shape, so presence membership, origin capture, and
+/// notification targeting cannot disagree about what names an instance.
+bool isValidClientInstanceId(Object? value) {
+  if (value is! String) return false;
+  return _clientInstancePattern.hasMatch(value.trim().toLowerCase());
+}
+
 /// Transport-owned Plan 49 state shared by the Agent's local and cloud
 /// adapters. Local membership never leaves this in-memory owner.
 class DeliveryPresenceController {
@@ -48,6 +57,21 @@ class DeliveryPresenceController {
   bool get shouldEmitCloud {
     final cloudOnly = freshCloudOnlyInstanceIds;
     return cloudOnly == null || cloudOnly.isNotEmpty;
+  }
+
+  /// Whether [clientInstanceId] is provably attached by any route right now.
+  ///
+  /// Local membership is authoritative and in-memory. The cloud recipient set
+  /// counts only while its Gateway lease is fresh: a stale, malformed, or
+  /// missing set proves nothing, and an unknown target must not be reported as
+  /// reachable.
+  bool isInstanceAttached(String clientInstanceId) {
+    final normalized = clientInstanceId.trim().toLowerCase();
+    if (!_clientInstancePattern.hasMatch(normalized)) return false;
+    if (_localInstances.containsValue(normalized)) return true;
+    final cloudInstances = freshCloudOnlyInstanceIds;
+    if (cloudInstances == null) return false;
+    return _cloudInstances!.contains(normalized);
   }
 
   bool claimCloudEgress() {

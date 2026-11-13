@@ -1062,3 +1062,245 @@ republished with the same deterministic `event_id` exactly once when
 position, ranges, estimate fields, and summary do not change. Payloads expose
 `before_measurement_kind` and keep the confirmed after-value distinct from
 `estimated_request_tokens_after`.
+
+---
+
+## 7. Agent-Owned Notification Dispatch (Plan 174)
+
+A Sanad user must learn that a session needs them while they are away from it.
+Every decision about that notification stays in the Agent: whether the event
+notifies, its kind, its urgency, its copy, its redaction, its target, its
+escalation window, and its cancellation. The hosted relay resolves a named
+target to tokens and delivers; it reads no content.
+
+This section is the wire contract between the Agent and the relay, and between
+the Agent and every Sanad Client. It is additive to the canonical envelope in
+section 6: no existing `device_event` field changes meaning.
+
+### 7.1 Instruction events
+
+Two canonical event names carry notifications. Both use the existing canonical
+envelope (`event_id`, `event`, `delivery`, `origin`, `session_id`, `payload`) and
+the `platform_family: sanad_client` delivery scope, so a running Client on
+either transport receives them through the path it already uses.
+
+| Event | Meaning |
+|---|---|
+| `notification.dispatch` | One step of the delivery policy: raise (or re-address) the notification. |
+| `notification.withdraw` | The ask is over: remove the notification wherever it is shown. |
+
+Dedupe is **not** on the envelope `event_id`. An ask is escalated by a second
+dispatch, so each step is its own canonical event; the notification identity is
+`payload.notification.event_id`, which is the canonical `event_id` of the
+`tool_permission_request` that raised the ask and is therefore stable across
+local, cloud, and push copies. A Client shows one notification per
+`notification.event_id` and replaces it in place on a later step.
+
+### 7.2 Payload
+
+```json
+{
+  "event": "notification.dispatch",
+  "event_id": "evt_instruction_01J...",
+  "delivery": { "scope": "platform_family", "platform_family": "sanad_client" },
+  "session_id": "session-id",
+  "payload": {
+    "protocol": "sanad.notification",
+    "version": 1,
+    "session_id": "session-id",
+    "notification": {
+      "instruction": "dispatch",
+      "step": "origin",
+      "event_id": "evt_ask_01J...",
+      "request_id": "request-id",
+      "kind": "permission_request",
+      "urgency": "high",
+      "target": { "scope": "client_instance", "client_instance_id": "uuid-v4" },
+      "locale": "ar",
+      "title": "Fix the login redirect",
+      "body": "Approval requested: shell_execute: git push origin main",
+      "actions": [
+        { "id": "allow_once", "label": "Allow once" },
+        { "id": "allow_session", "label": "Allow for this session" },
+        { "id": "deny", "label": "Deny" },
+        { "id": "open", "label": "Open" }
+      ],
+      "deep_link": { "session_id": "session-id", "request_id": "request-id" },
+      "collapse_key": "session-id:permission_request",
+      "created_at": "2026-11-13T10:00:00.000Z",
+      "expires_at": "2026-11-13T10:30:00.000Z",
+      "platform_hints": {
+        "android_channel_id": "sanad_permission_request_high",
+        "ios_category": "SANAD_PERMISSION_REQUEST",
+        "thread_id": "session-id"
+      },
+      "instruction_event_id": "evt_instruction_01J..."
+    }
+  }
+}
+```
+
+`instruction_event_id` is transport correlation only. It never identifies the
+notification and never replaces `notification.event_id`.
+
+A withdrawal carries no copy:
+
+```json
+{
+  "payload": {
+    "protocol": "sanad.notification",
+    "version": 1,
+    "session_id": "session-id",
+    "notification": {
+      "instruction": "withdraw",
+      "event_id": "evt_ask_01J...",
+      "request_id": "request-id",
+      "kind": "permission_request",
+      "target": { "scope": "account" },
+      "collapse_key": "session-id:permission_request",
+      "reason": "resolved",
+      "created_at": "2026-11-13T10:00:10.000Z",
+      "expires_at": "2026-11-13T10:30:10.000Z"
+    }
+  }
+}
+```
+
+`reason` is `resolved`, `already_resolved`, `session_terminal`, or `disposed`.
+
+### 7.3 Kinds and urgency
+
+Kinds are Agent-owned; `urgency` is an attribute of a kind, not a second
+taxonomy. Every kind defaults to `high`: banner and sound, no kind silent. A
+user lowers an individual kind; the product default does not.
+
+| Kind | Meaning |
+|---|---|
+| `permission_request` | The run is blocked on an execution decision. |
+| `user_question` | The run is blocked on an answer or a requested form. |
+| `blocked` | The session cannot proceed without human intervention. |
+| `failed` | The run ended in a final failure. |
+| `completed` | The requested result exists. |
+| `background_task_done` | A background task or terminal command finished. |
+| `scheduled_result` | A scheduled run produced a result. |
+| `provider_quota` | The selected provider is exhausted or rate-limited. |
+
+`connection_lost` and `auth_required` exist in the same vocabulary and are
+**Client-owned**: a Client raises them locally for a condition only it can
+observe, and they never traverse the relay.
+
+### 7.4 Locale registration and copy
+
+The Agent renders notification copy. A Client registers its interface locale at
+connection time and the Agent keeps a template table covering the notification
+kinds and action labels only.
+
+- The authenticated local `client.hello` carries an optional `locale` (BCP-47;
+  `ar`, `ar-SA`, and `ar_SA` all resolve to Arabic). `metadata.locale` is read
+  as the same value when a transport nests display metadata.
+- An absent, unsupported, or unregistered locale falls back to `en`, the
+  authored source locale.
+- `title` is the session title, carried verbatim and never translated. When the
+  session has no title the kind's authored fallback title is used.
+- `body` and every action label are the Agent's localized copy for the ask.
+- One instruction carries one locale, chosen from the origin instance and
+  reused by every step of that ask. Per-device locale selection belongs to the
+  Client surface work.
+
+Client localization keys that carry the same sentences are named
+`notification<Kind><Title|Body>` and `notificationAction<Label>`. The Agent copy
+parity test asserts that the two key sets and their placeholders agree, and
+records the keys the Client has not authored yet.
+
+### 7.5 Delivery policy
+
+1. Resolve the origin Client instance from the delivery envelope already carried
+   by the command: the cloud route's Gateway-authored `origin_client` block, or
+   the instance id the local adapter bound on the socket's authenticated
+   `client.hello`.
+2. **Origin first.** If that instance is provably attached and can notify, send
+   one `notification.dispatch` with `step: "origin"` and
+   `target: { scope: "client_instance" }`, then arm exactly one escalation timer
+   keyed by `session_id + request_id`.
+3. **Immediate fan-out.** If the origin is missing, belongs to another platform
+   family (the standalone CLI, Telegram, WhatsApp, a scheduled run), declared
+   itself unable to notify, or is attached by no route, send one dispatch with
+   `step: "immediate"` and `target: { scope: "account" }` and arm no timer.
+4. **Escalation.** After 90 seconds the timer sends one dispatch with
+   `step: "escalation"` and `target: { scope: "account" }`, including the origin.
+   A second escalation for the same ask never happens.
+5. **Cancellation.** Resolution or a terminal session state (`idle` or
+   `stopping`) cancels the timer and sends `notification.withdraw`. Nothing is
+   dispatched after a resolution, even if a late creation arrives for the same
+   ask.
+
+"Provably attached" means the instance holds local membership in the Agent, or
+it appears in a **fresh** `cloud_delivery_interest` recipient set. A stale,
+absent, or malformed cloud signal proves nothing and escalates immediately,
+because a missed notification is worse than an early fan-out. The Agent knows
+nothing else about an offline target: it names an instance identity, and the
+token inventory stays in the hosted service.
+
+A Client that is currently displaying the session only silences its own banner.
+It never suppresses the escalation, because an open window is not evidence that
+a human is in front of it.
+
+### 7.6 Target semantics and relay obligations
+
+| `target.scope` | Meaning | Relay obligation |
+|---|---|---|
+| `client_instance` | Exactly one Client instance, named by `client_instance_id`. | Deliver to that instance only; if it has no live connection, deliver nothing. |
+| `account` | Every push-capable device of the authenticated account. | Deliver to each registered token of that account. |
+
+- The relay resolves `target` and tokens. It does not parse, classify, store,
+  reroute on, or rewrite any other field.
+- The relay performs no redaction and no "hide details" transformation; the
+  payload it receives is already redacted.
+- An instruction whose `protocol` or `version` the relay does not know is
+  dropped, never guessed.
+- A withdrawal is account-scoped because the Agent names targets, not tokens:
+  it cannot know which devices the relay reached. A device that never saw the
+  notification identity drops the withdrawal.
+
+### 7.7 Redaction, bounds, and expiry
+
+Every text field (`title`, `body`, every action label) crosses the Agent's
+existing secret-redaction path and is then bounded: 120 characters for the
+title, 280 for the body, 32 for an action label. Whitespace is collapsed first.
+
+The payload carries the redacted ask itself and nothing else. It never carries a
+conversation transcript, tool output, a tool schema, a workspace path, a policy
+key, a credential, or a submitted secret value. A permission request may carry
+the command text the user must judge; a requested secret carries only the
+reason for the form, never a field name or value.
+
+`collapse_key` is `session_id + ":" + kind`, so a conversation groups on the
+notification surface. `expires_at` is 30 minutes after composition: a device
+that receives an instruction later than that must not wake the user for an ask
+that is already over.
+
+`platform_hints` are the Agent's decision, not the receiver's:
+`android_channel_id` is per kind and urgency (`sanad_<kind>_<urgency>`, so
+muting one kind cannot mute the rest), `ios_category` is per kind
+(`SANAD_<KIND>`), and `thread_id` is the session.
+
+### 7.8 Local-only limitation
+
+Cross-device notification is a hosted capability. An Agent running without a
+cloud relay path can still dispatch and can still escalate, but every step
+reaches only the Clients attached to that machine. The limitation is documented
+rather than worked around: the Agent does not queue, retry, or invent a
+transport for a device it cannot reach.
+
+### 7.9 Client obligations
+
+- Dedupe on `notification.event_id`, not on the envelope `event_id`, and replace
+  in place when a later step arrives for the same identity.
+- Ignore a `client_instance` instruction that does not name this instance; it
+  belongs to another device of the same account.
+- Ignore an instruction whose `protocol` or `version` is unknown.
+- Drop a `notification.withdraw` whose identity is not currently shown, and never
+  re-raise a notification after it.
+- Raise the OS notification locally on desktop. Desktop never uses a push
+  provider: both the local and the cloud route deliver the event to a running
+  Client, which raises the notification itself.
