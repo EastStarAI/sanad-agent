@@ -2,6 +2,15 @@
 class DeviceConfig {
   static const int maxNameLength = 255;
 
+  /// The placeholder name of the row this Client synthesizes for the machine it
+  /// runs on.
+  ///
+  /// The Agent has no name for a device it has not registered yet, so the Client
+  /// creates the row itself. The model keeps a locale-independent placeholder
+  /// and the UI resolves it through the localization system, because a stored
+  /// English name would surface in an Arabic interface.
+  static const String localPlaceholderName = 'This device';
+
   final String id;
   final String name;
   final String? hardwareId; // For Sanad Agent - device ID

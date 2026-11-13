@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:sanad_client/core/navigation/nav_trace.dart';
 import 'package:sanad_client/core/presentation/widgets/app_progress_indicator.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 import '../../../../devices/domain/models/device_config.dart';
 import '../../../../devices/presentation/utils/device_ui_mapper.dart';
@@ -106,6 +107,7 @@ class _DeviceDropdown extends StatelessWidget {
       );
     }
 
+    final l10n = AppLocalizations.of(context)!;
     final displayWidget = Row(
       children: [
         if (activeDevice != null) ...[
@@ -114,7 +116,7 @@ class _DeviceDropdown extends StatelessWidget {
         ],
         Expanded(
           child: Text(
-            activeDevice?.name ?? 'No devices',
+            activeDevice?.displayName(l10n) ?? 'No devices',
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: theme.colorScheme.onSurface,
@@ -176,6 +178,8 @@ class _DeviceDropdown extends StatelessWidget {
           ...devices.map((device) {
             final isSelected = device.id == activeDevice?.id;
             return PopupMenuItem<Object?>(
+              // The key stays on the stored name, never the translated label, so
+              // it does not change identity with the interface language.
               key: Key('sidebar_device_item_${device.name}'),
               value: device,
               height: 32,
@@ -186,7 +190,7 @@ class _DeviceDropdown extends StatelessWidget {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      device.name,
+                      device.displayName(l10n),
                       style: TextStyle(
                         color: isSelected ? theme.colorScheme.onSurface : theme.colorScheme.onSurfaceVariant,
                         fontSize: 12,
@@ -270,7 +274,7 @@ class _LocalBadge extends StatelessWidget {
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
-        'local',
+        AppLocalizations.of(context)!.devicesLocalBadge,
         style: TextStyle(
           fontSize: 9,
           fontWeight: FontWeight.w600,

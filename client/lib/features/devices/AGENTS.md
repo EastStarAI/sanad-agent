@@ -12,6 +12,11 @@ This contract applies to `client/lib/features/devices/`.
 - A correlated capability response with a null or malformed payload is not a fresh cache entry. A later Online inventory update must retry capability fetching so model and thinking controls recover without a Client or Agent restart.
 - Web and mobile paths remain cloud-only and must not create local placeholders.
 - On desktop, key the local inventory row by the Agent `hardware_id` and pin that local/merged row first. Preserve any matching Backend `device_id` separately as `cloudDeviceId`. Order every remaining visible inventory oldest-first by `createdAt`, with stable device-id ties and missing timestamps after timestamped records. Web/mobile have no local row and are fully chronological. Reapply this invariant after authoritative fetches, live mutations/status events, and local/cloud merging rather than trusting source order.
+- The row the Client synthesizes for its own machine carries
+  `DeviceConfig.localPlaceholderName`, a locale-independent placeholder rather
+  than English copy; presentation resolves it through the localization system
+  (`DeviceConfigUI.displayName`). A name the Agent or the user wrote is never
+  translated, and a widget key never derives from either.
 - `DeviceCubit` is the sole presentation authority for the active conversation device; settings inspection state must not replace it implicitly.
 
 ## Selection and Restore

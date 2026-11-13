@@ -245,10 +245,12 @@ class _PreferencesCard extends StatelessWidget {
 
 /// One kind: on/off, and how loudly it may interrupt.
 ///
-/// The subtitle states what this device can actually do, not only what the kind
-/// is set to: while the OS refuses notifications, or while no notification
-/// service is reachable, the row says so instead of describing the alert style
-/// it would use if delivery worked.
+/// The row separates two facts that used to share one line. The subtitle states
+/// what this device can actually do — off, no notification service, a revoked OS
+/// permission — while the urgency control states the stored ceiling. That is why
+/// the control is a labeled pill rather than an unlabeled glyph: at rest it names
+/// the value it will apply, so `Alert` and `Banner only` no longer render
+/// identically, and the label is the same word the menu lists.
 class _KindRow extends StatelessWidget {
   const _KindRow({
     required this.kind,
@@ -277,34 +279,13 @@ class _KindRow extends StatelessWidget {
       onChanged: !state.preferences.enabled || state.unavailable
           ? null
           : (value) => unawaited(cubit.setKindEnabled(kind, value)),
-      secondary: PopupMenuButton<NotificationUrgency>(
-        key: ValueKey('notification_kind_${kind.wire}_urgency'),
-        enabled: enabled && !state.unavailable,
-        tooltip: l10n.notificationsUrgencyChange,
-        icon: const Icon(Icons.tune_rounded),
-        onSelected: (value) => unawaited(cubit.setKindUrgency(kind, value)),
-        itemBuilder: (context) => [
-          _urgencyItem(NotificationUrgency.high, l10n.notificationsUrgencyAlert),
-          _urgencyItem(NotificationUrgency.normal, l10n.notificationsUrgencyBannerOnly),
-        ],
-      ),
-    );
-  }
-
-  PopupMenuItem<NotificationUrgency> _urgencyItem(NotificationUrgency value, String text) {
-    final selected = state.ceilingFor(kind) == value;
-    return PopupMenuItem<NotificationUrgency>(
-      key: ValueKey('notification_kind_${kind.wire}_urgency_${value.wire}'),
-      value: value,
-      child: Row(
-        children: [
-          if (selected)
-            const Padding(
-              padding: EdgeInsetsDirectional.only(end: 8),
-              child: Icon(Icons.check, size: 16),
-            ),
-          Text(text),
-        ],
+      secondary: _UrgencyControl(
+        kind: kind,
+        state: state,
+        l10n: l10n,
+        cubit: cubit,
+        enabled: enabled,
+        ceiling: ceiling,
       ),
     );
   }
@@ -318,6 +299,145 @@ class _KindRow extends StatelessWidget {
     return ceiling.isInterruptive
         ? l10n.notificationsUrgencyAlertHint
         : l10n.notificationsUrgencyBannerOnlyHint;
+  }
+}
+
+/// The per-kind urgency control: a labeled, value-bearing menu button.
+///
+/// It owns both halves of the affordance — the pill the user sees and the menu
+/// that changes it — so the word on the pill and the words in the menu cannot
+/// drift apart. The pill keeps the setting's own name (`Alert` / `Banner only`)
+/// and the menu puts the delivery it means underneath that name
+/// (`Banner and sound` / `Banner without sound`), which is one vocabulary with
+/// its explanation instead of two names for one setting.
+class _UrgencyControl extends StatelessWidget {
+  const _UrgencyControl({
+    required this.kind,
+    required this.state,
+    required this.l10n,
+    required this.cubit,
+    required this.enabled,
+    required this.ceiling,
+  });
+
+  final NotificationKind kind;
+  final NotificationSettingsState state;
+  final AppLocalizations l10n;
+  final NotificationSettingsCubit cubit;
+  final bool enabled;
+  final NotificationUrgency ceiling;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final interactive = enabled && !state.unavailable;
+    // The control is dimmed when the row cannot deliver, but it still states the
+    // stored ceiling: the subtitle next to it is what reports the block.
+    final light = !interactive;
+
+    return PopupMenuButton<NotificationUrgency>(
+      key: ValueKey('notification_kind_${kind.wire}_urgency'),
+      enabled: interactive,
+      tooltip: l10n.notificationsUrgencyChange,
+      onSelected: (value) => unawaited(cubit.setKindUrgency(kind, value)),
+      itemBuilder: (context) => [
+        _urgencyItem(
+          context,
+          NotificationUrgency.high,
+          name: l10n.notificationsUrgencyAlert,
+          detail: l10n.notificationsUrgencyAlertHint,
+        ),
+        _urgencyItem(
+          context,
+          NotificationUrgency.normal,
+          name: l10n.notificationsUrgencyBannerOnly,
+          detail: l10n.notificationsUrgencyBannerOnlyHint,
+        ),
+      ],
+      child: Container(
+        padding: const EdgeInsetsDirectional.only(start: 10, end: 4, top: 4, bottom: 4),
+        decoration: BoxDecoration(
+          color: scheme.surfaceContainerHighest.withValues(alpha: light ? 0.35 : 0.65),
+          borderRadius: BorderRadius.circular(999),
+          border: Border.all(
+            color: scheme.outline.withValues(alpha: light ? 0.15 : 0.35),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(_icon(), size: 16, color: _tone(scheme, light)),
+            const SizedBox(width: 6),
+            Text(
+              ceiling.isInterruptive
+                  ? l10n.notificationsUrgencyAlert
+                  : l10n.notificationsUrgencyBannerOnly,
+              key: ValueKey('notification_kind_${kind.wire}_urgency_value'),
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: _tone(scheme, light),
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _tone(scheme, light)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _tone(ColorScheme scheme, bool light) => light
+      ? scheme.onSurfaceVariant.withValues(alpha: 0.6)
+      : scheme.onSurface;
+
+  /// The glyph carries the state at a glance: a sound-on alert, a silent banner,
+  /// a permission block, or no delivery at all.
+  IconData _icon() {
+    if (!enabled || state.unavailable) return Icons.notifications_off_outlined;
+    if (!state.permission.canDisplay) return Icons.notifications_paused_outlined;
+    return ceiling.isInterruptive ? Icons.notifications_active_outlined : Icons.volume_off_outlined;
+  }
+
+  /// One menu row: the setting's name plus the delivery it produces.
+  ///
+  /// The check slot is reserved for both items, so an unselected row starts at
+  /// the same offset as the selected one instead of shifting by a glyph width.
+  PopupMenuItem<NotificationUrgency> _urgencyItem(
+    BuildContext context,
+    NotificationUrgency value, {
+    required String name,
+    required String detail,
+  }) {
+    final theme = Theme.of(context);
+    return PopupMenuItem<NotificationUrgency>(
+      key: ValueKey('notification_kind_${kind.wire}_urgency_${value.wire}'),
+      value: value,
+      height: 56,
+      child: Row(
+        children: [
+          SizedBox(
+            width: 24,
+            child: ceiling == value ? const Icon(Icons.check, size: 16) : null,
+          ),
+          Flexible(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name, style: theme.textTheme.bodyMedium, overflow: TextOverflow.ellipsis),
+                Text(
+                  detail,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -341,6 +461,17 @@ class _TestCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(l10n.notificationsTestSubtitle),
+          if (state.testKind != null) ...[
+            const SizedBox(height: 4),
+            // The probe borrows a real kind, so it inherits that row's alert
+            // style. Naming it is what stops a quietened kind from reading as a
+            // test that forgot the setting.
+            Text(
+              l10n.notificationsTestKindNotice(NotificationCopySource(l10n).labelFor(state.testKind!)),
+              key: const ValueKey('notification_test_kind_notice'),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontStyle: FontStyle.italic),
+            ),
+          ],
           const SizedBox(height: 16),
           FilledButton.tonal(
             key: const ValueKey('notification_test_btn'),

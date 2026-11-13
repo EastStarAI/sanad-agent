@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
 import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
@@ -40,6 +41,10 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
     required NotificationPreferencesStore store,
     required NotificationPlatformAdapter adapter,
     WebPushSubscriptionService? webPush,
+    // The pipeline releases this once the platform objects exist. Without it a
+    // read that arrives first reports the platform as unavailable, which the
+    // display policy then honours for every Agent-raised notification.
+    NotificationPlatformReadiness? platformReadiness,
     // A change belongs to this device, so it is also re-declared to the Agent
     // this Client is attached to. It never travels through the account: no
     // other device's choices change, and the relay only forwards an opaque
@@ -48,6 +53,7 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
   })  : _store = store,
         _adapter = adapter,
         _webPush = webPush,
+        _platformReadiness = platformReadiness,
         _publishPreferences = publishPreferences,
         super(
           NotificationSettingsState(
@@ -70,6 +76,7 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
   final NotificationPreferencesStore _store;
   final NotificationPlatformAdapter _adapter;
   final WebPushSubscriptionService? _webPush;
+  final NotificationPlatformReadiness? _platformReadiness;
   StreamSubscription<WebPushSettings>? _webPushSubscription;
   final NotificationPreferencesPublisher? _publishPreferences;
 
@@ -79,10 +86,14 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
 
   /// Attaches the running pipeline's test action. Absent when this build has no
   /// notification surface, in which case Settings reports it as unavailable.
-  void attachTestSender(NotificationTestSender sender) {
+  ///
+  /// [kind] is the kind the pipeline's probe borrows, so the page can name the
+  /// alert style the result describes: a user who quietened that kind gets a
+  /// quieter probe, and saying which row it follows is what keeps that honest.
+  void attachTestSender(NotificationTestSender sender, {NotificationKind? kind}) {
     _testSender = sender;
     if (isClosed) return;
-    emit(state.copyWith(testSenderAttached: true));
+    emit(state.copyWith(testSenderAttached: true, testKind: kind));
   }
 
   /// Reads the stored choices and the current OS permission.
@@ -274,6 +285,12 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
 
   Future<NotificationPermissionStatus> _readPermission() async {
     if (!_adapter.isSupported) return NotificationPermissionStatus.unsupported;
+    // A platform builds the objects it answers with during initialization, so a
+    // read that arrives first waits for the pipeline instead of throwing and
+    // being reported as `unavailable`. The display policy treats anything but
+    // `granted` as a refusal, so this ordering is what keeps an Agent-raised
+    // notification deliverable before Settings is ever opened.
+    await _platformReadiness?.ready;
     try {
       return await _adapter.checkPermission();
     } catch (_) {

@@ -127,9 +127,7 @@ void main() {
 
     final l10n = lookupAppLocalizations(const Locale('ar'));
     for (final value in <String>[
-      l10n.notificationsUrgencyAlert,
       l10n.notificationsUrgencyAlertHint,
-      l10n.notificationsUrgencyBannerOnly,
       l10n.notificationsUrgencyBannerOnlyHint,
       l10n.notificationsUrgencyOff,
       l10n.notificationsUrgencyChange,

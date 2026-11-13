@@ -18,6 +18,7 @@ import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_cubit.dart';
 import 'package:sanad_client/features/devices/presentation/bloc/device_state.dart';
 import 'package:sanad_client/features/notifications/application/notification_action_router.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
 import 'package:sanad_client/features/notifications/application/notification_service.dart';
 import 'package:sanad_client/features/notifications/application/notification_session_opener.dart';
@@ -156,13 +157,37 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       askRegistry: _askRegistry,
       actionRouter: _actionRouter,
     );
-    unawaited(_service!.start());
+    unawaited(_startPipeline());
     // Settings owns the button; the pipeline owns the action. Attaching the
     // probe here keeps one path to the platform and lets the test result honour
     // the same permission and preference gates a real alert would.
-    settings.attachTestSender(_sendTestNotification);
+    settings.attachTestSender(
+      _sendTestNotification,
+      kind: NotificationService.testNotificationKind,
+    );
     _listenToTransportLifecycle();
     _startMobilePush();
+  }
+
+  /// Starts the pipeline, then releases the one permission read it gates.
+  ///
+  /// Settings reads the OS permission as soon as it exists, and a platform only
+  /// builds the objects that answer a read inside `initialize`. Releasing the
+  /// read after `start()` is what makes the cold-start answer true: before this
+  /// ordering, the first read threw, was reported as `unavailable`, and the
+  /// display policy dropped Agent-raised notifications until something else
+  /// refreshed it — the Settings page being the very surface that cleared it.
+  Future<void> _startPipeline() async {
+    try {
+      await _service!.start();
+    } finally {
+      // A container that never registered the readiness signal is a container
+      // whose cubit has no gate to release, so the release is skipped rather
+      // than thrown from an unawaited future.
+      if (getIt.isRegistered<NotificationPlatformReadiness>()) {
+        getIt<NotificationPlatformReadiness>().complete();
+      }
+    }
   }
 
   /// Mounts the push wake-up path on a platform that has a provider.

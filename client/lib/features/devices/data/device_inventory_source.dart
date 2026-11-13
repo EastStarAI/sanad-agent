@@ -18,7 +18,7 @@ class LocalDeviceInventorySource implements DeviceInventorySource {
     final hardwareId = _connectionCoordinator.currentDeviceId;
     final localDevice = DeviceConfig(
       id: hardwareId,
-      name: 'This device',
+      name: DeviceConfig.localPlaceholderName,
       hardwareId: hardwareId,
       isOnline: _connectionCoordinator.localSocketService.isConnected,
     );

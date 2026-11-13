@@ -85,6 +85,14 @@ This contract applies to `client/lib/features/notifications/`.
 - The iOS foreground hook is a notification-center delegate that answers per
   event from the mirrored visible session and preserves the previously installed
   chain. A globally silent foreground is rejected.
+- A permission read is ordered after platform initialization.
+  `NotificationPlatformReadiness` is the one release point: every adapter builds
+  the objects it answers a read with inside `initialize`, so the bridge completes
+  the readiness signal once `NotificationService.start()` returns and the
+  Settings cubit awaits it before its first `checkPermission`. Without that
+  ordering the cold-start read throws, is reported as `unavailable`, and the
+  display policy refuses every Agent-raised notification until something else
+  refreshed the permission — the Settings page being the surface that did.
 - Permission is requested only from an explicit Settings action. Nothing asks on
   startup, on first event, or on first notification. A refusal or a revocation is
   reported as it is; nothing rewrites the in-app switch on the user's behalf.
@@ -125,6 +133,12 @@ This contract applies to `client/lib/features/notifications/`.
   without buttons. Button copy comes from the localized labels the adapter
   receives with `initialize`; the English fallback applies only to an empty map,
   and a raw intent name is never user-facing copy.
+- The one button whose copy follows a language change inside a running session is
+  the freedesktop open action. Linux builds its action array per notification, so
+  `NotificationPresentationRequest.openActionLabel` carries the label resolved
+  for the language in use; an absent label keeps the copy `initialize`
+  registered. A Darwin category cannot be corrected after registration and keeps
+  the language it was registered in until the next launch.
 - A cold-start interaction is not resumed. `NotificationService` reads the
   launch interaction once, records it as `NotificationColdStartOutcome`, and acts
   on nothing: no approval is sent from a payload alone and no destination is
@@ -144,6 +158,11 @@ This contract applies to `client/lib/features/notifications/`.
   (banner and sound); a stored value only records a deliberate change, and
   `withKindUrgency` never stores a value that would raise a kind, so a corrupt
   file or a future build cannot make one louder.
+- The ceiling has one name everywhere it is shown. The Settings control states
+  the value it will apply (`Alert` / `Banner only`), the menu states the delivery
+  that value means (`Banner and sound` / `Banner without sound`) beside it, and
+  the row subtitle reports an off kind, a missing service, or a revoked OS
+  permission instead of an alert style the pipeline would refuse.
 - A kind is off **or** quietened, never both on the wire. The two choices are
   stored separately so unmuting restores the ceiling, but
   `toAgentDeclaration` emits exactly one token per kind and `off` wins in either
@@ -177,6 +196,9 @@ This contract applies to `client/lib/features/notifications/`.
 - Its copy is supplied by `NotificationCopySource.testNotificationCopy` and names
   it as a test, so a probe can never be read as an Agent decision. It is never
   published to the relay.
+- It borrows `NotificationService.testNotificationKind` and therefore inherits
+  that kind's alert style, so Settings names the borrowed kind beside the action.
+  A quietened kind must never read as a test that forgot the setting.
 - A suppressed result is reported as a localized explanation, never as success.
   A presentation the platform refused is its own outcome
   (`NotificationDisplayOutcome.presentationFailed`): the probe reports a
@@ -198,11 +220,15 @@ This contract applies to `client/lib/features/notifications/`.
   lifecycle, the channel and category inventory, and the web subscription
   lifecycle.
 - Widget tests own the end-to-end pipeline through a fake platform adapter, the
-  Settings surface (permission states, per-kind urgency, the row copy that states
-  an OS block instead of a delivery style, the test action and its failure, the
-  stated limits), the window-presence projection driven by a
+  Settings surface (permission states, per-kind urgency and the value its control
+  states, the menu vocabulary and its alignment, the row copy that states an OS
+  block instead of a delivery style, the test action, the kind it follows, and its
+  failure, the stated limits), the window-presence projection driven by a
   `DesktopLifecycleManager`, the browser install/configuration states, and Arabic
   right-to-left rendering.
+- Unit tests own the cold-start ordering itself: a platform whose permission read
+  depends on `initialize` still delivers an Agent-raised notification, and a
+  language change reaches the open action label without a restart.
 - `client/test/guards/notifications_localization_guard_test.dart` owns the
   localization invariant: no hard-coded widget string, no Arabic literal in Dart,
   and every referenced key authored in both locales.

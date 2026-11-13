@@ -301,14 +301,31 @@ feature needs no `libnotify` build dependency. A session without a daemon (or
 without a running notification server) reports `unavailable` rather than
 silently dropping every notification.
 
-Button copy is fixed by the platform, not by the presentation request: macOS
-registers its notification categories exactly once, when the plugin initializes,
-and Linux fixes its default action name at that same moment. The adapter therefore
-receives the localized action labels with `initialize` and resolves them once.
-Because the saved locale is restored before the UI starts, the registered copy
-matches the user's language; a language change made later in the running session
-does not re-register the categories, so those buttons keep the previous language
-until the next launch.
+Approval button copy is fixed by the platform, not by the presentation request:
+macOS registers its notification categories exactly once, when the plugin
+initializes. The adapter therefore receives the localized action labels with
+`initialize`. Because the saved locale is restored before the UI starts, the
+registered copy matches the user's language; a language change made later in the
+running session does not re-register the categories, so an approval button keeps
+the language it was registered in until the next launch.
+
+The freedesktop open action is the exception, because Linux builds the action
+array for each notification rather than registering it once. The presentation
+request carries `openActionLabel`, resolved from the language in use when the
+notification is raised, so switching the interface to Arabic mid-session also
+changes the button on the next notification instead of at the next launch. A
+request with no resolved label passes no name and the copy registered at
+initialization stays, because a blank button would be worse than a stale one.
+
+The first permission read is ordered after that initialization. Every adapter
+builds the objects it answers a read with inside `initialize`, so
+`NotificationPlatformReadiness` is the single release point: the bridge completes
+it once `NotificationService.start()` returns, and the Settings cubit awaits it
+before its first `checkPermission`. Before that ordering the cold-start read threw
+against a platform object that did not exist yet, was mapped to `unavailable`, and
+the display policy refused every Agent-raised notification until the user opened
+Settings — the very surface that refreshed the permission.
+
 macOS registers `sanad_ask` for the full approval set plus one category per
 offered subset (`sanad_ask.allow_once+deny`, …), so the buttons a notification
 presents are exactly the actions its payload offered and a category can never add
@@ -356,7 +373,10 @@ One policy answers "does this reach the operating system?", in this order:
    stored value only records a deliberate change, and a ceiling can only lower
    what the Agent decided. See §8.1 and
    [communication_protocols.md](communication_protocols.md) §7.10.
-6. **OS permission** — nothing is shown while the OS has not granted it.
+6. **OS permission** — nothing is shown while the OS has not granted it. The
+   permission the policy reads is the one the platform answered, not a startup
+   placeholder: the read is released only after initialization has returned, so a
+   working notification service is never reported as unavailable at cold start.
 7. **Presence** — the ask is suppressed only while the window is visible *and*
    the routed conversation surface is that exact session. A session on screen
    with no projected ask yet still counts, because the in-app prompt for the
