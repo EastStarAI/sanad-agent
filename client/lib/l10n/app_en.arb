@@ -91,6 +91,8 @@
   "deleteConversation": "Delete conversation",
   "deleteConversationConfirm": "Are you sure you want to delete this conversation?",
   "devices": "Devices",
+  "devicesSelectorLabel": "Device selector",
+  "devicesSettingsMenuItem": "Device settings",
   "devicesThisDevice": "This device",
   "devicesLocalBadge": "local",
   "addDevice": "Add Device",

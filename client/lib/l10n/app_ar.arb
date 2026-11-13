@@ -91,6 +91,8 @@
   "deleteConversation": "حذف المحادثة",
   "deleteConversationConfirm": "هل أنت متأكد أنك تريد حذف هذه المحادثة؟",
   "devices": "الأجهزة",
+  "devicesSelectorLabel": "محدِّد الجهاز",
+  "devicesSettingsMenuItem": "إعدادات الجهاز",
   "devicesThisDevice": "هذا الجهاز",
   "devicesLocalBadge": "محلي",
   "addDevice": "إضافة جهاز",

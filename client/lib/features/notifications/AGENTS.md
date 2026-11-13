@@ -86,16 +86,22 @@ This contract applies to `client/lib/features/notifications/`.
   event from the mirrored visible session and preserves the previously installed
   chain. A globally silent foreground is rejected.
 - A permission read is ordered after platform initialization, and the first one
-  is published before any event is consumed. Every adapter builds the objects it
-  answers a read with inside `initialize`, so `NotificationService.start()`
+  is published before any display path decides. Every adapter builds the objects
+  it answers a read with inside `initialize`, so `NotificationService.start()`
   awaits an `onPlatformReady` hook between initialization and stream subscription;
   the bridge supplies it, completes `NotificationPlatformReadiness` there, and
-  loads Settings from it. `NotificationPlatformReadiness` is also what a read that
-  arrives first waits on, so a page opened earlier still cannot observe a
-  capability the platform has not built yet. Without that ordering the cold-start
-  read throws, is reported as `unavailable`, and the display policy refuses every
-  Agent-raised notification until something else refreshed the permission — the
-  Settings page being the surface that did.
+  loads Settings from it. The three display paths are then ordered by their own
+  owner: the socket and web-push copies arrive through those subscriptions, and
+  the mobile push wake-up starts only after that start returns
+  (`NotificationBridge._startPushAfterPipeline`), because `MobilePushService`
+  hands an arrival straight to `NotificationService.handleEvent` outside them.
+  `NotificationPlatformReadiness` is also what a read that arrives first waits
+  on, so a surface opened earlier cannot observe a capability the platform has
+  not built; that wait is bounded, and a platform that never answers is reported
+  as `unavailable` instead of holding Settings open forever. Without the ordering
+  the cold-start read throws, is reported as `unavailable`, and the display
+  policy refuses every Agent-raised notification until something else refreshed
+  the permission — the Settings page being the surface that did.
 - Permission is requested only from an explicit Settings action. Nothing asks on
   startup, on first event, or on first notification. A refusal or a revocation is
   reported as it is; nothing rewrites the in-app switch on the user's behalf.

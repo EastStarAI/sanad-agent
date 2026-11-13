@@ -355,32 +355,38 @@ class _UrgencyControl extends StatelessWidget {
           detail: l10n.notificationsUrgencyBannerOnlyHint,
         ),
       ],
-      child: Container(
-        padding: const EdgeInsetsDirectional.only(start: 10, end: 4, top: 4, bottom: 4),
-        decoration: BoxDecoration(
-          color: scheme.surfaceContainerHighest.withValues(alpha: light ? 0.35 : 0.65),
-          borderRadius: BorderRadius.circular(999),
-          border: Border.all(
-            color: scheme.outline.withValues(alpha: light ? 0.15 : 0.35),
-          ),
-        ),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(_icon(), size: 16, color: _tone(scheme, light)),
-            const SizedBox(width: 6),
-            Text(
-              ceiling.isInterruptive
-                  ? l10n.notificationsUrgencyAlert
-                  : l10n.notificationsUrgencyBannerOnly,
-              key: ValueKey('notification_kind_${kind.wire}_urgency_value'),
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: _tone(scheme, light),
-                fontWeight: FontWeight.w600,
-              ),
+      // `PopupMenuButton.child` drops the `button: true` role the icon form
+      // emitted through `IconButton`, so the pill states it: a screen reader must
+      // hear a control, not a decorative label.
+      child: Semantics(
+        button: true,
+        child: Container(
+          padding: const EdgeInsetsDirectional.only(start: 10, end: 4, top: 4, bottom: 4),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: light ? 0.35 : 0.65),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(
+              color: scheme.outline.withValues(alpha: light ? 0.15 : 0.35),
             ),
-            Icon(Icons.arrow_drop_down_rounded, size: 18, color: _tone(scheme, light)),
-          ],
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_icon(), size: 16, color: _tone(scheme, light)),
+              const SizedBox(width: 6),
+              Text(
+                ceiling.isInterruptive
+                    ? l10n.notificationsUrgencyAlert
+                    : l10n.notificationsUrgencyBannerOnly,
+                key: ValueKey('notification_kind_${kind.wire}_urgency_value'),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: _tone(scheme, light),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              Icon(Icons.arrow_drop_down_rounded, size: 18, color: _tone(scheme, light)),
+            ],
+          ),
         ),
       ),
     );

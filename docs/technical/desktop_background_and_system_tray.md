@@ -318,17 +318,28 @@ request with no resolved label passes no name and the copy registered at
 initialization stays, because a blank button would be worse than a stale one.
 
 The first permission read is ordered after that initialization, and it is
-published before any event is consumed. Every adapter builds the objects it
+published before any display path decides. Every adapter builds the objects it
 answers a read with inside `initialize`, so `NotificationService.start()` awaits
 an `onPlatformReady` hook between initialization and stream subscription: the
 bridge completes `NotificationPlatformReadiness` there and loads Settings from it.
+The two stream-fed paths, the local socket and a browser push, are covered by
+those subscriptions. The mobile push wake-up is not: `MobilePushService` hands an
+arrival straight to `NotificationService.handleEvent`, so the bridge starts it
+only after that pipeline start returns, which is what keeps a push that lands
+during boot from being decided against an unread permission.
+
 `NotificationPlatformReadiness` is also the gate a read that arrives first waits
 on, so a surface mounted earlier cannot observe a platform object that does not
-exist yet. Before that ordering the cold-start read threw, was mapped to
-`unavailable`, and the display policy refused every Agent-raised notification
-until the user opened Settings — the very surface that refreshed the permission.
-The startup log therefore reports the permission the platform actually answered,
-not a placeholder.
+exist yet. That wait is bounded (5 seconds): a platform that never finishes
+initializing does not hold Settings open forever, and the read then reports what
+the platform actually answers, which for an uninitialized adapter is
+`unavailable`.
+
+Before that ordering the cold-start read threw, was mapped to `unavailable`, and
+the display policy refused every Agent-raised notification until the user opened
+Settings — the very surface that refreshed the permission. The startup log
+therefore reports the permission the platform actually answered, not a
+placeholder.
 
 macOS registers `sanad_ask` for the full approval set plus one category per
 offered subset (`sanad_ask.allow_once+deny`, …), so the buttons a notification

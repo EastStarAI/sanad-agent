@@ -182,7 +182,10 @@ Planning complete. The plan is accepted.
   authoritative. Live browser and installed-iOS evidence is still unexecuted,
   and the delivery contract is documented in
   [Web Push Delivery](../technical/web_push_delivery.md).
-- `174g` (notification surface fixes) is implemented on `task/174g-ui-fixes`:
+- `174g` (notification surface fixes) is implemented on `task/174g-ui-fixes`,
+  including the independent review's follow-up on the cold-start/mobile-push
+  ordering, the bounded readiness wait, the device-header copy, and the
+  accessibility role of the urgency control:
   the cold-start permission read is ordered after platform initialization
   (`NotificationPlatformReadiness`), the freedesktop open action follows the live
   language instead of the launch language, the urgency control states its value

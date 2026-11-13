@@ -175,26 +175,3 @@ class DeviceConfig {
     return Object.hashAll(entries.map((entry) => Object.hash(entry.key, entry.value)));
   }
 }
-
-/// Enum representing connection status
-enum ConnectionStatus {
-  disconnected,
-  connecting,
-  connected,
-  error,
-}
-
-extension ConnectionStatusExtension on ConnectionStatus {
-  String get displayName {
-    switch (this) {
-      case ConnectionStatus.connected:
-        return 'متصل';
-      case ConnectionStatus.connecting:
-        return 'جاري الاتصال';
-      case ConnectionStatus.disconnected:
-        return 'غير متصل';
-      case ConnectionStatus.error:
-        return 'خطأ';
-    }
-  }
-}

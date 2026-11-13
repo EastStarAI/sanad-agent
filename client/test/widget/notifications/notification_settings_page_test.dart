@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/semantics.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/core/presentation/bloc/locale/locale_cubit.dart';
@@ -322,6 +323,34 @@ void main() {
     );
   });
 
+  testWidgets('the urgency control is exposed as a button to a screen reader', (tester) async {
+    // Plan 174g (S4): `PopupMenuButton.child` drops the `button: true` role the
+    // icon form emitted through `IconButton`, so the pill states it itself.
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+    final semantics = tester.ensureSemantics();
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final node = tester.getSemantics(find.byKey(
+      ValueKey('notification_kind_${NotificationKind.completed.wire}_urgency'),
+    ));
+    // The row merges its children, so the role lands on the pill's own node
+    // inside the merged tile rather than on the tile's outer node.
+    final button = _firstButtonNode(node);
+
+    expect(button, isNotNull,
+        reason: 'a pill a screen reader cannot identify as a control is not a control');
+    expect(button!.getSemanticsData().hasAction(SemanticsAction.tap), isTrue,
+        reason: 'the pill is activated by the same tap the menu opens with');
+
+    // The framework verifies handles before tear-downs run, so it is released
+    // here rather than from a tear-down.
+    semantics.dispose();
+  });
+
   testWidgets('the urgency menu uses the vocabulary the row states', (tester) async {
     // Plan 174g (L4): the menu said `Alert` / `Banner only` while the rows said
     // `Banner and sound` / `Banner without sound`, so the user had to translate
@@ -552,4 +581,15 @@ void main() {
 
     expect(selected, <SettingsDestination>[SettingsDestination.notifications]);
   });
+}
+
+/// The first node in [root]'s subtree that is a button, including [root].
+SemanticsNode? _firstButtonNode(SemanticsNode root) {
+  if (root.getSemanticsData().flagsCollection.isButton) return root;
+  SemanticsNode? found;
+  root.visitChildren((SemanticsNode child) {
+    found = found ?? _firstButtonNode(child);
+    return found != null;
+  });
+  return found;
 }

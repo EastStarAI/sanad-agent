@@ -1,8 +1,10 @@
 # 174g — Notification surface fixes from the enabled-state review
 
-**Status:** implemented on `task/174g-ui-fixes`. Analyzer and focused unit/widget
-coverage are green; the live re-capture is the orchestrator's, and the acceptance
-steps it should follow are in §6.
+**Status:** implemented on `task/174g-ui-fixes`, plus the independent review's
+warning and suggestion pass (§7: W1–W5, S1, S2, S4, S5 closed; S3 open and
+recorded). Analyzer and focused unit/widget coverage are green; the live
+re-capture is the orchestrator's, and the acceptance steps it should follow are in
+§6.
 **Owners:** `client/lib/features/notifications/` (pipeline, readiness, Settings
 cubit, platform adapter), `client/lib/features/settings/…/notifications_page.dart`,
 `client/lib/features/devices/` and
@@ -33,7 +35,7 @@ between the menu, the rows, and the interface language.
 | L4 | low | Menu vocabulary diverges from the row vocabulary | Fixed |
 | L5 | low | The unselected menu item loses the checkmark's indent | Fixed |
 | L6 | low | The test probe silently inherits the `Completed runs` loudness | Fixed by naming the kind |
-| L7 | low | The Arabic page still shows literal English `This device` and `local` | Fixed on the reviewed surfaces; remaining device-name copy recorded in §5 |
+| L7 | low | The Arabic page still shows literal English `This device` and `local` | **Partially fixed.** The settings rail is fully localized (header name, badge, menu labels, loading and empty states, section title) and guarded by a test. Four settings pages still render the stored `device.name`, which keeps the English sentinel — see §5. |
 
 ### H1 — cold-start permission ordering
 
@@ -58,7 +60,16 @@ The fix is ordering, not suppression:
   that arrives before the pipeline has started (a page mounted early, a hot
   restart) waits instead of throwing. An adapter with no platform surface answers
   `unsupported` first, so an unsupported build cannot wait on a signal that never
-  arrives.
+  arrives. That wait is bounded by `NotificationPlatformReadiness.timeout`
+  (5 seconds): a platform whose initialization never returns now produces an
+  `unavailable` answer from the read itself instead of a Settings page that never
+  finishes loading.
+- The mobile push wake-up is ordered too. `MobilePushService` hands an arrival
+  straight to `NotificationService.handleEvent`, outside the socket subscriptions
+  the pipeline start drains, so `NotificationBridge._startPushAfterPipeline` starts
+  it only after that start (and the Settings load inside it) has returned. Waiting
+  on the readiness signal alone would not be enough there: the signal marks the
+  platform initialized, while a push decision reads the published permission.
 
 An absent readiness instance means "no gate", which is what keeps a widget test
 or a surface without a pipeline reading immediately, exactly as before.
@@ -105,7 +116,13 @@ probe kind was rejected: a kind is a wire token shared with the Agent contract, 
 adding one to make a probe quieter would change the payload vocabulary for a
 cosmetic reason.
 
-### L7 — the device chrome around the page
+### L7 — the device chrome around the page (partial, deliberately)
+
+Scope of the claim: **the settings rail and the device menu are localized; the
+device settings pages are not.** The sentinel stays English text in the model
+(unavoidable: it is the stored name of a synthesized row), so any surface that
+renders `device.name` without the resolver still shows `This device`. The four
+pages that do that are listed in §5 with their owner.
 
 - The Client's synthesized local row now carries
   `DeviceConfig.localPlaceholderName`; `DeviceConfigUI.displayName` resolves it
@@ -125,22 +142,32 @@ last lines while preserving exit status.
 | `fvm flutter gen-l10n` | regenerated after the ARB edits |
 | `fvm flutter analyze` | no issues |
 | `fvm dart analyze` (from `agent/`) | no issues |
-| `fvm flutter test test/unit/features/notifications/notification_cold_start_permission_test.dart` | pass (H1: 4 tests, including the startup log line) |
-| `fvm flutter test test/unit/features/notifications/notification_action_label_locale_test.dart` | pass (M2) |
-| `fvm flutter test test/widget/notifications/` | pass |
-| `fvm flutter test test/unit/features/notifications/` | pass |
-| `fvm flutter test test/guards/notifications_localization_guard_test.dart` | pass |
-| `fvm flutter test test/widget/sidebar_device_header_localization_test.dart` | pass (L7) |
+| `fvm flutter test test/unit/features/notifications/notification_cold_start_permission_test.dart` | pass (H1 + S2: 5 tests, including the startup log line and the bounded wait) |
+| `fvm flutter test test/unit/features/notifications/notification_action_label_locale_test.dart` | pass (M2: 3 tests) |
+| `fvm flutter test test/widget/notifications/notification_settings_page_test.dart` | pass (M3/L4/L5/L6/S4: 20 tests) |
+| `fvm flutter test test/widget/notifications/notification_settings_rtl_test.dart` | pass (W3 restored: 2 tests) |
+| `fvm flutter test test/widget/notifications test/unit/features/notifications test/guards/notifications_localization_guard_test.dart test/widget/sidebar_device_header_localization_test.dart` | pass (263 tests) |
+| `fvm flutter test test/guards/notifications_localization_guard_test.dart` | pass (3 tests; now scans the device header too) |
+| `fvm flutter test test/widget/sidebar_device_header_localization_test.dart` | pass (L7/W4: 6 tests) |
 | `fvm flutter test test/guards/file_size_ratchet_guard_test.dart test/guards/locale_stable_widget_keys_guard_test.dart test/guards/no_hardcoded_font_guard_test.dart` | pass |
-| `fvm flutter test test/unit/services/device_inventory_source_test.dart test/unit/services/device_manager_test.dart test/unit/services/device_command_client_test.dart test/widget/device_name_editor_test.dart test/unit/bloc/session_cubit_test.dart test/features/mcp/mcp_server_management_screen_test.dart` | pass (shared device surfaces) |
+| `fvm flutter test test/unit/services/device_inventory_source_test.dart test/unit/services/device_manager_test.dart test/unit/services/device_command_client_test.dart test/widget/device_name_editor_test.dart test/unit/bloc/session_cubit_test.dart test/features/mcp/mcp_server_management_screen_test.dart` | pass (114 tests, shared device surfaces) |
 
-Fail-before evidence for the two behaviors a widget test can express directly:
+Fail-before evidence, per behavior, with the exact test that moves:
 
-- Removing `await _platformReadiness?.ready;` from the cubit makes the cold-start
-  test fail (`permission` stays `unavailable` and the Agent notification is
-  suppressed), and restoring it makes it pass.
-- Restoring the old conditional check icon makes the menu-alignment assertion fail
-  with a 24 px offset difference (`63.0` vs `87.0`).
+- **The readiness gate.** Deleting `await _platformReadiness?.ready;` from
+  `NotificationSettingsCubit._readPermission` makes exactly one test fail:
+  `a read that waits is answered once the pipeline releases it`
+  (`Expected: granted` / `Actual: unavailable`). It does **not** move the other two
+  tests in that file, because both of them load Settings from inside the
+  `onPlatformReady` hook, i.e. after `initialize()` has already returned; the gate
+  is what protects a read that starts *before* the pipeline, not the ordered
+  first read itself.
+- **The menu alignment (L5).** Restoring the old conditional check icon makes
+  `the urgency menu uses the vocabulary the row states` fail with a 24 px offset
+  difference (`Expected: <87.0>` / `Actual: <63.0>`).
+
+Both mutations were run in a throw-away copy of the worktree, so this branch never
+carried the reverts.
 
 No live runtime was started, restarted, or stopped for this task, and
 `/home/ubuntu/.sanad-test` was not used: verification is the analyzer plus the
@@ -164,9 +191,8 @@ focused unit and widget tests above.
 
 | Item | Owner | Note |
 | :--- | :--- | :--- |
-| Remaining device-chrome English copy around the settings rail (`Loading devices…`, `No devices`, `Device selector`, `Device Settings`) | devices / conversations features | Pre-existing and outside the notifications owner. The two strings the Arabic capture showed (`This device`, `local`) are fixed; localizing the rest of that widget is its own change. |
-| `ConnectionStatusExtension.displayName` in `client/lib/features/devices/domain/models/device_config.dart` holds Arabic string literals in Dart source, which the localization contract forbids | devices feature | Pre-existing and currently unreferenced; found while touching the model for L7. It should either be deleted or resolved through `AppLocalizations` by whoever owns that status projection. |
-| Device-name copy on the devices settings pages (`providers_page.dart`, `skills_page.dart`, `workspace_page.dart`, `device_overview_page.dart` render `device.name` inside hard-coded English sentences) | devices + settings features | A localized `displayName` resolver now exists; those pages need their own copy pass before they can use it. |
+| **Device settings pages still show `This device` in English**: `providers_page.dart` ("Models, credentials, and recovery policy for …"), `skills_page.dart` ("User-level skills available on …"), `workspace_page.dart` ("Configuration scope on …"), and `device_overview_page.dart` (title and confirmations) render `device.name` directly. | devices + settings features | These pages are not localized at all — the name sits inside hard-coded English sentences — so resolving only the name would put an Arabic name inside an English sentence. `DeviceConfigUI.displayName` is the seam they should adopt when their own copy pass happens; until then this row is the precise limit of L7. |
+| `NotificationBridge` composition wiring is protected only by inspection (the reviewer's S3): the tests drive `service.start(onPlatformReady: …)` themselves, so a regression that re-adds an eager `cubit.load()` in `app_providers.dart` would still pass. Mounting the bridge in a test needs the whole dependency graph, which is why this stays open. | client notifications | Deliberately deferred; the gate itself is covered. |
 | Live re-capture of the enabled page (dark/light, EN/AR, menu open, row off, banner-only) | orchestrator | See §6. |
 | Agent-raised delivery end to end, click routing, and cross-device isolation | orchestrator live pass | Unchanged by this task. |
 
@@ -190,3 +216,22 @@ focused unit and widget tests above.
 6. Quiet `Completed runs` to `Banner only`, then press the test action: the test
    card names the borrowed kind, and the delivered urgency is `1`.
 7. Read the Arabic rail: no English `This device` or `local`.
+
+## 7. Independent review follow-up
+
+The first review pass (`delegation/174/results/174g-review.md`, APPROVE with
+warnings) raised the items below. All are closed except where the row says
+otherwise.
+
+| Finding | Outcome |
+| :--- | :--- |
+| **W1** — the ordering guarantee did not cover the mobile push path, yet two contracts stated it absolutely | Closed in code. `NotificationBridge._startPushAfterPipeline` starts `MobilePushService` only after the pipeline start (and the Settings load inside it) returns, because a push arrival reaches `NotificationService.handleEvent` outside the socket subscriptions and a push decision reads the *published* permission, not merely the platform readiness. Both contracts now name the three display paths and their enforcement points. |
+| **W2** — the recorded fail-before evidence was wrong | Closed in §3: only `a read that waits is answered once the pipeline releases it` moves when the gate is removed, because the other two tests load from inside the hook. |
+| **W3** — two Arabic assertions were dropped from the RTL test | Restored: `notificationsUrgencyAlert` and `notificationsUrgencyBannerOnly` are back in the translated-key list. |
+| **W4** — the device header still hard-coded copy and the guard did not scan it | Closed: `Device selector` (the semantics label), `Loading devices…`, `No devices`, and `Device Settings` are localized, the pre-existing Arabic plan reference in that file's comment is English again, and the notifications localization guard now scans the file — including literal arguments to `Semantics(...)`, not only `Text(...)`. |
+| **W5** — the English sentinel still surfaces on four settings pages | Narrowed, not completed: the L7 row now says **partially fixed** and §5 names the four pages and the reason (their surrounding copy is English, so translating only the name would mix languages). |
+| **S1** — `@visibleForTesting` on a production-used helper | Removed from `linuxDetailsFor`. |
+| **S2** — the readiness gate had no bound | Closed: `NotificationPlatformReadiness.timeout` (5 s) bounds the wait; a stalled initialization now yields the read's own honest `unavailable` instead of a Settings page that never loads. Covered by a test with a 20 ms bound. |
+| **S3** — the production wiring is untested | Open and recorded in §5: mounting the bridge needs the whole dependency graph. |
+| **S4** — the pill lost the `button: true` role | Closed: the pill is wrapped in `Semantics(button: true)` and a widget test asserts the button node and its tap action inside the merged row. |
+| **S5** — the Arabic literals were documented, not deleted | Closed: `ConnectionStatus` and its unreferenced `displayName` extension are deleted. |

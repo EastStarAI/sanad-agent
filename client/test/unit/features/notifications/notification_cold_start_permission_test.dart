@@ -244,6 +244,26 @@ void main() {
     expect(cubit.state.permission, NotificationPermissionStatus.granted);
   });
 
+  test('a stalled initialization is bounded and the read reports the truth', () async {
+    // A platform that never releases the gate must not keep Settings loading
+    // forever: the wait is bounded, the read runs anyway, and the platform's own
+    // failure becomes the honest answer.
+    final adapter = _ColdStartAdapter();
+    final readiness = NotificationPlatformReadiness(timeout: const Duration(milliseconds: 20));
+    final cubit = NotificationSettingsCubit(
+      store: NotificationPreferencesStore(await SharedPreferences.getInstance()),
+      adapter: adapter,
+      platformReadiness: readiness,
+    );
+    addTearDown(cubit.close);
+
+    await cubit.load();
+
+    expect(readiness.isReady, isFalse, reason: 'nothing ever released the gate');
+    expect(cubit.state.permission, NotificationPermissionStatus.unavailable,
+        reason: 'the read proceeded and reported what the platform answered');
+  });
+
   test('a platform that is not initialized yet reports the failure it had', () async {
     // No readiness gate: the old behavior is kept for a surface with no
     // pipeline, so the assertion documents the defect this task fixed instead of

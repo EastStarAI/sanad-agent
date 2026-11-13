@@ -30,6 +30,10 @@ DeviceConfig _agentDevice() => DeviceConfig(
       isOnline: true,
     );
 
+void _ignore() {}
+
+void _ignoreDevice(DeviceConfig device) {}
+
 Widget _wrap(Locale locale, Widget child) => MaterialApp(
       locale: locale,
       localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -81,6 +85,67 @@ void main() {
     expect(find.text('Studio Mac'), findsOneWidget,
         reason: 'a name the user or the Agent wrote is never translated');
     expect(find.text(arabic.devicesThisDevice), findsNothing);
+  });
+
+  testWidgets('the loading and empty states are localized too', (tester) async {
+    // Plan 174g (W4): the same widget mixed localized and hard-coded copy.
+    final arabic = lookupAppLocalizations(const Locale('ar'));
+
+    await tester.pumpWidget(
+      _wrap(
+        const Locale('ar'),
+        const SidebarDeviceHeaderBar(
+          devices: <DeviceConfig>[],
+          activeDevice: null,
+          onDeviceSelected: _ignoreDevice,
+          onSettingsTapped: _ignore,
+          isLoadingFromBackend: true,
+        ),
+      ),
+    );
+    // The spinner never settles, so this asserts on frames rather than on a
+    // settled tree.
+    await tester.pump();
+    expect(find.text(arabic.devicesLoading), findsOneWidget);
+    expect(find.text('Loading devices…'), findsNothing);
+
+    await tester.pumpWidget(
+      _wrap(
+        const Locale('ar'),
+        const SidebarDeviceHeaderBar(
+          devices: <DeviceConfig>[],
+          activeDevice: null,
+          onDeviceSelected: _ignoreDevice,
+          onSettingsTapped: _ignore,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text(arabic.noDevicesAvailable), findsOneWidget);
+    expect(find.text('No devices'), findsNothing);
+  });
+
+  testWidgets('the device menu copy is localized', (tester) async {
+    final arabic = lookupAppLocalizations(const Locale('ar'));
+    final device = _localDevice();
+
+    await tester.pumpWidget(
+      _wrap(
+        const Locale('ar'),
+        SidebarDeviceHeaderBar(
+          devices: <DeviceConfig>[device],
+          activeDevice: device,
+          onDeviceSelected: (_) {},
+          onSettingsTapped: () {},
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('sidebar_device_switcher_btn')));
+    await tester.pumpAndSettle();
+
+    expect(find.text(arabic.devicesSettingsMenuItem), findsOneWidget);
+    expect(find.text('Device Settings'), findsNothing);
   });
 
   testWidgets('the device section title localizes the synthesized name', (tester) async {

@@ -22,13 +22,31 @@ import 'dart:async';
 /// a surface with no pipeline) reads immediately, which is the behavior every
 /// existing caller already had.
 class NotificationPlatformReadiness {
+  NotificationPlatformReadiness({this.timeout = defaultTimeout});
+
+  /// How long a read may wait for a release before it proceeds without one.
+  ///
+  /// A platform initialization that never returns must not become a Settings
+  /// page that never finishes loading, so the wait is bounded and a waiter that
+  /// outlives it reads the permission anyway. The read then reports whatever the
+  /// platform actually answers — an uninitialized platform throws and is mapped
+  /// to `unavailable`, which is the honest result of a stalled initialization
+  /// rather than a silent claim about a permission nobody could read.
+  ///
+  /// The bound is generous because it exists for a wedged channel, not for
+  /// scheduling latency: a healthy `initialize` is a single platform call.
+  static const Duration defaultTimeout = Duration(seconds: 5);
+
+  final Duration timeout;
+
   final Completer<void> _ready = Completer<void>();
 
-  /// Completes when the platform can answer a permission read.
+  /// Completes when the platform can answer a permission read, or when [timeout]
+  /// has elapsed without a release.
   ///
   /// It never completes with an error: a failed initialization is still an
   /// answer, and reporting it as such is the permission read's job.
-  Future<void> get ready => _ready.future;
+  Future<void> get ready => _ready.future.timeout(timeout, onTimeout: () {});
 
   /// Whether the platform has already been released for reads.
   bool get isReady => _ready.isCompleted;

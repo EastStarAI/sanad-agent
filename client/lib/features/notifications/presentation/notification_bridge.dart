@@ -157,7 +157,6 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       askRegistry: _askRegistry,
       actionRouter: _actionRouter,
     );
-    unawaited(_startPipeline(settings));
     // Settings owns the button; the pipeline owns the action. Attaching the
     // probe here keeps one path to the platform and lets the test result honour
     // the same permission and preference gates a real alert would.
@@ -166,6 +165,26 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       kind: NotificationService.testNotificationKind,
     );
     _listenToTransportLifecycle();
+    unawaited(_startPushAfterPipeline(settings));
+  }
+
+  /// Starts the push wake-up path once the display pipeline can answer.
+  ///
+  /// Push has no ordering of its own: a push arrival is handed straight to
+  /// [NotificationService.handleEvent], outside the socket subscriptions the
+  /// pipeline start drains. Starting it only after that start returns is what
+  /// keeps a push that lands during boot from being decided against a permission
+  /// nobody has read yet.
+  Future<void> _startPushAfterPipeline(NotificationSettingsCubit settings) async {
+    try {
+      await _startPipeline(settings);
+    } catch (error, stack) {
+      // Push still starts: a display path that exists is better than one that
+      // silently never mounts, and the failure is already logged by the caller
+      // that observed it.
+      _logger.warning('notification pipeline start failed before push', error, stack);
+    }
+    if (!mounted) return;
     _startMobilePush();
   }
 

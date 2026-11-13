@@ -15,10 +15,15 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Files whose user-facing text must come from the localization system.
+///
+/// The device header belongs here because it renders this feature's context —
+/// the device a notification is about — and it used to mix localized and
+/// hard-coded copy inside one row.
 const List<String> _guardedFiles = <String>[
   'client/lib/features/notifications/presentation/notification_copy_source.dart',
   'client/lib/features/notifications/presentation/bloc/notification_settings_state.dart',
   'client/lib/features/settings/presentation/widgets/settings_pages/notifications_page.dart',
+  'client/lib/features/conversations/presentation/widgets/sidebar/sidebar_device_header_bar.dart',
 ];
 
 /// Directories scanned as a whole, in addition to [_guardedFiles].
@@ -27,7 +32,7 @@ const List<String> _guardedDirectories = <String>[
 ];
 
 final RegExp _localizationReference = RegExp(r'(?:l10n|_localizations)\.([a-zA-Z][a-zA-Z0-9]*)');
-final RegExp _hardCodedText = RegExp(r'''Text\(\s*(?:'|")''');
+final RegExp _hardCodedText = RegExp(r'''(?:Text|Semantics)\(\s*(?:'|")''');
 final RegExp _arabicText = RegExp(r'[\u0600-\u06FF]');
 
 void main() {
