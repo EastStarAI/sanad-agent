@@ -317,14 +317,18 @@ changes the button on the next notification instead of at the next launch. A
 request with no resolved label passes no name and the copy registered at
 initialization stays, because a blank button would be worse than a stale one.
 
-The first permission read is ordered after that initialization. Every adapter
-builds the objects it answers a read with inside `initialize`, so
-`NotificationPlatformReadiness` is the single release point: the bridge completes
-it once `NotificationService.start()` returns, and the Settings cubit awaits it
-before its first `checkPermission`. Before that ordering the cold-start read threw
-against a platform object that did not exist yet, was mapped to `unavailable`, and
-the display policy refused every Agent-raised notification until the user opened
-Settings — the very surface that refreshed the permission.
+The first permission read is ordered after that initialization, and it is
+published before any event is consumed. Every adapter builds the objects it
+answers a read with inside `initialize`, so `NotificationService.start()` awaits
+an `onPlatformReady` hook between initialization and stream subscription: the
+bridge completes `NotificationPlatformReadiness` there and loads Settings from it.
+`NotificationPlatformReadiness` is also the gate a read that arrives first waits
+on, so a surface mounted earlier cannot observe a platform object that does not
+exist yet. Before that ordering the cold-start read threw, was mapped to
+`unavailable`, and the display policy refused every Agent-raised notification
+until the user opened Settings — the very surface that refreshed the permission.
+The startup log therefore reports the permission the platform actually answered,
+not a placeholder.
 
 macOS registers `sanad_ask` for the full approval set plus one category per
 offered subset (`sanad_ask.allow_once+deny`, …), so the buttons a notification

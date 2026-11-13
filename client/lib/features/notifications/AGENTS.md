@@ -85,14 +85,17 @@ This contract applies to `client/lib/features/notifications/`.
 - The iOS foreground hook is a notification-center delegate that answers per
   event from the mirrored visible session and preserves the previously installed
   chain. A globally silent foreground is rejected.
-- A permission read is ordered after platform initialization.
-  `NotificationPlatformReadiness` is the one release point: every adapter builds
-  the objects it answers a read with inside `initialize`, so the bridge completes
-  the readiness signal once `NotificationService.start()` returns and the
-  Settings cubit awaits it before its first `checkPermission`. Without that
-  ordering the cold-start read throws, is reported as `unavailable`, and the
-  display policy refuses every Agent-raised notification until something else
-  refreshed the permission — the Settings page being the surface that did.
+- A permission read is ordered after platform initialization, and the first one
+  is published before any event is consumed. Every adapter builds the objects it
+  answers a read with inside `initialize`, so `NotificationService.start()`
+  awaits an `onPlatformReady` hook between initialization and stream subscription;
+  the bridge supplies it, completes `NotificationPlatformReadiness` there, and
+  loads Settings from it. `NotificationPlatformReadiness` is also what a read that
+  arrives first waits on, so a page opened earlier still cannot observe a
+  capability the platform has not built yet. Without that ordering the cold-start
+  read throws, is reported as `unavailable`, and the display policy refuses every
+  Agent-raised notification until something else refreshed the permission — the
+  Settings page being the surface that did.
 - Permission is requested only from an explicit Settings action. Nothing asks on
   startup, on first event, or on first notification. A refusal or a revocation is
   reported as it is; nothing rewrites the in-app switch on the user's behalf.

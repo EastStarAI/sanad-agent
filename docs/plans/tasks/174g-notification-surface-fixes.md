@@ -46,13 +46,19 @@ Agent-raised notification until something else refreshed the permission.
 
 The fix is ordering, not suppression:
 
-- `NotificationPlatformReadiness` (`application/`) is the single release point,
-  registered in the container and passed to the cubit.
-- `NotificationSettingsCubit._readPermission()` awaits it before the first
-  `checkPermission`, and an adapter with no platform surface still returns
-  `unsupported` first, so an unsupported build cannot wait on it.
-- `NotificationBridge` completes it once `NotificationService.start()` returns
-  (in a `finally`, so a failed initialization is still an answer).
+- `NotificationService.start()` takes an `onPlatformReady` hook and awaits it
+  between `initialize()` and stream subscription, so the first read is published
+  before any Agent event can be decided against it.
+- `NotificationPlatformReadiness` (`application/`) is the one release point,
+  registered in the container and passed to the cubit. The bridge completes it
+  inside that hook and then loads Settings from it (`NotificationSettingsCubit`
+  no longer starts the read at creation), which is why the startup log now reports
+  the permission the platform actually answered.
+- `NotificationSettingsCubit._readPermission()` still awaits the signal, so a read
+  that arrives before the pipeline has started (a page mounted early, a hot
+  restart) waits instead of throwing. An adapter with no platform surface answers
+  `unsupported` first, so an unsupported build cannot wait on a signal that never
+  arrives.
 
 An absent readiness instance means "no gate", which is what keeps a widget test
 or a surface without a pipeline reading immediately, exactly as before.
@@ -119,7 +125,7 @@ last lines while preserving exit status.
 | `fvm flutter gen-l10n` | regenerated after the ARB edits |
 | `fvm flutter analyze` | no issues |
 | `fvm dart analyze` (from `agent/`) | no issues |
-| `fvm flutter test test/unit/features/notifications/notification_cold_start_permission_test.dart` | pass (H1) |
+| `fvm flutter test test/unit/features/notifications/notification_cold_start_permission_test.dart` | pass (H1: 4 tests, including the startup log line) |
 | `fvm flutter test test/unit/features/notifications/notification_action_label_locale_test.dart` | pass (M2) |
 | `fvm flutter test test/widget/notifications/` | pass |
 | `fvm flutter test test/unit/features/notifications/` | pass |
@@ -166,8 +172,9 @@ focused unit and widget tests above.
 ## 6. Acceptance for the live re-capture
 
 1. Start the Client with a notification service present and **do not open
-   Settings**. The startup log must not report `permission=unavailable`; the first
-   `notification service started` line carries `permission=granted`.
+   Settings**. The first `notification service started` line must carry
+   `permission=granted`, not `unavailable` (the pipeline publishes the read before
+   it logs).
 2. Raise an Agent notification (the run-completion kind) before opening Settings:
    it must reach the OS.
 3. Open Settings → Notifications, switch the language to Arabic, then press

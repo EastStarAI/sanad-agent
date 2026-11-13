@@ -157,7 +157,7 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
       askRegistry: _askRegistry,
       actionRouter: _actionRouter,
     );
-    unawaited(_startPipeline());
+    unawaited(_startPipeline(settings));
     // Settings owns the button; the pipeline owns the action. Attaching the
     // probe here keeps one path to the platform and lets the test result honour
     // the same permission and preference gates a real alert would.
@@ -169,25 +169,26 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
     _startMobilePush();
   }
 
-  /// Starts the pipeline, then releases the one permission read it gates.
+  /// Starts the pipeline and publishes the permission it is allowed to read.
   ///
-  /// Settings reads the OS permission as soon as it exists, and a platform only
-  /// builds the objects that answer a read inside `initialize`. Releasing the
-  /// read after `start()` is what makes the cold-start answer true: before this
-  /// ordering, the first read threw, was reported as `unavailable`, and the
-  /// display policy dropped Agent-raised notifications until something else
-  /// refreshed it — the Settings page being the very surface that cleared it.
-  Future<void> _startPipeline() async {
-    try {
-      await _service!.start();
-    } finally {
-      // A container that never registered the readiness signal is a container
-      // whose cubit has no gate to release, so the release is skipped rather
-      // than thrown from an unawaited future.
-      if (getIt.isRegistered<NotificationPlatformReadiness>()) {
-        getIt<NotificationPlatformReadiness>().complete();
-      }
-    }
+  /// A platform builds the objects that answer a permission read inside
+  /// `initialize`, so the read is released only once that call has returned, and
+  /// it is published before any event is consumed. Before this ordering the
+  /// first read threw against an object that did not exist yet, was reported as
+  /// `unavailable`, and the display policy dropped Agent-raised notifications
+  /// until something else refreshed it — the Settings page being the very
+  /// surface that cleared it.
+  Future<void> _startPipeline(NotificationSettingsCubit settings) async {
+    await _service!.start(
+      onPlatformReady: () async {
+        // A container without the readiness signal has a cubit with no gate to
+        // release, so the release is skipped instead of thrown.
+        if (getIt.isRegistered<NotificationPlatformReadiness>()) {
+          getIt<NotificationPlatformReadiness>().complete();
+        }
+        await settings.load();
+      },
+    );
   }
 
   /// Mounts the push wake-up path on a platform that has a provider.

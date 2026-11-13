@@ -104,7 +104,9 @@ class AppProviders extends StatelessWidget {
               publishPreferences: (_) => connectionCoordinator.localSocketService
                   .publishNotificationPreferences(),
             );
-            unawaited(cubit.load());
+            // The first load is driven by the pipeline, not here: it must run
+            // after the platform has initialized, and the bridge is what starts
+            // that pipeline (see NotificationBridge._startPipeline).
             return cubit;
           },
         ),

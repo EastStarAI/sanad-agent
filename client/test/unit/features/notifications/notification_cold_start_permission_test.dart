@@ -29,6 +29,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
+import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// A platform whose permission answer depends on initialization, exactly like
@@ -130,9 +131,8 @@ void main() {
     );
     addTearDown(cubit.close);
 
-    // The app-scoped provider creates the cubit and starts the read unawaited,
-    // before anything has initialized the platform.
-    final load = cubit.load();
+    // The developer is on a fresh Client: the cubit exists, its permission is
+    // still unread, and nothing has initialized the platform.
     expect(cubit.state.permission, NotificationPermissionStatus.unknown);
     expect(adapter.initialized, isFalse);
 
@@ -152,10 +152,14 @@ void main() {
     );
     addTearDown(service.dispose);
 
-    // ...and the bridge starts the pipeline, then releases the read.
-    await service.start();
-    readiness.complete();
-    await load;
+    // ...and the bridge starts the pipeline, which releases the read and
+    // publishes it before any event is consumed.
+    await service.start(
+      onPlatformReady: () async {
+        readiness.complete();
+        await cubit.load();
+      },
+    );
 
     expect(adapter.initialized, isTrue);
     expect(
@@ -171,6 +175,52 @@ void main() {
     expect(adapter.shown, hasLength(1),
         reason: 'an Agent-raised notification is deliverable without opening Settings');
     expect(adapter.shown.single.title, 'Run finished');
+  });
+
+  test('the startup line reports the permission the platform actually has', () async {
+    // The observed symptom was the log line itself:
+    // `notification service started (supported=true permission=unavailable
+    // coldStart=none)` against a live notification service.
+    final lines = <String>[];
+    final subscription = Logger('notifications').onRecord.listen((record) => lines.add(record.message));
+    addTearDown(subscription.cancel);
+
+    final adapter = _ColdStartAdapter();
+    final readiness = NotificationPlatformReadiness();
+    final cubit = NotificationSettingsCubit(
+      store: NotificationPreferencesStore(await SharedPreferences.getInstance()),
+      adapter: adapter,
+      platformReadiness: readiness,
+    );
+    addTearDown(cubit.close);
+    final events = StreamController<Map<String, dynamic>>.broadcast();
+    addTearDown(events.close);
+    final service = NotificationService(
+      adapter: adapter,
+      eventStreams: <Stream<Map<String, dynamic>>>[events.stream],
+      copyResolver: (NotificationKind kind) => _copy,
+      readPreferences: () => cubit.state.preferences,
+      readPermission: () => cubit.state.permission,
+      readPresence: () => NotificationPresence.none,
+      actionRouter: _idleRouter(),
+      quietWindow: NotificationQuietWindow(duration: Duration.zero),
+    );
+    addTearDown(service.dispose);
+
+    await service.start(
+      onPlatformReady: () async {
+        readiness.complete();
+        await cubit.load();
+      },
+    );
+
+    final startup = lines.firstWhere(
+      (line) => line.startsWith('notification service started'),
+      orElse: () => '',
+    );
+    expect(startup, isNotEmpty, reason: 'the pipeline reports its own start');
+    expect(startup, contains('permission=granted'));
+    expect(startup, isNot(contains('permission=unavailable')));
   });
 
   test('a read that waits is answered once the pipeline releases it', () async {

@@ -142,7 +142,14 @@ class NotificationService {
   NotificationColdStartOutcome get coldStartOutcome => _coldStartOutcome;
 
   /// Prepares the platform channel and starts consuming both transports.
-  Future<void> start() async {
+  ///
+  /// [onPlatformReady] runs after the adapter has initialized and before any
+  /// event is consumed. The composition uses it for the two things that must
+  /// happen exactly there: releasing the first permission read (a platform only
+  /// builds the objects that answer one inside `initialize`) and publishing that
+  /// read, so no arriving event can be decided against a permission nobody has
+  /// read yet. A failure in it is logged and never stops the pipeline.
+  Future<void> start({Future<void> Function()? onPlatformReady}) async {
     if (_started || _disposed) return;
     _started = true;
     try {
@@ -153,6 +160,11 @@ class NotificationService {
       );
     } catch (error, stack) {
       _logger.warning('notification platform initialization failed', error, stack);
+    }
+    try {
+      await onPlatformReady?.call();
+    } catch (error, stack) {
+      _logger.warning('notification permission could not be published', error, stack);
     }
     for (final stream in _eventStreams) {
       _subscriptions.add(stream.listen(
