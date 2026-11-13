@@ -1277,6 +1277,18 @@ void main() {
         find.byKey(const Key('provider_credential_action_field')),
       );
       await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('provider_credential_action_keep')),
+        findsWidgets,
+      );
+      expect(
+        find.byKey(const Key('provider_credential_action_replace')),
+        findsWidgets,
+      );
+      expect(
+        find.byKey(const Key('provider_credential_action_remove')),
+        findsWidgets,
+      );
       await tester.tap(find.text('Replace with new key').last);
       await tester.pumpAndSettle();
 

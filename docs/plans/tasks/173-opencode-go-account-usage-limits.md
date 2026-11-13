@@ -143,10 +143,13 @@ Recovery check:
    `45% remaining`.
 
 The edit-mode credential controls received stable keys
-(`provider_credential_actions_button`, `provider_credential_action_field`,
+(`provider_credential_actions_button`, `provider_credential_action_field`, the
+keyed `provider_credential_action_{keep,replace,remove}` items,
 `provider_new_api_key_field`, and `provider_credential_reconnect_button` for
 account instances) so interactive acceptance stays key-addressed and visual
-screenshots are reserved for rendering checks.
+screenshots are reserved for rendering checks. The dropdown items appear by key
+in the snapshot, but selecting one still requires a visible tap because the
+open menu overlay owns the pointer route.
 
 ## Definition of Done
 

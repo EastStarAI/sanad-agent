@@ -436,17 +436,20 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
             ),
             items: [
               DropdownMenuItem(
+                key: const Key('provider_credential_action_keep'),
                 value: 'keep',
                 child: Text(
                   credential?.hasSecret == true ? 'Keep existing' : 'Keep as-is (no key stored)',
                 ),
               ),
               const DropdownMenuItem(
+                key: Key('provider_credential_action_replace'),
                 value: 'replace',
                 child: Text('Replace with new key'),
               ),
               if (credential?.hasSecret == true)
                 const DropdownMenuItem(
+                  key: Key('provider_credential_action_remove'),
                   value: 'remove',
                   child: Text('Remove credential'),
                 ),
