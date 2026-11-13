@@ -1,9 +1,12 @@
+import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:logging/logging.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_action.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
+import 'package:sanad_client/features/notifications/infrastructure/darwin_action_categories.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_action_labels.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 /// The macOS, Windows, and Linux implementation of the local notification path.
@@ -22,6 +25,9 @@ import 'package:sanad_client/utils/app_platform.dart';
 ///   instead of presenting buttons whose decision it cannot read. An unpackaged
 ///   (NSIS) build also cannot cancel a presented toast, because Windows only
 ///   lets an app with package identity query its own notifications.
+/// - macOS and Linux fix button copy when the platform initializes, so the
+///   localized labels arrive once with [initialize]; the English fallback in
+///   [NotificationActionLabels] is used only when that map is empty.
 class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
   FlutterLocalNotificationsAdapter({FlutterLocalNotificationsPlugin? plugin})
       : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
@@ -38,9 +44,6 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
 
   /// The activation-callback GUID registered with Windows. Stable on purpose.
   static const String windowsCallbackGuid = '9d0c1e46-5b0a-4f5a-9a4e-1d6f3c2b7a10';
-
-  /// The macOS notification category that carries approval buttons.
-  static const String approvalCategoryId = 'sanad_ask';
 
   /// Freedesktop icon used when the session has no themed icon of its own.
   static const String linuxIconName = 'dialog-information';
@@ -69,43 +72,7 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
     _onResponse = onResponse;
     if (_initialized) return;
 
-    final settings = InitializationSettings(
-      macOS: DarwinInitializationSettings(
-        // Nothing is requested at startup: the OS prompt may only follow a
-        // click in Settings.
-        requestAlertPermission: false,
-        requestSoundPermission: false,
-        requestBadgePermission: false,
-        notificationCategories: <DarwinNotificationCategory>[
-          DarwinNotificationCategory(
-            approvalCategoryId,
-            actions: <DarwinNotificationAction>[
-              DarwinNotificationAction.plain(
-                NotificationAction.allowOnceId,
-                _label(approvalActionLabels, NotificationActionIntent.allowOnce),
-              ),
-              DarwinNotificationAction.plain(
-                NotificationAction.allowSessionId,
-                _label(approvalActionLabels, NotificationActionIntent.allowSession),
-              ),
-              DarwinNotificationAction.plain(
-                NotificationAction.denyId,
-                _label(approvalActionLabels, NotificationActionIntent.deny),
-              ),
-            ],
-          ),
-        ],
-      ),
-      linux: LinuxInitializationSettings(
-        defaultActionName: 'Open',
-        defaultIcon: ThemeLinuxIcon(linuxIconName),
-      ),
-      windows: const WindowsInitializationSettings(
-        appName: appDisplayName,
-        appUserModelId: appUserModelId,
-        guid: windowsCallbackGuid,
-      ),
-    );
+    final settings = buildSettings(approvalActionLabels: approvalActionLabels);
 
     try {
       await _plugin.initialize(
@@ -119,25 +86,102 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
     }
   }
 
-  static String _label(
-    Map<NotificationActionIntent, String> labels,
-    NotificationActionIntent intent,
+  /// The settings this adapter registers with the platform.
+  ///
+  /// Built once, because macOS registers its categories and Linux fixes its
+  /// default action name at initialization: both take the localized labels here
+  /// and cannot be corrected later. One macOS category is registered per
+  /// non-empty subset of the approval actions, so a presented notification can
+  /// only show the buttons its own payload offered.
+  @visibleForTesting
+  static InitializationSettings buildSettings({
+    Map<NotificationActionIntent, String> approvalActionLabels =
+        const <NotificationActionIntent, String>{},
+  }) {
+    return InitializationSettings(
+      macOS: DarwinInitializationSettings(
+        // Nothing is requested at startup: the OS prompt may only follow a
+        // click in Settings.
+        requestAlertPermission: false,
+        requestSoundPermission: false,
+        requestBadgePermission: false,
+        notificationCategories: <DarwinNotificationCategory>[
+          for (final actions in DarwinActionCategories.registeredActionSets)
+            DarwinNotificationCategory(
+              DarwinActionCategories.idFor(actions),
+              actions: <DarwinNotificationAction>[
+                for (final action in actions)
+                  DarwinNotificationAction.plain(
+                    action.id,
+                    NotificationActionLabels.resolve(approvalActionLabels, action.intent),
+                  ),
+              ],
+            ),
+        ],
+      ),
+      linux: LinuxInitializationSettings(
+        defaultActionName: NotificationActionLabels.linuxDefaultActionName(approvalActionLabels),
+        defaultIcon: ThemeLinuxIcon(linuxIconName),
+      ),
+      windows: const WindowsInitializationSettings(
+        appName: appDisplayName,
+        appUserModelId: appUserModelId,
+        guid: windowsCallbackGuid,
+      ),
+    );
+  }
+
+  /// The macOS category that presents exactly the actions [request] offers, or
+  /// `null` when the request answers no approval.
+  @visibleForTesting
+  static String? approvalCategoryFor(NotificationPresentationRequest request) {
+    if (!request.offersApprovalActions) return null;
+    return DarwinActionCategories.categoryFor(request.actions.map((action) => action.id));
+  }
+
+  /// Maps a platform response to the Client's interaction shape.
+  ///
+  /// Pure, so a test can prove the mapping without a channel or a desktop host.
+  @visibleForTesting
+  static NotificationPlatformResponse responseFrom(NotificationResponse response) {
+    return NotificationPlatformResponse(
+      payload: response.payload ?? '',
+      actionId: response.actionId,
+      data: <String, String>{
+        for (final entry in response.data.entries) entry.key: entry.value?.toString() ?? '',
+      },
+    );
+  }
+
+  /// Maps the platform's launch details to the Client's interaction shape, or
+  /// `null` when this process was not started by a notification interaction.
+  @visibleForTesting
+  static NotificationPlatformResponse? launchResponseFrom(
+    NotificationAppLaunchDetails? details,
   ) {
-    final label = labels[intent];
-    if (label == null || label.trim().isEmpty) return intent.name;
-    return label.trim();
+    if (details == null || !details.didNotificationLaunchApp) return null;
+    final response = details.notificationResponse;
+    if (response == null) return null;
+    return responseFrom(response);
   }
 
   void _handleResponse(NotificationResponse response) {
-    _onResponse?.call(
-      NotificationPlatformResponse(
-        payload: response.payload ?? '',
-        actionId: response.actionId,
-        data: <String, String>{
-          for (final entry in response.data.entries) entry.key: entry.value?.toString() ?? '',
-        },
-      ),
-    );
+    _onResponse?.call(responseFrom(response));
+  }
+
+  @override
+  Future<NotificationPlatformResponse?> readLaunchResponse() async {
+    // Only macOS and Windows can report the interaction that started the
+    // process; Linux has no launch-time response at all. The caller must still
+    // treat a returned interaction as unusable in-memory state.
+    if (!_initialized || !(AppPlatform.isMacOS || AppPlatform.isWindows)) return null;
+    try {
+      return launchResponseFrom(await _plugin.getNotificationAppLaunchDetails());
+    } catch (error, stack) {
+      _lastFailure = error.toString();
+      _logger.warning('could not read the notification launch details', error, stack);
+      return null;
+    }
   }
 
   @override
@@ -216,7 +260,7 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
           presentSound: request.urgency.isInterruptive,
           threadIdentifier: request.threadId,
           categoryIdentifier: request.offersApprovalActions && supportsApprovalActions
-              ? approvalCategoryId
+              ? approvalCategoryFor(request)
               : null,
         ),
         linux: LinuxNotificationDetails(

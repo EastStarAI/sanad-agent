@@ -46,6 +46,13 @@ On every desktop platform:
    - The Flutter process, event loop, sockets, `ClientCliHost`, and in-memory caches remain fully active.
 3. During an explicit quit the manager already released `setPreventClose(false)` and destroys the window itself, so a close request that arrives while shutting down never hides the window again.
 
+Both hide and show go through `DesktopLifecycleManager`, which owns
+`isWindowVisible` and publishes every change on `windowVisibilityChanges`. That
+record is the Client's deterministic answer to "is the window on screen?" and it
+is what notification presence reads (see 7.4). It does not depend on the platform
+emitting a lifecycle transition for the hide, which not every desktop platform
+does.
+
 ### 3.2 Restoring the Window (`Show`)
 
 The main application window is restored and focused whenever:
@@ -271,7 +278,7 @@ are accepted, so a producer can attach the block to an existing event.
 
 | Platform | Permission | Presentation | Action buttons | Cancel |
 | :--- | :--- | :--- | :--- | :--- |
-| **macOS** | `UNUserNotificationCenter`; asked only from Settings | Banner, sound, thread per session | Yes, through the registered `sanad_ask` category | Yes |
+| **macOS** | `UNUserNotificationCenter`; asked only from Settings | Banner, sound, thread per session | Yes, through the category registered for the offered actions (`sanad_ask` family) | Yes |
 | **Linux** | None; the freedesktop D-Bus service is the gate | `org.freedesktop.Notifications` with urgency | Yes, freedesktop actions | Yes (by notification id) |
 | **Windows** | None | WinRT toast under the app's AUMID | No (see 7.3) | No on an unpackaged build |
 
@@ -290,6 +297,22 @@ Linux talks to the session notification daemon over D-Bus, which is why the
 feature needs no `libnotify` build dependency. A session without a daemon (or
 without a running notification server) reports `unavailable` rather than
 silently dropping every notification.
+
+Button copy is fixed by the platform, not by the presentation request: macOS
+registers its notification categories exactly once, when the plugin initializes,
+and Linux fixes its default action name at that same moment. The adapter therefore
+receives the localized action labels with `initialize` and resolves them once.
+Because the saved locale is restored before the UI starts, the registered copy
+matches the user's language; a language change made later in the running session
+does not re-register the categories, so those buttons keep the previous language
+until the next launch.
+macOS registers `sanad_ask` for the full approval set plus one category per
+offered subset (`sanad_ask.allow_once+deny`, …), so the buttons a notification
+presents are exactly the actions its payload offered and a category can never add
+one the payload left out. A payload that offers no approval action this build can
+name matches no category and is presented without buttons. The English fallback
+in `NotificationActionLabels` is used only when the label map is empty, and a raw
+intent name such as `allowOnce` is never presented as copy.
 
 ### 7.3 Windows limitations under the current NSIS packaging
 
@@ -335,6 +358,22 @@ One policy answers "does this reach the operating system?", in this order:
    pending ask does not count, and a hidden window never counts even when its
    selected session is the one asking.
 
+Window visibility is not a heuristic. `DesktopLifecycleManager` owns every hide
+and show the Client performs — close-to-tray, the tray Show item, a notification
+click, an explicit quit — and `NotificationWindowPresenceReporter` projects that
+record into presence, so a platform that emits no lifecycle transition for a tray
+hide can no longer leave presence claiming a window the user cannot see. An OS
+lifecycle state is only corroboration: a lifecycle-hidden state also clears
+presence, but `resumed` never overrides a deterministic hide, because activating
+the process (a Dock-icon click, for example) does not necessarily restore the
+window. On a target without the desktop manager the lifecycle state is the only
+signal, which is the contract mobile and web will use.
+
+Residual gap: a window that the operating system or the window manager hides
+without going through `DesktopLifecycleManager` — most notably a user-driven
+minimize that emits no lifecycle transition — is not observed, and presence then
+treats the session as visible.
+
 Suppression never changes in-app state. The conversation path that renders the
 prompt does not consult this pipeline, so an ask is still projected, still
 interactive, and still answerable while its OS notification is withheld.
@@ -371,6 +410,15 @@ first window closed.
   nothing and changes no UI. `NotificationAskRegistry` is the bounded record that
   makes this decidable while no conversation surface is mounted; a reconnect
   refresh arrives as a replayed `tool_permission_request`.
+- **A cold start is not resumed.** An interaction whose launch started the
+  process reaches a Client with an empty ask registry and no routed conversation
+  surface, so answering it would build a decision from the notification payload
+  alone, and opening it would navigate with no resolved destination. The adapter
+  reports the launch interaction once (`readLaunchResponse`); the service records
+  it (`NotificationColdStartOutcome`: `dropped`, or `unreadable` for a payload
+  this build cannot parse) and acts on nothing. The pending ask, when the Agent
+  still holds one, arrives through the ordinary reconnect replay and is answered
+  in the app with full context.
 - **A resolved ask is withdrawn** on macOS and Linux; see 7.3 for Windows.
 
 Delivery therefore lives exactly as long as the process does. Hiding the window
@@ -395,9 +443,12 @@ scheduled notification is used.
 ### 7.8 Verification boundary
 
 Unit tests own the display matrix, collapse identity, dedupe, quiet window,
-payload parsing, preference persistence, and the fail-closed action rules.
-Widget tests own the end-to-end pipeline through a fake adapter and the Settings
-surface. Real permission prompts, tray-hidden display, toast replacement, and
-notification clicks are proven only by a live desktop pass per platform; any
-platform that has not been exercised is listed as a limitation in
+payload parsing, preference persistence, the fail-closed action rules, the macOS
+category derivation (one category per offered action set), the action-label
+fallback, and the cold-start outcome. Widget tests own the end-to-end pipeline
+through a fake adapter, the Settings surface, and the window-presence projection
+that turns a `DesktopLifecycleManager` hide into a display decision. Real
+permission prompts, tray-hidden display, toast replacement, and notification
+clicks are proven only by a live desktop pass per platform; any platform that has
+not been exercised is listed as a limitation in
 `docs/plans/tasks/174b-desktop-os-notifications.md`.

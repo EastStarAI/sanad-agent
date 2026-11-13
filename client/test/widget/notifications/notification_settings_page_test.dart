@@ -44,6 +44,9 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   }
 
   @override
+  Future<NotificationPlatformResponse?> readLaunchResponse() async => null;
+
+  @override
   Future<void> show(NotificationPresentationRequest request) async {}
 
   @override

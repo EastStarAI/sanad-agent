@@ -47,15 +47,37 @@ This contract applies to `client/lib/features/notifications/`.
 - `NotificationBridge` and `NotificationPresenceReporter` are composition only:
   they supply dependencies and report what is on screen. They contain no display
   rule.
+- Window visibility has one deterministic owner: `DesktopLifecycleManager`
+  publishes every hide and show it performs, and
+  `NotificationWindowPresenceReporter` projects that record into presence. An OS
+  lifecycle transition is corroboration only; `resumed` never overrides a
+  deterministic hide, and a target without the manager falls back to the
+  lifecycle state. Presence never infers visibility from window state kept
+  anywhere else.
+- The presented approval actions never exceed what the payload offered. macOS
+  fixes button copy and the button set when a category is registered at startup,
+  so `DarwinActionCategories` derives one category per offered subset and the
+  adapter selects the one that matches the request; an unmatched set is presented
+  without buttons. Button copy comes from the localized labels the adapter
+  receives with `initialize`; the English fallback applies only to an empty map,
+  and a raw intent name is never user-facing copy.
+- A cold-start interaction is not resumed. `NotificationService` reads the
+  launch interaction once, records it as `NotificationColdStartOutcome`, and acts
+  on nothing: no approval is sent from a payload alone and no destination is
+  opened without replayed state. The ask stays answerable in the app after the
+  reconnect replay.
 - An approval is answered through the existing `tool_permission_response`
   command, with the request the Client already holds. A response mutates no
   Client state; the in-app prompt clears from the Agent's resolved event.
 
 ## Verification
 - Unit tests own the display matrix, collapse keys, dedupe identity, the quiet
-  window, payload parsing, the ask registry, and the action fail-closed rules.
-- Widget tests own the end-to-end pipeline through a fake platform adapter and
-  the Settings surface.
+  window, payload parsing, the ask registry, the action fail-closed rules, the
+  macOS action-set derivation and registration, the action-label fallback, and
+  the cold-start outcome.
+- Widget tests own the end-to-end pipeline through a fake platform adapter, the
+  Settings surface, and the window-presence projection driven by a
+  `DesktopLifecycleManager`.
 - Real macOS, Windows, and Linux behavior is verified by a live desktop pass, not
   by mocks. A platform that has not been exercised is recorded as a limitation in
   `docs/plans/tasks/174b-desktop-os-notifications.md`.
