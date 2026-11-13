@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
+import 'package:sanad_client/features/notifications/domain/models/web_push_capability.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_state.dart';
 import 'package:sanad_client/features/notifications/presentation/notification_copy_source.dart';
@@ -40,7 +41,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       builder: (context, state) {
         return PageFrame(
           title: l10n.notifications,
-          subtitle: l10n.notificationsSubtitle,
+          subtitle: state.webPush.isWebPlatform ? l10n.notificationsWebSubtitle : l10n.notificationsSubtitle,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
@@ -74,17 +75,23 @@ class _PermissionCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(_description(l10n)),
-          if (state.needsPermissionRequest) ...[
+          if (_offersEnable) ...[
             const SizedBox(height: 16),
             FilledButton(
               key: const ValueKey('notification_permission_request_btn'),
-              onPressed: state.requestingPermission
-                  ? null
-                  : () => unawaited(cubit.requestPermission()),
+              onPressed: state.requestingPermission ? null : () => unawaited(cubit.requestPermission()),
               child: Text(l10n.notificationsEnable),
             ),
           ],
-          if (state.permissionDenied) ...[
+          if (_offersDisable) ...[
+            const SizedBox(height: 16),
+            OutlinedButton(
+              key: const ValueKey('notification_web_push_disable_btn'),
+              onPressed: state.requestingPermission ? null : () => unawaited(cubit.disableWebPush()),
+              child: Text(l10n.notificationsWebDisable),
+            ),
+          ],
+          if (state.permissionDenied && state.canOpenSystemSettings) ...[
             const SizedBox(height: 16),
             OutlinedButton(
               key: const ValueKey('notification_open_settings_btn'),
@@ -97,7 +104,45 @@ class _PermissionCard extends StatelessWidget {
     );
   }
 
+  /// A browser asks only through the full lifecycle; a native platform keeps
+  /// the OS-only ask that the shared pipeline already owned.
+  bool get _offersEnable {
+    if (state.requestingPermission) return false;
+    if (!state.webPush.isWebPlatform) return state.needsPermissionRequest;
+    if (!state.webPush.canSubscribe || state.webPush.isSubscribed) return false;
+    if (state.permissionDenied) return false;
+    if (state.permission == NotificationPermissionStatus.unavailable) return false;
+    return state.webPush.failure != WebPushFailure.signInRequired;
+  }
+
+  bool get _offersDisable => state.webPush.isWebPlatform && state.webPush.isSubscribed && !state.requestingPermission;
+
   String _description(AppLocalizations l10n) {
+    final web = state.webPush;
+    if (web.isWebPlatform) {
+      switch (web.availability) {
+        case WebPushAvailability.installRequired:
+          return l10n.notificationsWebInstallRequiredBody;
+        case WebPushAvailability.unconfigured:
+          return l10n.notificationsWebUnconfiguredBody;
+        case WebPushAvailability.unsupported:
+          return l10n.notificationsWebUnsupportedBody;
+        case WebPushAvailability.ready:
+          if (web.failure == WebPushFailure.registrationFailed) {
+            return l10n.notificationsWebRegistrationFailedBody;
+          }
+          if (web.failure == WebPushFailure.signInRequired) {
+            return l10n.notificationsWebSignInRequiredBody;
+          }
+          if (web.isSubscribed) return l10n.notificationsWebEnabledBody;
+          if (state.permissionDenied) return l10n.notificationsWebPermissionDeniedBody;
+          if (state.permission == NotificationPermissionStatus.unavailable) {
+            return l10n.notificationsPermissionUnavailableBody;
+          }
+          if (state.needsPermissionRequest) return l10n.notificationsPermissionNotAskedBody;
+          return l10n.notificationsWebDisabledBody;
+      }
+    }
     if (!state.platformSupported) return l10n.notificationsUnsupportedBody;
     if (state.permissionDenied) return l10n.notificationsPermissionDeniedBody;
     if (state.permission == NotificationPermissionStatus.unavailable) {

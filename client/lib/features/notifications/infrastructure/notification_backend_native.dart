@@ -4,6 +4,8 @@ import 'package:sanad_client/features/notifications/domain/models/notification_a
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_bundle.dart';
+import 'package:sanad_client/features/notifications/infrastructure/web_push_client_unsupported.dart';
 import 'package:sanad_client/utils/app_platform.dart';
 
 /// The macOS, Windows, and Linux implementation of the local notification path.
@@ -298,4 +300,10 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
   }
 }
 
-NotificationPlatformAdapter createNotificationAdapter() => FlutterLocalNotificationsAdapter();
+/// A native build pairs its OS adapter with an inert web push client: desktop
+/// and mobile never register a browser endpoint.
+NotificationPlatformBundle createNotificationBundle() => NotificationPlatformBundle(
+      adapter: FlutterLocalNotificationsAdapter(),
+      webPush: const UnsupportedWebPushClient(),
+      dispose: () async {},
+    );

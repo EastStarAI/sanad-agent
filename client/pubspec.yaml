@@ -84,6 +84,11 @@ dependencies:
   # rive: ^0.14.1
   universal_io: ^2.3.1
 
+  # DOM and ServiceWorker bindings for the Web notification surface. Web-only
+  # files are reached through a conditional import, so native builds link only
+  # the inert implementation.
+  web: ^1.1.1
+
   toastification: ^3.1.0
   flutter_bloc: ^9.1.1
   equatable: ^2.0.8

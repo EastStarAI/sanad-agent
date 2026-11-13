@@ -69,18 +69,36 @@ class NotificationSessionOpener {
 
   /// Brings Sanad forward and opens the session a notification points at.
   Future<void> open(NotificationPayload payload) async {
-    await _showWindow();
-    final agent = resolveAgent(
+    await openSession(
       sessionId: payload.sessionId,
+      requestId: payload.requestId,
       deviceId: payload.deviceId,
       hardwareId: payload.hardwareId,
     );
+  }
+
+  /// Opens a session by identity, for a launch URL a notification click
+  /// produced. Returns whether a destination was reached; a click on a cold
+  /// start retries once the device inventory arrives.
+  Future<bool> openSession({
+    required String sessionId,
+    String? requestId,
+    String? deviceId,
+    String? hardwareId,
+  }) async {
+    await _showWindow();
+    final agent = resolveAgent(
+      sessionId: sessionId,
+      deviceId: deviceId,
+      hardwareId: hardwareId,
+    );
     if (agent == null) {
       _logger.warning('could not resolve the device for a notification; nothing was opened');
-      return;
+      return false;
     }
     await _openDestination(
-      ConversationDestination.session(deviceId: agent.id, sessionId: payload.sessionId),
+      ConversationDestination.session(deviceId: agent.id, sessionId: sessionId),
     );
+    return true;
   }
 }
