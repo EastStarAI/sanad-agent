@@ -456,6 +456,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           if (_credentialAction == 'replace') ...[
             const SizedBox(height: 12),
             TextFormField(
+              key: const Key('provider_new_api_key_field'),
               controller: _newKeyController,
               obscureText: true,
               decoration: const InputDecoration(
