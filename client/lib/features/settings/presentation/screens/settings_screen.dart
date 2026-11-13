@@ -23,6 +23,7 @@ import '../widgets/settings_navigation.dart';
 import '../widgets/settings_pages/device_overview_page.dart';
 import '../widgets/settings_pages/empty_device_page.dart';
 import '../widgets/settings_pages/general_page.dart';
+import '../widgets/settings_pages/notifications_page.dart';
 import '../widgets/settings_pages/profile_page.dart';
 import '../widgets/settings_pages/providers_page.dart';
 import '../widgets/settings_pages/secrets_page.dart';
@@ -375,6 +376,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   ) {
     if (_destination == SettingsDestination.profile) return const ProfilePage();
     if (_destination == SettingsDestination.general) return const GeneralPage();
+    if (_destination == SettingsDestination.notifications) return const NotificationsPage();
     if (_destination == SettingsDestination.sessionsDevices) {
       return SessionsDevicesPage(
         devices: devices,

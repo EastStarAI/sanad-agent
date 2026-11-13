@@ -10,6 +10,7 @@ import 'package:sanad_client/l10n/app_localizations.dart';
 enum SettingsDestination {
   profile,
   general,
+  notifications,
   sessionsDevices,
   overview,
   providers,
@@ -91,6 +92,13 @@ class SettingsNavigation extends StatelessWidget {
             navKey: 'general',
             selected: selectedDestination == SettingsDestination.general,
             onTap: () => onSelectPersonal(SettingsDestination.general),
+          ),
+          NavigationTile(
+            icon: Icons.notifications_none_rounded,
+            label: AppLocalizations.of(context)!.notifications,
+            navKey: 'notifications',
+            selected: selectedDestination == SettingsDestination.notifications,
+            onTap: () => onSelectPersonal(SettingsDestination.notifications),
           ),
           NavigationTile(
             icon: Icons.devices_other_outlined,

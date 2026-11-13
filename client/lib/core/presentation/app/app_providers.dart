@@ -28,6 +28,10 @@ import 'package:sanad_client/features/voice/domain/services/voice_stream_service
 import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit.dart';
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
+import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_usage_cubit.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
@@ -63,6 +67,7 @@ class AppProviders extends StatelessWidget {
     final agentCommandHandler = appState.agentCommandHandler;
     final logStore = appState.logStore;
     final connectionCoordinator = getIt<DeviceConnectionCoordinator>();
+    final notificationPresence = getIt<NotificationPresenceStore>();
 
     return MultiBlocProvider(
       providers: [
@@ -74,6 +79,22 @@ class AppProviders extends StatelessWidget {
         ),
         BlocProvider(create: (_) => ThemeCubit(initialTheme)),
         BlocProvider(create: (_) => LocaleCubit(initialLocale)),
+        // What the user is looking at, written by the window lifecycle and the
+        // mounted conversation surface. Provided rather than read from the
+        // registry by widgets so a surface without the provider stays inert.
+        Provider<NotificationPresenceStore>.value(value: notificationPresence),
+        BlocProvider(
+          create: (_) {
+            // One app-scoped owner of permission and preferences: the display
+            // pipeline reads it and Settings edits it.
+            final cubit = NotificationSettingsCubit(
+              store: getIt<NotificationPreferencesStore>(),
+              adapter: getIt<NotificationPlatformAdapter>(),
+            );
+            unawaited(cubit.load());
+            return cubit;
+          },
+        ),
         BlocProvider(create: (_) => AppErrorCubit()),
         BlocProvider(create: (_) => DebugPanelCubit()),
         BlocProvider(
