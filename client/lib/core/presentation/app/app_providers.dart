@@ -29,6 +29,7 @@ import 'package:sanad_client/features/voice/presentation/bloc/voice_stream_cubit
 import 'package:sanad_client/infrastructure/local_tools/local_tool_runtime_service.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
@@ -90,6 +91,7 @@ class AppProviders extends StatelessWidget {
             final cubit = NotificationSettingsCubit(
               store: getIt<NotificationPreferencesStore>(),
               adapter: getIt<NotificationPlatformAdapter>(),
+              webPush: getIt<WebPushSubscriptionService>(),
             );
             unawaited(cubit.load());
             return cubit;

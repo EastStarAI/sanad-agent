@@ -2,6 +2,8 @@ import 'package:sanad_client/features/notifications/domain/models/notification_a
 import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_bundle.dart';
+import 'package:sanad_client/features/notifications/infrastructure/web_push_client_unsupported.dart';
 
 /// A total no-op adapter for targets with no OS notification surface.
 ///
@@ -56,5 +58,8 @@ class UnsupportedNotificationAdapter implements NotificationPlatformAdapter {
   Future<void> dispose() async {}
 }
 
-NotificationPlatformAdapter createNotificationAdapter() =>
-    const UnsupportedNotificationAdapter();
+NotificationPlatformBundle createNotificationBundle() => NotificationPlatformBundle(
+      adapter: const UnsupportedNotificationAdapter(),
+      webPush: const UnsupportedWebPushClient(),
+      dispose: () async {},
+    );

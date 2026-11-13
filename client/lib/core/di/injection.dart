@@ -60,13 +60,19 @@ import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
+import 'package:sanad_client/features/notifications/data/http_web_push_subscription_registrar.dart';
 import 'package:sanad_client/features/notifications/data/mobile_push_pending_revocation_store.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
+import 'package:sanad_client/features/notifications/data/web_push_subscription_store.dart';
 import 'package:sanad_client/features/notifications/domain/models/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/domain/repositories/web_push_subscription_registrar.dart';
+import 'package:sanad_client/features/notifications/domain/services/web_push_client.dart';
 import 'package:sanad_client/features/notifications/infrastructure/mobile_push_token_relay.dart';
 import 'package:sanad_client/features/notifications/infrastructure/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/infrastructure/notification_backend.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_bundle.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
@@ -547,10 +553,51 @@ Future<void> configureDependencies({
     );
   }
 
+  if (!getIt.isRegistered<NotificationPlatformBundle>()) {
+    getIt.registerLazySingleton<NotificationPlatformBundle>(
+      () => createNotificationPlatformBundle(),
+      dispose: (bundle) => bundle.dispose(),
+    );
+  }
+
   if (!getIt.isRegistered<NotificationPlatformAdapter>()) {
     getIt.registerLazySingleton<NotificationPlatformAdapter>(
-      () => createPlatformNotificationAdapter(),
-      dispose: (adapter) => adapter.dispose(),
+      () => getIt<NotificationPlatformBundle>().adapter,
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushClient>()) {
+    getIt.registerLazySingleton<WebPushClient>(
+      () => getIt<NotificationPlatformBundle>().webPush,
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionStore>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionStore>(
+      () => WebPushSubscriptionStore(getIt<SharedPreferences>()),
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionRegistrar>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionRegistrar>(
+      () => HttpWebPushSubscriptionRegistrar(
+        baseUrl: Uri.parse(AppConfig.backendUrl),
+      ),
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionService>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionService>(
+      () => WebPushSubscriptionService(
+        client: getIt<WebPushClient>(),
+        registrar: getIt<WebPushSubscriptionRegistrar>(),
+        store: getIt<WebPushSubscriptionStore>(),
+        readAccessToken: () => getIt<AuthService>().accessToken,
+        readAccountId: () => getIt<AuthService>().userId,
+        readClientInstanceId: () => getIt<String>(instanceName: 'clientInstanceId'),
+        readVapidPublicKey: () => AppConfig.webPushVapidPublicKey,
+      ),
+      dispose: (service) => service.dispose(),
     );
   }
 

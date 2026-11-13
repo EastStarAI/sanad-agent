@@ -170,4 +170,12 @@ Planning complete. The plan is accepted.
   module (Android) plus the App ID Push capability (iOS) remain with
   release/platform. The behavior is documented in
   [Mobile Push Delivery](../technical/mobile_push_delivery.md).
-- `174d`–`174f` are authored and unstarted.
+- `174d` (Web push and installable PWA) is implemented on `task/174d-web-push`:
+  the web Client owns `client/web/sw.js` and registers it through an authored
+  `client/web/flutter_bootstrap.js`, runs the browser permission and
+  account-bound subscription lifecycle from the explicit Settings action,
+  revokes on logout, and treats push as a wake-up so a visible tab stays
+  authoritative. Live browser and installed-iOS evidence is still unexecuted,
+  and the delivery contract is documented in
+  [Web Push Delivery](../technical/web_push_delivery.md).
+- `174e`–`174f` are authored and unstarted.

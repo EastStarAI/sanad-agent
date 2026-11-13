@@ -19,6 +19,9 @@ This contract applies to `client/lib/features/notifications/`.
   provider credential, provider SDK, or provider configuration is part of the
   public dependency graph, and the token never reaches the Agent, a log line, or
   workspace state.
+- Web delivery adds a browser wake-up, never a decision. A visible tab receives
+  the envelope and decides with the same display policy; with no visible tab the
+  owned worker renders the Agent's already-redacted copy from the payload alone.
 
 ## Pipeline Ownership
 - `NotificationPayload.fromEvent` is the only parser of the Agent payload, and it
@@ -72,8 +75,9 @@ This contract applies to `client/lib/features/notifications/`.
 ## Presentation and Platform
 - `NotificationPlatformAdapter` is the only platform boundary. The native
   implementation is the only library that imports `flutter_local_notifications`;
-  Web resolves a total no-op through a conditional import, and mobile composes the
-  same adapter behind its own push transport.
+  a web target resolves a browser adapter and a push client through the same
+  conditional import, and mobile composes the same adapter behind its own push
+  transport.
 - Android channel importance is fixed at creation, so the adapter creates every
   channel at high importance at initialization and never recreates one lower.
 - iOS fixes a notification's buttons in the registered category, so the categories
@@ -83,6 +87,26 @@ This contract applies to `client/lib/features/notifications/`.
   chain. A globally silent foreground is rejected.
 - Permission is requested only from an explicit Settings action. Nothing asks on
   startup, on first event, or on first notification.
+- Web owns one root-scope service worker (`client/web/sw.js`), registered from
+  `client/web/flutter_bootstrap.js`; the Flutter-generated worker is a
+  self-unregistering tombstone and is never registered. The worker presents both
+  page-decided and push-decided notifications, so one collapse tag and one click
+  path exist.
+- The web worker resolves the session and request from every shape the product
+  sends — the family `device_event` envelope, the documented transport body, and a
+  bare instruction block — in the same precedence as `NotificationPayload.fromEvent`.
+  A shape the page accepts is never silently dropped by the closed-tab path.
+- `WebPushSubscriptionService` is the only owner of the browser permission and
+  subscription lifecycle. Permission is requested only from the explicit Settings
+  action, a subscription is registered to the authenticated account, and logout
+  revokes it with the token captured while the session was valid. Its reported
+  state is the relay acknowledgement, never the browser subscription alone: only
+  the relay can reach an endpoint, so an unacknowledged registration is a failure
+  with a retry, and the persisted record is the acknowledgement that clears it.
+- Browser approval buttons are not offered: browser action limits cannot carry a
+  three-way approval set without hiding a decision. A click opens the exact
+  session, and a decision is answered only through the in-app prompt and
+  `tool_permission_response`.
 - `NotificationBridge` and `NotificationPresenceReporter` are composition only:
   they supply dependencies and report what is on screen. They contain no display
   rule.
@@ -114,12 +138,21 @@ This contract applies to `client/lib/features/notifications/`.
   window, payload parsing and the payload-only mobile rebuild, the ask registry,
   the action fail-closed rules, the macOS action-set derivation and registration,
   the action-label fallback, the cold-start outcome, the mobile foreground
-  matrix, the token lifecycle, and the channel and category inventory.
+  matrix, the token lifecycle, the channel and category inventory, and the web
+  subscription lifecycle.
 - Widget tests own the end-to-end pipeline through a fake platform adapter, the
-  Settings surface, and the window-presence projection driven by a
-  `DesktopLifecycleManager`.
+  Settings surface, the window-presence projection driven by a
+  `DesktopLifecycleManager`, and the browser install/configuration states.
 - Real macOS, Windows, Linux, Android, and iOS behavior is verified by a live pass
   on that platform, not by mocks. A platform that has not been exercised is
   recorded as a limitation in its task file: desktop cases in
   `docs/plans/tasks/174b-desktop-os-notifications.md` and mobile device cases in
   `docs/plans/tasks/174c-mobile-push-delivery.md`.
+- The web worker, live browser delivery, and the installed iOS path are recorded
+  as unexecuted in `docs/plans/tasks/174d-web-push-and-pwa.md`; `fvm flutter build
+  web` and the source contract in `client/test/tool/web_push_pwa_contract_test.dart`
+  are the executable evidence on a host without a browser. The worker itself is
+  executed there too, through `client/test/web/sw_closed_tab_notification_test.mjs`
+  and `client/test/tool/web_push_worker_execution_test.dart`, which run every
+  payload shape with no visible client and assert one notification plus the exact
+  click-through URL.

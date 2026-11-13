@@ -25,6 +25,13 @@ class NotificationPreferences extends Equatable {
 
   bool isKindEnabled(NotificationKind kind) => kindOverrides[kind] ?? true;
 
+  /// The kinds the user deliberately muted. Mirrored to the web service worker
+  /// so a closed tab honours the same choices the page made.
+  Set<NotificationKind> get mutedKinds => <NotificationKind>{
+        for (final entry in kindOverrides.entries)
+          if (!entry.value) entry.key,
+      };
+
   /// Whether a notification of [kind] may be raised at all.
   bool allows(NotificationKind kind) => enabled && isKindEnabled(kind);
 
