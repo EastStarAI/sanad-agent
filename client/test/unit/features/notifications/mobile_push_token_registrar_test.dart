@@ -28,8 +28,13 @@ class _FakeTransport implements MobilePushTransport {
   final StreamController<MobilePushToken> _tokens = StreamController<MobilePushToken>.broadcast();
 
   MobilePushToken? _token;
+  Completer<void>? _tokenGate;
   int registrations = 0;
   final List<String?> visibleSessions = <String?>[];
+
+  /// Suspends the next token lookup, so a test can move the socket while the
+  /// registrar is inside its flight instead of between two flights.
+  void holdNextTokenLookup(Completer<void> gate) => _tokenGate = gate;
 
   void rotate(MobilePushToken token) {
     _token = token;
@@ -52,7 +57,14 @@ class _FakeTransport implements MobilePushTransport {
   Future<MobilePushMessage?> takeInitialMessage() async => null;
 
   @override
-  Future<MobilePushToken?> currentToken() async => _token;
+  Future<MobilePushToken?> currentToken() async {
+    final gate = _tokenGate;
+    if (gate != null) {
+      _tokenGate = null;
+      await gate.future;
+    }
+    return _token;
+  }
 
   @override
   Future<void> ensureRegistration() async {
@@ -80,6 +92,16 @@ class _FakeRelay implements MobilePushTokenRelay {
   /// the "only the acknowledgement clears the record" rule is testable.
   bool rejectsRevocations = false;
 
+  /// Refuses exactly one registration, as a call made against a socket that has
+  /// not finished authenticating does.
+  bool refusesNextRegistration = false;
+
+  Completer<void>? _registerGate;
+
+  /// Suspends the next registration call, so a test can report a readiness
+  /// transition while the flight is inside the call.
+  void holdNextRegistration(Completer<void> gate) => _registerGate = gate;
+
   bool _ready;
 
   @override
@@ -104,6 +126,15 @@ class _FakeRelay implements MobilePushTokenRelay {
 
   @override
   Future<bool> register(MobilePushToken token) async {
+    final gate = _registerGate;
+    if (gate != null) {
+      _registerGate = null;
+      await gate.future;
+    }
+    if (refusesNextRegistration) {
+      refusesNextRegistration = false;
+      return false;
+    }
     if (!_ready) return false;
     registered.add(token);
     events.add('register:${token.value}');
@@ -137,6 +168,12 @@ class _MemoryPendingStore implements MobilePushPendingRevocationStore {
     records.removeWhere((item) => item.token == token);
   }
 }
+
+MobilePushPendingRevocation _pending(MobilePushToken token) => MobilePushPendingRevocation(
+      token: token,
+      deviceId: 'device-1',
+      requestedAt: DateTime.utc(2026, 11, 13),
+    );
 
 MobilePushTokenRegistrar _registrar(
   _FakeTransport transport,
@@ -303,14 +340,7 @@ void main() {
     test('a rotation settles an owed withdrawal before it announces the new token', () async {
       final transport = _FakeTransport();
       final relay = _FakeRelay(ready: false);
-      final store = _MemoryPendingStore()
-        ..records.add(
-          MobilePushPendingRevocation(
-            token: _tokenValue,
-            deviceId: 'device-1',
-            requestedAt: DateTime.utc(2026, 11, 13),
-          ),
-        );
+      final store = _MemoryPendingStore()..records.add(_pending(_tokenValue));
       final registrar = _registrar(transport, relay, store);
 
       // The session starts while the socket is still down, so the withdrawal an
@@ -330,6 +360,152 @@ void main() {
       );
       expect(store.records, isEmpty);
       expect(registrar.state, MobilePushRegistrationState.registered);
+    });
+
+    test('a readiness transition inside the authentication flight still settles first', () async {
+      // Regression for N1. The socket was still authenticating when
+      // onAuthenticated() ran, so the flush was skipped; the readiness transition
+      // then arrived inside the same flight and was coalesced away. `distinct()`
+      // meant it never repeated, so the flight registered the token while its own
+      // withdrawal was still owed, and the next reconnect flushed that stale
+      // record and withdrew the live binding while state still said `registered`.
+      final transport = _FakeTransport();
+      final relay = _FakeRelay(ready: false);
+      final store = _MemoryPendingStore()..records.add(_pending(_tokenValue));
+      final registrar = _registrar(transport, relay, store);
+
+      final lookup = Completer<void>();
+      transport.holdNextTokenLookup(lookup);
+      final flight = registrar.onAuthenticated();
+      await pumpEventQueue();
+      expect(relay.events, isEmpty, reason: 'the socket cannot carry anything yet');
+      expect(store.records, hasLength(1));
+
+      // The socket becomes ready inside the flight, and the token is still owed a
+      // withdrawal at that moment.
+      relay.connect();
+      lookup.complete();
+      await flight;
+      await pumpEventQueue();
+
+      expect(
+        relay.events,
+        <String>['revoke:${_tokenValue.value}', 'register:${_tokenValue.value}'],
+      );
+      expect(relay.revoked, hasLength(1));
+      expect(relay.registered, hasLength(1));
+      expect(store.records, isEmpty);
+      expect(registrar.state, MobilePushRegistrationState.registered);
+    });
+
+    test('a readiness transition inside a registration flight is not lost', () async {
+      final transport = _FakeTransport();
+      final relay = _FakeRelay()..refusesNextRegistration = true;
+      final registrar = _registrar(transport, relay);
+
+      final registration = Completer<void>();
+      relay.holdNextRegistration(registration);
+      final flight = registrar.onAuthenticated();
+      await pumpEventQueue();
+
+      // Readiness returns while the registration call is already in progress. The
+      // relay refuses that call, and no second transition will ever be reported
+      // for this socket, so only a flight that repeats the pass can recover.
+      relay.connect();
+      registration.complete();
+      await flight;
+      await pumpEventQueue();
+
+      expect(relay.events, <String>['register:${_tokenValue.value}']);
+      expect(relay.registered, hasLength(1));
+      expect(registrar.state, MobilePushRegistrationState.registered);
+    });
+
+    test('a stale withdrawal never withdraws the token the relay holds', () async {
+      final transport = _FakeTransport();
+      final relay = _FakeRelay();
+      final store = _MemoryPendingStore();
+      final registrar = _registrar(transport, relay, store);
+
+      await registrar.onAuthenticated();
+      expect(registrar.state, MobilePushRegistrationState.registered);
+
+      // A record for the token the relay already holds surfaces after the
+      // acknowledgement, which is the only way one can be left behind.
+      store.records.add(_pending(_tokenValue));
+      relay.connect();
+      await pumpEventQueue();
+
+      expect(
+        relay.revoked,
+        isEmpty,
+        reason: 'withdrawing the accepted binding would silently kill push',
+      );
+      expect(relay.registered, hasLength(1));
+      expect(store.records, isEmpty, reason: 'the superseded record is settled, not retried');
+      expect(registrar.state, MobilePushRegistrationState.registered);
+    });
+
+    test('a rotation never announces a token while that token is still owed', () async {
+      final transport = _FakeTransport(hasToken: false);
+      final relay = _FakeRelay(ready: false);
+      final store = _MemoryPendingStore()..records.add(_pending(_rotated));
+      final registrar = _registrar(transport, relay, store);
+
+      await registrar.onAuthenticated();
+      expect(relay.events, isEmpty);
+
+      transport.rotate(_rotated);
+      await pumpEventQueue();
+      // The socket is still authenticating, so the rotated token is not announced
+      // and its own withdrawal stays owed.
+      expect(relay.events, isEmpty);
+      expect(store.records, hasLength(1));
+
+      relay.connect();
+      await pumpEventQueue();
+
+      expect(
+        relay.events,
+        <String>['revoke:${_rotated.value}', 'register:${_rotated.value}'],
+      );
+      expect(relay.registered.single.value, _rotated.value);
+      expect(store.records, isEmpty);
+      expect(registrar.state, MobilePushRegistrationState.registered);
+    });
+
+    test('a logout during a registration leaves no live binding behind', () async {
+      final transport = _FakeTransport();
+      final relay = _FakeRelay();
+      final store = _MemoryPendingStore();
+      final registrar = _registrar(transport, relay, store);
+
+      final registration = Completer<void>();
+      relay.holdNextRegistration(registration);
+      final flight = registrar.onAuthenticated();
+      await pumpEventQueue();
+
+      // The session ends while the relay is still accepting the registration.
+      await registrar.revoke(reason: MobilePushRevocationReason.logout, deviceId: 'device-1');
+      expect(registrar.state, MobilePushRegistrationState.revoked);
+
+      registration.complete();
+      await flight;
+      await pumpEventQueue();
+
+      // The accepted binding is withdrawn again, so the relay holds nothing and
+      // the state never claims a binding the device asked it to retire.
+      expect(
+        relay.events,
+        <String>[
+          'revoke:${_tokenValue.value}',
+          'register:${_tokenValue.value}',
+          'revoke:${_tokenValue.value}',
+        ],
+      );
+      expect(registrar.state, MobilePushRegistrationState.revoked);
+      expect(registrar.currentToken, isNull);
+      expect(store.records, isEmpty);
     });
 
     test('a withdrawal the relay will not acknowledge stays recorded', () async {
@@ -424,11 +600,7 @@ void main() {
       expect(_tokenValue.toString(), contains(_tokenValue.fingerprint));
       expect(_tokenValue.fingerprint.length, 16);
 
-      final record = MobilePushPendingRevocation(
-        token: _tokenValue,
-        deviceId: 'device-1',
-        requestedAt: DateTime.utc(2026, 11, 13),
-      );
+      final record = _pending(_tokenValue);
       expect(record.toString(), isNot(contains(_tokenValue.value)));
       expect(record.toString(), contains(_tokenValue.fingerprint));
     });

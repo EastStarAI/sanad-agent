@@ -68,14 +68,33 @@ them; the withdrawal simply does not depend on readiness:
 3. The record is cleared **only** after the relay accepts the withdrawal on a
    ready authenticated socket. A crash between the emit and the clear repeats an
    idempotent revocation instead of losing it.
-4. On the next authenticated connection the registrar flushes every record
-   **before** it announces the current token. Both the fresh-authentication path
-   and the reconnect path follow that order, and a provider rotation that arrives
-   on its own schedule settles what is owed first as well, so a token being
-   retired is never re-registered ahead of its own revocation.
+4. Every authenticated connection settles the records **before** it announces the
+   current token, and the check is made inside the same serialized flight,
+   immediately before the announcement, rather than once when the flight starts.
+   That placement is what makes the order hold: the socket can become reachable
+   while a flight is suspended, so a flush that only ran at the beginning would
+   be skipped. A registration is deferred while the token it names is still owed
+   a withdrawal, and deferred as well when the owed state cannot be established
+   (relay not ready, or the store unreadable).
 5. Account deletion drops a record instead of retrying it: the binding dies with
    the account, and a provider token is a per-installation capability rather than
    an account credential, so nothing a later session could do would withdraw it.
+
+The ordering is per token, and a request is never dropped. The readiness stream
+is `distinct()`, so a coalesced transition would never repeat, and one lost
+transition was enough to announce a token whose own withdrawal was still owed —
+which then revoked the live binding on the next reconnect. A readiness or
+rotation request that arrives while a flight is running therefore makes that
+flight take another pass before it settles.
+
+`registered` is a claim about the relay, not about intent: the state is set only
+for a token the relay accepted and has not been asked to withdraw since. A
+withdrawal clears it, a refused registration clears it, and a record that refers
+to the token the relay has just accepted is treated as superseded and dropped
+instead of being sent, because withdrawing an accepted binding is the one
+outcome that kills push silently. If a withdrawal for the live token ever does
+reach the relay, the state moves off `registered` instead of staying behind a
+dead binding, and the next accepted registration restores it.
 
 The single visible consequence is that a revocation of a token the socket could
 not reach is delivered one session late. That is the safe direction: the device
@@ -210,10 +229,17 @@ presents the same notification twice.
 
 Unit and widget coverage proves the foreground matrix, the token lifecycle,
 payload-only parsing, channel and category derivation, and the fail-closed action
-rules. The withdrawal ordering is covered at the seam the race happens at: a
-revocation requested against an already-torn-down socket is recorded, flushed on
-the next authenticated connection, and delivered before the same installation
-announces its token again. Device behavior has not been executed on this host:
+rules. The withdrawal ordering is covered at the seams the race actually happens
+at: a revocation requested against an already-torn-down socket is recorded,
+flushed on the next authenticated connection, and delivered before the same
+installation announces its token again; a readiness transition that arrives while
+the authentication flight is suspended still settles the record before the
+announcement; a transition that arrives inside a refused registration is not lost
+and is retried by the same flight; a stale record never withdraws a token the
+relay already accepted; and a rotation never announces a token that is still owed
+its own withdrawal. A logout observed while a registration is being accepted
+withdraws that binding again instead of leaving it live. Device behavior has not
+been executed on this host:
 
 - `[!]` Android background and terminated display: no Android runtime here; owner
   is the platform/release pipeline, and it also needs the provider module.

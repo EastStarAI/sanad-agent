@@ -66,10 +66,10 @@ reading another one.
    not ready and `push.revoke_token` never left the Client on logout, account
    deletion, or a terminal `auth_revoked`. Reordering the two widgets would only
    move the race, so the withdrawal never depends on readiness: it is recorded
-   first, sent immediately when the socket is ready, and flushed on the next
-   authenticated connection before any registration. The record is cleared only
-   once the relay accepts the withdrawal, or dropped when the account is deleted
-   and the binding can never be valid again.
+   first, sent immediately when the socket is ready, and settled inside the same
+   serialized flight immediately before that token could be announced again. The
+   record is cleared only once the relay accepts the withdrawal, or dropped when
+   the account is deleted and the binding can never be valid again.
 
 ## Review corrections (B1)
 
@@ -86,6 +86,49 @@ reading another one.
   deliberate trade against a token that outlives its session; the record adds no
   new trust boundary (it uses the app-private preferences that already hold the
   refresh token) and is deleted once the relay accepts the withdrawal.
+
+## Review corrections (N1)
+
+The second review proved a reachable counterexample that B1 did not close:
+
+1. `onAuthenticated()` began while the socket was still authenticating, so
+   `_flushPendingRevocations()` returned early and the record stayed owed.
+2. The socket became ready **inside** that flight. `_run` returned the in-flight
+   future instead of queueing the readiness action, and the readiness stream is
+   `distinct()`, so the transition was lost for good.
+3. The flight then registered the token whose own withdrawal was still queued.
+4. On the next reconnect the stale record flushed and withdrew the live token,
+   while the registrar still reported `registered`: push was silently dead.
+
+What the code guarantees now, and what it no longer claims:
+
+- **No transition is dropped.** A readiness or rotation request that arrives
+  while a pass is running marks the flight and makes it take another pass before
+  it settles, instead of coalescing into the running future.
+- **The settle check is inside the flight, just before the announcement.** It
+  runs after every suspension, so a socket that becomes reachable mid-flight
+  still settles the record first. The earlier claim that a single flush at flight
+  start was enough was wrong.
+- **The rule is per token.** A registration is deferred while the token it names
+  is still owed a withdrawal, and also when the owed state cannot be established
+  (relay not ready, store unreadable). An unacknowledged record for a *different*
+  token does not block the current one, so a stuck withdrawal cannot make the
+  device unreachable.
+- **A stale record never kills the live binding.** A record that names the token
+  the relay has just accepted is superseded by that acceptance: it is settled
+  without a withdrawal. If a withdrawal for the live token ever does reach the
+  relay, `registered` is cleared in the same step and the next accepted
+  registration restores it.
+- **`_state` follows the relay.** The registrar tracks the token the relay
+  acknowledged. `registered` requires that token to be the current one, a refused
+  registration clears it, and a registration that is accepted after the session
+  ended (or after the provider rotated away) is withdrawn and reported as such
+  rather than as a success.
+
+G1 was re-marked again against the corrected statements: the revocation and
+ordering gates are `[x]` **only** for what the tests now prove, and the ordering
+claim in `docs/technical/mobile_push_delivery.md` was rewritten to match. Device
+and relay-side behavior is still `[!]`.
 
 ## Gates
 
@@ -120,10 +163,18 @@ reading another one.
 - [x] Revoke on logout, terminal `auth_revoked`, and account deletion (which
       performs the same logout), independent of socket readiness: the withdrawal
       is recorded before it is sent, retried until the relay accepts it, and
-      flushed on the next authenticated connection before any registration. The
-      ordering race that made the earlier claim false is covered by a test that
-      disconnects the relay first and still delivers the withdrawal (unit-proven).
-      Delivery to the hosted relay depends on `174e`.
+      settled inside the same serialized flight immediately before any
+      registration. The ordering race that made the earlier claim false is
+      covered by tests that disconnect the relay first and still deliver the
+      withdrawal, and that become ready **during** the authentication flight
+      (unit-proven). Delivery to the hosted relay depends on `174e`.
+- [x] Ordering is per token and no request is dropped (unit-proven): a readiness
+      transition that lands inside the authentication flight still settles the
+      record first, a transition that lands inside a refused registration makes
+      the flight take another pass, a stale record never withdraws the token the
+      relay accepted, and a rotation never announces a token that is still owed
+      its own withdrawal. `registered` is claimed only for a token the relay
+      accepted and has not been asked to withdraw since.
 - [!] Account deletion as a distinct reason: the deletion flow calls
       `AuthCubit.logout()`, so the Client emits the `logout` revocation and takes
       the durable path above. `MobilePushRevocationReason.accountDeleted`
@@ -194,6 +245,11 @@ reading another one.
 | Token register/rotate/revoke (relay ready) | PASS (unit) | `mobile_push_token_registrar_test.dart` |
 | Revoke after the socket was already torn down | PASS (unit) | Same suite: teardown, then revoke, then flush on the next authenticated connection |
 | Flush before re-registration | PASS (unit) | Same suite: `revoke:` precedes `register:` for one installation token, on both the authentication and the reconnect path |
+| Readiness during the authentication flight (N1) | PASS (unit) | Same suite: socket not ready at `onAuthenticated()`, ready mid-flight; relay sees `revoke:` then `register:` exactly once, final state `registered`, record cleared |
+| Readiness during a refused registration | PASS (unit) | Same suite: the transition makes the flight take another pass; exactly one accepted `register:` |
+| Stale record after an accepted registration | PASS (unit) | Same suite: no withdrawal of the live token, record settled, state stays `registered` |
+| Per-token rule under rotation | PASS (unit) | Same suite: a rotated token whose own withdrawal is owed is not announced until that withdrawal is accepted |
+| Logout during a registration | PASS (unit) | Same suite: the binding the relay accepted is withdrawn again, no record is left, and the state stays `revoked` |
 | Pending withdrawal durability | PASS (unit) | `mobile_push_pending_revocation_store_test.dart`: round trip, one record per token, bounded store, unreadable store discarded |
 | Token never logged in the clear | PASS (unit) | `toString`/`fingerprint` assertions on the token and on the pending record |
 | Channels all high, categories per kind | PASS (unit) | `mobile_notification_catalog_test.dart` |
@@ -240,7 +296,7 @@ Run from the repository root with `fvm` on `PATH`:
 | Command | Result |
 |---|---|
 | `cd client && fvm flutter analyze` | `No issues found!` |
-| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (149 tests)` |
+| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (154 tests)` |
 
 ## Open items
 
