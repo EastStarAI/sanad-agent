@@ -28,10 +28,14 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   bool get supportsApprovalActions => supported;
 
   @override
+  bool get canOpenSystemSettings => false;
+
+  @override
   Future<void> initialize({
     NotificationPlatformResponseCallback? onResponse,
     Map<NotificationActionIntent, String> approvalActionLabels =
         const <NotificationActionIntent, String>{},
+    Map<NotificationKind, String> kindLabels = const <NotificationKind, String>{},
   }) async {}
 
   @override

@@ -84,7 +84,7 @@ class _PermissionCard extends StatelessWidget {
               child: Text(l10n.notificationsEnable),
             ),
           ],
-          if (state.permissionDenied) ...[
+          if (state.permissionDenied && state.canOpenSystemSettings) ...[
             const SizedBox(height: 16),
             OutlinedButton(
               key: const ValueKey('notification_open_settings_btn'),

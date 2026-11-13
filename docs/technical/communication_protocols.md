@@ -1363,3 +1363,63 @@ transport for a device it cannot reach.
 - Raise the OS notification locally on desktop. Desktop never uses a push
   provider: both the local and the cloud route deliver the event to a running
   Client, which raises the notification itself.
+
+### 7.10 Mobile registration and provider payload
+
+Mobile Clients are a delivery target the Agent never addresses directly: the
+Agent names a Client instance or the whole account, and the relay resolves that to
+device tokens. The Client owns the token lifecycle and announces it on the
+authenticated Cloud Socket, so no second credential exists for push.
+
+#### Registration events
+
+| Event | Direction | Payload |
+|---|---|---|
+| `push.register_token` | Client → Gateway | `{"version":1,"provider":"apns"\|"fcm","token":"<opaque>","capabilities":["notification_dispatch_v1"]}` |
+| `push.revoke_token` | Client → Gateway | `{"version":1,"provider":"apns"\|"fcm","token":"<opaque>"}` |
+
+- The account is derived from the authenticated socket; no user identity travels
+  in either payload.
+- Registration is idempotent and repeated on every return to a ready
+  authenticated socket, because the relay may have dropped the binding while the
+  device was away.
+- The token is a bearer capability: the Client holds it in memory for the account
+  session and never writes it to a log, workspace state, or an Agent payload. The
+  one persisted form is the pending-withdrawal record that makes a revocation
+  survive the socket teardown which precedes it: it holds the token until the
+  relay accepts `push.revoke_token` on a ready authenticated socket, is capped at
+  eight entries, and is emptied on acceptance or on account deletion.
+- A Client announces a token only while an account session exists. Logout, a
+  terminal `auth_revoked`, and account deletion all withdraw it; a withdrawal the
+  socket cannot carry is sent as soon as an authenticated socket exists, and
+  before the token could be announced again.
+- An event whose `version` the Gateway does not know is dropped, never guessed.
+
+#### Provider payload
+
+The relay delivers to the platform provider the fields the provider needs, taken
+unchanged from the redacted instruction:
+
+- the display copy (`title`, `body`), the Android channel (`sanad_<kind>_high`),
+  the iOS category (`SANAD_<KIND>`), the thread identity (the session), and the
+  copy of `deep_link.session_id` at the top level, because a native foreground
+  hook reads it before any client code runs;
+- `sanad_envelope`, the canonical `device_event` for the notification as one JSON
+  string, so a running Client parses the arrival with the same parser the socket
+  path uses.
+
+The envelope is not rewritten by the relay and carries no field the relay is
+expected to interpret. It contains no transcript, command output, workspace path,
+policy key, credential, or submitted secret value.
+
+#### Mobile client obligations
+
+- Dedupe against the socket copy on `payload.notification.event_id`; one ask
+  produces one visible notification per device whatever route it took.
+- Present nothing when the notification's session is the one on screen, and a
+  heads-up notification otherwise.
+- Render from the payload alone when the process was terminated, and route an
+  action only after the replayed ask state has arrived; a payload alone never
+  authorizes a decision.
+- Resolve every action through `tool_permission_response`, exactly as an in-app
+  answer does.

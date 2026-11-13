@@ -8,6 +8,7 @@ class NotificationSettingsState extends Equatable {
   const NotificationSettingsState({
     this.loading = true,
     this.platformSupported = false,
+    this.canOpenSystemSettings = false,
     this.permission = NotificationPermissionStatus.unknown,
     this.permissionRequested = false,
     this.preferences = const NotificationPreferences(),
@@ -18,6 +19,11 @@ class NotificationSettingsState extends Equatable {
 
   /// Whether this platform has an OS notification surface.
   final bool platformSupported;
+
+  /// Whether this platform can open its own notification pane for the app.
+  /// Where it cannot, Settings explains the refusal instead of offering a button
+  /// that would do nothing.
+  final bool canOpenSystemSettings;
 
   final NotificationPermissionStatus permission;
 
@@ -50,6 +56,7 @@ class NotificationSettingsState extends Equatable {
   NotificationSettingsState copyWith({
     bool? loading,
     bool? platformSupported,
+    bool? canOpenSystemSettings,
     NotificationPermissionStatus? permission,
     bool? permissionRequested,
     NotificationPreferences? preferences,
@@ -58,6 +65,7 @@ class NotificationSettingsState extends Equatable {
     return NotificationSettingsState(
       loading: loading ?? this.loading,
       platformSupported: platformSupported ?? this.platformSupported,
+      canOpenSystemSettings: canOpenSystemSettings ?? this.canOpenSystemSettings,
       permission: permission ?? this.permission,
       permissionRequested: permissionRequested ?? this.permissionRequested,
       preferences: preferences ?? this.preferences,
@@ -69,6 +77,7 @@ class NotificationSettingsState extends Equatable {
   List<Object?> get props => [
         loading,
         platformSupported,
+        canOpenSystemSettings,
         permission,
         permissionRequested,
         preferences,

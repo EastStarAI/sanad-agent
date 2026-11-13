@@ -292,11 +292,12 @@ promoted past what this host can observe.
    same session (`suppressedOnScreen` → `display` → `suppressedOnScreen`).
    *Residual gap:* a minimize the app does not perform and the platform does not
    report is still invisible to presence; recorded next to G5.
-2. **W3 — no user-visible string bypasses localization.** `_label()` and the
-   freedesktop `defaultActionName` now resolve through
-   `NotificationActionLabels`, which uses the localized map the adapter receives
-   with `initialize` and an English fallback only when that map is empty; a raw
-   intent name is never presented. A unit test also asserts the English fallback
+2. **W3 — no user-visible string bypasses localization.** The approval button
+   copy (the macOS subset category family, and the iOS per-kind categories that
+   mobile push registers) and the freedesktop `defaultActionName` all resolve
+   through `NotificationActionLabels`, which uses the localized map the adapter
+   receives with `initialize` and an English fallback only when that map is
+   empty; a raw intent name is never presented. A unit test also asserts the English fallback
    equals the `notificationAction*` entries in `client/lib/l10n/app_en.arb`.
    §7.2 documents that macOS registers its categories once at startup. Evidence:
    `test/unit/features/notifications/notification_action_labels_test.dart` and the

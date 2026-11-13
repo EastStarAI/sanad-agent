@@ -33,10 +33,14 @@ class _LaunchAdapter implements NotificationPlatformAdapter {
   bool get supportsApprovalActions => true;
 
   @override
+  bool get canOpenSystemSettings => false;
+
+  @override
   Future<void> initialize({
     NotificationPlatformResponseCallback? onResponse,
     Map<NotificationActionIntent, String> approvalActionLabels =
         const <NotificationActionIntent, String>{},
+    Map<NotificationKind, String> kindLabels = const <NotificationKind, String>{},
   }) async {
     calls.add('initialize');
     this.onResponse = onResponse;

@@ -60,8 +60,12 @@ import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/data/mobile_push_pending_revocation_store.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
+import 'package:sanad_client/features/notifications/domain/models/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/infrastructure/mobile_push_token_relay.dart';
+import 'package:sanad_client/features/notifications/infrastructure/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/infrastructure/notification_backend.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
@@ -539,6 +543,7 @@ Future<void> configureDependencies({
   if (!getIt.isRegistered<NotificationPresenceStore>()) {
     getIt.registerLazySingleton<NotificationPresenceStore>(
       () => NotificationPresenceStore(),
+      dispose: (store) => store.dispose(),
     );
   }
 
@@ -546,6 +551,34 @@ Future<void> configureDependencies({
     getIt.registerLazySingleton<NotificationPlatformAdapter>(
       () => createPlatformNotificationAdapter(),
       dispose: (adapter) => adapter.dispose(),
+    );
+  }
+
+  // Mobile push is a wake-up only: the transport carries messages and the device
+  // token, and the relay carries the token to the account. Neither one decides
+  // whether a notification is shown, so both are registered for every platform
+  // and resolve a total no-op where there is no provider.
+  if (!getIt.isRegistered<MobilePushTransport>()) {
+    getIt.registerLazySingleton<MobilePushTransport>(
+      () => createMobilePushTransport(),
+      dispose: (transport) => transport.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<MobilePushTokenRelay>()) {
+    getIt.registerLazySingleton<MobilePushTokenRelay>(
+      () => AccountSessionPushTokenRelay(
+        getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
+      ),
+    );
+  }
+
+  // A revocation must survive the socket that could not carry it, so the record
+  // of withdrawals still owed is durable. It uses the app-private preferences
+  // that already hold the account's refresh token.
+  if (!getIt.isRegistered<MobilePushPendingRevocationStore>()) {
+    getIt.registerLazySingleton<MobilePushPendingRevocationStore>(
+      () => PreferencesMobilePushPendingRevocationStore(getIt<SharedPreferences>()),
     );
   }
 

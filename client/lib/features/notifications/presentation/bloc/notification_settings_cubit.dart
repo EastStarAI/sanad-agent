@@ -21,6 +21,7 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
         _adapter = adapter,
         super(NotificationSettingsState(
           platformSupported: adapter.isSupported,
+          canOpenSystemSettings: adapter.canOpenSystemSettings,
           preferences: store.read(),
           permissionRequested: store.wasPermissionRequested,
         ));
@@ -44,6 +45,7 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
       state.copyWith(
         loading: false,
         platformSupported: _adapter.isSupported,
+        canOpenSystemSettings: _adapter.canOpenSystemSettings,
         preferences: preferences,
         permission: permission,
         permissionRequested: _store.wasPermissionRequested,

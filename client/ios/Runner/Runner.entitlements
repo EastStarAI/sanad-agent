@@ -8,5 +8,12 @@
 		<string>applinks:staging.app.sanad.eaststarai.com</string>
 		<string>applinks:app.sanad.eaststarai.com</string>
 	</array>
+	<!-- Remote notifications. The value is the development environment, which is
+	     what a capability-generated entitlement carries; a distribution profile
+	     upgrades it to production when the app is signed for release. The App ID
+	     must have the Push Notifications capability enabled before a build with
+	     this key can be signed. -->
+	<key>aps-environment</key>
+	<string>development</string>
 </dict>
 </plist>
