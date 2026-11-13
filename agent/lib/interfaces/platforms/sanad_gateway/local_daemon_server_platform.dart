@@ -362,7 +362,13 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
       onDone: () {
         _clients.remove(socket);
         _socketDeviceIds.remove(socket);
-        clientProfiles?.forget(_clientInstances.remove(socket));
+        // The instance registration belongs to this socket: release only this
+        // connection's claim, so a reconnect or a second window holding the
+        // same instance id keeps the locale and capability it announced.
+        clientProfiles?.forget(
+          _clientInstances.remove(socket),
+          connectionKey: socket,
+        );
         _clientOrigins.remove(socket);
         deliveryPresence?.removeLocalMember(socket);
         _platformRuntimeBridge.unregisterChannel(
@@ -420,11 +426,17 @@ class LocalDaemonServerPlatform extends BasePlatform with SanadGatewayBehavior {
         });
         return;
       }
-      _clientInstances[socket] = instanceId;
       // Display facts only: the locale notification copy is rendered in and
       // whether this instance can notify at all. Absent values keep the
-      // documented fallback; they never grant or deny anything.
-      clientProfiles?.registerFromHello(envelope);
+      // documented fallback; they never grant or deny anything. The facts are
+      // held per connection so one closing socket cannot erase a registration
+      // another live socket still holds.
+      final previousInstanceId = _clientInstances[socket];
+      _clientInstances[socket] = instanceId;
+      if (previousInstanceId != null && previousInstanceId != instanceId) {
+        clientProfiles?.forget(previousInstanceId, connectionKey: socket);
+      }
+      clientProfiles?.registerFromHello(envelope, connectionKey: socket);
       _clientOrigins[socket] = AuthenticatedCommandOrigin.fromLocalHello(
         envelope,
       );

@@ -1133,15 +1133,16 @@ local, cloud, and push copies. A Client shows one notification per
         "android_channel_id": "sanad_permission_request_high",
         "ios_category": "SANAD_PERMISSION_REQUEST",
         "thread_id": "session-id"
-      },
-      "instruction_event_id": "evt_instruction_01J..."
+      }
     }
   }
 }
 ```
 
-`instruction_event_id` is transport correlation only. It never identifies the
-notification and never replaces `notification.event_id`.
+The instruction's own identity is the canonical envelope `event_id`. The payload
+does not repeat it: one identity field is enough, and a second one invites a
+receiver to dedupe on the wrong value. `notification.event_id` is the ask, and
+it is the only key a Client shows or replaces a notification by.
 
 A withdrawal carries no copy:
 
@@ -1196,8 +1197,9 @@ connection time and the Agent keeps a template table covering the notification
 kinds and action labels only.
 
 - The authenticated local `client.hello` carries an optional `locale` (BCP-47;
-  `ar`, `ar-SA`, and `ar_SA` all resolve to Arabic). `metadata.locale` is read
-  as the same value when a transport nests display metadata.
+  `ar`, `ar-SA`, and `ar_SA` all resolve to Arabic) and an optional
+  `notification_capable` boolean. `metadata.locale` is read as the same value
+  when a transport nests display metadata.
 - An absent, unsupported, or unregistered locale falls back to `en`, the
   authored source locale.
 - `title` is the session title, carried verbatim and never translated. When the
@@ -1206,6 +1208,20 @@ kinds and action labels only.
 - One instruction carries one locale, chosen from the origin instance and
   reused by every step of that ask. Per-device locale selection belongs to the
   Client surface work.
+- The facts are held per connection. A closing socket releases only its own
+  claim; the registration survives while another live connection still holds
+  the same instance id, because a reconnect or a second window is the same
+  Client.
+
+**Cloud route limitation.** A cloud Client cannot register either fact today.
+The cloud envelope carries a Gateway-authored `origin_client` block with no
+locale and no capability field, and the Agent registers display facts only from
+the authenticated local `client.hello`. A cloud-originated ask therefore renders
+in `en` and is treated as able to notify (`canNotify` defaults to true), so the
+origin-first step still applies when that instance is in the fresh recipient
+set. This is a known gap, not a declaration by the Client: `174e` must carry the
+facts through `origin_client` before a cloud Client's locale or
+`notification_capable: false` has any effect.
 
 Client localization keys that carry the same sentences are named
 `notification<Kind><Title|Body>` and `notificationAction<Label>`. The Agent copy
@@ -1245,6 +1261,15 @@ A Client that is currently displaying the session only silences its own banner.
 It never suppresses the escalation, because an open window is not evidence that
 a human is in front of it.
 
+**Cloud egress.** The Agent's cloud adapter gates ordinary family events on the
+live `cloud_delivery_interest` set: when no recipient is cloud-only, the event is
+not serialized or sent. A notification instruction is exempt and is always
+eligible for cloud egress. The account-scoped step exists exactly for the device
+the interest set cannot see — a phone that is offline, or the only device holding
+the push token — so suppressing the instruction there would strand the user with
+a run waiting on them. `notification.dispatch` and `notification.withdraw` both
+bypass the gate; every other event keeps it.
+
 ### 7.6 Target semantics and relay obligations
 
 | `target.scope` | Meaning | Relay obligation |
@@ -1265,8 +1290,42 @@ a human is in front of it.
 ### 7.7 Redaction, bounds, and expiry
 
 Every text field (`title`, `body`, every action label) crosses the Agent's
-existing secret-redaction path and is then bounded: 120 characters for the
-title, 280 for the body, 32 for an action label. Whitespace is collapsed first.
+existing secret-redaction path (`agent/lib/core/secrets_redactor.dart`, the
+single owner) and is then bounded: 120 characters for the title, 280 for the
+body, 32 for an action label. Whitespace is collapsed first.
+
+The redactor covers, by shape:
+
+| Shape | Example |
+|---|---|
+| Provider key prefix | `sk-…`, `nvapi-…`, `pk-…` |
+| AWS access key id | `AKIA…`, `ASIA…` (`AKIAIOSFODNN7EXAMPLE`) |
+| Source-host token | `ghp_…`, `gho_…`, `ghs_…`, `github_pat_…`, `glpat-…` |
+| Authorization header / bearer token | `Authorization: Bearer <token>`, `x-api-key: <value>` |
+| Named assignment, including a CLI flag | `token=…`, `--password=hunt4` |
+| Named flag with the value in the next word | `--token abc123` |
+| JSON credential field | `"api_key":"…"` |
+
+The name/value shapes recognize `api_key`/`apikey`, `secret`, `client_secret`,
+`token`, `access_token`, `refresh_token`, `auth_token`, `password`/`passwd`, and
+`private_key`, with `_`, `-`, or no separator between words. `authorization` and
+`x-api-key` are recognized as header fields, and a JSON key with any of those
+names is redacted structurally. A value floor of four characters keeps a short
+flag password such as `--password=hunt4` inside the guarantee.
+**Precise limitation.** A credential that has no recognizable prefix, no
+credential-shaped name, and no assignment cannot be detected without redacting
+ordinary prose, and is not detected:
+
+- a bare positional argument, such as `tool -p hunt4` or `tool hunt4`;
+- a value split across lines (`--token` on one line, the value on the next);
+- a PEM block's body (`-----BEGIN … PRIVATE KEY-----` and the base64 after it) —
+the header line is ordinary text and the body is indistinguishable from data.
+
+This is a bounded limitation, not an absolute guarantee: the composer composes
+the ask (a tool name, a command line, a question, a form reason) and never a
+free-form secret, so the shapes above cover what a suspension can carry. Copy
+that is not credential-shaped is deliberately not mangled, because an unreadable
+notification is a failed notification.
 
 The payload carries the redacted ask itself and nothing else. It never carries a
 conversation transcript, tool output, a tool schema, a workspace path, a policy

@@ -110,6 +110,68 @@ void main() {
     });
   });
 
+  group('connection-scoped forgetting', () {
+    test(
+      'a closing socket does not erase an instance another socket holds',
+      () {
+        final profiles = ClientInstanceProfiles();
+        profiles.register(
+          clientInstanceId: _instance,
+          locale: 'ar',
+          canNotify: false,
+          connectionKey: 'socket-a',
+        );
+        profiles.register(
+          clientInstanceId: _instance,
+          connectionKey: 'socket-b',
+        );
+
+        profiles.forget(_instance, connectionKey: 'socket-a');
+
+        expect(
+          profiles.localeFor(_instance),
+          NotificationLocale.arabic,
+          reason: 'socket-b still holds the same instance',
+        );
+        expect(profiles.canNotify(_instance), isFalse);
+
+        profiles.forget(_instance, connectionKey: 'socket-b');
+
+        expect(profiles.localeFor(_instance), NotificationLocale.fallback);
+        expect(profiles.canNotify(_instance), isTrue);
+      },
+    );
+
+    test('a hello registration is released with its own socket', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.registerFromHello(const {
+        'client_instance_id': _instance,
+        'locale': 'ar',
+      }, connectionKey: 'socket-a');
+
+      profiles.forget(_instance, connectionKey: 'socket-other');
+      expect(profiles.localeFor(_instance), NotificationLocale.arabic);
+
+      profiles.forget(_instance, connectionKey: 'socket-a');
+      expect(profiles.localeFor(_instance), NotificationLocale.fallback);
+    });
+
+    test('a bare forget cannot erase a registration a socket holds', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.register(
+        clientInstanceId: _instance,
+        locale: 'ar',
+        connectionKey: 'socket-a',
+      );
+
+      profiles.forget(_instance);
+      expect(profiles.localeFor(_instance), NotificationLocale.arabic);
+
+      profiles.clear();
+      expect(profiles.localeFor(_instance), NotificationLocale.fallback);
+    });
+  });
+
   test('the registry is bounded', () {
     final profiles = ClientInstanceProfiles(capacity: 2);
     for (var index = 0; index < 4; index += 1) {

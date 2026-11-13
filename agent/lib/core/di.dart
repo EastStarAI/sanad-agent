@@ -551,7 +551,7 @@ void setupDI() {
       ),
       profiles: getIt<ClientInstanceProfiles>(),
       sessionTitle: (sessionId) =>
-          getIt<SessionManager>().getSession(sessionId)?.title,
+          getIt<SessionManager>().getSessionTitle(sessionId),
       sink: (instruction) {
         if (!getIt.isRegistered<GatewayManager>()) return;
         getIt<GatewayManager>().publishFamilyEvent(

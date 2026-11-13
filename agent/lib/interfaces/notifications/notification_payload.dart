@@ -10,6 +10,7 @@ library;
 import 'dart:convert';
 
 import '../../core/secrets_redactor.dart';
+import '../platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'notification_ask.dart';
 import 'notification_copy.dart';
 import 'notification_kind.dart';
@@ -25,6 +26,19 @@ abstract final class NotificationWire {
 
   /// Payload key holding the instruction object inside the canonical payload.
   static const payloadKey = 'notification';
+
+  /// Whether [eventType] names a notification instruction.
+  ///
+  /// These events are always eligible for cloud egress, unlike ordinary
+  /// family events. The Agent names a target, not a token: the relay is the
+  /// only route that reaches a device the account is carrying, and a device
+  /// that is dark right now is exactly the one an escalation exists for. An
+  /// interest set with no cloud-only recipient therefore proves only that the
+  /// device holding the ask is elsewhere, which is the case the copy must still
+  /// cover.
+  static bool isInstructionEvent(String? eventType) =>
+      eventType == CanonicalEventTypes.notificationDispatch ||
+      eventType == CanonicalEventTypes.notificationWithdraw;
 }
 
 /// Who a dispatch step is addressed to.
@@ -137,17 +151,16 @@ class NotificationPayloadComposer {
 
   /// Composes one dispatch instruction.
   ///
-  /// [dispatchEventId] is assigned by the transport layer to the canonical
-  /// event that carries this payload; it is kept on the instruction as
-  /// `instruction_event_id` only so diagnostics never confuse it with
-  /// [NotificationAsk.eventId], which is the notification's identity.
+  /// The instruction's own identity is the canonical envelope `event_id` the
+  /// transport mints; the payload deliberately does not repeat it, so no field
+  /// can be confused with [NotificationAsk.eventId], which is the
+  /// notification's identity.
   Map<String, dynamic> composeDispatch({
     required NotificationAsk ask,
     required NotificationLocale locale,
     required NotificationTarget target,
     required NotificationDispatchStep step,
     required DateTime dispatchedAt,
-    String? dispatchEventId,
   }) {
     final text = NotificationCopy.render(
       kind: ask.kind,
@@ -190,8 +203,6 @@ class NotificationPayloadComposer {
           urgency: ask.effectiveUrgency,
           sessionId: ask.sessionId,
         ),
-        if (dispatchEventId != null)
-          'instruction_event_id': _identifier(dispatchEventId),
       },
     };
   }
@@ -206,7 +217,6 @@ class NotificationPayloadComposer {
     required NotificationAsk ask,
     required String reason,
     required DateTime withdrawnAt,
-    String? dispatchEventId,
   }) => {
     'protocol': NotificationWire.protocol,
     'version': NotificationWire.version,
@@ -221,8 +231,6 @@ class NotificationPayloadComposer {
       'reason': reason,
       'created_at': _timestamp(withdrawnAt),
       'expires_at': _timestamp(withdrawnAt.toUtc().add(lifetime)),
-      if (dispatchEventId != null)
-        'instruction_event_id': _identifier(dispatchEventId),
     },
   };
 

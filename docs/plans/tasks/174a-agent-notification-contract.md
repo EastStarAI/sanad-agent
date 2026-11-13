@@ -1,6 +1,6 @@
 # 174a — Agent notification contract and delivery policy
 
-**Status:** implemented — G0–G5 closed on `task/174a-agent-contract`; awaiting review
+**Status:** implemented — G0–G5 closed on `task/174a-agent-contract`; review notes W1–S6 applied
 **Owners:** `agent/lib/interfaces/notifications/`, `agent/lib/interfaces/runtime/`, `docs/technical/communication_protocols.md`
 **Plan:** [174](../174-client-notifications-and-push-delivery.md)
 **Contract:** [docs/technical/communication_protocols.md](../../technical/communication_protocols.md) §7
@@ -77,11 +77,17 @@ the Agent knows only that it is in neither set; tokens and the device inventory
 stay in the hosted service.
 
 **Redaction (G0.3)** `agent/lib/core/secrets_redactor.dart` → `SecretsRedactor`
-is the single owner of secret scrubbing for runtime notices and logs. It
-recognizes key prefixes (`sk-`, `nvapi-`, …), `Bearer` tokens, `x-api-key` and
+is the single owner of secret scrubbing for runtime notices and logs. At G0 it
+recognized key prefixes (`sk-`, `nvapi-`, …), `Bearer` tokens, `x-api-key` and
 `Authorization` headers, assignments (`token = …`), and JSON credential fields,
 and its own contract says it redacts a span rather than leak it. It is reused
-unchanged; no second implementation exists.
+unchanged in structure — no second implementation exists — and the review (W1)
+extended the same owner with the credential shapes a suspension can carry, since
+the notification body is a new low-trust surface (relay, lock screen): AWS access
+key ids, GitHub and GitLab tokens, and flag-separated secrets. The bounded
+limitation is recorded in
+[docs/technical/communication_protocols.md](../../technical/communication_protocols.md)
+§7.7 rather than implied away.
 
 **Locale (G0.4)** The local `client.hello` carries `protocol`, `version`,
 `client_instance_id`, `capabilities`, and `metadata` = `ClientDisplayMetadata`
@@ -145,9 +151,9 @@ real socket boundary).
 **Evidence:** `notification_payload.dart` (single composer; `SecretsRedactor`
 then bounds 120/280/32), `notification_ask.dart` (the only reader of a suspension
 payload; selects the tool name, the permission command, and the question or form
-reason only), and `notification_payload_test.dart` (10 cases, including a
+reason only), and `notification_payload_test.dart` (11 cases, including a
 payload full of transcript/tool-output/schema/path/credential noise that must not
-appear).
+appear, and the review's cloud-credential and flag-secret canaries).
 
 ### G4 — Wire contract and documentation
 
@@ -215,11 +221,12 @@ Run from `agent/` with the FVM-managed SDK:
 | Command | Result |
 |---|---|
 | `fvm dart analyze` | `No issues found!` |
-| `fvm dart test test/interfaces/notifications test/interfaces/notification_origin_capture_test.dart` | `+69: All tests passed!` |
-| `fvm dart test test/interfaces/platforms/sanad_gateway/local_gateway_transport_test.dart` | `+25: All tests passed!` |
-| `fvm dart test test/interfaces test/guards test/capabilities/permission_manager_test.dart` | `+1028 ~1 -1`; the single failure is `test/interfaces/local_workspace_runtime_service_test.dart` → `PathAccessException: Directory listing failed, path = '/' (OS Error: Permission denied, errno = 13)` |
-| `fvm dart test test/interfaces/local_workspace_runtime_service_test.dart --name "returns system roots when path is empty"` | reproduces alone; the sandbox denies listing `/`, and neither the test nor its subject is touched by this task |
-| `fvm dart format --output=none --set-exit-if-changed lib/interfaces/notifications test/interfaces/notifications test/interfaces/notification_origin_capture_test.dart` | clean (new files formatted; the pre-existing non-canonical format of `gateway_manager.dart`, `platform_runtime_bridge.dart`, and `di.dart` was left untouched to avoid unrelated churn) |
+| `fvm dart test test/core/secrets_redactor_test.dart test/interfaces/notifications test/interfaces/notification_origin_capture_test.dart test/interfaces/platforms/sanad_gateway/delivery_presence_controller_test.dart test/interfaces/platforms/sanad_gateway/local_gateway_transport_test.dart` | `+140: All tests passed!` |
+| `fvm dart test test/interfaces test/guards test/core` | `+2092 ~14 -1`; the single failure is `test/interfaces/local_workspace_runtime_service_test.dart` → `PathAccessException: Directory listing failed, path = '/' (OS Error: Permission denied, errno = 13)` |
+| `fvm dart test test/evolution` | `+504 ~1 -6`; all six failures are `Failed to load dynamic library 'libsqlite3.so'` from tests that call `sqlite3.open` without loading through `AgentStateDatabase`, whose Linux override opens `libsqlite3.so.0`. This host has the runtime library and not the `-dev` symlink; neither file is touched by this task. |
+| `fvm dart test test/guards/file_size_ratchet_guard_test.dart` | `+3: All tests passed!` — the cloud adapter is back to 1010 lines, exactly at its never-raised allowlist |
+| `fvm dart format --output=none --set-exit-if-changed lib/core/secrets_redactor.dart lib/interfaces/notifications test/interfaces/notifications test/interfaces/platforms/sanad_gateway/delivery_presence_controller_test.dart` | clean |
+| `fvm dart run scripts/lint_wiki.dart` | 2 pre-existing `Missing markdown frontmatter` errors in `docs/qa_maintenance/mobile_new_account_onboarding_qa.md` and `docs/technical/context_window_resolution.md`; both files are untouched by this task |
 
 ## Decisions during implementation
 
@@ -261,15 +268,52 @@ Run from `agent/` with the FVM-managed SDK:
     fixed expiry stops a late escalation from waking a device for a finished ask.
 11. **`expires_at` is computed from composition, not from escalation.** The ask's
     lifetime is one deadline; an escalation only re-addresses it.
+12. **The payload carries no `instruction_event_id` (review S1).** The
+    instruction's identity is the canonical envelope `event_id`, which the
+    transport mints after composition; repeating it in the payload invited a
+    receiver to dedupe on the wrong value and gave the composer a parameter no
+    caller could fill. It was dropped from both the composer and §7.2.
+13. **One fallback definition of the copy locale (review S2).**
+    `NotificationLocale.resolve` is that definition;
+    `NotificationLocale.fallback` is the constant it applies. The uncalled
+    `notificationLocaleOrDefault` wrapper was removed instead of becoming a
+    second spelling of the same rule.
+14. **A notification instruction is always eligible for cloud egress (review
+    W3).** `DeliveryPresenceController.claimCloudEgress(always: true)` is the
+    explicit override the cloud adapter uses for
+    `notification.dispatch`/`notification.withdraw`; ordinary family events keep
+    the interest gate. The account-scoped step exists for the device the live
+    `cloud_delivery_interest` set cannot see, so gating it there suppressed the
+    escalation in exactly the offline-phone case it was written for. Regression
+    coverage is in `delivery_presence_controller_test.dart`.
+15. **Display facts are held per connection (review S4).**
+    `ClientInstanceProfiles` records which connections announced an instance and
+    a disconnect releases only that claim, so a reconnect or a second window
+    holding the same instance id keeps its locale and capability. A bare
+    `forget` erases nothing while a connection still holds the instance.
+16. **The notification title read is a single row (review W2).**
+    `SessionManager.getSessionTitle` reads the session row; `getSession`
+    hydrates message history and perturbs the eight-entry snapshot cache, which
+    a notification per ask must never do.
+17. **The cloud adapter's device `platform` label moved to its owner.** The file
+    is allowlisted at 1010 lines by the size ratchet and may only shrink, so the
+    review's egress exemption had to be paid for in the same file: the private
+    `_getPlatformName()` helper was removed and the registration payload now
+    sends `Platform.operatingSystem`, the value every other Agent surface sends
+    (`core/setup/service_definition_inspector.dart`, `core/update/`). The three
+    delivered names (`windows`, `macos`, `linux`) are unchanged.
 
 ## Open items
 
 - Terminal kinds (`completed`, `failed`, `background_task_done`,
   `scheduled_result`, `provider_quota`) are modeled and have copy, but no emitter
   is wired; see the G0 inventory for why this task's gates do not require it.
-- The cloud route cannot register a locale yet (the Gateway authors
-  `origin_client` and forwards no locale), so a cloud-originated ask renders in
-  the fallback locale until `174e`/`174f`.
+- The cloud route cannot register a locale **or** `notification_capable` yet:
+  the Gateway authors `origin_client` and forwards neither field, and display
+  facts are registered only from the authenticated local `client.hello`. A
+  cloud-originated ask therefore renders in the fallback locale and is treated
+  as able to notify until `174e`/`174f` carry the facts. This is documented in
+  §7.4 (review S6).
 - Per-device locale, quiet hours, and digesting are out of scope of plan 174.
 - `client/` is untouched: the 21 Client localization keys are recorded as
   expected-missing in the parity test and are authored by `174f`.

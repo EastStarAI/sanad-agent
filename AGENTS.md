@@ -115,9 +115,10 @@ Choose verification by blast radius:
 
 ## 5. UI Localization Constraint
 
-* **Localized Interface Text:** The Client interface is multilingual (`en` and `ar` RTL). Every user-facing string is resolved through the Client localization system instead of being hard-coded in widget code, with `client/lib/l10n/app_en.arb` remaining the authored source locale. Handwritten Dart, widget and UI source in `client/` must never contain Arabic text as a literal; generated localization Dart (`lib/l10n/app_localizations*.dart`) naturally carries the translated strings and is not a source restriction.
+* **Localized Interface Text:** The Client interface is multilingual (`en` and `ar` RTL). Every user-facing Client string is resolved through the Client localization system instead of being hard-coded in widget code, with `client/lib/l10n/app_en.arb` remaining the authored source locale. Handwritten Dart, widget and UI source in `client/` must never contain Arabic text as a literal; generated localization Dart (`lib/l10n/app_localizations*.dart`) naturally carries the translated strings and is not a source restriction.
+* **Agent-Authored Notification Copy:** Notification copy is the one interface surface the Agent renders, because it leaves the device already localized while the app may be closed. Its `ar` column is authored in `agent/lib/interfaces/notifications/`, is interface copy and not agent-facing output, and must stay key-for-key paired with the Client localization keys.
 * **English-Only Non-Interface Artifacts:** Documentation, code, comments, logs, protocol payloads, and agent-facing output remain English-only.
-* **Owning Contract:** `client/AGENTS.md` owns locale mechanics and string ownership, and [docs/technical/client_multilanguage.md](docs/technical/client_multilanguage.md) owns the remaining-string coverage report; keep that detail there rather than duplicating it here.
+* **Owning Contract:** `client/AGENTS.md` owns Client locale mechanics and Client string ownership; [docs/technical/communication_protocols.md](docs/technical/communication_protocols.md) §7.4 owns the Agent-authored notification copy and its parity rule, and [docs/technical/client_multilanguage.md](docs/technical/client_multilanguage.md) owns the remaining-string coverage report. Keep that detail there rather than duplicating it here.
 
 ---
 

@@ -12,7 +12,6 @@
 /// leaves the device crosses the same existing secret-redaction path.
 library;
 
-import 'notification_copy.dart';
 import 'notification_kind.dart';
 
 /// One unresolved ask, reduced to what a notification is allowed to carry.
@@ -144,11 +143,3 @@ abstract final class NotificationWithdrawReason {
   static const sessionTerminal = 'session_terminal';
   static const disposed = 'disposed';
 }
-
-/// Resolves the copy locale for a notification.
-///
-/// The dispatcher passes the locale registered for the origin instance; this
-/// helper exists so tests and future callers have one definition of the
-/// fallback.
-NotificationLocale notificationLocaleOrDefault(Object? registeredLocale) =>
-    NotificationLocale.resolve(registeredLocale);

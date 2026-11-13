@@ -76,6 +76,77 @@ void main() {
     });
   });
 
+  group('SecretsRedactor.redact — self-identifying cloud credentials', () {
+    test('redacts an AWS access key id', () {
+      const input = 'aws s3 sync failed with AKIAIOSFODNN7EXAMPLE';
+      final out = redactor.redact(input);
+      expect(out.contains('AKIAIOSFODNN7EXAMPLE'), isFalse);
+      expect(out, contains('AKIA***'));
+      expect(out, contains('s3 sync failed'));
+    });
+
+    test('redacts an STS temporary access key id', () {
+      const input = 'ASIAY34FZKBOKMUTVV7A';
+      final out = redactor.redact(input);
+      expect(out.contains('ASIAY34FZKBOKMUTVV7A'), isFalse);
+      expect(out, contains('ASIA***'));
+    });
+
+    test('redacts GitHub and GitLab tokens', () {
+      const github = 'push rejected: ghp_16C7e42F292c6912E7710c838347Ae178B4a';
+      const fineGrained =
+          'github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz';
+      const gitlab = 'glpat-ABCDEFGHIJKLMNOPQRST';
+
+      for (final input in [github, fineGrained, gitlab]) {
+        final out = redactor.redact(input);
+        expect(
+          out.contains(input.split(': ').last),
+          isFalse,
+          reason: 'the token body must not survive: $input',
+        );
+        expect(out, contains('***'));
+      }
+
+      expect(redactor.redact(github), contains('ghp_***'));
+      expect(redactor.redact(gitlab), contains('glpat-***'));
+    });
+
+    test('keeps ordinary prose that merely looks key-like', () {
+      const input = 'The AKIA preview in the docs is a placeholder, not a key.';
+      expect(redactor.redact(input), input);
+    });
+  });
+
+  group('SecretsRedactor.redact — flag-separated credentials', () {
+    test('redacts a short --password=value', () {
+      const input = 'Running: mysql --user=root --password=hunt4 -e "select 1"';
+      final out = redactor.redact(input);
+      expect(out.contains('hunt4'), isFalse);
+      expect(out, contains('mysql'));
+      expect(out, contains('--user=root'));
+    });
+
+    test('redacts a space-separated --token value', () {
+      const input = 'curl --token abc123 https://api.example.test/v1';
+      final out = redactor.redact(input);
+      expect(out.contains('abc123'), isFalse);
+      expect(out, contains('curl'));
+      expect(out, contains('https://api.example.test/v1'));
+    });
+
+    test('redacts a space-separated --api-key value', () {
+      const input = 'tool --api-key sk-live-9f8e7d6c5b';
+      final out = redactor.redact(input);
+      expect(out.contains('sk-live-9f8e7d6c5b'), isFalse);
+    });
+
+    test('keeps a named flag without a value', () {
+      const input = 'Pass --force to overwrite, and read the token docs first.';
+      expect(redactor.redact(input), input);
+    });
+  });
+
   group('SecretsRedactor.redact — preserves provider context', () {
     test('keeps model names and status text', () {
       const input =

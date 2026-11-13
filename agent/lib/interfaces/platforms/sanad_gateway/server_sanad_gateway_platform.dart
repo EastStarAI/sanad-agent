@@ -14,6 +14,7 @@ import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_payload.dart';
 import 'package:sanad_agent/interfaces/platforms/base_platform.dart';
 
 import 'capabilities_loader.dart';
@@ -869,7 +870,9 @@ class ServerSanadGatewayPlatform extends BasePlatform
         'device_proof': ?deviceProof,
       },
       'hardware_id': authManager.hardwareId,
-      'platform': _getPlatformName(),
+      // `Platform.operatingSystem` owns this label: it yields the same
+      // `windows`/`macos`/`linux` names every other Agent surface sends.
+      'platform': Platform.operatingSystem,
       ...capabilities.toJson(),
       'transport_capabilities': const [deliveryPresenceCapability],
     };
@@ -971,20 +974,20 @@ class ServerSanadGatewayPlatform extends BasePlatform
     _socket!.emit('device_event', canonicalEnvelope);
   }
 
-  String _getPlatformName() {
-    if (Platform.isWindows) return 'windows';
-    if (Platform.isMacOS) return 'macos';
-    if (Platform.isLinux) return 'linux';
-    return 'unknown';
-  }
-
   @override
   Future<void> sendResponse(GatewayResponse response) async {
     final localDeliveryExclusions =
         deliveryPresence?.takeLocalDelivery(response.eventId) ??
         const <String>{};
-    // The interest gate precedes canonical translation/serialization.
-    if (deliveryPresence?.claimCloudEgress() == false) return;
+    // The interest gate precedes canonical translation/serialization; a
+    // notification instruction is exempt (communication_protocols.md §7.5)
+    // because the relay owns the push tokens and the target may be offline.
+    final notification = NotificationWire.isInstructionEvent(
+      response.message.metadata?['canonical_event_type']?.toString(),
+    );
+    if (deliveryPresence?.claimCloudEgress(always: notification) == false) {
+      return;
+    }
     final canonicalEvent = _protocolBridge.translateResponse(response);
     await _emitAgentEvent(
       _protocolBridge.buildAgentEventEnvelope(canonicalEvent),

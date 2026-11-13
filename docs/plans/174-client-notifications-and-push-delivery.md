@@ -2,8 +2,8 @@
 title: "Client Notifications and Push Delivery"
 description: "Agent-owned notification decisions, local OS delivery on desktop, mobile push, and web push, all through a content-opaque hosted relay."
 status: active
-current_gate: G0
-remaining_estimate: 0%
+current_gate: "174b implementation (174a implemented)"
+remaining_estimate: "174b–174f unstarted"
 ---
 
 # Plan 174 — Client Notifications and Push Delivery

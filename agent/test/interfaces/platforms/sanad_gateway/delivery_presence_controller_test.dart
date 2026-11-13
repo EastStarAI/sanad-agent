@@ -153,6 +153,107 @@ void main() {
     },
   );
 
+  group('a notification instruction always reaches the cloud', () {
+    GatewayResponse notificationResponse(String eventType) => GatewayResponse(
+      sessionId: 'session-1',
+      message: Message(
+        role: MessageRole.assistant,
+        metadata: {
+          'canonical_event_type': eventType,
+          'canonical_payload': {
+            'protocol': 'sanad.notification',
+            'version': 1,
+            'session_id': 'session-1',
+            'notification': {
+              'instruction': 'dispatch',
+              'event_id': 'evt_ask_1',
+              'target': {'scope': 'account'},
+            },
+          },
+        },
+      ),
+    );
+
+    /// Runs one response through the real gate and reports how the gate voted.
+    Future<Map<String, int>> dispatch(
+      GatewayResponse response, {
+      required DeliveryPresenceController presence,
+    }) async {
+      final platform = ServerSanadGatewayPlatform(deliveryPresence: presence);
+      try {
+        await platform.sendResponse(response);
+      } on Object {
+        // A claimed event proceeds to canonical translation, and this test
+        // registers no SanadProtocolBridge. That throw is the proof the gate
+        // let the event through; a suppressed event returns before it.
+      }
+      return presence.metrics;
+    }
+
+    test('with an empty live interest set', () async {
+      controller.acceptInterest(lease(revision: 1, instances: []));
+      expect(controller.shouldEmitCloud, isFalse);
+
+      expect(
+        await dispatch(
+          notificationResponse('notification.dispatch'),
+          presence: controller,
+        ),
+        {'local': 0, 'cloud': 1, 'suppressed': 0},
+      );
+    });
+
+    test('with an interest set that is entirely local', () async {
+      controller.updateLocalMember(
+        'socket-local',
+        clientInstanceId: localInstance,
+      );
+      controller.acceptInterest(lease(revision: 1, instances: [localInstance]));
+      expect(controller.shouldEmitCloud, isFalse);
+
+      expect(
+        await dispatch(
+          notificationResponse('notification.dispatch'),
+          presence: controller,
+        ),
+        {'local': 0, 'cloud': 1, 'suppressed': 0},
+      );
+    });
+
+    test('and a withdrawal is not stranded either', () async {
+      controller.acceptInterest(lease(revision: 1, instances: []));
+
+      expect(
+        await dispatch(
+          notificationResponse('notification.withdraw'),
+          presence: controller,
+        ),
+        {'local': 0, 'cloud': 1, 'suppressed': 0},
+      );
+    });
+
+    test('while an ordinary family event keeps the gate', () async {
+      controller.acceptInterest(lease(revision: 1, instances: []));
+
+      expect(
+        await dispatch(
+          GatewayResponse(
+            sessionId: 'session-1',
+            message: Message(
+              role: MessageRole.assistant,
+              metadata: {
+                'canonical_event_type': 'session_preferences_updated',
+                'canonical_payload': const {'session_id': 'session-1'},
+              },
+            ),
+          ),
+          presence: controller,
+        ),
+        {'local': 0, 'cloud': 0, 'suppressed': 1},
+      );
+    });
+  });
+
   test('event-local delivery is cloud-relevant, consumable, and bounded', () {
     controller.acceptInterest(
       lease(revision: 1, instances: [localInstance, remoteInstance]),
