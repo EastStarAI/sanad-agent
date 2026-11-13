@@ -1383,10 +1383,16 @@ authenticated Cloud Socket, so no second credential exists for push.
 - Registration is idempotent and repeated on every return to a ready
   authenticated socket, because the relay may have dropped the binding while the
   device was away.
-- The token is a bearer capability: the Client keeps it in memory only and never
-  writes it to logs, preferences, workspace state, or an Agent payload.
+- The token is a bearer capability: the Client holds it in memory for the account
+  session and never writes it to a log, workspace state, or an Agent payload. The
+  one persisted form is the pending-withdrawal record that makes a revocation
+  survive the socket teardown which precedes it: it holds the token until the
+  relay accepts `push.revoke_token` on a ready authenticated socket, is capped at
+  eight entries, and is emptied on acceptance or on account deletion.
 - A Client announces a token only while an account session exists. Logout, a
-  terminal `auth_revoked`, and account deletion all send `push.revoke_token`.
+  terminal `auth_revoked`, and account deletion all withdraw it; a withdrawal the
+  socket cannot carry is sent as soon as an authenticated socket exists, and
+  before the token could be announced again.
 - An event whose `version` the Gateway does not know is dropped, never guessed.
 
 #### Provider payload

@@ -45,14 +45,59 @@ tied to the account session rather than to the app process:
 3. **Re-register on reconnect.** Every return to a ready authenticated socket
    announces the token again; the relay may have dropped the binding while the
    device was away.
-4. **Revoke when the session ends.** Logout, a terminal Gateway `auth_revoked`,
-   and account deletion (which performs the same logout) all send
-   `push.revoke_token`. A device that signed out stops being a delivery target.
+4. **Withdraw when the session ends.** Logout, a terminal Gateway `auth_revoked`,
+   and account deletion (which performs the same logout) all withdraw the token
+   with `push.revoke_token`. A device that signed out stops being a delivery
+   target.
 
-The token is held in memory only. It is never written to preferences, a
-workspace file, a conversation record, or an Agent payload, and it is never
-logged: the only form that may appear in a log line or diagnostic is a short
-SHA-256 fingerprint, which exists for change detection rather than recovery.
+### The withdrawal ordering constraint
+
+Ending a session is an ordering race, and the withdrawal must not lose it. The
+account lifecycle listener is an **ancestor** of the notification bridge in the
+widget tree, so on `AuthUnauthenticated` it dismantles the cloud socket before
+the bridge observes the same transition. `disconnect()` marks the socket
+`disconnected` synchronously, so the bridge's revocation always meets a socket
+that is not ready, and an emit at that moment would be dropped. Broadcast
+listener order is not a contract between two widgets, so the fix does not reorder
+them; the withdrawal simply does not depend on readiness:
+
+1. The registrar writes the withdrawal — provider, token, device, and request
+   time — to the app-private preferences store **before** it attempts to send it.
+2. It still sends immediately when the socket is ready, which is the normal case
+   for a rotation or a revocation that happens while connected.
+3. The record is cleared **only** after the relay accepts the withdrawal on a
+   ready authenticated socket. A crash between the emit and the clear repeats an
+   idempotent revocation instead of losing it.
+4. On the next authenticated connection the registrar flushes every record
+   **before** it announces the current token. Both the fresh-authentication path
+   and the reconnect path follow that order, and a provider rotation that arrives
+   on its own schedule settles what is owed first as well, so a token being
+   retired is never re-registered ahead of its own revocation.
+5. Account deletion drops a record instead of retrying it: the binding dies with
+   the account, and a provider token is a per-installation capability rather than
+   an account credential, so nothing a later session could do would withdraw it.
+
+The single visible consequence is that a revocation of a token the socket could
+not reach is delivered one session late. That is the safe direction: the device
+is already unreachable locally, and the relay retires the binding as soon as the
+record is flushed.
+
+### Token handling and retention
+
+The token is a bearer capability, so it is kept as narrow as the withdrawal rule
+allows:
+
+- In memory the token lives for the account session only.
+- On disk the **only** form is a pending withdrawal in the app-private
+  preferences that already hold the account's refresh token, so the record adds
+  no new trust boundary. The store holds one entry per token, is capped at eight
+  entries, and is emptied once the relay accepts the last withdrawal it carries.
+- The value never appears in a log line, in an Agent payload, in workspace state,
+  or in a diagnostic. The only form a log line may carry is the short SHA-256
+  fingerprint, which exists for change detection rather than recovery.
+- A device that never reconnects keeps its record until it does. The protocol has
+  no other way to retire a binding the relay holds, and dropping the record would
+  silently leave the token live.
 
 ## Channels and categories
 
@@ -165,7 +210,10 @@ presents the same notification twice.
 
 Unit and widget coverage proves the foreground matrix, the token lifecycle,
 payload-only parsing, channel and category derivation, and the fail-closed action
-rules. Device behavior has not been executed on this host:
+rules. The withdrawal ordering is covered at the seam the race happens at: a
+revocation requested against an already-torn-down socket is recorded, flushed on
+the next authenticated connection, and delivered before the same installation
+announces its token again. Device behavior has not been executed on this host:
 
 - `[!]` Android background and terminated display: no Android runtime here; owner
   is the platform/release pipeline, and it also needs the provider module.

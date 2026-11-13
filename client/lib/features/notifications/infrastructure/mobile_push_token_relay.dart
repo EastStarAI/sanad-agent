@@ -25,9 +25,10 @@ abstract class MobilePushTokenRelay {
 
   /// Withdraws [token] from the authenticated account.
   ///
-  /// A revocation that cannot reach the relay is not an error the user sees:
-  /// the token is dropped locally either way, so the next session starts
-  /// without it.
+  /// Returns whether the withdrawal was handed to an authenticated socket. A
+  /// `false` is not an error the user sees: the caller keeps the withdrawal
+  /// recorded and retries it on the next authenticated connection, so a token
+  /// that outlived its session is still retired.
   Future<bool> revoke(MobilePushToken token);
 }
 
@@ -75,8 +76,8 @@ class AccountSessionPushTokenRelay implements MobilePushTokenRelay {
   @override
   Future<bool> revoke(MobilePushToken token) async {
     final value = token.wireValue;
-    // A revocation is attempted even when the socket is down: the local claim is
-    // dropped regardless, and the relay expires an unused token on its own.
+    // A disconnected socket carries nothing, so `false` is the honest answer and
+    // the caller keeps the withdrawal for the next authenticated connection.
     if (value == null) return false;
     if (!isReady) return false;
     _socket.emit(revokeEvent, <String, dynamic>{

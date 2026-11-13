@@ -50,9 +50,13 @@ This contract applies to `client/lib/features/notifications/`.
   interactions, and the device token, and it decides nothing. A build with no
   provider resolves a total no-op.
 - `MobilePushTokenRegistrar` owns the token lifecycle: register after
-  authentication, refresh on rotation, re-register on reconnect, and revoke on
-  logout, session revocation, and account deletion. The token lives in memory only
-  and is referenced in diagnostics by fingerprint alone.
+  authentication, refresh on rotation, re-register on reconnect, and withdraw on
+  logout, session revocation, and account deletion. A withdrawal is durable: it
+  is recorded before it is sent and flushed on the next authenticated connection
+  ahead of any registration, because the account lifecycle tears the cloud socket
+  down before this pipeline sees the logout. The record is the only persisted form
+  of the token, it is bounded, and it is deleted once the relay accepts the
+  withdrawal; diagnostics use the fingerprint alone.
 - `MobileNotificationCatalog` owns the channel and category inventory. Every
   channel is created high importance before any delivery, one per kind, and a
   payload hint is honoured only when it matches the identity the Client owns.

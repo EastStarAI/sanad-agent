@@ -23,6 +23,7 @@ import 'package:sanad_client/features/notifications/application/notification_ser
 import 'package:sanad_client/features/notifications/application/notification_session_opener.dart';
 import 'package:sanad_client/features/notifications/application/mobile_push_service.dart';
 import 'package:sanad_client/features/notifications/application/mobile_push_token_registrar.dart';
+import 'package:sanad_client/features/notifications/data/mobile_push_pending_revocation_store.dart';
 import 'package:sanad_client/features/notifications/domain/models/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_action.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_copy.dart';
@@ -143,6 +144,7 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
     final registrar = MobilePushTokenRegistrar(
       transport: transport,
       relay: getIt<MobilePushTokenRelay>(),
+      pendingRevocations: getIt<MobilePushPendingRevocationStore>(),
     )..start();
     _pushRegistrar = registrar;
     _mobilePushService = MobilePushService(
@@ -161,12 +163,18 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
   /// Registers the device token while an account session exists, and withdraws
   /// it as soon as that session ends.
   ///
-  /// Three events end the session and all three must revoke: an explicit logout
-  /// (which account deletion also performs), and a terminal `auth_revoked` from
-  /// the Gateway. A revoked token is what makes an offline device stop being a
-  /// delivery target, so it is withdrawn before anything else reacts.
+  /// Two events end the session and both must revoke: an explicit logout (which
+  /// account deletion also performs), and a terminal `auth_revoked` from the
+  /// Gateway.
+  ///
+  /// The account lifecycle listener is an ancestor of this widget, so it tears
+  /// the cloud socket down before this listener runs and the revocation always
+  /// meets a disconnected socket. The registrar therefore records the withdrawal
+  /// before it tries to send it and delivers it on the next authenticated
+  /// connection, so the outcome here does not depend on who reacted first.
   void _listenToAccountSession() {
     final auth = context.read<AuthCubit>();
+    final coordinator = getIt<DeviceConnectionCoordinator>();
     if (auth.state is AuthAuthenticated) unawaited(_pushRegistrar!.onAuthenticated());
     _pushSubscriptions.add(
       auth.stream.listen((state) {
@@ -174,18 +182,25 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
           case AuthAuthenticated():
             unawaited(_pushRegistrar!.onAuthenticated());
           case AuthUnauthenticated():
-            unawaited(_pushRegistrar!.revoke(reason: MobilePushRevocationReason.logout));
+            unawaited(
+              _pushRegistrar!.revoke(
+                reason: MobilePushRevocationReason.logout,
+                deviceId: coordinator.currentDeviceId,
+              ),
+            );
           default:
             break;
         }
       }),
     );
-    final cloud = getIt<DeviceConnectionCoordinator>().cloudSocketService;
     _pushSubscriptions.add(
-      cloud.onAuthFailure.listen((payload) {
+      coordinator.cloudSocketService.onAuthFailure.listen((payload) {
         if (payload['terminal'] != true) return;
         unawaited(
-          _pushRegistrar!.revoke(reason: MobilePushRevocationReason.sessionRevoked),
+          _pushRegistrar!.revoke(
+            reason: MobilePushRevocationReason.sessionRevoked,
+            deviceId: coordinator.currentDeviceId,
+          ),
         );
       }),
     );

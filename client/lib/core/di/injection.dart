@@ -60,6 +60,7 @@ import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
 import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/data/mobile_push_pending_revocation_store.dart';
 import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
 import 'package:sanad_client/features/notifications/domain/models/mobile_push_transport.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
@@ -569,6 +570,15 @@ Future<void> configureDependencies({
       () => AccountSessionPushTokenRelay(
         getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
       ),
+    );
+  }
+
+  // A revocation must survive the socket that could not carry it, so the record
+  // of withdrawals still owed is durable. It uses the app-private preferences
+  // that already hold the account's refresh token.
+  if (!getIt.isRegistered<MobilePushPendingRevocationStore>()) {
+    getIt.registerLazySingleton<MobilePushPendingRevocationStore>(
+      () => PreferencesMobilePushPendingRevocationStore(getIt<SharedPreferences>()),
     );
   }
 

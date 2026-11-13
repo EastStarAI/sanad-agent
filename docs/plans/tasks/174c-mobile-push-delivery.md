@@ -58,6 +58,34 @@ reading another one.
 5. **A terminated-client interaction waits for the replayed ask.** An approval is
    answered only after the Client's authoritative state arrives; a timeout drops
    the interaction instead of answering from the payload alone.
+6. **Revocation is durable, not listener-ordered.** Review found G1 unreachable:
+   the account lifecycle listener is an ancestor of the notification bridge, so on
+   `AuthUnauthenticated` it disconnects the cloud socket before the bridge's
+   listener runs, and `disconnect()` marks the socket `disconnected`
+   synchronously. The bridge's revocation therefore always met a socket that was
+   not ready and `push.revoke_token` never left the Client on logout, account
+   deletion, or a terminal `auth_revoked`. Reordering the two widgets would only
+   move the race, so the withdrawal never depends on readiness: it is recorded
+   first, sent immediately when the socket is ready, and flushed on the next
+   authenticated connection before any registration. The record is cleared only
+   once the relay accepts the withdrawal, or dropped when the account is deleted
+   and the binding can never be valid again.
+
+## Review corrections (B1)
+
+- The ordering claim is now verified rather than assumed: `FlutterBloc`'s
+  `BlocListener` subscribes in `initState`, before its child bridge mounts, and
+  `SocketConnectionController.disconnect()` sets
+  `SocketLifecycleState.disconnected` synchronously. The registrar suite
+  reproduces that sequence — teardown, then revoke — and proves the withdrawal
+  still reaches the relay on the next authenticated connection, ahead of the
+  re-registration of the same installation token.
+- G1 was re-marked: the revocation gates are `[x]` because the behavior is
+  reachable now. The token-retention gate is `[!]`, because a withdrawal the
+  socket could not carry keeps the token in one bounded record. That is a
+  deliberate trade against a token that outlives its session; the record adds no
+  new trust boundary (it uses the app-private preferences that already hold the
+  refresh token) and is deleted once the relay accepts the withdrawal.
 
 ## Gates
 
@@ -87,11 +115,30 @@ reading another one.
 
 ### G1 — Token registration
 
-- [x] Register after authentication, refresh on rotation, re-register on reconnect.
+- [x] Register after authentication, refresh on rotation, re-register on reconnect
+      (unit-proven).
 - [x] Revoke on logout, terminal `auth_revoked`, and account deletion (which
-      performs the same logout).
-- [x] The token stays in memory only: never logged, never in the Agent, never in
-      workspace state, and referenced in diagnostics by fingerprint only.
+      performs the same logout), independent of socket readiness: the withdrawal
+      is recorded before it is sent, retried until the relay accepts it, and
+      flushed on the next authenticated connection before any registration. The
+      ordering race that made the earlier claim false is covered by a test that
+      disconnects the relay first and still delivers the withdrawal (unit-proven).
+      Delivery to the hosted relay depends on `174e`.
+- [!] Account deletion as a distinct reason: the deletion flow calls
+      `AuthCubit.logout()`, so the Client emits the `logout` revocation and takes
+      the durable path above. `MobilePushRevocationReason.accountDeleted`
+      implements and unit-proves the drop-instead-of-retry rule, but no app path
+      emits it today; passing a deletion signal to the registrar is follow-up work
+      and is not claimed here.
+- [!] The token is **not** memory-only: a withdrawal the socket could not carry
+      keeps the token in one pending-withdrawal record until the relay accepts the
+      revocation. That is deliberate — the alternative is a token that keeps
+      delivering after logout. The record is the only persisted form (the same
+      app-private preferences that already hold the refresh token), holds one
+      entry per token, is capped at eight, is deleted once accepted, and never
+      reaches a log line, an Agent payload, or workspace state; diagnostics use
+      the fingerprint alone. The earlier "in memory only" claim in this file was
+      wrong.
 
 ### G2 — Foreground display policy
 
@@ -144,8 +191,11 @@ reading another one.
 | Foreground, exact session visible | PASS (unit) | `mobile_foreground_policy_test.dart`, `mobile_push_service_test.dart` |
 | Foreground, other session visible | PASS (unit) | Same suites; also asserts channel/category identity |
 | Socket and push copy of one event | PASS (unit) | One presentation for one `event_id` |
-| Token register/rotate/revoke | PASS (unit) | `mobile_push_token_registrar_test.dart` |
-| Token never logged in the clear | PASS (unit) | `toString`/`fingerprint` assertions |
+| Token register/rotate/revoke (relay ready) | PASS (unit) | `mobile_push_token_registrar_test.dart` |
+| Revoke after the socket was already torn down | PASS (unit) | Same suite: teardown, then revoke, then flush on the next authenticated connection |
+| Flush before re-registration | PASS (unit) | Same suite: `revoke:` precedes `register:` for one installation token, on both the authentication and the reconnect path |
+| Pending withdrawal durability | PASS (unit) | `mobile_push_pending_revocation_store_test.dart`: round trip, one record per token, bounded store, unreadable store discarded |
+| Token never logged in the clear | PASS (unit) | `toString`/`fingerprint` assertions on the token and on the pending record |
 | Channels all high, categories per kind | PASS (unit) | `mobile_notification_catalog_test.dart` |
 | Payload-only parsing | PASS (unit) | `mobile_push_message_test.dart` |
 | Android background / terminated / action / permission prompt | `[!]` | No Android runtime on this host; needs the provider module; owner: platform/release |
@@ -166,8 +216,9 @@ reading another one.
 - [ ] Given the same event arrives by socket and by push, when both are handled,
       then exactly one notification is visible. `[x]` unit.
 - [ ] Given the user logged out, when the relay dispatches afterwards, then no
-      delivery occurs for the revoked token. `[x]` unit for the revocation; relay
-      side is `174e`.
+      delivery occurs for the revoked token. `[x]` unit for the revocation,
+      including the case where the socket is already down when the logout is
+      observed; the relay side is `174e`.
 
 ## Definition of Done
 
@@ -189,7 +240,7 @@ Run from the repository root with `fvm` on `PATH`:
 | Command | Result |
 |---|---|
 | `cd client && fvm flutter analyze` | `No issues found!` |
-| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (133 tests)` |
+| `cd client && fvm flutter test test/unit/features/notifications test/widget/notifications` | `All tests passed! (149 tests)` |
 
 ## Open items
 
