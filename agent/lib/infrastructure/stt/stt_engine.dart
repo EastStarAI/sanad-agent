@@ -359,8 +359,9 @@ class SherpaSttEngine implements SttEngine {
   }
 }
 
-/// whisper.cpp engine: one ggml file, mmap'd by the C shim, decoded in a worker
-/// isolate. Same event vocabulary as the sherpa engine.
+/// whisper.cpp engine: one ggml file, copied into an anonymous backend buffer
+/// by the C shim, decoded in a worker isolate. Same event vocabulary as the
+/// sherpa engine.
 class WhisperCppSttEngine extends SherpaSttEngine {
   WhisperCppSttEngine() : super(entryPoint: whisperCppWorkerEntry);
 }

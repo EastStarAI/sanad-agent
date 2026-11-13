@@ -445,6 +445,18 @@ Arabic entry measured 1.5 s on a 4 vCPU arm64 host. Measured peaks: daemon idle
 46 MB, listening ~1.2 GB with the q8 entry, ~0.6 GB after a session and flat
 across sessions (no leak).
 
+Warm weights are private and anonymous. The pinned whisper.cpp v1.9.5 no longer
+takes a `use_mmap` context parameter, so the loader reads the ggml file into a
+CPU backend buffer instead of leaving it file-backed. Measured on a Linux arm64
+daemon with the warm Arabic entry: one anonymous `rw-p` block of 873,553,920
+bytes for the 874,208,239-byte file, zero mappings of the model file, and a
+process `RssFile` of 20,948 kB. Budget the full entry size per warm daemon as
+unreclaimable memory — it is not page cache, it is not shared with another
+daemon reading the same file, and on a host without swap it is direct OOM
+pressure while parked. Lower `stt.model_idle_minutes` where that residency
+cannot be afforded; the warm park trades that memory for reload latency, and a
+cold load costs 1.5 s on a 4 vCPU arm64 host.
+
 `stt.model_path` overrides the catalog with a local directory (a sherpa
 directory or a single `.bin` ggml file) and requires no download or checksum;
 that model has no declared language, so `stt.language` is its decode language.

@@ -35,13 +35,15 @@ class SttModelFile {
 ///
 /// Both run inside the daemon (no sidecar, no CLI, no local HTTP): the sherpa
 /// path copies ONNX weights into RAM and keeps one arena per thread, while the
-/// whisper.cpp path mmaps ggml weights and peaks far lower — the difference
-/// matters on low-resource machines.
+/// whisper.cpp path keeps one quantized ggml file resident in an anonymous
+/// backend buffer and still peaks lower — the difference matters on
+/// low-resource machines.
 enum SttEngineKind {
   /// sherpa-onnx: ONNX encoder/decoder pair plus the silero VAD.
   sherpa,
 
-  /// whisper.cpp through dart:ffi: one ggml file, mmap'd.
+  /// whisper.cpp through dart:ffi: one ggml file resident in an anonymous
+  /// backend buffer, not a file-backed mapping.
   whisperCpp,
 }
 
