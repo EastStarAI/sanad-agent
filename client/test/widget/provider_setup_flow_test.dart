@@ -591,6 +591,52 @@ void main() {
   );
 
   testWidgets(
+    'default and status badges share alignment and dimensions',
+    (tester) async {
+      final fake = _FakeClient(
+        providers: [_provider(configured: true)],
+        instances: [
+          ProviderInstanceDto(
+            id: 'inst-badge',
+            templateId: 'openai',
+            displayName: 'OpenAI Work',
+            protocol: 'openai_compatible',
+            authMethod: 'api_key',
+            status: 'ready',
+            isDefault: true,
+            configRevision: 1,
+            credentialRevision: 1,
+          ),
+        ],
+        runtimeReady: false,
+      );
+
+      await tester.pumpWidget(_wrap(ProviderSetupFlow(client: fake)));
+      await tester.pumpAndSettle();
+
+      final defaultBadge = find.byKey(
+        const Key('provider_instance_default_inst-badge'),
+      );
+      final statusBadge = find.byKey(
+        const Key('provider_instance_status_inst-badge'),
+      );
+      expect(defaultBadge, findsOneWidget);
+      expect(statusBadge, findsOneWidget);
+      expect(find.text('Default'), findsOneWidget);
+      expect(find.text('READY'), findsOneWidget);
+
+      final defaultSize = tester.getSize(defaultBadge);
+      final statusSize = tester.getSize(statusBadge);
+      expect(defaultSize.height, statusSize.height);
+      expect(defaultSize.width, statusSize.width);
+      expect(
+        tester.getTopLeft(defaultBadge).dy,
+        tester.getTopLeft(statusBadge).dy,
+      );
+    },
+  );
+
+  testWidgets(
     'configured provider cards render before usage capability and snapshot finish',
     (tester) async {
       final supportGate = Completer<void>();

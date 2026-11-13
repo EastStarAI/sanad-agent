@@ -151,7 +151,9 @@ keyed `provider_credential_action_{keep,replace,remove}` items,
 account instances) so interactive acceptance stays key-addressed and visual
 screenshots are reserved for rendering checks. The dropdown items appear by key
 in the snapshot, but selecting one still requires a visible tap because the
-open menu overlay owns the pointer route.
+open menu overlay owns the pointer route. The provider card header also renders
+`Default` beside the status badge in a shared right-aligned row with identical
+`72×24` bounds; both badges carry stable keys.
 
 ## Definition of Done
 
