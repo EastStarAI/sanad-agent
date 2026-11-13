@@ -53,6 +53,9 @@ dependencies:
   logging: ^1.3.0
   window_manager: ^0.5.1
   tray_manager: ^0.8.0
+  # Desktop OS notifications. The Client raises them locally for both the local
+  # and the cloud route; no push provider is involved on desktop.
+  flutter_local_notifications: ^23.0.1
 
   macos_window_utils: ^1.7.0
   image: ^4.7.2

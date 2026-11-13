@@ -59,6 +59,10 @@ import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
 import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
+import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_backend.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
@@ -525,6 +529,29 @@ Future<void> configureDependencies({
   if (!getIt.isRegistered<TrayManagerAdapter>()) {
     getIt.registerLazySingleton<TrayManagerAdapter>(
       () => createPlatformTrayManagerAdapter(),
+    );
+  }
+
+  // Desktop notification pipeline. The presence store and the platform adapter
+  // are platform-neutral registrations: the adapter resolves the native backend
+  // through a conditional import and reports `isSupported` itself, so Web and
+  // mobile compose the same code without a native dependency.
+  if (!getIt.isRegistered<NotificationPresenceStore>()) {
+    getIt.registerLazySingleton<NotificationPresenceStore>(
+      () => NotificationPresenceStore(),
+    );
+  }
+
+  if (!getIt.isRegistered<NotificationPlatformAdapter>()) {
+    getIt.registerLazySingleton<NotificationPlatformAdapter>(
+      () => createPlatformNotificationAdapter(),
+      dispose: (adapter) => adapter.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<NotificationPreferencesStore>()) {
+    getIt.registerLazySingleton<NotificationPreferencesStore>(
+      () => NotificationPreferencesStore(getIt<SharedPreferences>()),
     );
   }
 

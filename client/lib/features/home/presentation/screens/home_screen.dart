@@ -38,6 +38,7 @@ import 'package:sanad_client/features/conversations/presentation/widgets/sidebar
 import 'package:sanad_client/features/conversations/presentation/widgets/sidebar/conversation_sidebar_scope.dart';
 import 'package:sanad_client/features/home/presentation/widgets/conversation_workspace_layout.dart';
 import 'package:sanad_client/features/home/presentation/widgets/home_shell_scaffold.dart';
+import 'package:sanad_client/features/notifications/presentation/notification_presence_reporter.dart';
 import 'package:sanad_client/features/home/presentation/widgets/sidebar_drawer.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
@@ -201,9 +202,12 @@ class _HomeScreenState extends State<HomeScreen> {
               ),
             ),
           ],
-          child: _HomeScreenContent(
+          child: NotificationPresenceReporter(
             destination: widget.destination,
-            deviceContent: widget.deviceContent,
+            child: _HomeScreenContent(
+              destination: widget.destination,
+              deviceContent: widget.deviceContent,
+            ),
           ),
         ),
       ),

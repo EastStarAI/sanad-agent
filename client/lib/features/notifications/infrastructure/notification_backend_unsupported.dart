@@ -1,0 +1,52 @@
+import 'package:sanad_client/features/notifications/domain/models/notification_action.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+
+/// A total no-op adapter for targets with no OS notification surface.
+///
+/// Reporting [isSupported] as `false` is what keeps the rest of the feature
+/// honest: the display policy drops every notification, and Settings states
+/// that notifications are unavailable instead of offering a permission button
+/// that cannot work.
+class UnsupportedNotificationAdapter implements NotificationPlatformAdapter {
+  const UnsupportedNotificationAdapter();
+
+  @override
+  bool get isSupported => false;
+
+  @override
+  bool get supportsApprovalActions => false;
+
+  @override
+  Future<void> initialize({
+    NotificationPlatformResponseCallback? onResponse,
+    Map<NotificationActionIntent, String> approvalActionLabels =
+        const <NotificationActionIntent, String>{},
+  }) async {}
+
+  @override
+  Future<NotificationPermissionStatus> checkPermission() async =>
+      NotificationPermissionStatus.unsupported;
+
+  @override
+  Future<NotificationPermissionStatus> requestPermission() async =>
+      NotificationPermissionStatus.unsupported;
+
+  @override
+  Future<void> show(NotificationPresentationRequest request) async {}
+
+  @override
+  Future<bool> cancel(int notificationId) async => false;
+
+  @override
+  Future<void> cancelAll() async {}
+
+  @override
+  Future<bool> openSystemSettings() async => false;
+
+  @override
+  Future<void> dispose() async {}
+}
+
+NotificationPlatformAdapter createNotificationAdapter() =>
+    const UnsupportedNotificationAdapter();
