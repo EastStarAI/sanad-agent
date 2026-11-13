@@ -53,6 +53,7 @@ class SocketModule {
     required String clientInstanceId,
     required ClientDisplayMetadata clientMetadata,
     String? accessToken,
+    Map<String, dynamic>? Function()? notificationDeclaration,
   }) {
     return SanadSocketService(
       url: AppConfig.backendUrl,
@@ -60,6 +61,7 @@ class SocketModule {
       clientInstanceId: clientInstanceId,
       clientMetadata: clientMetadata,
       startToken: accessToken,
+      notificationDeclaration: notificationDeclaration,
     );
   }
 
@@ -67,6 +69,7 @@ class SocketModule {
     required String hardwareId,
     required String clientInstanceId,
     required ClientDisplayMetadata clientMetadata,
+    Map<String, dynamic>? Function()? notificationDeclaration,
   }) {
     return SanadSocketService.local(
       url: AppConfig.localGatewayUrl,
@@ -75,6 +78,7 @@ class SocketModule {
       clientMetadata: clientMetadata,
       credentialProvider: const LocalGatewayCredentialProvider(),
       enabled: AppPlatform.isDesktop,
+      notificationDeclaration: notificationDeclaration,
     );
   }
 }

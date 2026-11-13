@@ -46,6 +46,7 @@ class DesktopLifecycleManager with WidgetsBindingObserver {
 
   bool _isQuitting = false;
   bool _isWindowHidden = false;
+  final StreamController<bool> _windowVisibility = StreamController<bool>.broadcast();
 
   DesktopLifecycleManager({
     DesktopWindowManagerAdapter windowAdapter = const DefaultDesktopWindowManagerAdapter(),
@@ -62,19 +63,46 @@ class DesktopLifecycleManager with WidgetsBindingObserver {
         _onExitProcess = onExitProcess;
 
   bool get isQuitting => _isQuitting;
+
   bool get isWindowHidden => _isWindowHidden;
 
+  /// Whether the window is currently presented.
+  ///
+  /// This is the Client's own deterministic record: it flips exactly when
+  /// [hideWindow] or [showWindow] runs, so it does not depend on the platform
+  /// emitting a lifecycle transition for a tray hide or a restore.
+  bool get isWindowVisible => !_isWindowHidden;
+
+  /// Emits [isWindowVisible] whenever a hide or a show changes it.
+  ///
+  /// Notification presence consumes this instead of inferring visibility from
+  /// [AppLifecycleState], which desktop platforms do not update on every hide
+  /// the app itself performs.
+  Stream<bool> get windowVisibilityChanges => _windowVisibility.stream;
+
   Future<void> hideWindow() async {
-    _isWindowHidden = true;
+    _setWindowHidden(true);
     _logger.info('Hiding desktop window to background');
     await _windowAdapter.hide();
   }
 
   Future<void> showWindow() async {
-    _isWindowHidden = false;
+    _setWindowHidden(false);
     _logger.info('Restoring desktop window from background');
     await _windowAdapter.show();
     await _windowAdapter.focus();
+  }
+
+  void _setWindowHidden(bool hidden) {
+    if (_isWindowHidden == hidden) return;
+    _isWindowHidden = hidden;
+    if (!_windowVisibility.isClosed) _windowVisibility.add(!hidden);
+  }
+
+  /// Releases the visibility stream. Used by tests and by a re-initialization;
+  /// the app-scoped instance lives until the process exits.
+  void dispose() {
+    unawaited(_windowVisibility.close());
   }
 
   /// Background desktop operation is uniform across macOS, Windows, and Linux:
@@ -108,6 +136,9 @@ class DesktopLifecycleManager with WidgetsBindingObserver {
 
   Future<void> quit() async {
     if (_isQuitting) return;
+    // Nothing is presented once the process is quitting, and the flag must not
+    // outlive the window it describes.
+    _setWindowHidden(true);
     _isQuitting = true;
     _logger.info('Explicit quit initiated: executing deterministic shutdown');
 

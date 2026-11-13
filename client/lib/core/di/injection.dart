@@ -59,6 +59,21 @@ import 'package:sanad_client/features/client_cli/data/client_cli_host.dart';
 import 'package:sanad_client/features/client_cli/domain/client_cli_platform.dart';
 import 'package:sanad_client/features/client_cli/presentation/bloc/client_cli_cubit.dart';
 import 'package:sanad_client/core/di/modules/client_cli_module.dart';
+import 'package:sanad_client/features/notifications/application/notification_platform_readiness.dart';
+import 'package:sanad_client/features/notifications/application/notification_presence_store.dart';
+import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
+import 'package:sanad_client/features/notifications/data/http_web_push_subscription_registrar.dart';
+import 'package:sanad_client/features/notifications/data/mobile_push_pending_revocation_store.dart';
+import 'package:sanad_client/features/notifications/data/notification_preferences_store.dart';
+import 'package:sanad_client/features/notifications/data/web_push_subscription_store.dart';
+import 'package:sanad_client/features/notifications/domain/models/mobile_push_transport.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/domain/repositories/web_push_subscription_registrar.dart';
+import 'package:sanad_client/features/notifications/domain/services/web_push_client.dart';
+import 'package:sanad_client/features/notifications/infrastructure/mobile_push_token_relay.dart';
+import 'package:sanad_client/features/notifications/infrastructure/mobile_push_transport.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_backend.dart';
+import 'package:sanad_client/features/notifications/infrastructure/notification_bundle.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/platform/tray_manager_service.dart';
 import 'package:sanad_client/core/presentation/state/app_state.dart';
@@ -183,6 +198,7 @@ Future<void> configureDependencies({
         clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
         clientMetadata: getIt<ClientDisplayMetadata>(),
         accessToken: getIt<AuthService>().accessToken,
+        notificationDeclaration: _notificationDeclarationProvider,
       ),
       instanceName: 'cloudSocketService',
     );
@@ -196,6 +212,7 @@ Future<void> configureDependencies({
         hardwareId: getIt<String>(instanceName: 'hardwareId'),
         clientInstanceId: getIt<String>(instanceName: 'clientInstanceId'),
         clientMetadata: getIt<ClientDisplayMetadata>(),
+        notificationDeclaration: _notificationDeclarationProvider,
       ),
       instanceName: 'localSocketService',
     );
@@ -528,6 +545,108 @@ Future<void> configureDependencies({
     );
   }
 
+  // Desktop notification pipeline. The presence store and the platform adapter
+  // are platform-neutral registrations: the adapter resolves the native backend
+  // through a conditional import and reports `isSupported` itself, so Web and
+  // mobile compose the same code without a native dependency.
+  if (!getIt.isRegistered<NotificationPresenceStore>()) {
+    getIt.registerLazySingleton<NotificationPresenceStore>(
+      () => NotificationPresenceStore(),
+      dispose: (store) => store.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<NotificationPlatformBundle>()) {
+    getIt.registerLazySingleton<NotificationPlatformBundle>(
+      () => createNotificationPlatformBundle(),
+      dispose: (bundle) => bundle.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<NotificationPlatformAdapter>()) {
+    getIt.registerLazySingleton<NotificationPlatformAdapter>(
+      () => getIt<NotificationPlatformBundle>().adapter,
+    );
+  }
+
+  // The one readiness signal a permission read waits on: the pipeline releases
+  // it once the platform objects exist, so a cold start cannot report a working
+  // notification service as unavailable.
+  if (!getIt.isRegistered<NotificationPlatformReadiness>()) {
+    getIt.registerLazySingleton<NotificationPlatformReadiness>(
+      () => NotificationPlatformReadiness(),
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushClient>()) {
+    getIt.registerLazySingleton<WebPushClient>(
+      () => getIt<NotificationPlatformBundle>().webPush,
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionStore>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionStore>(
+      () => WebPushSubscriptionStore(getIt<SharedPreferences>()),
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionRegistrar>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionRegistrar>(
+      () => HttpWebPushSubscriptionRegistrar(
+        baseUrl: Uri.parse(AppConfig.backendUrl),
+      ),
+    );
+  }
+
+  if (!getIt.isRegistered<WebPushSubscriptionService>()) {
+    getIt.registerLazySingleton<WebPushSubscriptionService>(
+      () => WebPushSubscriptionService(
+        client: getIt<WebPushClient>(),
+        registrar: getIt<WebPushSubscriptionRegistrar>(),
+        store: getIt<WebPushSubscriptionStore>(),
+        readAccessToken: () => getIt<AuthService>().accessToken,
+        readAccountId: () => getIt<AuthService>().userId,
+        readClientInstanceId: () => getIt<String>(instanceName: 'clientInstanceId'),
+        readVapidPublicKey: () => AppConfig.webPushVapidPublicKey,
+      ),
+      dispose: (service) => service.dispose(),
+    );
+  }
+
+  // Mobile push is a wake-up only: the transport carries messages and the device
+  // token, and the relay carries the token to the account. Neither one decides
+  // whether a notification is shown, so both are registered for every platform
+  // and resolve a total no-op where there is no provider.
+  if (!getIt.isRegistered<MobilePushTransport>()) {
+    getIt.registerLazySingleton<MobilePushTransport>(
+      () => createMobilePushTransport(),
+      dispose: (transport) => transport.dispose(),
+    );
+  }
+
+  if (!getIt.isRegistered<MobilePushTokenRelay>()) {
+    getIt.registerLazySingleton<MobilePushTokenRelay>(
+      () => AccountSessionPushTokenRelay(
+        getIt<SanadSocketService>(instanceName: 'cloudSocketService'),
+      ),
+    );
+  }
+
+  // A revocation must survive the socket that could not carry it, so the record
+  // of withdrawals still owed is durable. It uses the app-private preferences
+  // that already hold the account's refresh token.
+  if (!getIt.isRegistered<MobilePushPendingRevocationStore>()) {
+    getIt.registerLazySingleton<MobilePushPendingRevocationStore>(
+      () => PreferencesMobilePushPendingRevocationStore(getIt<SharedPreferences>()),
+    );
+  }
+
+  if (!getIt.isRegistered<NotificationPreferencesStore>()) {
+    getIt.registerLazySingleton<NotificationPreferencesStore>(
+      () => NotificationPreferencesStore(getIt<SharedPreferences>()),
+    );
+  }
+
   if (!getIt.isRegistered<AppTrayService>()) {
     getIt.registerLazySingleton<AppTrayService>(
       () => AppTrayService(
@@ -541,3 +660,11 @@ Future<void> configureDependencies({
     );
   }
 }
+
+/// The device-scoped notification choices this Client registers with every Agent
+/// connection.
+///
+/// It is read lazily at registration time, so a change made in Settings is
+/// carried by the next hello without the socket holding a copy of its own.
+Map<String, dynamic> _notificationDeclarationProvider() =>
+    getIt<NotificationPreferencesStore>().read().toAgentDeclaration();

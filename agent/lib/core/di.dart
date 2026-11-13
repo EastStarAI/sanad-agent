@@ -55,6 +55,9 @@ import 'package:sanad_agent/core/auth/auth_manager.dart';
 import 'package:sanad_agent/plugins/plugin_manager.dart';
 import 'package:sanad_agent/evolution/cron_scheduler.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
+import 'package:sanad_agent/interfaces/notifications/client_instance_profiles.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_dispatcher.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_presence.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_endpoint_record.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/sanad_protocol_bridge.dart';
@@ -534,11 +537,39 @@ void setupDI() {
       metadata: getIt<UserSecretMetadataRepository>(),
     ),
   );
+  // Plan 174: the Agent decides which session events notify, renders and
+  // redacts the copy, names the target, and owns the escalation timer. The
+  // hosted relay only transports the finished instruction.
+  getIt.registerLazySingleton<ClientInstanceProfiles>(
+    () => ClientInstanceProfiles(),
+  );
+  getIt.registerLazySingleton<NotificationDispatcher>(
+    dispose: (dispatcher) => dispatcher.dispose(),
+    () => NotificationDispatcher(
+      presence: DeliveryPresenceTargetPresence(
+        getIt<DeliveryPresenceController>(),
+      ),
+      profiles: getIt<ClientInstanceProfiles>(),
+      sessionTitle: (sessionId) =>
+          getIt<SessionManager>().getSessionTitle(sessionId),
+      sink: (instruction) {
+        if (!getIt.isRegistered<GatewayManager>()) return;
+        getIt<GatewayManager>().publishFamilyEvent(
+          CanonicalEvent(
+            type: instruction.eventType,
+            payload: instruction.payload,
+            sessionId: instruction.sessionId,
+          ),
+        );
+      },
+    ),
+  );
   getIt.registerLazySingleton<PlatformRuntimeBridge>(
     () => PlatformRuntimeBridge(
       secretAcquisition: SecretAcquisition(
         metadata: getIt<UserSecretMetadataRepository>(),
       ),
+      notifications: getIt<NotificationDispatcher>(),
     ),
   );
   getIt.registerLazySingleton<SuspendedCheckpointStore>(
@@ -622,6 +653,7 @@ void setupDI() {
   getIt.registerLazySingleton<LocalDaemonServerPlatform>(
     () => LocalDaemonServerPlatform(
       deliveryPresence: getIt<DeliveryPresenceController>(),
+      clientProfiles: getIt<ClientInstanceProfiles>(),
     ),
   );
 

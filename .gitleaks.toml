@@ -14,6 +14,23 @@ paths = [
 ]
 
 [[allowlists]]
+description = "Published synthetic credential shapes used as redaction fixtures and documented examples"
+paths = [
+  '''^agent/test/core/secrets_redactor_test\.dart$''',
+  '''^agent/test/interfaces/notifications/notification_payload_test\.dart$''',
+  '''^agent/lib/core/secrets_redactor\.dart$''',
+  '''^docs/technical/communication_protocols\.md$''',
+]
+regexTarget = "match"
+regexes = [
+  '''AKIAIOSFODNN7EXAMPLE''',
+  '''ASIAY34FZKBOKMUTVV7A''',
+  '''ghp_16C7e42F292c6912E7710c838347Ae178B4a''',
+  '''github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz''',
+  '''glpat-ABCDEFGHIJKLMNOPQRST''',
+]
+
+[[allowlists]]
 description = "CocoaPods SPEC CHECKSUMS in the macOS lockfile are podspec hashes, not credentials"
 rules = ["generic-api-key"]
 paths = [

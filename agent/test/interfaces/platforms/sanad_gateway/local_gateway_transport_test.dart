@@ -16,6 +16,7 @@ import 'package:sanad_agent/evolution/db/agent_state_database.dart';
 import 'package:crypto/crypto.dart';
 import 'package:path/path.dart' as p;
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/notifications/client_instance_profiles.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_daemon_server_platform.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/local_gateway_credentials.dart';
@@ -103,6 +104,7 @@ void main() {
   const token = LocalGatewayCredential('transport-test-token');
   late LocalDaemonServerPlatform platform;
   late _ObservedDeliveryPresenceController deliveryPresence;
+  late ClientInstanceProfiles clientProfiles;
   late _ExchangeAuthManager authManager;
   late int port;
   late List<Message> mediaMessages;
@@ -149,8 +151,10 @@ void main() {
       getIt.registerSingleton<SanadProtocolBridge>(SanadProtocolBridge());
       getIt.registerSingleton<PlatformRuntimeBridge>(PlatformRuntimeBridge());
       deliveryPresence = _ObservedDeliveryPresenceController();
+      clientProfiles = ClientInstanceProfiles();
       platform = LocalDaemonServerPlatform(
         deliveryPresence: deliveryPresence,
+        clientProfiles: clientProfiles,
         authCoupling: ColocatedAuthCoupling(
           authManager: authManager,
           authorizationClient: DeviceAuthorizationClient(
@@ -911,6 +915,40 @@ void main() {
     await localRemoval;
     expect(deliveryPresence.localInstanceIds, isEmpty);
   });
+
+  test(
+    'an authenticated hello registers the notification locale and capability',
+    () async {
+      const instanceId = '33333333-3333-4333-8333-333333333333';
+      final socket = await WebSocket.connect(
+        'ws://127.0.0.1:$port/ws',
+        headers: {LocalGatewayCredentials.headerName: token.value},
+      );
+      final frames = StreamIterator<dynamic>(socket);
+      expect(await frames.moveNext(), isTrue); // register_success
+
+      socket.add(
+        jsonEncode({
+          'type': 'client.hello',
+          'protocol': 'sanad.identity_presence',
+          'version': 1,
+          'client_instance_id': instanceId,
+          'locale': 'ar',
+          'notification_capable': true,
+        }),
+      );
+      expect(await frames.moveNext(), isTrue); // client.hello_ack
+      expect(clientProfiles.localeFor(instanceId).code, 'ar');
+      expect(clientProfiles.canNotify(instanceId), isTrue);
+
+      final localRemoval = deliveryPresence.expectNextLocalRemoval();
+      await frames.cancel();
+      await socket.close();
+      await localRemoval;
+      // A disconnected instance keeps no display facts in memory.
+      expect(clientProfiles.length, 0);
+    },
+  );
 
   test(
     'authentication exchange reloads file state without returning credentials',

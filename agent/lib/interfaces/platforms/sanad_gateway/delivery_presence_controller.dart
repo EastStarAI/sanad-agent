@@ -13,6 +13,15 @@ final _clientInstancePattern = RegExp(
   caseSensitive: false,
 );
 
+/// Whether [value] is a well-formed Client instance identity.
+///
+/// One owner for the shape, so presence membership, origin capture, and
+/// notification targeting cannot disagree about what names an instance.
+bool isValidClientInstanceId(Object? value) {
+  if (value is! String) return false;
+  return _clientInstancePattern.hasMatch(value.trim().toLowerCase());
+}
+
 /// Transport-owned Plan 49 state shared by the Agent's local and cloud
 /// adapters. Local membership never leaves this in-memory owner.
 class DeliveryPresenceController {
@@ -50,8 +59,31 @@ class DeliveryPresenceController {
     return cloudOnly == null || cloudOnly.isNotEmpty;
   }
 
-  bool claimCloudEgress() {
-    final emit = shouldEmitCloud;
+  /// Whether [clientInstanceId] is provably attached by any route right now.
+  ///
+  /// Local membership is authoritative and in-memory. The cloud recipient set
+  /// counts only while its Gateway lease is fresh: a stale, malformed, or
+  /// missing set proves nothing, and an unknown target must not be reported as
+  /// reachable.
+  bool isInstanceAttached(String clientInstanceId) {
+    final normalized = clientInstanceId.trim().toLowerCase();
+    if (!_clientInstancePattern.hasMatch(normalized)) return false;
+    if (_localInstances.containsValue(normalized)) return true;
+    final cloudInstances = freshCloudOnlyInstanceIds;
+    if (cloudInstances == null) return false;
+    return _cloudInstances!.contains(normalized);
+  }
+
+  /// Claims cloud egress for one event and records the outcome.
+  ///
+  /// [always] is the explicit override for an event that must leave the device
+  /// whether or not the live interest set names a cloud-only recipient. A
+  /// notification instruction is the one such event: the hosted relay owns the
+  /// push tokens, so suppressing the copy because every known recipient is
+  /// local strands exactly the device that is offline, which is the case an
+  /// account-wide escalation exists for. Ordinary family events keep the gate.
+  bool claimCloudEgress({bool always = false}) {
+    final emit = always || shouldEmitCloud;
     if (emit) {
       _cloudEvents += 1;
     } else {

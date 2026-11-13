@@ -10,12 +10,34 @@
 /// It is intentionally conservative: when in doubt it redacts a span rather
 /// than leaks it. It never re-interprets the *meaning* of a provider message
 /// — it only strips secret-shaped substrings.
+///
+/// Coverage is by shape, not by vendor list: a self-identifying key (a known
+/// prefix), a name/value pair (`token=…`, `token: …`), a named CLI flag
+/// (`--token abc123`), or a named JSON field. A credential with no name, no
+/// recognizable prefix, and no assignment — a bare positional argument such as
+/// `-p hunt4`, or a value that continues on the next line — cannot be told
+/// apart from ordinary text, so it is not detected and must not be composed
+/// into a low-trust surface in the first place.
 class SecretsRedactor {
   const SecretsRedactor();
 
   // Pre-compiled patterns. Built once.
   static final RegExp _keyPrefix = RegExp(
     r'\b(sk|nvapi|pk|rk|cr)-[A-Za-z0-9_\-]{12,}\b',
+  );
+
+  /// AWS access key ids are self-identifying: a documented four-letter key-id
+  /// prefix followed by upper-case alphanumerics (`AKIA…`, `ASIA…`, and the
+  /// same shape for IAM roles, groups, and STS sessions).
+  static final RegExp _awsKeyId = RegExp(
+    r'\b(AKIA|ASIA|AGPA|AIDA|AROA|ANPA|ANVA|ASCA)[A-Z0-9]{16,}',
+  );
+
+  /// Source-host tokens keep a readable prefix and a long opaque body:
+  /// GitHub's `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_` families, its fine-grained
+  /// `github_pat_` form, and GitLab's `glpat-`.
+  static final RegExp _sourceHostToken = RegExp(
+    r'\b(gh[pousr]_|github_pat_|glpat-)[A-Za-z0-9_\-]{16,}',
   );
   static final RegExp _authHeader = RegExp(
     r'(authorization|x-api-key|x-amz-security-token)\s*[:=]\s*[A-Za-z0-9_\-\.=:]+',
@@ -25,8 +47,22 @@ class SecretsRedactor {
     r'\bbearer\s+[A-Za-z0-9_\-\.=:]+',
     caseSensitive: false,
   );
+
+  /// A credential named and assigned in one expression: `api_key=VALUE`,
+  /// `token: VALUE`, and the flag form `--password=VALUE` (the `\b` holds
+  /// between the dash and the name).
+  ///
+  /// The value floor is four characters, not eight: a short flag password such
+  /// as `--password=hunt4` is still a credential.
   static final RegExp _assignment = RegExp(
-    r'\b(api[_-]?key|apikey|secret|token|password|access[_-]?token|refresh[_-]?token)\b\s*[:=]\s*[A-Za-z0-9_\-\.=:/+]{8,}',
+    r'\b(api[_-]?key|apikey|secret|client[_-]?secret|token|password|passwd|access[_-]?token|refresh[_-]?token|auth[_-]?token|private[_-]?key)\b\s*[:=]\s*[A-Za-z0-9_\-\.=:/+]{4,}',
+    caseSensitive: false,
+  );
+
+  /// A named CLI flag whose value is the next word: `--token abc123`,
+  /// `-password hunt4`. The flag name is diagnostic, the value is not.
+  static final RegExp _flagSecret = RegExp(
+    r'(?<![\w-])(--?(?:api[_-]?key|apikey|secret|client[_-]?secret|token|password|passwd|access[_-]?token|refresh[_-]?token|auth[_-]?token|private[_-]?key))(?:\s*=\s*|\s+)\S+',
     caseSensitive: false,
   );
   static final RegExp _jsonField = RegExp(
@@ -43,8 +79,12 @@ class SecretsRedactor {
   ///
   /// Recognized patterns:
   /// - `sk-…`, `nvapi-…`, and similar `prefix-…` long-lived API keys.
+  /// - AWS access key ids (`AKIA…`, `ASIA…`) and source-host tokens (`ghp_…`,
+  ///   `github_pat_…`, `glpat-…`).
   /// - `Bearer <token>` authorization headers.
-  /// - `x-api-key: <value>` and `api_key`/`apikey` assignments.
+  /// - `x-api-key: <value>` and `api_key`/`apikey` assignments, including the
+  ///   flag form `--password=hunt4`.
+  /// - A named CLI flag with its value in the next word: `--token abc123`.
   /// - `Authorization: <scheme> <token>` headers.
   /// - JSON credential fields (`"api_key":"…"`).
   String redact(String input) {
@@ -52,7 +92,10 @@ class SecretsRedactor {
     var out = input;
     out = out.replaceAll(_bearer, 'Bearer ***');
     out = out.replaceAllMapped(_keyPrefix, (m) => '${m[1]}-***');
+    out = out.replaceAllMapped(_awsKeyId, (m) => '${m[1]}***');
+    out = out.replaceAllMapped(_sourceHostToken, (m) => '${m[1]}***');
     out = out.replaceAllMapped(_authHeader, (m) => '${m[1]}: ***');
+    out = out.replaceAllMapped(_flagSecret, (m) => '${m[1]} ***');
     out = out.replaceAllMapped(_assignment, (m) => '${m[1]}: ***');
     out = out.replaceAllMapped(_jsonField, (m) => '"${m[1]}": "***"');
     return out;

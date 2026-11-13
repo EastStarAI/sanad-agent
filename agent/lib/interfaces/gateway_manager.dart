@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -10,6 +11,9 @@ import 'platforms/base_platform.dart';
 import 'models/delivery/models.dart';
 import 'models/gateway_event.dart';
 import 'package:sanad_agent/core/models/message.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_dispatcher.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/delivery_presence_controller.dart';
+import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/authenticated_command_origin.dart';
 import 'package:sanad_agent/interfaces/runtime/compaction_lifecycle_relay.dart';
 import 'package:sanad_agent/interfaces/runtime/session_run_orchestrator.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_runtime_bridge.dart';
@@ -201,6 +205,23 @@ class GatewayManager {
         delivery: DeliveryPolicy.platformFamily(PlatformFamily.sanadClient),
       ),
     );
+    _withdrawNotificationsOnTerminalState(snapshot);
+  }
+
+  /// A session that stopped or came to rest cannot still be waiting on the
+  /// user: the ask it was waiting on is over, so its notification must not
+  /// outlive it.
+  ///
+  /// `blocked` and `waiting` are deliberately absent: those are the states in
+  /// which an ask is still live, and cancelling there would withdraw the one
+  /// notification the user is meant to act on.
+  void _withdrawNotificationsOnTerminalState(SessionExecutionSnapshot snapshot) {
+    if (snapshot.state != SessionExecutionState.idle &&
+        snapshot.state != SessionExecutionState.stopping) {
+      return;
+    }
+    if (!getIt.isRegistered<NotificationDispatcher>()) return;
+    getIt<NotificationDispatcher>().onSessionTerminal(snapshot.sessionId);
   }
 
   void _onSessionRouteChanged(SessionRouteMutationResult route) {
@@ -234,6 +255,28 @@ class GatewayManager {
       requestId: response.delivery.requestId,
       sessionId: response.sessionId,
     );
+  }
+
+  /// The authenticated Client instance that sent this command.
+  ///
+  /// The cloud route carries it as Gateway-authored `origin_client` metadata.
+  /// The local route has no such envelope, so its adapter stamps the instance
+  /// id it bound on the socket's authenticated `client.hello`. An unprovable or
+  /// malformed identity resolves to `null`, which the notification policy
+  /// treats as "cannot name the origin" and escalates immediately.
+  @visibleForTesting
+  String? clientInstanceIdFor(GatewayEvent event) {
+    final authenticated = AuthenticatedCommandOrigin.fromEnvelope(
+      event.metadata,
+    ).clientInstanceId;
+    if (isValidClientInstanceId(authenticated)) {
+      return authenticated!.toLowerCase();
+    }
+    final local = event.metadata['client_instance_id'];
+    if (isValidClientInstanceId(local)) {
+      return (local! as String).toLowerCase();
+    }
+    return null;
   }
 
   /// `origin` — return to the originating platform instance and conversation
@@ -403,6 +446,7 @@ class GatewayManager {
       hardwareId:
           event.metadata['hardware_id']?.toString() ??
           commandPayload['hardware_id']?.toString(),
+      clientInstanceId: clientInstanceIdFor(event),
     );
     final originatedEvent = event.copyWithOrigin(origin);
     if (getIt.isRegistered<PlatformRuntimeBridge>()) {

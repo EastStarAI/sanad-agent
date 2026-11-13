@@ -12,6 +12,7 @@ import 'package:sanad_client/core/presentation/utils/external_paste_manager.dart
 import 'package:sanad_client/features/conversations/data/persistence/conversation_cache_persistor.dart';
 import 'package:sanad_client/features/conversations/data/repositories/conversation_cache_repository.dart';
 import 'package:sanad_client/features/devices/data/device_connection_coordinator.dart';
+import 'package:sanad_client/features/notifications/presentation/notification_bridge.dart';
 import 'package:sanad_client/core/presentation/bloc/appearance/appearance_state.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/utils/app_platform.dart';
@@ -115,7 +116,9 @@ class _SanadAgentAppState extends State<SanadAgentApp> with WidgetsBindingObserv
         conversationCacheRepository: getIt<ConversationCacheRepository>(),
         conversationCachePersistor: _conversationCachePersistor,
         navigatorKey: appNavigatorKey,
-        child: AppShell(navigatorKey: appNavigatorKey),
+        child: NotificationBridge(
+          child: AppShell(navigatorKey: appNavigatorKey),
+        ),
       ),
     );
   }

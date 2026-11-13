@@ -29,8 +29,12 @@ android {
     ndkVersion = "28.2.13676358"
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        // `flutter_local_notifications` (desktop OS notifications) is compiled
+        // into every Android build and relies on library desugaring even when
+        // no scheduled notification is used.
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
     }
 
     kotlinOptions {
@@ -70,4 +74,9 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // Required by `flutter_local_notifications` (see compileOptions above).
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.1.4'
 }

@@ -7,6 +7,9 @@ import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/models/message.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_ask.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_dispatcher.dart';
+import 'package:sanad_agent/interfaces/notifications/notification_kind.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/platform_session_channel.dart';
 import 'package:sanad_agent/interfaces/runtime/suspended_checkpoint_store.dart';
@@ -75,10 +78,20 @@ class ResolvedPermissionRecord {
 }
 
 class PlatformRuntimeBridge {
-  PlatformRuntimeBridge({SecretAcquisition? secretAcquisition})
-    : _secretAcquisitionProvided = secretAcquisition;
+  PlatformRuntimeBridge({
+    SecretAcquisition? secretAcquisition,
+    NotificationDispatcher? notifications,
+  }) : _secretAcquisitionProvided = secretAcquisition,
+       _notifications = notifications;
 
   final SecretAcquisition? _secretAcquisitionProvided;
+
+  /// The Agent's notification owner.
+  ///
+  /// Optional so a host that runs the bridge without notifications (unit
+  /// tests, an embedded runtime) keeps working: an absent dispatcher means the
+  /// bridge decides nothing about notifying, exactly as before plan 174.
+  final NotificationDispatcher? _notifications;
   late final SecretAcquisition _secretAcquisition =
       _secretAcquisitionProvided ?? SecretAcquisition();
 
@@ -196,23 +209,27 @@ class PlatformRuntimeBridge {
     final requestId =
         payload['request_id']?.toString() ?? _nextRequestId('permission');
     final completer = Completer<Map<String, dynamic>>();
-    _pendingPermissionRequests[requestId] = PendingPermissionEntry(
+    final pending = PendingPermissionEntry(
       completer: completer,
       sessionId: sessionId,
       requestId: requestId,
       toolName: payload['tool_name']?.toString() ?? '',
       payload: Map<String, dynamic>.from(payload),
     );
+    _pendingPermissionRequests[requestId] = pending;
 
     final origin = _sessionOrigins[sessionId];
     final delivery = _deliveryForOrigin(origin, requestId: requestId);
+    final eventId = EventId.generate();
     await _emitRuntimeEvent(
       sessionId: sessionId,
       eventType: CanonicalEventTypes.toolPermissionRequest,
       payload: {...payload, 'request_id': requestId, 'session_id': sessionId},
       delivery: delivery,
       origin: origin,
+      eventId: eventId,
     );
+    _notifyAskCreated(pending: pending, eventId: eventId, origin: origin);
 
     try {
       final decision = await completer.future;
@@ -721,17 +738,56 @@ class PlatformRuntimeBridge {
     required String outcome,
     required DeliveryPolicy delivery,
     required OriginContext? origin,
-  }) => _emitRuntimeEvent(
-    sessionId: sessionId,
-    eventType: CanonicalEventTypes.toolPermissionResolved,
-    payload: {
-      'session_id': sessionId,
-      'request_id': requestId,
-      'outcome': outcome,
-    },
-    delivery: delivery,
-    origin: origin,
-  );
+  }) async {
+    await _emitRuntimeEvent(
+      sessionId: sessionId,
+      eventType: CanonicalEventTypes.toolPermissionResolved,
+      payload: {
+        'session_id': sessionId,
+        'request_id': requestId,
+        'outcome': outcome,
+      },
+      delivery: delivery,
+      origin: origin,
+    );
+    // Resolution is the only event that ends an ask for good, so the
+    // notification is withdrawn here and nowhere else. A late or concurrent
+    // response resolves to `already_resolved`; the dispatcher has already
+    // retired the ask, so it withdraws nothing twice.
+    _notifications?.onAskResolved(
+      sessionId: sessionId,
+      requestId: requestId,
+      reason: outcome == 'already_resolved'
+          ? NotificationWithdrawReason.alreadyResolved
+          : NotificationWithdrawReason.resolved,
+    );
+  }
+
+  /// Hands one live suspension to the notification owner.
+  ///
+  /// The ask is reduced to the excerpt a notification may carry; the full
+  /// suspension payload never leaves this method.
+  void _notifyAskCreated({
+    required PendingPermissionEntry pending,
+    required String eventId,
+    required OriginContext? origin,
+  }) {
+    final notifications = _notifications;
+    if (notifications == null) return;
+    final isUserInput = pending.isUserQuestion || pending.isSecretRequest;
+    notifications.onAskCreated(
+      ask: NotificationAsk.fromSuspension(
+        sessionId: pending.sessionId,
+        requestId: pending.requestId,
+        eventId: eventId,
+        kind: isUserInput
+            ? NotificationKind.userQuestion
+            : NotificationKind.permissionRequest,
+        payload: pending.payload,
+      ),
+      origin: origin,
+    );
+  }
 
   void _rememberPermissionResolution(
     String requestId,
@@ -755,12 +811,13 @@ class PlatformRuntimeBridge {
     required Map<String, dynamic> payload,
     required DeliveryPolicy delivery,
     required OriginContext? origin,
+    String? eventId,
   }) async {
-    final eventId = EventId.generate();
+    final resolvedEventId = eventId ?? EventId.generate();
     final response = GatewayResponse(
       sessionId: sessionId,
       platformId: origin?.platformId,
-      eventId: eventId,
+      eventId: resolvedEventId,
       origin: origin,
       delivery: delivery,
       message: Message(
@@ -785,7 +842,11 @@ class PlatformRuntimeBridge {
     await _sendProtocolEvent(
       sessionId: sessionId,
       eventType: eventType,
-      payload: {...payload, 'event_id': eventId, 'delivery': delivery.toJson()},
+      payload: {
+        ...payload,
+        'event_id': resolvedEventId,
+        'delivery': delivery.toJson(),
+      },
     );
   }
 

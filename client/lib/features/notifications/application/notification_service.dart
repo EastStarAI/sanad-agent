@@ -1,0 +1,473 @@
+import 'dart:async';
+import 'dart:convert';
+
+import 'package:logging/logging.dart';
+import 'package:sanad_client/features/notifications/application/notification_action_router.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_action.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_collapse_key.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_copy.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
+import 'package:sanad_client/features/notifications/domain/models/mobile_notification_catalog.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_payload.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_preferences.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_presence.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
+import 'package:sanad_client/features/notifications/domain/services/notification_ask_registry.dart';
+import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
+import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
+import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
+
+/// What the Client did with a platform interaction that arrived before it had
+/// any in-memory state — that is, the interaction whose launch started this
+/// process.
+///
+/// A cold start has no replayed ask and no mounted conversation surface, so the
+/// payload alone is the only input an answer could be built from. That is exactly
+/// a decision the Agent did not make, so the Client records the interaction and
+/// acts on nothing.
+enum NotificationColdStartOutcome {
+  /// No notification interaction started this process.
+  none,
+
+  /// An interaction arrived, was understood, and was deliberately not acted on.
+  dropped,
+
+  /// An interaction arrived with a payload this build cannot read.
+  unreadable,
+}
+
+/// The one local path from an Agent notification event to an OS notification.
+///
+/// Both transports feed the same instance: the local socket and the cloud
+/// socket are two copies of one event stream, and nothing here selects between
+/// them. The service decides, and every input of that decision is injected, so
+/// the matrix is testable without a socket, a window, or an operating system.
+class NotificationService {
+  NotificationService({
+    required NotificationPlatformAdapter adapter,
+    required List<Stream<Map<String, dynamic>>> eventStreams,
+    required NotificationCopyResolver copyResolver,
+    required NotificationPreferences Function() readPreferences,
+    required NotificationPermissionStatus Function() readPermission,
+    required NotificationPresence Function() readPresence,
+    required NotificationActionRouter actionRouter,
+    Map<NotificationActionIntent, String> Function()? readApprovalActionLabels,
+    Map<NotificationKind, String> Function()? readKindLabels,
+    NotificationAskRegistry? askRegistry,
+    NotificationQuietWindow? quietWindow,
+    EventDeduplicator? deduplicator,
+    DateTime Function()? clock,
+  })  : _adapter = adapter,
+        _eventStreams = eventStreams,
+        _copyResolver = copyResolver,
+        _readPreferences = readPreferences,
+        _readPermission = readPermission,
+        _readPresence = readPresence,
+        _actionRouter = actionRouter,
+        _readApprovalActionLabels = readApprovalActionLabels ?? _noApprovalLabels,
+        _readKindLabels = readKindLabels ?? _noKindLabels,
+        _askRegistry = askRegistry ?? NotificationAskRegistry(),
+        _quietWindow = quietWindow ?? NotificationQuietWindow(),
+        _deduplicator = deduplicator ?? EventDeduplicator(maxEntries: 512),
+        _clock = clock ?? DateTime.now;
+
+  static Map<NotificationActionIntent, String> _noApprovalLabels() =>
+      const <NotificationActionIntent, String>{};
+
+  static Map<NotificationKind, String> _noKindLabels() => const <NotificationKind, String>{};
+
+
+  final NotificationPlatformAdapter _adapter;
+  final List<Stream<Map<String, dynamic>>> _eventStreams;
+  final NotificationCopyResolver _copyResolver;
+  final NotificationPreferences Function() _readPreferences;
+  final NotificationPermissionStatus Function() _readPermission;
+  final NotificationPresence Function() _readPresence;
+  final NotificationActionRouter _actionRouter;
+  final Map<NotificationActionIntent, String> Function() _readApprovalActionLabels;
+  final Map<NotificationKind, String> Function() _readKindLabels;
+  final NotificationAskRegistry _askRegistry;
+  final NotificationQuietWindow _quietWindow;
+
+  /// Dedupe is by canonical `event_id` alone.
+  ///
+  /// The transport-shared [EventDeduplicator] keys on `event_id` plus a payload
+  /// fingerprint, so it cannot prove that two route copies are one
+  /// notification; this instance is called without a payload, which reduces the
+  /// key to the event id and makes both routes collapse to one sighting.
+  final EventDeduplicator _deduplicator;
+
+  final DateTime Function() _clock;
+  final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
+  final Set<String> _presented = <String>{};
+
+  /// The identity `session_id` of the user's test notification.
+  ///
+  /// It is a fixed value so repeated test presses replace one banner instead of
+  /// stacking: the collapse key is derived from this session plus the kind.
+  static const String testSessionId = 'notification-test';
+
+  /// How long a test notification stays meaningful.
+  static const Duration testLifetime = Duration(minutes: 1);
+
+  /// The kind the test notification borrows, so its result describes a real
+  /// delivery instead of a second decision.
+  ///
+  /// A probe needs a kind to run the real pipeline: the global switch, the
+  /// per-kind switch, the ceiling, the collapse identity, and the platform all
+  /// key on one. It therefore inherits that kind's loudness, which is why
+  /// Settings names the kind it uses rather than letting a quietened row look
+  /// like a broken test.
+  static const NotificationKind testNotificationKind = NotificationKind.completed;
+
+  int _testSequence = 0;
+
+  bool _started = false;
+  bool _disposed = false;
+  NotificationColdStartOutcome _coldStartOutcome = NotificationColdStartOutcome.none;
+
+  static final Logger _logger = Logger('notifications');
+
+  /// Whether the current platform can raise an OS notification at all.
+  bool get isSupported => _adapter.isSupported;
+
+  int get presentedCount => _presented.length;
+
+  /// The outcome of the interaction that started this process, for diagnostics
+  /// and tests. It is never a decision: [NotificationColdStartOutcome.dropped]
+  /// and [NotificationColdStartOutcome.unreadable] both mean nothing was sent
+  /// and no Client state changed.
+  NotificationColdStartOutcome get coldStartOutcome => _coldStartOutcome;
+
+  /// Prepares the platform channel and starts consuming both transports.
+  ///
+  /// [onPlatformReady] runs after the adapter has initialized and before any
+  /// event is consumed. The composition uses it for the two things that must
+  /// happen exactly there: releasing the first permission read (a platform only
+  /// builds the objects that answer one inside `initialize`) and publishing that
+  /// read, so no arriving event can be decided against a permission nobody has
+  /// read yet. A failure in it is logged and never stops the pipeline.
+  Future<void> start({Future<void> Function()? onPlatformReady}) async {
+    if (_started || _disposed) return;
+    _started = true;
+    try {
+      await _adapter.initialize(
+        onResponse: (response) => unawaited(_onPlatformResponse(response)),
+        approvalActionLabels: _readApprovalActionLabels(),
+        kindLabels: _readKindLabels(),
+      );
+    } catch (error, stack) {
+      _logger.warning('notification platform initialization failed', error, stack);
+    }
+    try {
+      await onPlatformReady?.call();
+    } catch (error, stack) {
+      _logger.warning('notification permission could not be published', error, stack);
+    }
+    for (final stream in _eventStreams) {
+      _subscriptions.add(stream.listen(
+        (event) => unawaited(handleEvent(event)),
+        onError: (Object error) => _logger.warning('notification event stream error', error),
+      ));
+    }
+    _coldStartOutcome = await _adoptColdStartInteraction();
+    _logger.info(
+      'notification service started '
+      '(supported=${_adapter.isSupported} permission=${_readPermission().name} '
+      'coldStart=${_coldStartOutcome.name})',
+    );
+  }
+
+  /// Records the interaction that launched this process and acts on nothing.
+  ///
+  /// A launch interaction reaches a Client with no replayed ask state and no
+  /// routed conversation surface, so answering it would build a
+  /// `tool_permission_response` from the notification payload alone, and opening
+  /// it would navigate with no resolved destination. The Client therefore fails
+  /// closed: nothing is sent, no state is mutated, and the pending ask (when the
+  /// Agent still holds one) arrives through the ordinary reconnect replay, where
+  /// the user answers it in the app with full context.
+  Future<NotificationColdStartOutcome> _adoptColdStartInteraction() async {
+    final NotificationPlatformResponse? launch;
+    try {
+      launch = await _adapter.readLaunchResponse();
+    } catch (error, stack) {
+      _logger.warning('could not read a cold-start notification interaction', error, stack);
+      return NotificationColdStartOutcome.none;
+    }
+    if (launch == null) return NotificationColdStartOutcome.none;
+    final payload = _decode(launch.payload);
+    if (payload == null) {
+      _logger.warning('dropped a cold-start notification interaction with an unreadable payload');
+      return NotificationColdStartOutcome.unreadable;
+    }
+    _logger.info(
+      'dropped a cold-start notification interaction '
+      '(kind=${payload.kind.wire} intent=${_actionIdOf(launch, payload) ?? 'open'})',
+    );
+    return NotificationColdStartOutcome.dropped;
+  }
+
+  /// Arms the quiet window. Called on every local or cloud connect, because a
+  /// reconnect replays parked state that must reach the app without becoming a
+  /// new interruption.
+  void onTransportConnected() {
+    if (_disposed || !_adapter.isSupported) return;
+    _quietWindow.arm();
+    _logger.fine('notification quiet window armed for ${_quietWindow.duration.inSeconds}s');
+  }
+
+  /// Applies one canonical envelope.
+  ///
+  /// Returns the display decision, or `null` when the event is not a
+  /// notification this Client understands. A decision whose presentation the
+  /// platform refused is returned as
+  /// [NotificationDisplayOutcome.presentationFailed], so the Agent's own event
+  /// path and the user's probe both report what actually happened.
+  Future<NotificationDisplayDecision?> handleEvent(Map<String, dynamic> event) async {
+    if (_disposed) return null;
+
+    final resolvedSessionId = _askRegistry.observe(event);
+    if (resolvedSessionId != null) {
+      await _withdrawAsk(resolvedSessionId);
+    }
+
+    final payload = NotificationPayload.fromEvent(event);
+    if (payload == null) return null;
+
+    final duplicate = !_deduplicator.shouldProcess(payload.eventId, transport: 'notification');
+    final decision = NotificationDisplayPolicy.decide(
+      payload: payload,
+      alreadyProcessed: duplicate,
+      preferences: _readPreferences(),
+      permission: _readPermission(),
+      quietWindowOpen: _quietWindow.isOpen,
+      presence: _readPresence(),
+      now: _clock(),
+      platformSupported: _adapter.isSupported,
+    );
+
+    if (decision.shouldDisplay) {
+      return await _display(payload) ? decision : _presentationFailure(decision);
+    }
+    _logger.fine('notification not raised: ${decision.reason}');
+    return decision;
+  }
+
+  /// Reports a decision whose presentation the platform refused.
+  ///
+  /// The policy answer and the delivery answer are different facts: the user's
+  /// settings allowed a notification and the adapter call still failed, so the
+  /// caller is told the presentation failed instead of being handed `display`
+  /// for a notification nobody saw.
+  NotificationDisplayDecision _presentationFailure(
+    NotificationDisplayDecision decided,
+  ) =>
+      NotificationDisplayDecision(
+        NotificationDisplayOutcome.presentationFailed,
+        kind: decided.kind,
+        sessionId: decided.sessionId,
+      );
+
+  /// Presents [payload], returning whether the platform accepted the call.
+  ///
+  /// A failure is logged and reported instead of thrown: one notification that
+  /// could not be raised must not reach the transport or the ask it describes.
+  Future<bool> _display(NotificationPayload payload) async {
+    final copy = _copyResolver(payload.kind);
+    final actions = <NotificationPresentationAction>[];
+    if (_adapter.supportsApprovalActions) {
+      for (final action in payload.actions) {
+        final label = copy.labelFor(action);
+        if (label == null) continue;
+        actions.add(NotificationPresentationAction(id: action.id, label: label));
+      }
+    }
+    // The device's own ceiling is applied here, not by the Agent: a preference
+    // belongs to this device, and every route — local socket, cloud socket, or
+    // a future push — converges on this one presentation call.
+    final request = NotificationPresentationRequest(
+      id: payload.notificationId,
+      title: payload.title.isNotEmpty ? payload.title : copy.title,
+      body: payload.body.isNotEmpty ? payload.body : copy.body,
+      urgency: _readPreferences().urgencyFor(payload.kind, payload.urgency),
+      payload: jsonEncode(payload.toPresentationPayload()),
+      actions: actions,
+      // Resolved per presentation, not at initialization: a language change
+      // inside a running session must reach the OS button too.
+      openActionLabel: _openActionLabel(),
+      offersApprovalActions: payload.kind.supportsApprovalActions,
+      threadId: payload.sessionId,
+      androidChannelId: MobileNotificationCatalog.channelIdFor(payload),
+      iosCategoryId: MobileNotificationCatalog.categoryIdFor(payload),
+    );
+    try {
+      await _adapter.show(request);
+      _presented.add(payload.collapseKey);
+      _logger.info('raised ${payload.kind.wire} notification');
+      return true;
+    } catch (error, stack) {
+      _logger.warning('could not raise ${payload.kind.wire} notification', error, stack);
+      return false;
+    }
+  }
+
+  /// The localized label for this notification's open action.
+  ///
+  /// The copy is resolved from the current locale on every presentation, which
+  /// is what lets a language change reach the OS button without a restart. An
+  /// empty or absent label leaves the platform's registered copy in place,
+  /// because a blank button would be worse than a stale one.
+  String? _openActionLabel() {
+    final label = _readApprovalActionLabels()[NotificationActionIntent.open]?.trim();
+    return label == null || label.isEmpty ? null : label;
+  }
+
+  /// Raises one user-initiated test notification through the real pipeline.
+  ///
+  /// The probe is the only event this feature fabricates, and it exists because
+  /// a user cannot otherwise tell a working setup from a silent one. It is
+  /// built as an ordinary envelope so the same parser, the same collapse
+  /// identity, the same display policy, and the same platform adapter run; the
+  /// copy it carries names it as a test so it can never be read as an Agent
+  /// decision.
+  ///
+  /// What it does not reproduce is what makes an arrival an interruption: it is
+  /// not deduplicated against the transports, it ignores the post-connect quiet
+  /// window, and it ignores window presence, because the user asked for it right
+  /// now. Everything a user setting controls — the global switch, the kind, the
+  /// urgency ceiling, and the OS permission — is applied exactly as usual, which
+  /// is what makes the result a real answer instead of a decorative one.
+  ///
+  /// The result is the policy decision, or
+  /// [NotificationDisplayOutcome.presentationFailed] when the platform refused
+  /// the call. A failed presentation is never reported as a notification that
+  /// was shown, because that is the one claim this probe exists to refuse.
+  Future<NotificationDisplayDecision?> raiseTestNotification({
+    required String title,
+    required String body,
+    DateTime? now,
+  }) async {
+    if (_disposed) return null;
+    final at = now ?? _clock();
+    final payload = NotificationPayload.fromEvent(
+      _testEnvelope(title: title, body: body, at: at),
+    );
+    if (payload == null) return null;
+    final decision = NotificationDisplayPolicy.decide(
+      payload: payload,
+      alreadyProcessed: false,
+      preferences: _readPreferences(),
+      permission: _readPermission(),
+      quietWindowOpen: false,
+      presence: NotificationPresence.none,
+      now: at,
+      platformSupported: _adapter.isSupported,
+    );
+    if (decision.shouldDisplay) {
+      return await _display(payload) ? decision : _presentationFailure(decision);
+    }
+    _logger.fine('test notification not raised: ${decision.reason}');
+    return decision;
+  }
+
+  /// One canonical envelope for the test probe.
+  ///
+  /// The urgency is the product default so the platform shows what a real alert
+  /// looks like; the user's ceiling then lowers it in [_display] like any other
+  /// notification.
+  Map<String, dynamic> _testEnvelope({
+    required String title,
+    required String body,
+    required DateTime at,
+  }) {
+    _testSequence += 1;
+    return <String, dynamic>{
+      'event': 'notification',
+      'event_id': 'test-${at.microsecondsSinceEpoch}-$_testSequence',
+      'payload': <String, dynamic>{
+        'kind': testNotificationKind.wire,
+        'urgency': NotificationUrgency.defaultUrgency.wire,
+        'title': title,
+        'body': body,
+        'deep_link': <String, String>{'session_id': testSessionId},
+        'collapse_key': NotificationCollapseKey.forAsk(
+          sessionId: testSessionId,
+          kind: testNotificationKind,
+        ),
+        'expires_at': at.toUtc().add(testLifetime).toIso8601String(),
+      },
+    };
+  }
+
+  /// Withdraws the ask notification of [sessionId] once the ask is resolved.
+  ///
+  /// A platform without package identity (unpackaged Windows) cannot cancel a
+  /// presented toast; the call is still made so a packaged build withdraws it,
+  /// and the stale interaction is rejected separately.
+  Future<void> _withdrawAsk(String sessionId) async {
+    final key = NotificationCollapseKey.forAsk(
+      sessionId: sessionId,
+      kind: NotificationKind.permissionRequest,
+    );
+    if (!_presented.remove(key)) return;
+    try {
+      await _adapter.cancel(NotificationCollapseKey.notificationId(key));
+      _logger.fine('withdrew resolved ask notification');
+    } catch (error) {
+      _logger.fine('could not withdraw resolved ask notification: $error');
+    }
+  }
+
+  Future<void> _onPlatformResponse(NotificationPlatformResponse response) async {
+    final decoded = _decode(response.payload);
+    if (decoded == null) {
+      _logger.warning('dropped a notification interaction with an unreadable payload');
+      return;
+    }
+    final outcome = await _actionRouter.handle(decoded, _actionIdOf(response, decoded));
+    _logger.info('notification interaction handled: ${outcome.name}');
+  }
+
+  /// Recovers the action identity from the platform response.
+  ///
+  /// Some platforms report the payload itself in the action field, and some
+  /// report the pressed button in a data entry instead. Anything unrecognized
+  /// resolves to `null`, which the router treats as a plain open, so an
+  /// unreadable action can never become a decision.
+  String? _actionIdOf(NotificationPlatformResponse response, NotificationPayload payload) {
+    final actionId = response.actionId;
+    if (actionId != null && NotificationAction.intentForWireId(actionId) != null) {
+      return actionId;
+    }
+    final offered = <String>{for (final action in payload.actions) action.id};
+    for (final value in response.data.values) {
+      if (offered.contains(value)) return value;
+    }
+    return null;
+  }
+
+  NotificationPayload? _decode(String raw) {
+    if (raw.isEmpty) return null;
+    try {
+      return NotificationPayload.fromPresentationPayload(jsonDecode(raw));
+    } on FormatException {
+      return null;
+    }
+  }
+
+  /// Forgets every rendered notification and stops consuming events.
+  Future<void> dispose() async {
+    if (_disposed) return;
+    _disposed = true;
+    for (final subscription in _subscriptions) {
+      await subscription.cancel();
+    }
+    _subscriptions.clear();
+    _presented.clear();
+    _askRegistry.clear();
+    _quietWindow.clear();
+  }
+}

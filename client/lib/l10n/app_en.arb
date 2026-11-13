@@ -91,6 +91,11 @@
   "deleteConversation": "Delete conversation",
   "deleteConversationConfirm": "Are you sure you want to delete this conversation?",
   "devices": "Devices",
+  "devicesSelectorLabel": "Device selector",
+  "devicesSettingsMenuItem": "Device Settings",
+  "devicesNone": "No devices",
+  "devicesThisDevice": "This device",
+  "devicesLocalBadge": "local",
   "addDevice": "Add Device",
   "connected": "Connected",
   "disconnected": "Disconnected",
@@ -1340,5 +1345,147 @@
   "providerUsageUnavailable": "Usage information is temporarily unavailable. Please retry.",
   "providerUsageFailed": "Usage information could not be loaded. Please try again.",
   "providerUsageRetry": "Retry",
-  "providerUsageReconnect": "Reconnect"
+  "providerUsageReconnect": "Reconnect",
+  "notifications": "Notifications",
+  "notificationsSubtitle": "Alerts when a session needs you.",
+  "notificationsPermission": "System permission",
+  "notificationsPermissionGrantedBody": "Sanad can show notifications.",
+  "notificationsPermissionNotAskedBody": "Sanad has not asked for notification permission yet. Turn it on when you are ready.",
+  "notificationsPermissionDeniedBody": "Notifications are turned off for Sanad in your system settings. Open them to allow alerts.",
+  "notificationsPermissionUnavailableBody": "This system has no notification service available right now.",
+  "notificationsAskFallback": "your request",
+  "notificationsUnsupportedBody": "Notifications are available in the Sanad desktop and mobile apps.",
+  "notificationsLimitsTitle": "Platform limits",
+  "notificationsLimitsOsWins": "Your system settings always win. If notifications are turned off for Sanad in the operating system, nothing is shown even while they are on here.",
+  "notificationsLimitsIosWebApp": "On iPhone and iPad, web notifications only arrive after Sanad is added to the Home Screen as a web app. An open browser tab does not receive them.",
+  "notificationsPerDeviceScope": "These choices apply to this device only. Each Sanad Client keeps its own notification settings.",
+  "notificationsPermissionDeniedWhileEnabled": "Notifications are on in Sanad but blocked by the system. Nothing will be shown until you allow them in the system settings.",
+  "notificationsTestTitle": "Test notification",
+  "notificationsTestSubtitle": "Runs the same delivery path as a real notification on this device, so the result reflects your permission and these settings.",
+  "notificationsTestKindNotice": "The test follows your {kind} alert style.",
+  "@notificationsTestKindNotice": {
+    "description": "Names the kind whose alert style the test notification borrows.",
+    "placeholders": {
+      "kind": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationsTestButton": "Send test notification",
+  "notificationsTestSending": "Sending...",
+  "notificationsTestNotificationTitle": "Test notification",
+  "notificationsTestNotificationBody": "This is how a Sanad notification looks on this device.",
+  "notificationsTestShown": "Test notification sent.",
+  "notificationsTestKindDisabled": "Nothing was shown: this kind is turned off above.",
+  "notificationsTestPermissionDenied": "Nothing was shown: the system has not allowed notifications for Sanad.",
+  "notificationsTestUnsupported": "Nothing can be shown: this system has no notification service.",
+  "notificationsTestFailed": "The test notification could not be shown.",
+  "notificationsUrgencyChange": "Change alert style",
+  "notificationsUrgencyAlert": "Alert",
+  "notificationsUrgencyAlertHint": "Banner and sound",
+  "notificationsUrgencyBannerOnly": "Banner only",
+  "notificationsUrgencyBannerOnlyHint": "Banner without sound",
+  "notificationsUrgencyOff": "Off",
+  "notificationsUrgencyBlockedByPermission": "Blocked by system permission",
+  "notificationsUrgencyNoService": "No notification service on this system",
+  "notificationsEnable": "Enable notifications",
+  "notificationsOpenSettings": "Open system settings",
+  "notificationsWebSubtitle": "Browser alerts when a session needs you, even after you close this tab.",
+  "notificationsWebInstallRequiredBody": "On iPhone and iPad, browser notifications work only in the installed Sanad app. Open the Safari share menu, choose Add to Home Screen, then turn notifications on from there.",
+  "notificationsWebUnconfiguredBody": "Browser notifications are not configured for this build. Sanad will still alert you while this tab is open.",
+  "notificationsWebUnsupportedBody": "This browser cannot show Sanad notifications. Try a recent Chrome, Edge, Firefox, or Safari, or install the Sanad desktop app.",
+  "notificationsWebEnabledBody": "This browser will show Sanad notifications even when the tab is closed.",
+  "notificationsWebDisabledBody": "Browser notifications are off for Sanad. Turn them on to be alerted while this tab is closed.",
+  "notificationsWebPermissionDeniedBody": "Notifications are blocked for Sanad in this browser's site settings. Allow them there, then try again.",
+  "notificationsWebSignInRequiredBody": "Sign in to Sanad to turn on browser notifications.",
+  "notificationsWebRegistrationFailedBody": "Sanad could not register this browser for delivery. Browser notifications stay off until registration succeeds.",
+  "notificationsWebRetry": "Try again",
+  "notificationsWebDisable": "Turn off browser notifications",
+  "notificationsAllow": "Allow notifications",
+  "notificationsAllowSubtitle": "Show a notification when a session needs you.",
+  "notificationsKinds": "Notify me about",
+  "notificationsKindPermissionRequest": "Permission requests",
+  "notificationsKindUserQuestion": "Questions",
+  "notificationsKindBlocked": "Blocked sessions",
+  "notificationsKindFailed": "Failed runs",
+  "notificationsKindCompleted": "Completed runs",
+  "notificationsKindBackgroundTaskDone": "Background tasks",
+  "notificationsKindScheduledResult": "Scheduled results",
+  "notificationsKindProviderQuota": "Provider limits",
+  "notificationsKindConnectionLost": "Lost connection",
+  "notificationsKindAuthRequired": "Sign-in required",
+  "notificationPermissionRequestTitle": "Approval needed",
+  "notificationUserQuestionTitle": "Answer needed",
+  "notificationBlockedTitle": "Session blocked",
+  "notificationFailedTitle": "Run failed",
+  "notificationCompletedTitle": "Run finished",
+  "notificationBackgroundTaskDoneTitle": "Background task finished",
+  "notificationScheduledResultTitle": "Schedule produced a result",
+  "notificationProviderQuotaTitle": "Provider limit reached",
+  "notificationConnectionLostTitle": "Connection lost",
+  "notificationAuthRequiredTitle": "Sign-in required",
+  "@notificationPermissionRequestBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "@notificationUserQuestionBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationPermissionRequestBody": "Approval requested: {ask}",
+  "notificationUserQuestionBody": "{ask}",
+  "notificationBlockedBody": "A session cannot continue without you.",
+  "@notificationFailedBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationFailedBody": "{ask}",
+  "@notificationCompletedBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationCompletedBody": "{ask}",
+  "@notificationBackgroundTaskDoneBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationBackgroundTaskDoneBody": "{ask}",
+  "@notificationScheduledResultBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationScheduledResultBody": "{ask}",
+  "@notificationProviderQuotaBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationProviderQuotaBody": "{ask}",
+  "notificationConnectionLostBody": "Sanad can no longer reach the agent.",
+  "notificationAuthRequiredBody": "Sign in again to keep receiving updates.",
+  "notificationActionOpen": "Open",
+  "notificationActionAllowOnce": "Allow once",
+  "notificationActionAnswer": "Answer",
+  "notificationActionAllowSession": "Allow for this session",
+  "notificationActionDeny": "Deny"
 }
