@@ -7,6 +7,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_a
 import 'package:sanad_client/features/notifications/domain/models/notification_collapse_key.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_copy.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
+import 'package:sanad_client/features/notifications/domain/models/mobile_notification_catalog.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_payload.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
@@ -52,6 +53,7 @@ class NotificationService {
     required NotificationPresence Function() readPresence,
     required NotificationActionRouter actionRouter,
     Map<NotificationActionIntent, String> Function()? readApprovalActionLabels,
+    Map<NotificationKind, String> Function()? readKindLabels,
     NotificationAskRegistry? askRegistry,
     NotificationQuietWindow? quietWindow,
     EventDeduplicator? deduplicator,
@@ -64,6 +66,7 @@ class NotificationService {
         _readPresence = readPresence,
         _actionRouter = actionRouter,
         _readApprovalActionLabels = readApprovalActionLabels ?? _noApprovalLabels,
+        _readKindLabels = readKindLabels ?? _noKindLabels,
         _askRegistry = askRegistry ?? NotificationAskRegistry(),
         _quietWindow = quietWindow ?? NotificationQuietWindow(),
         _deduplicator = deduplicator ?? EventDeduplicator(maxEntries: 512),
@@ -71,6 +74,8 @@ class NotificationService {
 
   static Map<NotificationActionIntent, String> _noApprovalLabels() =>
       const <NotificationActionIntent, String>{};
+
+  static Map<NotificationKind, String> _noKindLabels() => const <NotificationKind, String>{};
 
 
   final NotificationPlatformAdapter _adapter;
@@ -81,6 +86,7 @@ class NotificationService {
   final NotificationPresence Function() _readPresence;
   final NotificationActionRouter _actionRouter;
   final Map<NotificationActionIntent, String> Function() _readApprovalActionLabels;
+  final Map<NotificationKind, String> Function() _readKindLabels;
   final NotificationAskRegistry _askRegistry;
   final NotificationQuietWindow _quietWindow;
 
@@ -121,6 +127,7 @@ class NotificationService {
       await _adapter.initialize(
         onResponse: (response) => unawaited(_onPlatformResponse(response)),
         approvalActionLabels: _readApprovalActionLabels(),
+        kindLabels: _readKindLabels(),
       );
     } catch (error, stack) {
       _logger.warning('notification platform initialization failed', error, stack);
@@ -232,6 +239,8 @@ class NotificationService {
       actions: actions,
       offersApprovalActions: payload.kind.supportsApprovalActions,
       threadId: payload.sessionId,
+      androidChannelId: MobileNotificationCatalog.channelIdFor(payload),
+      iosCategoryId: MobileNotificationCatalog.categoryIdFor(payload),
     );
     try {
       await _adapter.show(request);

@@ -14,10 +14,11 @@ import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class _FakeAdapter implements NotificationPlatformAdapter {
-  _FakeAdapter({this.supported = true});
+  _FakeAdapter({this.supported = true, this.canOpenSettings = true});
 
   NotificationPermissionStatus permission = NotificationPermissionStatus.unknown;
   final bool supported;
+  final bool canOpenSettings;
   int permissionRequests = 0;
 
   @override
@@ -27,10 +28,14 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   bool get supportsApprovalActions => supported;
 
   @override
+  bool get canOpenSystemSettings => canOpenSettings;
+
+  @override
   Future<void> initialize({
     NotificationPlatformResponseCallback? onResponse,
     Map<NotificationActionIntent, String> approvalActionLabels =
         const <NotificationActionIntent, String>{},
+    Map<NotificationKind, String> kindLabels = const <NotificationKind, String>{},
   }) async {}
 
   @override
@@ -124,6 +129,24 @@ void main() {
     expect(find.text(l10n.notificationsPermissionDeniedBody), findsOneWidget);
     expect(find.byKey(const ValueKey('notification_permission_request_btn')), findsNothing);
     expect(find.byKey(const ValueKey('notification_open_settings_btn')), findsOneWidget);
+  });
+
+  testWidgets('offers no pane button on a platform that cannot open one', (tester) async {
+    final adapter = _FakeAdapter(canOpenSettings: false);
+    final cubit = await makeCubit(
+      tester,
+      adapter,
+      stored: <String, Object>{NotificationPreferencesStore.permissionRequestedKey: true},
+    );
+    adapter.permission = NotificationPermissionStatus.denied;
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    // The refusal is still explained; a button that could not open the pane is
+    // not offered.
+    expect(find.byKey(const ValueKey('notification_open_settings_btn')), findsNothing);
+    expect(find.byKey(const ValueKey('notification_permission_request_btn')), findsNothing);
   });
 
   testWidgets('keeps every kind enabled by default', (tester) async {

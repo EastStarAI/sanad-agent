@@ -160,4 +160,14 @@ Planning complete. The plan is accepted.
   redacted payload, and the withdrawal, and
   [docs/technical/communication_protocols.md](../technical/communication_protocols.md)
   §7 is the wire contract.
-- `174b`–`174f` are authored and unstarted.
+- `174b` (desktop OS notifications) is implemented on
+  `task/174b-desktop-notifications` for macOS, Windows, and Linux.
+- `174c` (mobile push delivery) is implemented on `task/174c-mobile-push`: token
+  lifecycle over the authenticated socket, one high-importance Android channel
+  and one iOS category per kind, the foreground rule, payload-only rendering, and
+  action handling through the existing `tool_permission_response` path. Device
+  verification is recorded as an open item in the task, and the platform provider
+  module (Android) plus the App ID Push capability (iOS) remain with
+  release/platform. The behavior is documented in
+  [Mobile Push Delivery](../technical/mobile_push_delivery.md).
+- `174d`–`174f` are authored and unstarted.
