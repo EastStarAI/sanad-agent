@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,9 +58,9 @@ class _NoopClient implements ProviderSetupClient {
 
 Widget _wrap(ProviderUsageCubit cubit, Widget child, {String locale = 'en'}) {
   return MaterialApp(
-            locale: Locale(locale),
-            localizationsDelegates: AppLocalizations.localizationsDelegates,
-            supportedLocales: const [Locale('en'), Locale('ar')],
+    locale: Locale(locale),
+    localizationsDelegates: AppLocalizations.localizationsDelegates,
+    supportedLocales: const [Locale('en'), Locale('ar')],
     home: Scaffold(
       body: BlocProvider.value(
         value: cubit,
@@ -248,9 +249,7 @@ void main() {
       expect(find.byKey(const Key('provider_usage_retry_a')), findsOneWidget);
       expect(find.byKey(const Key('provider_usage_reconnect_a')), findsNothing);
       expect(
-        tester
-            .widget<Text>(find.byKey(const Key('provider_usage_message_a')))
-            .data,
+        tester.widget<Text>(find.byKey(const Key('provider_usage_message_a'))).data,
         'Usage information is temporarily unavailable. Please retry.',
       );
       // The daemon's English text is never echoed; the status owns localized
@@ -406,6 +405,138 @@ void main() {
       expect(textButton.onPressed, isNull);
     },
   );
+
+  testWidgets(
+    'reset credits render separately with local expiry and replace the combined count',
+    (tester) async {
+      final first = DateTime.utc(2026, 11, 15, 10);
+      final second = DateTime.utc(2026, 11, 20, 10);
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: DateTime.now(),
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'openai-codex',
+                source: 'test',
+                fetchedAt: DateTime.now().toUtc(),
+                windows: const [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 40,
+                    remainingPercent: 60,
+                  ),
+                ],
+                availableResets: 2,
+                resetCredits: [
+                  ProviderUsageResetCreditDto(expiresAt: first),
+                  ProviderUsageResetCreditDto(expiresAt: second),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_1')),
+        findsOneWidget,
+      );
+      expect(find.text('Reset credit'), findsNWidgets(2));
+      expect(
+        find.text(
+          'Expires ${DateFormat('MMM d, y, HH:mm').format(first.toLocal())}',
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.text(
+          'Expires ${DateFormat('MMM d, y, HH:mm').format(second.toLocal())}',
+        ),
+        findsOneWidget,
+      );
+      expect(find.text('2 resets available'), findsNothing);
+      expect(find.text('Reset limits'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_expiry_a_0')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets('reset credit copy is localized in Arabic', (tester) async {
+    final expires = DateTime.utc(2026, 11, 15, 10);
+    cubit.emit(
+      cubit.state.upsertEntry(
+        _localDeviceId,
+        'a',
+        ProviderUsageEntry(
+          phase: ProviderUsagePhase.fresh,
+          fetchedAt: DateTime.now(),
+          result: ProviderUsageResultDto(
+            status: 'available',
+            providerInstanceId: 'a',
+            snapshot: ProviderUsageSnapshotDto(
+              providerInstanceId: 'a',
+              providerTemplateId: 'openai-codex',
+              source: 'test',
+              fetchedAt: DateTime.now().toUtc(),
+              windows: const [
+                ProviderUsageWindowDto(
+                  type: 'weekly',
+                  label: 'Weekly',
+                  usedPercent: 40,
+                  remainingPercent: 60,
+                ),
+              ],
+              availableResets: 1,
+              resetCredits: [
+                ProviderUsageResetCreditDto(expiresAt: expires),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        locale: 'ar',
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('الاستخدام والحدود'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('رصيد إعادة ضبط'), findsOneWidget);
+    expect(
+      find.text(
+        'ينتهي في ${DateFormat('MMM d, y, HH:mm').format(expires.toLocal())}',
+      ),
+      findsOneWidget,
+    );
+  });
 
   testWidgets('reset count is conditional and Reset anyway reuses confirmation', (tester) async {
     ProviderUsageEntry entryWithResets(int count) => ProviderUsageEntry(

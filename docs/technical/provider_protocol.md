@@ -300,10 +300,14 @@ response.
 
 A snapshot carries `provider_instance_id`, `provider_template_id`, `source`,
 `fetched_at`, optional plan and safe details, non-negative `available_resets`,
-and only the windows returned by the adapter. Version 1 window types are
-`session`, `weekly`, and `monthly`. Percentages are normalized to `[0, 100]`,
-and one side is derived when only used or remaining is supplied. Missing
-windows never create placeholders.
+an optional `reset_credits` list, and only the windows returned by the adapter.
+Each reset-credit entry carries display-safe UTC `expires_at` and optional
+`granted_at`; the provider's title, description, profile id, and account id
+never cross the protocol. `available_resets` remains authoritative for the
+reset action, while `reset_credits` supplies the per-credit display detail.
+Version 1 window types are `session`, `weekly`, and `monthly`. Percentages are
+normalized to `[0, 100]`, and one side is derived when only used or remaining is
+supplied. Missing windows never create placeholders.
 
 The first adapter is ChatGPT account usage for `openai-codex`. It reads the
 account backend with the selected instance's bearer credential and optional

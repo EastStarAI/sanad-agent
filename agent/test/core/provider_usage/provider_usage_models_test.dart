@@ -84,6 +84,12 @@ void main() {
           ),
         ],
         availableResets: 2,
+        resetCredits: [
+          ProviderUsageResetCredit(
+            expiresAt: DateTime.utc(2026, 7, 25, 9),
+            grantedAt: DateTime.utc(2026, 7, 18, 9),
+          ),
+        ],
         extraDetails: const ['Credits balance: \$5.00'],
       );
       final decoded = ProviderUsageSnapshot.fromMap(
@@ -91,6 +97,14 @@ void main() {
       );
       expect(decoded.providerInstanceId, s.providerInstanceId);
       expect(decoded.availableResets, 2);
+      expect(
+        decoded.resetCredits.single.expiresAt,
+        DateTime.utc(2026, 7, 25, 9),
+      );
+      expect(
+        decoded.resetCredits.single.grantedAt,
+        DateTime.utc(2026, 7, 18, 9),
+      );
       expect(decoded.windows.single.type, 'weekly');
       expect(decoded.extraDetails.single, 'Credits balance: \$5.00');
       expect(decoded.hasContent, isTrue);
@@ -105,6 +119,19 @@ void main() {
         unavailableReason: 'down',
       );
       expect(s.hasContent, isFalse);
+    });
+
+    test('reset credits alone count as content', () {
+      final s = ProviderUsageSnapshot(
+        providerInstanceId: 'i',
+        providerTemplateId: 't',
+        source: 's',
+        fetchedAt: DateTime.utc(2026),
+        resetCredits: [
+          ProviderUsageResetCredit(expiresAt: DateTime.utc(2026, 7, 25)),
+        ],
+      );
+      expect(s.hasContent, isTrue);
     });
 
     test('default availableResets is 0', () {
