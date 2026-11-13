@@ -3,6 +3,7 @@ part of '../../../sanad_dev_cli.dart';
 Future<void> handleRuntimeSwitch({
   required String runtimeSelector,
   int? portOverride,
+  String? sanadHomePath,
 }) async {
   if (runtimeSelector != 'current') {
     stderr.writeln('switch currently supports only --runtime current.');
@@ -13,7 +14,10 @@ Future<void> handleRuntimeSwitch({
   final targetRuntime = await _currentRuntime();
   final targetClientDirectory =
       '${targetRuntime.repositoryRoot}${Platform.pathSeparator}client';
-  final agents = await discoverAgentInstances();
+  // The source runtime's Home is not a discovery candidate until the caller
+  // worktree owns a runtime of its own, so a fresh worktree needs the explicit
+  // selector to reach the pair it is meant to adopt.
+  final agents = await discoverAgentInstances(sanadHomeOverride: sanadHomePath);
   final clients = await discoverClientInstances();
   final requestedPort = portOverride ?? _requestingAgentPort();
 
@@ -23,7 +27,9 @@ Future<void> handleRuntimeSwitch({
   if (matchingAgents.length != 1) {
     stderr.writeln(
       matchingAgents.isEmpty
-          ? 'Switch aborted: no source agent matches current.'
+          ? 'Switch aborted: no source agent matches current. Pass --home '
+                '<source Sanad Home> or --port <agent-port>; a worktree with '
+                'no runtime of its own cannot discover the pair on its own.'
           : 'Switch aborted: current agent is ambiguous; pass --port <agent-port>.',
     );
     exitCode = 1;

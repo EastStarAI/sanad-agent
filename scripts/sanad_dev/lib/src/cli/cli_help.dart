@@ -48,6 +48,9 @@ void printUsage() {
     '  switch --runtime current  Move the active runtime group to this worktree.',
   );
   print(
+    '                            Pass --home <source-home> when this worktree has no runtime yet.',
+  );
+  print(
     '                            Requires direct user authorization; all sessions sharing the pair are affected.',
   );
   print(
@@ -87,6 +90,9 @@ void printUsage() {
     '  --confirm                 Actually delete the listed orphan targets.',
   );
   print('  --runtime current         Select the requester runtime for switch.');
+  print(
+    '  --port <port>             With switch, identify the requester agent when several runtimes are live.',
+  );
   print('  --driver                  Run client/lib/driver_main.dart.');
   print(
     '  --cloud                   Explicitly enable cloud (already the default).',
