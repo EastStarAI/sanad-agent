@@ -393,7 +393,60 @@ void main() {
       );
       final snap = await adapter.fetch(ctx);
       expect(snap.availableResets, 0);
+      expect(snap.resetCredits, isEmpty);
     });
+
+    test(
+      'parses available reset credits with UTC expiry, sorted and sanitized',
+      () async {
+        final payload = {
+          'rate_limit': {
+            'primary_window': {'used_percent': 10},
+          },
+          'rate_limit_reset_credits': {
+            'available_count': 3,
+            'credits': [
+              {
+                'status': 'available',
+                'title': 'Full reset (Weekly + 5 hr)',
+                'description': 'provider-private',
+                'profile_user_id': 'PROFILE-LEAK',
+                'granted_at': '2026-11-01T10:00:00Z',
+                'expires_at': '2026-11-20T10:00:00Z',
+              },
+              {'status': 'redeemed', 'expires_at': '2026-11-10T10:00:00Z'},
+              {'status': 'available', 'expires_at': '2026-11-15T10:00:00Z'},
+              {'status': 'available', 'expires_at': 'not-a-date'},
+              {'status': 'available'},
+            ],
+          },
+        };
+        final ctx = context(
+          instanceId: 'inst-credits',
+          credential: oauthCred('inst-credits'),
+          httpClientFactory: _okFactory(payload),
+        );
+        final snap = await adapter.fetch(ctx);
+
+        expect(snap.availableResets, 3);
+        expect(snap.resetCredits, hasLength(2));
+        expect(snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()), [
+          '2026-11-15T10:00:00.000Z',
+          '2026-11-20T10:00:00.000Z',
+        ]);
+        expect(
+          snap.resetCredits.last.grantedAt?.toIso8601String(),
+          '2026-11-01T10:00:00.000Z',
+        );
+        expect(snap.resetCredits.every((c) => c.expiresAt!.isUtc), isTrue);
+
+        final mapText = snap.toMap().toString();
+        expect(mapText, isNot(contains('PROFILE-LEAK')));
+        expect(mapText, isNot(contains('Full reset')));
+        expect(mapText, isNot(contains('provider-private')));
+        expect(snap.toMap()['reset_credits'] as List, hasLength(2));
+      },
+    );
 
     test('snapshot JSON never contains token or account id', () async {
       final payload = {

@@ -521,39 +521,39 @@ class _ResetControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final count = snapshot.availableResets;
+    final credits = snapshot.resetCredits.where((credit) => credit.expiresAt != null).toList()
+      ..sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                count == 1
-                    ? AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetAvailableSingle
-                    : AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetsAvailable(count),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-              ),
+        if (credits.isNotEmpty) ...[
+          for (var i = 0; i < credits.length; i++)
+            _ResetCreditRow(
+              instanceId: instanceId,
+              index: i,
+              expiresAt: credits[i].expiresAt!,
             ),
-            TextButton.icon(
-              onPressed: entry.resetInProgress ? null : () => _start(context),
-              icon: entry.resetInProgress
-                  ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.restart_alt, size: 14),
-              label: Text(
-                AppLocalizations.of(context)!.providerUsageResetLimits,
+          Align(
+            alignment: Alignment.centerRight,
+            child: _resetButton(context, l10n),
+          ),
+        ] else
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  count == 1 ? l10n.providerUsageResetAvailableSingle : l10n.providerUsageResetsAvailable(count),
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-            ),
-          ],
-        ),
+              _resetButton(context, l10n),
+            ],
+          ),
         if (entry.resetResult != null && entry.resetResult!.status != 'confirmation_required')
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -563,11 +563,31 @@ class _ResetControls extends StatelessWidget {
                 fontSize: 11,
                 color: entry.resetResult!.status == 'reset'
                     ? Colors.green[700]
-                    : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
+                    : Theme.of(
+                        context,
+                      ).colorScheme.onSurface.withValues(alpha: 0.65),
               ),
             ),
           ),
       ],
+    );
+  }
+
+  Widget _resetButton(BuildContext context, AppLocalizations l10n) {
+    return TextButton.icon(
+      onPressed: entry.resetInProgress ? null : () => _start(context),
+      icon: entry.resetInProgress
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: AppProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.restart_alt, size: 14),
+      label: Text(l10n.providerUsageResetLimits),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
     );
   }
 
@@ -637,6 +657,64 @@ class _ResetControls extends StatelessWidget {
         confirmationToken: token,
       );
     }
+  }
+}
+
+/// One banked reset credit with its local expiration time (Task 174).
+class _ResetCreditRow extends StatelessWidget {
+  final String instanceId;
+  final int index;
+  final DateTime expiresAt;
+
+  const _ResetCreditRow({
+    required this.instanceId,
+    required this.index,
+    required this.expiresAt,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final local = expiresAt.toLocal();
+    return Padding(
+      key: Key('provider_usage_reset_credit_${instanceId}_$index'),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          Icon(
+            Icons.restart_alt,
+            size: 14,
+            color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: Text(
+              l10n.providerUsageResetCreditLabel,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ),
+          Tooltip(
+            message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(local),
+            child: Text(
+              l10n.providerUsageResetCreditExpires(
+                DateFormat('MMM d, y, HH:mm').format(local),
+              ),
+              key: Key(
+                'provider_usage_reset_credit_expiry_${instanceId}_$index',
+              ),
+              style: TextStyle(
+                fontSize: 11,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
