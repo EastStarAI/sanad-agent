@@ -808,6 +808,7 @@
   "providerUsageResetsInMinutes": "يُعاد الضبط بعد {count} دقيقة",
   "providerUsageResetsInHours": "يُعاد الضبط بعد {count} ساعة",
   "providerUsageResetsInDays": "يُعاد الضبط بعد {count} يوم",
+  "providerUsageResetsInDaysHours": "يُعاد الضبط بعد {days} يوم و{hours} ساعة",
   "providerUsageResetsOnDate": "يُعاد الضبط في {when}",
   "providerUsageResetsAvailable": "{count} عملية إعادة ضبط متاحة",
   "providerUsageResetAvailableSingle": "عملية إعادة ضبط واحدة متاحة",

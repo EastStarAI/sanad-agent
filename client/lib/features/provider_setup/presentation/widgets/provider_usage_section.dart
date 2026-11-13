@@ -430,9 +430,7 @@ class _WindowRow extends StatelessWidget {
             child: Tooltip(
               message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
               child: Text(
-                AppLocalizations.of(
-                  context,
-                )!.providerUsageResetsAt(_formatLocalRelative(context, window.resetAt!)),
+                _formatLocalRelative(context, window.resetAt!),
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -495,7 +493,10 @@ class _WindowRow extends StatelessWidget {
       return l10n.providerUsageResetsInHours(delta.inHours);
     }
     if (delta.inDays <= 6) {
-      return l10n.providerUsageResetsInDays(delta.inDays);
+      final days = delta.inDays;
+      final hours = delta.inHours % 24;
+      if (hours == 0) return l10n.providerUsageResetsInDays(days);
+      return l10n.providerUsageResetsInDaysHours(days, hours);
     }
     return l10n.providerUsageResetsOnDate(
       DateFormat('EEE, MMM d, HH:mm').format(local),

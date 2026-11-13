@@ -51,7 +51,11 @@ Weekly and Monthly displays exactly those two rows.
 Each window prioritizes the remaining value, such as `58% remaining`, and shows
 the used value as secondary information, such as `42% used`. Its progress bar
 represents consumption. Reset timing is rendered relative to the user's local
-time zone, with the full local time available as a tooltip.
+time zone, with the full local time available as a tooltip. Within six days, a
+countdown whose hour component is non-zero includes both days and hours (for
+example, `2 d 22 h`); an exact day boundary may show days alone, and longer
+horizons show the local date. The countdown owns its full `Resets …` sentence,
+so the prefix is never duplicated.
 
 ## Freshness and recovery
 

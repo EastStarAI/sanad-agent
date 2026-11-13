@@ -121,9 +121,11 @@ logs.
 Observed on the first valid-key snapshot:
 
 - Session: `2% used`, `98% remaining`, `Resets in 2 h`.
-- Weekly: `55% used`, `45% remaining`, `Resets in 2 d`.
+- Weekly: `55% used`, `45% remaining`, `Resets in 2 d 22 h`.
 - Monthly: `55% used`, `45% remaining`, `Resets on Mon, Nov 23, 17:03`.
 - No reset action was rendered at zero reset credits.
+- The reset countdown rendered a single `Resets` prefix and included both days
+  and hours within the six-day relative window.
 
 Recovery check:
 
@@ -140,7 +142,7 @@ Recovery check:
    returned to `READY` (`Key accepted: 30 models`), and the disclosure restored
    Session, Weekly, and Monthly. The refreshed Session reading was `3% used`,
    `97% remaining`, `Resets in 1 h`; Weekly and Monthly remained `55% used` /
-   `45% remaining`.
+   `45% remaining`, and the Weekly countdown read `2 d 22 h`.
 
 The edit-mode credential controls received stable keys
 (`provider_credential_actions_button`, `provider_credential_action_field`, the
@@ -169,8 +171,9 @@ fvm dart analyze                          # agent: no issues
 fvm dart test test/core/provider_usage    # 61 passed
 fvm dart test test/interfaces/sanad_bridge_provider_usage_test.dart  # 9 passed
 fvm flutter analyze                       # client: no issues
-fvm flutter test test/features/provider_setup/widgets/provider_usage_section_test.dart
-  # 10 passed after installing host GTK 3 / X11 / Xi development packages
+fvm flutter test test/features/provider_setup/widgets/provider_usage_section_test.dart test/widget/provider_setup_flow_test.dart
+  # 37 passed after installing host GTK 3 / X11 / Xi development packages
+  # includes days+hours countdown and no duplicated prefix coverage
 sanad-dev run --background --driver --no-cloud  # matched agent/client runtime
 sanad-dev ui ...                        # live OpenCode Go usage + auth_required
                                         # recovery acceptance (values above)

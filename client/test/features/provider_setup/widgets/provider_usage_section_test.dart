@@ -214,6 +214,63 @@ void main() {
   );
 
   testWidgets(
+    'reset countdown includes days and hours and never duplicates the prefix',
+    (tester) async {
+      final now = DateTime.now();
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: now,
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'opencode-go',
+                source: 'opencode_go',
+                fetchedAt: now,
+                windows: [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 10.0,
+                    resetAt: now.add(
+                      const Duration(days: 2, hours: 5, minutes: 5),
+                    ),
+                  ),
+                  ProviderUsageWindowDto(
+                    type: 'session',
+                    label: 'Session',
+                    usedPercent: 20.0,
+                    resetAt: now.add(const Duration(hours: 3, minutes: 5)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Resets in 2 d 5 h'), findsOneWidget);
+      expect(find.text('Resets in 3 h'), findsOneWidget);
+      expect(find.textContaining('Resets Resets'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'needsAttention shows a concise English message and a Retry button, no '
     'provider metadata is hidden',
     (tester) async {

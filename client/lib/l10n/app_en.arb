@@ -1305,6 +1305,17 @@
       }
     }
   },
+  "providerUsageResetsInDaysHours": "Resets in {days} d {hours} h",
+  "@providerUsageResetsInDaysHours": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      },
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
   "providerUsageResetsOnDate": "Resets on {when}",
   "@providerUsageResetsOnDate": {
     "placeholders": {

@@ -111,8 +111,9 @@ command, log, or screenshot. The acceptance surface is Settings → Providers.
    percentage while the page stays on the same instance.
 
 Acceptance run on 2026-11-13 observed Session `2%` → `3%` used, Weekly `55%`,
-Monthly `55%`, resets of `2 h`, `2 d`, and `Mon, Nov 23, 17:03`, and no reset
-action at zero credits. The API-key recovery path behaved exactly as above.
+Monthly `55%`, resets of `1 h`, `2 d 22 h`, and `Mon, Nov 23, 17:03`, and no
+reset action at zero credits. The countdown rendered a single `Resets` prefix.
+The API-key recovery path behaved exactly as above.
 
 ## Automated daemon-backed fixture
 
