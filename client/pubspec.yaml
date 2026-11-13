@@ -62,7 +62,7 @@ dependencies:
   auto_updater: ^1.0.0
   path_provider: ^2.1.5
   path: ^1.9.1
-  file_selector: ^1.0.3
+  file_selector: ^1.1.0
   archive: ^4.0.7
   package_info_plus: ^9.0.0
   sanad_release_contract:

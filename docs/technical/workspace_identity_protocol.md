@@ -53,6 +53,18 @@ The Workspace Settings overview owns `Rename Workspace` and `Change Path`. Chang
 
 A remote Change Path states that in-root scope before the pick, opens at the workspace's current folder when the device browses it and at the root otherwise, names the resolved target in one confirmation line before anything is sent, and renders one specific localized message instead of the daemon reason when the target is `path_not_allowed`. The daemon's relocation preview ticket stays invisible: the transport performs the preview and the ticketed retry. Mutation results update the conversation cache only after the correlated authoritative response. Each successful create, rename, relocate, or remove mutation invalidates older in-flight workspace-list generations for that device so a stale refresh cannot overwrite the confirmed result. A rejected mutation preserves the daemon-provided reason through the command and cache layers and displays it with the project's error toast; Settings does not replace it with a generic message or use a `SnackBar`.
 
+## Local Native Folder Picker
+
+A confirmed same-desktop local device picks its folder in the host's native directory panel through `WorkspacePickerHelper.pickWorkspacePath`, which is the single Client call site of `file_selector`; remote devices never reach it because they browse the confined in-app browser instead. Allowing the user to create a folder inside that panel is a platform contract, not a UI preference:
+
+| Platform | Contract |
+|---|---|
+| macOS | `NSOpenPanel.canCreateDirectories` is `false` at runtime unless the caller sets it, and `file_selector_macos` only assigns the property when the request carries a non-null value. The Client therefore sends `canCreateDirectories: true` explicitly; without that request the panel hides the New Folder affordance and a workspace can only adopt a folder that already exists. The AppKit `NSSavePanel.h` header documents a `YES` default, but that describes `NSSavePanel` (`true` there), not `NSOpenPanel`, so the header is not evidence for this panel. |
+| Windows | The Windows implementation carries no `canCreateDirectories` handling: its native folder dialog already offers folder creation and the request value is ignored, so the explicit request is a behaviour-preserving no-op there. |
+| Linux | `file_selector_linux` forwards the value as the GTK chooser's `create-folders` flag and keeps GTK's default, which already allows creating folders. |
+
+The flag is a request, never an authorization: the daemon still validates and registers the chosen path under its own workspace rules.
+
 ## Legacy Cache Reconciliation
 
 When a client cache still uses path ids and the daemon returns UUID workspaces, the cache matches the same stored path and remaps workspace pages, expansion state, New Conversation draft scope, and New Conversation destination to the UUID before removing stale keys.
