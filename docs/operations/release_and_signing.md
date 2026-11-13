@@ -707,8 +707,8 @@ The following remain live-release gates:
   passed. Windows 10 clean-machine validation is not part of the `1.0.0` release
   gate and must not be represented as tested;
 - use the completed App Store Connect API key and application record for
-  Internal TestFlight upload; hosted notarization, staple, and Gatekeeper
-  verification have passed;
+  Internal TestFlight uploads and App Store submission; hosted notarization,
+  staple, and Gatekeeper verification have passed;
 - build and review tagged RC candidates, publish each immutable Release only
   after its separate owner approval, stage Web/Appcast/installers, and exercise
   clean installation, real upgrade, failure recovery, and rollback paths.
