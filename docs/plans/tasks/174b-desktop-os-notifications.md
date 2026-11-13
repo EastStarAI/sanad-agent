@@ -1,7 +1,8 @@
 # 174b — Desktop OS notifications
 
 **Status:** implemented — G0–G4 closed on this host, G5 partially closed (unit and
-widget evidence complete; live desktop pass per platform not executable here)
+widget evidence complete; live desktop pass per platform not executable here);
+review findings W2, W3, W4, and S3 applied
 **Owners:** new `client/lib/features/notifications/`, `client/lib/infrastructure/socket/event_deduplicator.dart`, `client/lib/app.dart`
 **Plan:** [174](../174-client-notifications-and-push-delivery.md)
 **Depends on:** `174a` (payload and kinds)
@@ -179,6 +180,14 @@ the quiet window closes" widget cases.
 - [ ] One live desktop pass per platform for permission, display, click, and
       action. **Not executed** — no macOS, Windows, or Linux desktop session with
       a notification service is available on this host (see limitations).
+- [ ] **Residual platform gap (recorded, not closed here):** window presence is
+      now sourced from the Client's own `DesktopLifecycleManager` record, so every
+      hide the app performs is observed without relying on a lifecycle transition.
+      A hide performed by the OS or the window manager outside that path — most
+      notably a user-driven minimize that emits no `AppLifecycleState` transition —
+      is still not observed, and presence then treats the session as visible. Only a
+      live desktop pass on macOS, Windows, and Linux can prove which hides reach
+      the runner; see limitation 1–3.
 
 ## Acceptance Criteria
 
@@ -262,6 +271,53 @@ the quiet window closes" widget cases.
     *Reason:* the surface owns permission plus ten kind switches, which does not
     fit the General page, and a destination is deep-linkable and driver-testable.
 
+## Review follow-up (W2, W3, W4, S3)
+
+The independent review approved the desktop surface with notes. All four findings
+are applied on this branch; no behavior was relaxed and no platform claim was
+promoted past what this host can observe.
+
+1. **W2 — window visibility now has a deterministic source.**
+   `DesktopLifecycleManager` owns `isWindowVisible` and publishes every hide/show
+   on `windowVisibilityChanges`; `NotificationWindowPresenceReporter` projects
+   that record into presence above the router. `NotificationBridge` no longer
+   derives visibility from `AppLifecycleState`; its observer only refreshes the OS
+   permission on resume. The lifecycle state remains corroboration (a
+   lifecycle-hidden state clears presence) but `resumed` cannot override a
+   deterministic hide, and a target without the manager falls back to lifecycle
+   state. Evidence:
+   `test/widget/notifications/notification_window_presence_test.dart` mounts both
+   reporters with a `NotificationPresenceStore` provider and a `SessionCubit`
+   stub, hides through the manager, and asserts the policy outcome flips for the
+   same session (`suppressedOnScreen` → `display` → `suppressedOnScreen`).
+   *Residual gap:* a minimize the app does not perform and the platform does not
+   report is still invisible to presence; recorded next to G5.
+2. **W3 — no user-visible string bypasses localization.** `_label()` and the
+   freedesktop `defaultActionName` now resolve through
+   `NotificationActionLabels`, which uses the localized map the adapter receives
+   with `initialize` and an English fallback only when that map is empty; a raw
+   intent name is never presented. A unit test also asserts the English fallback
+   equals the `notificationAction*` entries in `client/lib/l10n/app_en.arb`.
+   §7.2 documents that macOS registers its categories once at startup. Evidence:
+   `test/unit/features/notifications/notification_action_labels_test.dart` and the
+   registration cases in `notification_backend_native_test.dart`.
+3. **W4 — the presented action set is the payload's action set.** macOS fixes a
+   category's buttons at registration, so a single `sanad_ask` category could
+   present a button the payload never offered. `DarwinActionCategories` derives
+   one category per non-empty subset of the approval actions, the adapter
+   registers that family at startup, and the presented notification selects the
+   category whose actions equal the request's. An unmatched set is presented with
+   no buttons. Evidence: `test/unit/features/notifications/darwin_action_categories_test.dart`
+   plus the presentation cases in `notification_backend_native_test.dart`.
+4. **S3 — cold start is recorded and fails closed.** The adapter reports the
+   launch interaction once (`readLaunchResponse`, macOS/Windows only), and
+   `NotificationService` records `NotificationColdStartOutcome` (`none`,
+   `dropped`, or `unreadable`) without routing it. Nothing is sent and no
+   destination is opened; the pending ask arrives through the ordinary reconnect
+   replay, where the user answers it in the app. Evidence:
+   `test/unit/features/notifications/notification_cold_start_test.dart`,
+   including that a live interaction still routes after a dropped one.
+
 ## Verification (commands and results)
 
 All commands were run inside `client/` with `fvm` (Flutter 3.47.0 / Dart 3.13.0).
@@ -276,6 +332,25 @@ All commands were run inside `client/` with `fvm` (Flutter 3.47.0 / Dart 3.13.0)
 | `fvm flutter test` (full fast suite) | `All tests passed!` — 2891 passed, 3 skipped (browser-only web guard) |
 | `fvm flutter build web --release --dart-define-from-file=config/prod.json` | `✓ Built build/web` — the conditional import keeps Web free of the native notification library. |
 | Linux notification-service probe (`DBusClient` → `org.freedesktop.Notifications.GetCapabilities`) | `ServiceUnknown` — no notification daemon on this host. |
+
+### Review follow-up verification (W2, W3, W4, S3)
+
+All commands were run inside `client/` with `fvm` (Flutter 3.47.0 / Dart 3.13.0),
+except the wiki index commands, which run from the workspace root.
+
+| Command | Result |
+| :--- | :--- |
+| `fvm flutter analyze` | `No issues found!` |
+| `fvm flutter test test/unit/features/notifications test/widget/notifications test/guards` | `All tests passed!` (139 tests) |
+| `fvm flutter test` (full fast suite) | `All tests passed!` — 2918 passed, 3 skipped (browser-only web guard) |
+| `fvm dart run scripts/generate_llms_txt.dart` | Not run on this branch. `docs/llms.txt` is a shared index regenerated outside this task and is deliberately left untouched, so the new `client/lib/features/notifications/AGENTS.md` is not listed in it yet. |
+| `fvm dart run scripts/lint_wiki.dart` | `FAILED: Found 3 documentation errors` — this branch's `client/lib/features/notifications/AGENTS.md` is not indexed in `docs/llms.txt`, plus 2 pre-existing missing-frontmatter errors on the branch base (`docs/qa_maintenance/mobile_new_account_onboarding_qa.md`, `docs/technical/context_window_resolution.md`). The first clears as soon as the shared index is regenerated. |
+
+New tests: `test/widget/notifications/notification_window_presence_test.dart` (3),
+`test/unit/features/notifications/darwin_action_categories_test.dart` (6),
+`test/unit/features/notifications/notification_action_labels_test.dart` (4),
+`test/unit/features/notifications/notification_backend_native_test.dart` (8), and
+`test/unit/features/notifications/notification_cold_start_test.dart` (6).
 
 ## Limitations (implemented, not executed here)
 
@@ -305,6 +380,19 @@ All commands were run inside `client/` with `fvm` (Flutter 3.47.0 / Dart 3.13.0)
 7. **`graphify update .` was not run.** The Graphify CLI is not installed in this
    environment and no `graphify-out/` exists in this worktree or the primary
    checkout, so the index could not be refreshed.
+8. **Cold-start behavior is recorded, not resumed.** An interaction that launches
+   the process is deliberately not acted on (S3). The outcome is deterministic and
+   covered by tests, but a user who presses an approval button in a quit app must
+   answer again in the app; closing that gap needs a launch-time replayed ask and
+   a routed destination, which is not observable on this host.
+9. **The new contract file is not indexed yet.** `client/lib/features/notifications/AGENTS.md`
+   is missing from `docs/llms.txt`, which is owned and regenerated outside this
+   task; `scripts/lint_wiki.dart` therefore reports it until that regeneration lands.
+10. **Registered button copy follows the launch language.** macOS and Linux fix
+    action copy when the platform initializes, so switching language mid-session
+    leaves the already-registered button copy in the previous language until the
+    next launch (see §7.2 of the technical page). Re-registering the categories on
+    a locale change was not attempted; it cannot be verified on this host.
 
 ## Definition of Done
 

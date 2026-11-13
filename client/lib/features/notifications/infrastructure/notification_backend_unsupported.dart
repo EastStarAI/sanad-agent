@@ -33,6 +33,9 @@ class UnsupportedNotificationAdapter implements NotificationPlatformAdapter {
       NotificationPermissionStatus.unsupported;
 
   @override
+  Future<NotificationPlatformResponse?> readLaunchResponse() async => null;
+
+  @override
   Future<void> show(NotificationPresentationRequest request) async {}
 
   @override

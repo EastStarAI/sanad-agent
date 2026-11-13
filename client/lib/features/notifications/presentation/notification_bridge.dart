@@ -27,6 +27,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/services/notification_ask_registry.dart';
 import 'package:sanad_client/features/notifications/presentation/bloc/notification_settings_cubit.dart';
 import 'package:sanad_client/features/notifications/presentation/notification_copy_source.dart';
+import 'package:sanad_client/features/notifications/presentation/notification_window_presence_reporter.dart';
 import 'package:sanad_client/infrastructure/platform/desktop_lifecycle_manager.dart';
 import 'package:sanad_client/infrastructure/socket/sanad_socket_service.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
@@ -40,8 +41,10 @@ import 'package:sanad_client/utils/app_platform.dart';
 /// dedupe, quiet-window, and action rules live in the domain and application
 /// layers, which is why this file has no rules of its own.
 ///
-/// It sits above the router, so it reports window visibility itself and navigates
-/// through the application navigator key rather than a router context.
+/// It sits above the router, so it composes [NotificationWindowPresenceReporter]
+/// — the one projector of the desktop window's deterministic hide/show record —
+/// and navigates through the application navigator key rather than a router
+/// context.
 class NotificationBridge extends StatefulWidget {
   const NotificationBridge({super.key, required this.child});
 
@@ -61,7 +64,9 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
   late final ConversationCacheRepository _cache;
   late final ConversationRepository _conversations;
 
-  /// The single lifecycle observer that decides whether the UI is on screen.
+  /// The pipeline this bridge owns. Window visibility is projected separately by
+  /// [NotificationWindowPresenceReporter], and the lifecycle observer here only
+  /// refreshes the OS permission on resume.
   NotificationService? _service;
   final List<StreamSubscription<SocketLifecycleState>> _lifecycleSubscriptions = [];
 
@@ -74,10 +79,6 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
     _cache = getIt<ConversationCacheRepository>();
     _conversations = getIt<ConversationRepository>();
     _askRegistry = NotificationAskRegistry();
-
-    // The app starts in the foreground; the lifecycle callback corrects this as
-    // soon as the window is hidden or restored.
-    _presence.setWindowVisible(true);
 
     _opener = NotificationSessionOpener(
       readDevices: _readDevices,
@@ -115,18 +116,13 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (!mounted) return;
-    switch (state) {
-      case AppLifecycleState.resumed:
-        _presence.setWindowVisible(true);
-        // An OS revocation must reach the display pipeline and Settings
-        // without an app restart.
-        unawaited(context.read<NotificationSettingsCubit>().refreshPermission());
-      case AppLifecycleState.hidden:
-      case AppLifecycleState.paused:
-      case AppLifecycleState.detached:
-        _presence.setWindowVisible(false);
-      case AppLifecycleState.inactive:
-        break;
+    // Window visibility is not derived here: [NotificationWindowPresenceReporter]
+    // reads the deterministic hide/show record of [DesktopLifecycleManager],
+    // because a desktop platform may never emit a transition for a tray hide.
+    if (state == AppLifecycleState.resumed) {
+      // An OS revocation must reach the display pipeline and Settings without an
+      // app restart.
+      unawaited(context.read<NotificationSettingsCubit>().refreshPermission());
     }
   }
 
@@ -227,5 +223,8 @@ class _NotificationBridgeState extends State<NotificationBridge> with WidgetsBin
   }
 
   @override
-  Widget build(BuildContext context) => widget.child;
+  Widget build(BuildContext context) => NotificationWindowPresenceReporter(
+        lifecycleManager: AppPlatform.isDesktop ? getIt<DesktopLifecycleManager>() : null,
+        child: widget.child,
+      );
 }

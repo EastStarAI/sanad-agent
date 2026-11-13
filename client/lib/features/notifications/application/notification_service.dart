@@ -17,6 +17,25 @@ import 'package:sanad_client/features/notifications/domain/services/notification
 import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
 import 'package:sanad_client/infrastructure/socket/event_deduplicator.dart';
 
+/// What the Client did with a platform interaction that arrived before it had
+/// any in-memory state — that is, the interaction whose launch started this
+/// process.
+///
+/// A cold start has no replayed ask and no mounted conversation surface, so the
+/// payload alone is the only input an answer could be built from. That is exactly
+/// a decision the Agent did not make, so the Client records the interaction and
+/// acts on nothing.
+enum NotificationColdStartOutcome {
+  /// No notification interaction started this process.
+  none,
+
+  /// An interaction arrived, was understood, and was deliberately not acted on.
+  dropped,
+
+  /// An interaction arrived with a payload this build cannot read.
+  unreadable,
+}
+
 /// The one local path from an Agent notification event to an OS notification.
 ///
 /// Both transports feed the same instance: the local socket and the cloud
@@ -79,6 +98,7 @@ class NotificationService {
 
   bool _started = false;
   bool _disposed = false;
+  NotificationColdStartOutcome _coldStartOutcome = NotificationColdStartOutcome.none;
 
   static final Logger _logger = Logger('notifications');
 
@@ -86,6 +106,12 @@ class NotificationService {
   bool get isSupported => _adapter.isSupported;
 
   int get presentedCount => _presented.length;
+
+  /// The outcome of the interaction that started this process, for diagnostics
+  /// and tests. It is never a decision: [NotificationColdStartOutcome.dropped]
+  /// and [NotificationColdStartOutcome.unreadable] both mean nothing was sent
+  /// and no Client state changed.
+  NotificationColdStartOutcome get coldStartOutcome => _coldStartOutcome;
 
   /// Prepares the platform channel and starts consuming both transports.
   Future<void> start() async {
@@ -105,10 +131,42 @@ class NotificationService {
         onError: (Object error) => _logger.warning('notification event stream error', error),
       ));
     }
+    _coldStartOutcome = await _adoptColdStartInteraction();
     _logger.info(
       'notification service started '
-      '(supported=${_adapter.isSupported} permission=${_readPermission().name})',
+      '(supported=${_adapter.isSupported} permission=${_readPermission().name} '
+      'coldStart=${_coldStartOutcome.name})',
     );
+  }
+
+  /// Records the interaction that launched this process and acts on nothing.
+  ///
+  /// A launch interaction reaches a Client with no replayed ask state and no
+  /// routed conversation surface, so answering it would build a
+  /// `tool_permission_response` from the notification payload alone, and opening
+  /// it would navigate with no resolved destination. The Client therefore fails
+  /// closed: nothing is sent, no state is mutated, and the pending ask (when the
+  /// Agent still holds one) arrives through the ordinary reconnect replay, where
+  /// the user answers it in the app with full context.
+  Future<NotificationColdStartOutcome> _adoptColdStartInteraction() async {
+    final NotificationPlatformResponse? launch;
+    try {
+      launch = await _adapter.readLaunchResponse();
+    } catch (error, stack) {
+      _logger.warning('could not read a cold-start notification interaction', error, stack);
+      return NotificationColdStartOutcome.none;
+    }
+    if (launch == null) return NotificationColdStartOutcome.none;
+    final payload = _decode(launch.payload);
+    if (payload == null) {
+      _logger.warning('dropped a cold-start notification interaction with an unreadable payload');
+      return NotificationColdStartOutcome.unreadable;
+    }
+    _logger.info(
+      'dropped a cold-start notification interaction '
+      '(kind=${payload.kind.wire} intent=${_actionIdOf(launch, payload) ?? 'open'})',
+    );
+    return NotificationColdStartOutcome.dropped;
   }
 
   /// Arms the quiet window. Called on every local or cloud connect, because a

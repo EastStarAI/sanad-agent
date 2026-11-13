@@ -117,6 +117,15 @@ abstract class NotificationPlatformAdapter {
   /// Asks the operating system, and only ever from an explicit user action.
   Future<NotificationPermissionStatus> requestPermission();
 
+  /// The interaction the platform reports for the launch that started this
+  /// process, if any.
+  ///
+  /// This is not a live interaction: the Client has no in-memory ask and no
+  /// mounted conversation surface when it arrives. An adapter that extends this
+  /// class and whose platform cannot deliver a launch interaction inherits this
+  /// no-op; an adapter that `implements` the contract supplies its own answer.
+  Future<NotificationPlatformResponse?> readLaunchResponse() async => null;
+
   Future<void> show(NotificationPresentationRequest request);
 
   /// Removes a presented notification. A platform without package identity may

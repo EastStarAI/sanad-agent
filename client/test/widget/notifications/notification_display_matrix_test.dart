@@ -48,6 +48,9 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   Future<NotificationPermissionStatus> requestPermission() async => permission;
 
   @override
+  Future<NotificationPlatformResponse?> readLaunchResponse() async => null;
+
+  @override
   Future<void> show(NotificationPresentationRequest request) async => shown.add(request);
 
   @override
