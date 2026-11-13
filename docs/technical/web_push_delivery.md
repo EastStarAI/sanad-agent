@@ -67,6 +67,17 @@ runs the whole lifecycle in one place (`WebPushSubscriptionService`):
    logout can revoke it after the tokens are gone and a second account
    re-registers instead of inheriting the first one's endpoint.
 
+**The reported status is the relay acknowledgement.** Settings reports
+`subscribed` only after the relay accepted the endpoint for the signed-in
+account, and the persisted record is that acknowledgement. A browser
+subscription alone proves nothing — the relay resolves the account's endpoints,
+so an endpoint it never accepted delivers nothing. A refused, unreachable, or
+otherwise unacknowledged registration is therefore reported as a failure with a
+retry that registers the same browser subscription again without prompting, and
+a later acknowledgement clears the failure. Reopening Settings cannot turn a
+refused registration into a working pipeline, and a record that belongs to
+another account is not this browser's delivery.
+
 Rotation and revocation:
 
 | Trigger | Behavior |
@@ -98,7 +109,14 @@ A push is a wake-up, not a decision.
   notification with no push involvement.
 - When no tab is visible, the worker renders the notification from the payload
   alone: the Agent already redacted and localized the title and body, so the worker
-  invents nothing and reads no conversation state.
+  invents nothing and reads no conversation state. It resolves the session from
+  every shape the product sends — the family `device_event` envelope, the
+  documented transport body, and a bare instruction block — using the same
+  precedence as `NotificationPayload.fromEvent`, so a shape the page accepts is
+  never silently dropped here. Every Agent kind is high urgency, so the worker
+  passes `requireInteraction`; a browser that does not support it ignores the
+  option, and an explicit `low` or `normal` urgency never forces a banner to
+  stay.
 - The user's global switch and per-kind choices are mirrored to the worker
   (`Cache API`, because a worker has no `localStorage`) so a closed tab honours
   the same preferences the page applies. `expires_at` is enforced in both
@@ -128,11 +146,12 @@ notification raised while no page exists has no page to compute it.
   `tool_permission_response` path, with the same expiry, kind, and pending-request
   checks that fail closed.
 - With no open page, the worker opens the app at the session the notification
-  names (`?sanad_session_id=…&sanad_request_id=…`). The page consumes and clears
-  the query, opens that session, and retries once when the device inventory
-  arrives after a cold start. An action is **not** replayed from the URL: a URL
-  is not evidence that the user pressed the button, so a closed-tab action opens
-  the session and the user answers in context.
+  names (`?sanad_session_id=…&sanad_request_id=…`), resolving that identity from
+  the same three payload shapes and from the page's own presentation payload. The
+  page consumes and clears the query, opens that session, and retries once when
+  the device inventory arrives after a cold start. An action is **not** replayed
+  from the URL: a URL is not evidence that the user pressed the button, so a
+  closed-tab action opens the session and the user answers in context.
 - Approval **buttons are not offered on web**. Chrome caps a notification at two
   actions, Safari at one, and Firefox ignores them; a three-way approval set
   (allow once, allow for this session, deny) cannot be shown without silently
@@ -168,7 +187,8 @@ Failure is contained: `401/403` means the session was rejected, `404/405/501`
 means this deployment does not serve the route yet, and any other failure is
 reported without removing the browser permission. A failed registration keeps
 the subscription so a later attempt reuses it instead of prompting again, and
-Settings states that delivery is not registered.
+Settings states that delivery is not registered until the relay acknowledges the
+endpoint; a reopened page cannot upgrade that to "delivery works".
 
 The push payload the relay delivers is the Agent's canonical notification
 envelope. The relay must preserve its `event_id`, because the page's dedupe
@@ -195,8 +215,14 @@ product documents this instead of attempting to bypass it.
 
 `fvm flutter build web` proves the web surface compiles, the owned worker is
 copied, and the bootstrap registers it instead of the Flutter worker. Unit and
-widget tests prove the lifecycle, the display and dedupe matrix, the iOS
-install state, and Settings copy. No browser is available on the build host, so
-live permission prompts, real push delivery, click-through, rotation, and the
-installed iOS path are recorded as unexecuted in
+widget tests prove the lifecycle, the acknowledgement-driven Settings state, the
+display and dedupe matrix, the iOS install state, and Settings copy.
+`test/web/sw_closed_tab_notification_test.mjs`, run by
+`test/tool/web_push_worker_execution_test.dart`, executes the worker itself with
+no browser and no page: for each payload shape it asserts exactly one rendered
+notification and the exact click-through URL, plus the known-kind filter, the
+withdrawal path, foreground forwarding, and that no notification copy is logged.
+No browser is available on the build host, so live permission prompts, real push
+delivery, click-through in a real browser, rotation, and the installed iOS path
+are recorded as unexecuted in
 [174d-web-push-and-pwa.md](../plans/tasks/174d-web-push-and-pwa.md).

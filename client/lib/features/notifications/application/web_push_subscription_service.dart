@@ -19,6 +19,12 @@ import 'package:sanad_client/features/notifications/domain/services/web_push_cli
 ///   current account, and [revokeForLogout] revokes before the tokens are gone.
 /// - A delivery failure never removes a working browser permission: the local
 ///   subscription stays and [WebPushSettings.failure] states what happened.
+/// - The reported status is the relay's acknowledgement, never the browser
+///   subscription alone. The relay resolves the account's endpoints, so an
+///   endpoint it did not accept delivers nothing; claiming `subscribed` from
+///   `pushManager.getSubscription()` would report a pipeline that does not
+///   exist. The acknowledgement record is the persisted subscription record,
+///   which is written only after the relay answers.
 class WebPushSubscriptionService {
   WebPushSubscriptionService({
     required WebPushClient client,
@@ -75,20 +81,24 @@ class WebPushSubscriptionService {
   /// Endpoint rotations the worker reported.
   Stream<WebPushSubscription> get rotations => _client.rotatedSubscriptions;
 
-  /// Re-reads availability and the browser subscription. Never prompts.
+  /// Re-reads availability, the browser subscription, and the relay
+  /// acknowledgement. Never prompts.
+  ///
+  /// A browser subscription the relay never acknowledged reports
+  /// [WebPushFailure.registrationFailed] here, so reopening Settings cannot turn
+  /// a refused registration into a working one.
   Future<WebPushSettings> refresh() async {
     if (!_client.isWebPlatform) return _emit(const WebPushSettings());
-    var subscribed = false;
+    WebPushSubscription? subscription;
     try {
-      subscribed = await _client.currentSubscription() != null;
+      subscription = await _client.currentSubscription();
     } catch (error) {
       _logger.fine('could not read the browser push subscription: ${error.runtimeType}');
     }
     return _emit(
-      _settings.copyWith(
-        availability: _effectiveAvailability(),
-        status: subscribed ? WebPushSubscriptionStatus.subscribed : WebPushSubscriptionStatus.notSubscribed,
-        failure: WebPushFailure.none,
+      _withDeliveryState(
+        _settings.copyWith(availability: _effectiveAvailability()),
+        subscription,
       ),
     );
   }
@@ -159,12 +169,7 @@ class WebPushSubscriptionService {
         ),
       );
     }
-    return _emit(
-      _settings.copyWith(
-        status: WebPushSubscriptionStatus.subscribed,
-        failure: WebPushFailure.none,
-      ),
-    );
+    return _emit(_withDeliveryState(_settings, subscription));
   }
 
   /// Withdraws this browser from the account and drops the subscription.
@@ -203,7 +208,10 @@ class WebPushSubscriptionService {
         await _store.clear();
       }
       return _emit(
-        settings.copyWith(status: WebPushSubscriptionStatus.notSubscribed),
+        settings.copyWith(
+          status: WebPushSubscriptionStatus.notSubscribed,
+          failure: WebPushFailure.signInRequired,
+        ),
       );
     }
 
@@ -223,13 +231,8 @@ class WebPushSubscriptionService {
       return settings;
     }
 
-    final outcome = await _register(subscription, accessToken, accountId);
-    return _emit(
-      settings.copyWith(
-        status: WebPushSubscriptionStatus.subscribed,
-        failure: outcome ? WebPushFailure.none : WebPushFailure.registrationFailed,
-      ),
-    );
+    await _register(subscription, accessToken, accountId);
+    return _emit(_withDeliveryState(settings, subscription));
   }
 
   /// Re-registers an endpoint the worker rotated.
@@ -240,13 +243,8 @@ class WebPushSubscriptionService {
       _logger.info('web push rotation deferred: no authenticated account session');
       return;
     }
-    final outcome = await _register(subscription, accessToken, _readAccountId());
-    _emit(
-      _settings.copyWith(
-        status: WebPushSubscriptionStatus.subscribed,
-        failure: outcome ? WebPushFailure.none : WebPushFailure.registrationFailed,
-      ),
-    );
+    await _register(subscription, accessToken, _readAccountId());
+    _emit(_withDeliveryState(_settings, subscription));
   }
 
   /// Revokes before the account tokens are cleared. Called on logout only.
@@ -283,6 +281,13 @@ class WebPushSubscriptionService {
     await _changes.close();
   }
 
+  /// Creates or reuses the browser subscription and asks the relay to accept
+  /// it.
+  ///
+  /// Returns the browser subscription even when the relay refused it: the
+  /// subscription survives a relay failure so a later attempt registers it
+  /// without asking for permission again, and [_withDeliveryState] reports the
+  /// refusal from the acknowledgement record instead of from this result.
   Future<WebPushSubscription?> _subscribe(String accessToken) async {
     final vapidPublicKey = _readVapidPublicKey();
     if (vapidPublicKey == null || vapidPublicKey.isEmpty) {
@@ -306,10 +311,8 @@ class WebPushSubscriptionService {
     subscription ??= await _subscribeNew(vapidPublicKey);
     if (subscription == null) return null;
 
-    final registered = await _register(subscription, accessToken, _readAccountId());
-    // The browser subscription survives a relay failure so a later attempt can
-    // register it without asking the user for permission again.
-    return registered ? subscription : null;
+    await _register(subscription, accessToken, _readAccountId());
+    return subscription;
   }
 
   Future<WebPushSubscription?> _subscribeNew(String vapidPublicKey) async {
@@ -325,7 +328,13 @@ class WebPushSubscriptionService {
     }
   }
 
-  Future<bool> _register(
+  /// Asks the relay to accept [subscription] and, on an acknowledgement, records
+  /// it as the delivery state.
+  ///
+  /// The store write is the acknowledgement: every reported status is projected
+  /// from it, so a refused or unreachable relay leaves no record and therefore
+  /// no claim of delivery.
+  Future<void> _register(
     WebPushSubscription subscription,
     String accessToken,
     String? accountId,
@@ -341,9 +350,12 @@ class WebPushSubscriptionService {
       );
     } catch (error) {
       _logger.warning('web push registration failed: ${error.runtimeType}');
-      outcome = WebPushRegistrationOutcome.failed;
+      return;
     }
-    if (outcome != WebPushRegistrationOutcome.registered) return false;
+    if (outcome != WebPushRegistrationOutcome.registered) {
+      _logger.info('web push registration not acknowledged: ${outcome.name}');
+      return;
+    }
     await _store.write(
       WebPushSubscriptionRecord(
         endpoint: subscription.endpoint,
@@ -351,7 +363,6 @@ class WebPushSubscriptionService {
         clientInstanceId: clientInstanceId,
       ),
     );
-    return true;
   }
 
   Future<void> _revokeAndUnsubscribe(String? accessToken) async {
@@ -380,6 +391,60 @@ class WebPushSubscriptionService {
       _logger.fine('could not unsubscribe the browser: ${error.runtimeType}');
     }
     await _store.clear();
+  }
+
+  /// Projects the Settings state from the relay acknowledgement.
+  ///
+  /// The browser subscription alone is not delivery: only the relay can reach
+  /// this endpoint, so a subscription it never acknowledged is reported as
+  /// [WebPushFailure.registrationFailed] with [WebPushSubscriptionStatus.notSubscribed]
+  /// — the failure state that offers the retry — instead of a working pipeline.
+  /// A later successful registration writes the record and clears it.
+  WebPushSettings _withDeliveryState(WebPushSettings settings, WebPushSubscription? subscription) {
+    if (!_hasAccountSession) {
+      return settings.copyWith(
+        status: WebPushSubscriptionStatus.notSubscribed,
+        failure: WebPushFailure.signInRequired,
+      );
+    }
+    if (subscription == null) {
+      return settings.copyWith(
+        status: WebPushSubscriptionStatus.notSubscribed,
+        failure: WebPushFailure.none,
+      );
+    }
+    if (_isAcknowledged(subscription)) {
+      return settings.copyWith(
+        status: WebPushSubscriptionStatus.subscribed,
+        failure: WebPushFailure.none,
+      );
+    }
+    return settings.copyWith(
+      status: WebPushSubscriptionStatus.notSubscribed,
+      failure: WebPushFailure.registrationFailed,
+    );
+  }
+
+  /// Whether the relay accepted this exact endpoint for this account and Client
+  /// instance.
+  ///
+  /// The store is written only after an acknowledgement, so the record is the
+  /// acknowledgement. A record for another account is not this browser's
+  /// delivery: the next synchronization re-registers the endpoint instead of
+  /// inheriting the previous account's claim.
+  bool _isAcknowledged(WebPushSubscription subscription) {
+    final stored = _store.read();
+    return stored != null &&
+        stored.endpoint == subscription.endpoint &&
+        stored.belongsTo(
+          accountId: _readAccountId(),
+          clientInstanceId: _readClientInstanceId(),
+        );
+  }
+
+  bool get _hasAccountSession {
+    final token = _readAccessToken();
+    return token != null && token.isNotEmpty;
   }
 
   WebPushAvailability _effectiveAvailability() {

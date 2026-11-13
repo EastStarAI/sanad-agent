@@ -85,7 +85,7 @@ async function handlePush(event) {
   if (notification == null) return;
 
   const instruction = readString(notification.instruction) || 'dispatch';
-  const sessionId = readString(notification.session_id) || readString(data.session_id);
+  const { sessionId } = readTarget(data, null);
   const kind = readString(notification.kind);
   const tag = sessionId && kind ? tagForNotification(notification, sessionId, kind) : null;
 
@@ -122,7 +122,11 @@ async function handlePush(event) {
     body: body || '',
     tag: tag || `sanad:${sessionId}:${kind}`,
     renotify: false,
-    requireInteraction: false,
+    // Every Agent kind is high urgency, and the browser decides whether it can
+    // honour that: a browser without `requireInteraction` ignores the field, so
+    // the banner stays as urgent as the platform allows and never invents a
+    // quieter default.
+    requireInteraction: isInterruptive(notification.urgency),
     data: { envelope: data },
   };
 
@@ -134,9 +138,9 @@ async function handlePush(event) {
 }
 
 async function handleNotificationClick(event) {
-  const data = event.notification.data || {};
-  const envelope = data.envelope || null;
-  const presented = data.payload || null;
+  const data = asObject(event.notification.data) || {};
+  const envelope = asObject(data.envelope);
+  const presented = asObject(data.payload);
   const actionId = typeof event.action === 'string' && event.action.length > 0
     ? event.action
     : null;
@@ -152,7 +156,7 @@ async function handleNotificationClick(event) {
     client.postMessage({
       type: CLICK_MESSAGE,
       envelope: envelope,
-      payload: presented,
+      payload: data.payload || null,
       action: actionId,
     });
     return;
@@ -161,13 +165,11 @@ async function handleNotificationClick(event) {
   // No page to receive an action. The app is opened at the exact session and
   // the user answers in context; a notification action is never replayed from a
   // URL, because a URL is not proof that the user pressed the button.
-  const target = readString(envelope && envelope.session_id) ||
-    readString(notificationBlock(envelope) && notificationBlock(envelope).session_id);
+  const target = readTarget(envelope, presented);
   const url = new URL(self.registration.scope);
-  if (target != null) {
-    url.searchParams.set('sanad_session_id', target);
-    const requestId = readString(notificationBlock(envelope) && notificationBlock(envelope).request_id);
-    if (requestId != null) url.searchParams.set('sanad_request_id', requestId);
+  if (target.sessionId != null) {
+    url.searchParams.set('sanad_session_id', target.sessionId);
+    if (target.requestId != null) url.searchParams.set('sanad_request_id', target.requestId);
   }
   await self.clients.openWindow(url.toString());
 }
@@ -266,6 +268,87 @@ function notificationBlock(data) {
   }
   if (data.notification && typeof data.notification === 'object') return data.notification;
   return data;
+}
+
+/**
+ * The session and request a notification points at.
+ *
+ * Three shapes reach this worker, and each one carries its identity somewhere
+ * else:
+ * - the family `device_event` envelope: `session_id` beside a nested
+ *   `payload.notification` block;
+ * - the documented transport body: `session_id` beside its `notification`
+ *   block;
+ * - a bare instruction block: no sibling identity at all, only
+ *   `deep_link.session_id`.
+ *
+ * The order mirrors the Client's `NotificationPayload.fromEvent`, so the page
+ * and the worker open the same session for the same notification. Reading a
+ * single sibling field made the closed-tab path silently do nothing for the
+ * shapes the product actually sends.
+ */
+function readTarget(data, presented) {
+  const block = notificationBlock(data);
+  const payload = asObject(data && data.payload);
+  const shown = asObject(presented);
+  return {
+    sessionId: firstString(
+      deepLinkValue(block, 'session_id'),
+      block && block.session_id,
+      deepLinkValue(payload, 'session_id'),
+      payload && payload.session_id,
+      deepLinkValue(data, 'session_id'),
+      data && data.session_id,
+      shown && shown.session_id,
+    ),
+    requestId: firstString(
+      deepLinkValue(block, 'request_id'),
+      block && block.request_id,
+      deepLinkValue(payload, 'request_id'),
+      payload && payload.request_id,
+      deepLinkValue(data, 'request_id'),
+      data && data.request_id,
+      shown && shown.request_id,
+    ),
+  };
+}
+
+function deepLinkValue(source, key) {
+  const deepLink = asObject(source && source.deep_link);
+  return deepLink && deepLink[key];
+}
+
+function firstString(...values) {
+  for (const value of values) {
+    const read = readString(value);
+    if (read != null) return read;
+  }
+  return null;
+}
+
+/** A payload object, or the JSON string a page-raised notification stores. */
+function asObject(value) {
+  if (value && typeof value === 'object') return value;
+  if (typeof value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Whether the Agent marked this notification as an interruption.
+ *
+ * Urgency is an attribute of the kind and every Agent kind defaults to high, so
+ * an absent or unknown value keeps the product default rather than going quiet:
+ * only an explicit `low` or `normal` lowers the banner.
+ */
+function isInterruptive(urgency) {
+  const value = readString(urgency);
+  if (value == null) return true;
+  return value !== 'low' && value !== 'normal';
 }
 
 function isExpired(expiresAt) {

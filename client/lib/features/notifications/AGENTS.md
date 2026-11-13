@@ -51,10 +51,17 @@ This contract applies to `client/lib/features/notifications/`.
   self-unregistering tombstone and is never registered. The worker presents both
   page-decided and push-decided notifications, so one collapse tag and one click
   path exist.
+- The web worker resolves the session and request from every shape the product
+  sends — the family `device_event` envelope, the documented transport body, and a
+  bare instruction block — in the same precedence as `NotificationPayload.fromEvent`.
+  A shape the page accepts is never silently dropped by the closed-tab path.
 - `WebPushSubscriptionService` is the only owner of the browser permission and
   subscription lifecycle. Permission is requested only from the explicit Settings
   action, a subscription is registered to the authenticated account, and logout
-  revokes it with the token captured while the session was valid.
+  revokes it with the token captured while the session was valid. Its reported
+  state is the relay acknowledgement, never the browser subscription alone: only
+  the relay can reach an endpoint, so an unacknowledged registration is a failure
+  with a retry, and the persisted record is the acknowledgement that clears it.
 - Browser approval buttons are not offered: browser action limits cannot carry a
   three-way approval set without hiding a decision. A click opens the exact
   session, and a decision is answered only through the in-app prompt and
@@ -78,4 +85,8 @@ This contract applies to `client/lib/features/notifications/`.
 - The web worker, live browser delivery, and the installed iOS path are recorded
   as unexecuted in `docs/plans/tasks/174d-web-push-and-pwa.md`; `fvm flutter build
   web` and the source contract in `client/test/tool/web_push_pwa_contract_test.dart`
-  are the executable evidence on a host without a browser.
+  are the executable evidence on a host without a browser. The worker itself is
+  executed there too, through `client/test/web/sw_closed_tab_notification_test.mjs`
+  and `client/test/tool/web_push_worker_execution_test.dart`, which run every
+  payload shape with no visible client and assert one notification plus the exact
+  click-through URL.

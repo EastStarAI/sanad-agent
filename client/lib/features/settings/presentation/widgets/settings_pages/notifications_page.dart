@@ -80,7 +80,11 @@ class _PermissionCard extends StatelessWidget {
             FilledButton(
               key: const ValueKey('notification_permission_request_btn'),
               onPressed: state.requestingPermission ? null : () => unawaited(cubit.requestPermission()),
-              child: Text(l10n.notificationsEnable),
+              child: Text(
+                state.webPush.failure == WebPushFailure.registrationFailed
+                    ? l10n.notificationsWebRetry
+                    : l10n.notificationsEnable,
+              ),
             ),
           ],
           if (_offersDisable) ...[
@@ -106,6 +110,9 @@ class _PermissionCard extends StatelessWidget {
 
   /// A browser asks only through the full lifecycle; a native platform keeps
   /// the OS-only ask that the shared pipeline already owned.
+  ///
+  /// A refused or unacknowledged registration is reported as a failure with a
+  /// retry, because Settings must never claim delivery the relay did not accept.
   bool get _offersEnable {
     if (state.requestingPermission) return false;
     if (!state.webPush.isWebPlatform) return state.needsPermissionRequest;
@@ -115,7 +122,13 @@ class _PermissionCard extends StatelessWidget {
     return state.webPush.failure != WebPushFailure.signInRequired;
   }
 
-  bool get _offersDisable => state.webPush.isWebPlatform && state.webPush.isSubscribed && !state.requestingPermission;
+  /// The browser subscription exists even when the relay refused it, so the
+  /// user can still withdraw it instead of being left with a permission the
+  /// product reports as unusable.
+  bool get _offersDisable =>
+      state.webPush.isWebPlatform &&
+      (state.webPush.isSubscribed || state.webPush.failure == WebPushFailure.registrationFailed) &&
+      !state.requestingPermission;
 
   String _description(AppLocalizations l10n) {
     final web = state.webPush;

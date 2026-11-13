@@ -125,6 +125,9 @@ void main() {
       ),
       permission: NotificationPermissionStatus.granted,
     );
+    // Startup synchronization is what the relay acknowledged; Settings reads
+    // that acknowledgement instead of the browser subscription alone.
+    await service.synchronize();
     final l10n = lookupAppLocalizations(const Locale('en'));
 
     await tester.pumpWidget(_wrap(cubit));
@@ -138,6 +141,34 @@ void main() {
 
     expect(client.unsubscribeCalls, 1);
     expect(cubit.state.webPush.isSubscribed, isFalse);
+  });
+
+  testWidgets('an unacknowledged registration reports a failure with a retry', (tester) async {
+    final cubit = await makeCubit(
+      tester,
+      subscription: const WebPushSubscription(
+        endpoint: 'https://push.example/existing',
+        p256dh: 'p',
+        auth: 'a',
+      ),
+      permission: NotificationPermissionStatus.granted,
+    );
+    final l10n = lookupAppLocalizations(const Locale('en'));
+
+    await tester.pumpWidget(_wrap(cubit));
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.notificationsWebRegistrationFailedBody), findsOneWidget);
+    expect(find.text(l10n.notificationsWebEnabledBody), findsNothing);
+    expect(find.text(l10n.notificationsWebRetry), findsOneWidget);
+    expect(cubit.state.webPush.isSubscribed, isFalse, reason: 'the relay has not accepted it yet');
+
+    await tester.tap(find.byKey(const ValueKey('notification_permission_request_btn')));
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.notificationsWebEnabledBody), findsOneWidget);
+    expect(find.byKey(const ValueKey('notification_web_push_disable_btn')), findsOneWidget);
+    expect(client.subscribeCalls, 0, reason: 'the retry reuses the browser subscription');
   });
 
   testWidgets('a refused browser permission offers no dead system-settings button', (tester) async {

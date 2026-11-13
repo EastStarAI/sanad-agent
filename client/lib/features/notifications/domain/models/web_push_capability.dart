@@ -26,11 +26,19 @@ enum WebPushFailure {
   /// A subscription must belong to an authenticated account, and none exists.
   signInRequired,
 
-  /// The browser subscription exists but the relay did not accept it.
+  /// The browser subscription exists, but the relay refused it, could not be
+  /// reached, or never acknowledged it. Nothing is delivered, so Settings
+  /// reports the failure and offers the retry that re-registers the same
+  /// subscription without prompting again.
   registrationFailed,
 }
 
-/// The browser's subscription state, as the page observes it.
+/// The delivery state Settings reports.
+///
+/// [subscribed] means the relay acknowledged this browser's endpoint for the
+/// signed-in account. A browser subscription the relay never accepted is
+/// [notSubscribed] with [WebPushFailure.registrationFailed], because an
+/// unacknowledged endpoint delivers nothing.
 enum WebPushSubscriptionStatus {
   notSubscribed,
   subscribing,

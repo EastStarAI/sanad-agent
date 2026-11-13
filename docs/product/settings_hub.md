@@ -48,7 +48,9 @@ instead of pretending it can work. The same page states when a build carries no
 push configuration, when this browser has no notification surface, when the
 browser blocked notifications for the site (the user allows them in the site
 settings; the Client cannot open that pane for them), and when delivery could not
-be registered with the account.
+be registered with the account. That last state persists until the relay accepts
+the registration and offers a retry, so the page never reports a delivery it does
+not have.
 
 Turning browser notifications on is always an explicit action on this page.
 Turning them off, or signing out, withdraws the browser subscription from the

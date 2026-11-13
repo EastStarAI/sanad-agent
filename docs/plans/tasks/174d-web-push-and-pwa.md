@@ -1,8 +1,11 @@
 # 174d — Web push and installable PWA
 
 **Status:** implemented on `task/174d-web-push`; build, analyzer, and tests
-green. Live browser and installed-iOS evidence is unexecuted on this host and
-recorded as `[!]` below.
+green. The review blockers — Settings reporting delivery the relay refused, and
+the worker reading only one payload shape — are fixed: the reported state now
+follows the relay acknowledgement, and the worker is executed in a Node harness
+for every shape the product sends. Live browser and installed-iOS evidence is
+unexecuted on this host and recorded as `[!]` below.
 **Owners:** `client/web`, web notification module in
 `client/lib/features/notifications/`, `client/lib/infrastructure/socket/event_deduplicator.dart`
 **Plan:** [174](../174-client-notifications-and-push-delivery.md)
@@ -88,6 +91,10 @@ the in-page experience authoritative when the tab is open.
       browser has not decided.
 - [x] Subscription creation uses the build-defined VAPID public key; registration
       uses the current account bearer token and the Client instance id.
+- [x] The reported status is the relay acknowledgement, not the browser
+      subscription: a refused, unreachable, or unacknowledged registration is a
+      failure state with a retry, reopening Settings cannot clear it, and a later
+      acknowledgement clears it.
 - [x] Rotation is re-registered from `pushsubscriptionchange`; logout revokes
       with the token captured while the session was still valid, then
       unsubscribes and clears the local record.
@@ -97,10 +104,19 @@ the in-page experience authoritative when the tab is open.
 - [x] The worker renders title, body, and icon-less text from the payload alone,
       enforces `expires_at`, honours the mirrored preference policy, and skips
       unknown kinds.
-- [x] Notification click focuses an open window or opens the exact session; an
-      action is never replayed from a URL.
+- [x] The worker resolves the session and request from every shape the product
+      sends — the family `device_event` envelope, the documented transport body,
+      and a bare instruction block — in the same precedence as
+      `NotificationPayload.fromEvent`, so no shape silently does nothing. A
+      notification with no request identity opens the session alone.
+- [x] Notification click focuses an open window or opens the exact session,
+      including `sanad_request_id` when the payload carries one; an action is
+      never replayed from a URL.
 - [x] A withdrawal instruction closes the notification by tag instead of raising
       one; an expired escalation is dropped in both contexts.
+- [x] High urgency reaches the banner as `requireInteraction`, which a browser
+      without that option ignores; an explicit `low` or `normal` never forces the
+      banner to stay.
 
 ### G3 — Open-tab behavior
 
@@ -123,20 +139,33 @@ the in-page experience authoritative when the tab is open.
 
 ### G5 — Verification
 
-- [x] Unit tests for the lifecycle, availability states, rotation, revocation,
-      and the display/dedupe matrix.
+- [x] Unit tests for the lifecycle, availability states, acknowledgement-driven
+      Settings state, rotation, revocation, and the display/dedupe matrix.
+- [x] The worker itself is executed with no browser and no page
+      (`test/web/sw_closed_tab_notification_test.mjs`, run by
+      `test/tool/web_push_worker_execution_test.dart`): each payload shape raises
+      exactly one notification and its click opens the exact session URL, with
+      the known-kind filter, expiry, withdrawal, foreground forwarding, and
+      content blindness asserted alongside.
 - [!] Browser matrix not executed: no browser is installed on this host.
       Chrome desktop, Firefox desktop, Safari macOS, and an installed iOS web app
       remain to be exercised on a machine with those browsers.
-- [!] Closed-tab delivery proof not executed: it needs a real relay that can
-      deliver a push to a real endpoint. The worker code path is covered by the
-      source contract test, not by delivery.
+- [!] Live push delivery not executed: it needs a real relay that can deliver a
+      push to a real endpoint. The worker code path is now executed for every
+      payload shape, not merely inspected.
 
 ## Acceptance Criteria
 
-- [!] Given the tab is closed and a question is raised, when the relay
-      dispatches, then a browser notification shows the redacted ask. —
-      implemented in `sw.js`; needs a live push to prove.
+- [x] Given the tab is closed and an ask arrives in any payload shape the
+      product sends, when the worker handles it, then exactly one notification
+      shows the redacted ask and the click opens that session with its request. —
+      executed in `test/web/sw_closed_tab_notification_test.mjs`.
+- [!] The same delivery through a real relay push to a real endpoint was not
+      executed: no relay deployment and no browser on this host.
+- [x] Given the relay refused or never acknowledged the registration, when the
+      user opens Settings, then the page reports that delivery is not registered
+      and offers the retry instead of claiming delivery; a later acknowledgement
+      clears it. — unit and widget tests.
 - [x] Given the tab is open on another session, when the event arrives over the
       socket, then a browser notification appears with no push involvement. —
       proven at the pipeline boundary.
@@ -154,14 +183,16 @@ the in-page experience authoritative when the tab is open.
 | :--- | :--- |
 | `fvm flutter analyze` (in `client/`) | No issues found. |
 | `fvm flutter build web --release --dart-define-from-file=config/prod.json` | Passed; `build/web/sw.js` and the authored `build/web/flutter_bootstrap.js` are emitted, and the bootstrap contains exactly one service-worker registration for `sw.js`. |
-| `fvm flutter test test/unit/notifications test/widget/notifications test/tool/web_push_pwa_contract_test.dart` | All passed (61 tests). |
+| `fvm flutter test test/unit/notifications test/widget/notifications test/tool/web_push_worker_execution_test.dart test/tool/web_push_pwa_contract_test.dart` | All passed. |
+| `node --test test/web/sw_closed_tab_notification_test.mjs` | 11 shape-matrix cases passed. |
 | `fvm flutter test test/guards/file_size_ratchet_guard_test.dart test/guards/locale_stable_widget_keys_guard_test.dart test/tool/app_web_startup_contract_test.dart test/tool/settings_navigation_contract_test.dart` | All passed. |
 
 ## Limitations (implemented, not executed here)
 
 1. No browser on the build host, so no live permission prompt, push delivery,
-   click, rotation, or background behavior was observed. The worker and the
-   lifecycle are covered by source and unit tests only.
+   click, rotation, or background behavior was observed. The worker is executed
+   in a Node harness for every payload shape, and the lifecycle is covered by
+   unit and widget tests; neither substitutes for a real browser.
 2. No hosted relay deployment serves
    `/api/notifications/web-push/subscriptions` yet (174e owns it). The Client
    reports `unavailable` and keeps the browser permission when the route is

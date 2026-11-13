@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:sanad_client/features/notifications/application/web_push_subscription_service.dart';
 import 'package:sanad_client/features/notifications/data/web_push_subscription_store.dart';
@@ -16,6 +18,7 @@ class _RecordingRegistrar implements WebPushSubscriptionRegistrar {
 
   WebPushRegistrationOutcome registerOutcome = WebPushRegistrationOutcome.registered;
   WebPushRegistrationOutcome revokeOutcome = WebPushRegistrationOutcome.revoked;
+  bool unreachable = false;
   final List<WebPushSubscription> registered = <WebPushSubscription>[];
   final List<String> registeredTokens = <String>[];
   final List<String> revoked = <String>[];
@@ -31,6 +34,7 @@ class _RecordingRegistrar implements WebPushSubscriptionRegistrar {
     registered.add(subscription);
     registeredTokens.add(accessToken);
     lastClientInstanceId = clientInstanceId;
+    if (unreachable) throw const SocketException('relay is unreachable');
     return registerOutcome;
   }
 
@@ -172,6 +176,7 @@ void main() {
       final failed = await service.enable();
 
       expect(failed.failure, WebPushFailure.registrationFailed);
+      expect(failed.status, WebPushSubscriptionStatus.notSubscribed);
       expect(client.subscription, isNotNull, reason: 'the permission must not be lost');
       expect(store.read(), isNull, reason: 'an unregistered endpoint is not account state');
 
@@ -179,9 +184,124 @@ void main() {
       final retried = await service.enable();
 
       expect(retried.failure, WebPushFailure.none);
+      expect(retried.status, WebPushSubscriptionStatus.subscribed);
       expect(client.permissionRequests, 1, reason: 'the second attempt reuses the permission');
       expect(client.subscribeCalls, 1, reason: 'the existing browser subscription is reused');
       expect(registrar.registered, hasLength(2));
+    });
+  });
+
+  group('relay acknowledgement', () {
+    const browserSubscription = WebPushSubscription(
+      endpoint: 'https://push.example/existing',
+      p256dh: 'p',
+      auth: 'a',
+    );
+
+    test('a refused registration is reported as a failure, not as delivery', () async {
+      await harness();
+      registrar.registerOutcome = WebPushRegistrationOutcome.failed;
+
+      final refused = await service.enable();
+
+      expect(refused.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(refused.failure, WebPushFailure.registrationFailed);
+      expect(client.subscription, isNotNull, reason: 'a refusal is not a permission reset');
+    });
+
+    test('an unreachable relay is reported as an unacknowledged registration', () async {
+      await harness();
+      registrar.unreachable = true;
+
+      final refused = await service.enable();
+
+      expect(refused.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(refused.failure, WebPushFailure.registrationFailed);
+      expect(store.read(), isNull);
+      expect(client.subscription, isNotNull);
+    });
+
+    test('reopening Settings cannot turn a refused registration into delivery', () async {
+      await harness();
+      registrar.registerOutcome = WebPushRegistrationOutcome.unavailable;
+      await service.enable();
+
+      final reloaded = await service.refresh();
+
+      expect(reloaded.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(
+        reloaded.failure,
+        WebPushFailure.registrationFailed,
+        reason: 'the status follows the relay acknowledgement, not the browser',
+      );
+    });
+
+    test('a browser subscription the relay never saw is unacknowledged', () async {
+      await harness(subscription: browserSubscription);
+
+      final settings = await service.refresh();
+
+      expect(settings.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(settings.failure, WebPushFailure.registrationFailed);
+      expect(client.permissionRequests, 0, reason: 'a read never prompts');
+    });
+
+    test('a later acknowledgement clears the reported failure', () async {
+      await harness();
+      registrar.registerOutcome = WebPushRegistrationOutcome.unavailable;
+      await service.enable();
+      expect(service.settings.failure, WebPushFailure.registrationFailed);
+
+      registrar.registerOutcome = WebPushRegistrationOutcome.registered;
+      final retried = await service.enable();
+      final reloaded = await service.refresh();
+
+      expect(retried.status, WebPushSubscriptionStatus.subscribed);
+      expect(retried.failure, WebPushFailure.none);
+      expect(reloaded.status, WebPushSubscriptionStatus.subscribed);
+      expect(reloaded.failure, WebPushFailure.none);
+    });
+
+    test('startup synchronization reports a refusal instead of delivery', () async {
+      await harness(subscription: browserSubscription);
+      registrar.registerOutcome = WebPushRegistrationOutcome.unauthorized;
+
+      final refused = await service.synchronize();
+
+      expect(refused.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(refused.failure, WebPushFailure.registrationFailed);
+      expect(client.permissionRequests, 0);
+
+      registrar.registerOutcome = WebPushRegistrationOutcome.registered;
+      final repaired = await service.synchronize();
+
+      expect(repaired.status, WebPushSubscriptionStatus.subscribed);
+      expect(repaired.failure, WebPushFailure.none);
+    });
+
+    test('a request for this browser endpoint is not inherited by another account', () async {
+      await harness(subscription: browserSubscription);
+      await store.write(
+        const WebPushSubscriptionRecord(
+          endpoint: 'https://push.example/existing',
+          accountId: 'account-0',
+          clientInstanceId: 'client-instance-1',
+        ),
+      );
+
+      final settings = await service.refresh();
+
+      expect(settings.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(settings.failure, WebPushFailure.registrationFailed);
+    });
+
+    test('a signed-out browser reports that delivery needs a session', () async {
+      await harness(token: null, subscription: browserSubscription);
+
+      final settings = await service.refresh();
+
+      expect(settings.status, WebPushSubscriptionStatus.notSubscribed);
+      expect(settings.failure, WebPushFailure.signInRequired);
     });
   });
 
