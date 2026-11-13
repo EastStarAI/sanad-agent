@@ -172,5 +172,6 @@ sanad-dev run --background --driver --no-cloud  # matched agent/client runtime
 sanad-dev ui ...                        # live OpenCode Go usage + auth_required
                                         # recovery acceptance (values above)
 GitHub Actions PR #425                  # 24 checks passed, 0 failed
-  # Test client (1/4)-(4/4) passed; rerun on the final keyed-field commit
+  # Test client (1/4)-(4/4) and All required checks pass on the
+  # keyed-controls commit
 ```
