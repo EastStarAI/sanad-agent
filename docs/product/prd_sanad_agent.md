@@ -264,10 +264,11 @@ GitHub Releases is the source for native agent binaries and client packages.
 Official installer scripts download verified release assets and can pair a
 headless device using a token created in Sanad Client.
 
-Android is distributed through Google Play under the package identity
-`com.eaststarai.sanad`, and iOS is limited to Internal TestFlight for the first
-release. Store-distributed mobile builds are clients only: they never host the
-native agent service.
+Android is distributed through Google Play, and iOS/iPadOS through the App Store,
+under the package identity `com.eaststarai.sanad` and the store display name
+`Sanad Remote`. Internal TestFlight remains the pre-release lane for iOS builds.
+Store-distributed mobile builds are clients only: they never host the native
+agent service.
 
 Installed agents expose unified service and update commands. Platform packages,
 checksums/signatures, install scripts, and update feeds must pass the launch
