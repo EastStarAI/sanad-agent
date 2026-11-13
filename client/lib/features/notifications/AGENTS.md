@@ -12,8 +12,13 @@ This contract applies to `client/lib/features/notifications/`.
   and `auth_required`). They are modelled here and are raised by a later task;
   nothing in this feature fabricates an Agent kind.
 - Desktop delivery is local. No push provider, no token, and no relay call exists
-  in this feature; the event arrives over the existing local or cloud socket and
-  the Client presents it.
+  for a desktop Client; the event arrives over the existing local or cloud socket
+  and the Client presents it.
+- Mobile delivery is a wake-up only. The hosted relay resolves a target to device
+  tokens; the Client owns the token lifecycle and the foreground decision. No
+  provider credential, provider SDK, or provider configuration is part of the
+  public dependency graph, and the token never reaches the Agent, a log line, or
+  workspace state.
 
 ## Pipeline Ownership
 - `NotificationPayload.fromEvent` is the only parser of the Agent payload, and it
@@ -37,11 +42,41 @@ This contract applies to `client/lib/features/notifications/`.
   approval from a notification can fail closed without a mounted conversation
   surface.
 
+## Mobile Delivery Ownership
+- `MobilePushMessage` rebuilds the canonical envelope from the provider payload so
+  `NotificationPayload.fromEvent` remains the only parser on every transport; a
+  second parser is a drift risk and is not allowed.
+- `MobilePushTransport` is the only push platform boundary. It carries messages,
+  interactions, and the device token, and it decides nothing. A build with no
+  provider resolves a total no-op.
+- `MobilePushTokenRegistrar` owns the token lifecycle: register after
+  authentication, refresh on rotation, re-register on reconnect, and revoke on
+  logout, session revocation, and account deletion. The token lives in memory only
+  and is referenced in diagnostics by fingerprint alone.
+- `MobileNotificationCatalog` owns the channel and category inventory. Every
+  channel is created high importance before any delivery, one per kind, and a
+  payload hint is honoured only when it matches the identity the Client owns.
+- `MobileForegroundPolicy` is the only foreground rule, and it reuses
+  `NotificationPresence.showsAsk` rather than re-deriving presence. The exact
+  visible session is in-app only; any other session is a heads-up banner.
+- `MobilePushService` adds sequencing only: an arrival goes through the existing
+  display pipeline (so preferences, permission, collapse, quiet window, and
+  `event_id` dedupe against the socket copy apply unchanged), and an interaction
+  goes through the existing action router. A terminated Client renders from the
+  payload alone and answers nothing until the replayed ask state arrives.
+
 ## Presentation and Platform
 - `NotificationPlatformAdapter` is the only platform boundary. The native
   implementation is the only library that imports `flutter_local_notifications`;
-  Web resolves a total no-op through a conditional import, and mobile keeps the
-  boundary free for its own push adapter.
+  Web resolves a total no-op through a conditional import, and mobile composes the
+  same adapter behind its own push transport.
+- Android channel importance is fixed at creation, so the adapter creates every
+  channel at high importance at initialization and never recreates one lower.
+- iOS fixes a notification's buttons in the registered category, so the categories
+  are registered at initialization with the payload contract's action set.
+- The iOS foreground hook is a notification-center delegate that answers per
+  event from the mirrored visible session and preserves the previously installed
+  chain. A globally silent foreground is rejected.
 - Permission is requested only from an explicit Settings action. Nothing asks on
   startup, on first event, or on first notification.
 - `NotificationBridge` and `NotificationPresenceReporter` are composition only:
@@ -53,9 +88,12 @@ This contract applies to `client/lib/features/notifications/`.
 
 ## Verification
 - Unit tests own the display matrix, collapse keys, dedupe identity, the quiet
-  window, payload parsing, the ask registry, and the action fail-closed rules.
+  window, payload parsing, the ask registry, the action fail-closed rules, the
+  mobile foreground matrix, the token lifecycle, the channel and category
+  inventory, and payload-only parsing.
 - Widget tests own the end-to-end pipeline through a fake platform adapter and
   the Settings surface.
-- Real macOS, Windows, and Linux behavior is verified by a live desktop pass, not
-  by mocks. A platform that has not been exercised is recorded as a limitation in
-  `docs/plans/tasks/174b-desktop-os-notifications.md`.
+- Real macOS, Windows, Linux, Android, and iOS behavior is verified by a live pass
+  on that platform, not by mocks. A platform that has not been exercised is
+  recorded as a limitation in its task file; mobile device cases are recorded in
+  `docs/plans/tasks/174c-mobile-push-delivery.md`.

@@ -30,6 +30,8 @@ class NotificationPayload extends Equatable {
     this.deviceId,
     this.hardwareId,
     this.expiresAt,
+    this.androidChannelId,
+    this.iosCategory,
   });
 
   /// Canonical `event_id` minted once by the Agent and preserved across the
@@ -59,6 +61,15 @@ class NotificationPayload extends Equatable {
 
   /// A notification that outlived this instant must not be raised.
   final DateTime? expiresAt;
+
+  /// The Android channel the Agent named, when it named one.
+  ///
+  /// It is a hint, not an instruction: the Client owns its channel inventory and
+  /// honours this value only when it matches the channel it owns for [kind].
+  final String? androidChannelId;
+
+  /// The iOS category the Agent named, with the same hint semantics.
+  final String? iosCategory;
 
   /// The event names this Client treats as a notification dispatch.
   static const Set<String> eventNames = <String>{
@@ -132,7 +143,17 @@ class NotificationPayload extends Equatable {
       deviceId: _firstNonEmpty(<Object?>[event['device_id'], block['device_id']]),
       hardwareId: _firstNonEmpty(<Object?>[event['hardware_id'], block['hardware_id']]),
       expiresAt: _parseTimestamp(block['expires_at']),
+      androidChannelId: _readString(_platformHints(block)['android_channel_id']),
+      iosCategory: _readString(_platformHints(block)['ios_category']),
     );
+  }
+
+  /// Platform hints are optional and advisory; an absent or malformed block
+  /// yields an empty map so parsing stays total.
+  static Map<String, dynamic> _platformHints(Map<String, dynamic> block) {
+    final hints = block['platform_hints'];
+    if (hints is! Map) return const <String, dynamic>{};
+    return Map<String, dynamic>.from(hints);
   }
 
   /// Supports both a flat payload and an explicit `notification` block, so a
@@ -218,6 +239,11 @@ class NotificationPayload extends Equatable {
         if (deviceId != null) 'device_id': deviceId,
         if (hardwareId != null) 'hardware_id': hardwareId,
         if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
+        if (androidChannelId != null || iosCategory != null)
+          'platform_hints': <String, dynamic>{
+            if (androidChannelId != null) 'android_channel_id': androidChannelId,
+            if (iosCategory != null) 'ios_category': iosCategory,
+          },
         'actions': <Map<String, dynamic>>[
           for (final action in actions)
             <String, dynamic>{
@@ -253,6 +279,8 @@ class NotificationPayload extends Equatable {
       deviceId: _readString(map['device_id']),
       hardwareId: _readString(map['hardware_id']),
       expiresAt: _parseTimestamp(map['expires_at']),
+      androidChannelId: _readString(_platformHints(map)['android_channel_id']),
+      iosCategory: _readString(_platformHints(map)['ios_category']),
     );
   }
 
@@ -270,5 +298,7 @@ class NotificationPayload extends Equatable {
         deviceId,
         hardwareId,
         expiresAt,
+        androidChannelId,
+        iosCategory,
       ];
 }

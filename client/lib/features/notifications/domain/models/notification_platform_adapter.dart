@@ -1,6 +1,7 @@
 import 'package:equatable/equatable.dart';
 
 import 'notification_action.dart';
+import 'notification_kind.dart';
 import 'notification_permission_status.dart';
 import 'notification_urgency.dart';
 
@@ -30,6 +31,8 @@ class NotificationPresentationRequest extends Equatable {
     this.actions = const <NotificationPresentationAction>[],
     this.offersApprovalActions = false,
     this.threadId,
+    this.androidChannelId,
+    this.iosCategoryId,
   });
 
   /// Stable id derived from the collapse key; the platform replaces the banner
@@ -49,8 +52,15 @@ class NotificationPresentationRequest extends Equatable {
   /// supports notification categories can attach its approval category.
   final bool offersApprovalActions;
 
-  /// Groups related notifications on platforms that support threads (macOS).
+  /// Groups related notifications on platforms that support threads (macOS,
+  /// iOS).
   final String? threadId;
+
+  /// The Android channel to post on, owned by the Client.
+  final String? androidChannelId;
+
+  /// The iOS category that fixes the buttons for this notification.
+  final String? iosCategoryId;
 
   @override
   List<Object?> get props => [
@@ -62,6 +72,8 @@ class NotificationPresentationRequest extends Equatable {
         actions,
         offersApprovalActions,
         threadId,
+        androidChannelId,
+        iosCategoryId,
       ];
 }
 
@@ -102,13 +114,21 @@ abstract class NotificationPlatformAdapter {
   /// decision.
   bool get supportsApprovalActions;
 
+  /// Whether [openSystemSettings] can actually open this application's
+  /// notification pane. Where it cannot, Settings explains the refusal instead
+  /// of offering a button that does nothing.
+  bool get canOpenSystemSettings;
+
   /// Prepares the platform channel. [approvalActionLabels] are the localized
   /// labels used where the platform fixes button copy when the notification
-  /// category is registered (macOS).
+  /// category is registered (macOS, iOS), and [kindLabels] names the Android
+  /// channels the Client owns, because a channel name is user-visible and is
+  /// fixed when the channel is created.
   Future<void> initialize({
     NotificationPlatformResponseCallback? onResponse,
     Map<NotificationActionIntent, String> approvalActionLabels =
         const <NotificationActionIntent, String>{},
+    Map<NotificationKind, String> kindLabels = const <NotificationKind, String>{},
   });
 
   /// Reads the current OS permission without ever prompting.

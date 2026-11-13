@@ -1,4 +1,5 @@
 import 'package:sanad_client/features/notifications/domain/models/notification_action.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_kind.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_permission_status.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 
@@ -18,10 +19,14 @@ class UnsupportedNotificationAdapter implements NotificationPlatformAdapter {
   bool get supportsApprovalActions => false;
 
   @override
+  bool get canOpenSystemSettings => false;
+
+  @override
   Future<void> initialize({
     NotificationPlatformResponseCallback? onResponse,
     Map<NotificationActionIntent, String> approvalActionLabels =
         const <NotificationActionIntent, String>{},
+    Map<NotificationKind, String> kindLabels = const <NotificationKind, String>{},
   }) async {}
 
   @override

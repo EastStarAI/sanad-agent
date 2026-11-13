@@ -65,7 +65,8 @@ class NotificationCopySource {
         NotificationKind.authRequired => _localizations.notificationAuthRequiredBody,
       };
 
-  /// The localized label for one kind, used by the per-kind Settings switches.
+  /// The localized label for one kind, used by the per-kind Settings switches
+  /// and as the Android channel name for that kind.
   String labelFor(NotificationKind kind) => switch (kind) {
         NotificationKind.permissionRequest => _localizations.notificationsKindPermissionRequest,
         NotificationKind.userQuestion => _localizations.notificationsKindUserQuestion,
@@ -77,5 +78,14 @@ class NotificationCopySource {
         NotificationKind.providerQuota => _localizations.notificationsKindProviderQuota,
         NotificationKind.connectionLost => _localizations.notificationsKindConnectionLost,
         NotificationKind.authRequired => _localizations.notificationsKindAuthRequired,
+      };
+
+  /// Channel names for every kind, keyed by kind.
+  ///
+  /// Android fixes a channel name when the channel is created and shows it in
+  /// the system settings, so the name is taken from the same localized copy the
+  /// rest of the surface uses.
+  Map<NotificationKind, String> get kindLabels => <NotificationKind, String>{
+        for (final kind in NotificationKind.values) kind: labelFor(kind),
       };
 }
