@@ -1372,6 +1372,8 @@
   "notificationsUrgencyBannerOnly": "Banner only",
   "notificationsUrgencyBannerOnlyHint": "Banner without sound",
   "notificationsUrgencyOff": "Off",
+  "notificationsUrgencyBlockedByPermission": "Blocked by system permission",
+  "notificationsUrgencyNoService": "No notification service on this system",
   "notificationsEnable": "Enable notifications",
   "notificationsOpenSettings": "Open system settings",
   "notificationsAllow": "Allow notifications",

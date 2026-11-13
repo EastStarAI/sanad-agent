@@ -101,6 +101,71 @@ void main() {
     });
   });
 
+  group('one answer per kind: off wins', () {
+    // A Client stores "off" and "quietened" separately so it can restore the
+    // ceiling when the row is switched back on. The wire carries one token per
+    // kind, so the Agent must read a mute that arrived with a ceiling as muted —
+    // in either order the two choices were made.
+    const mutedThenQuietened = ClientNotificationPreferences(
+      mutedKinds: <String>{'completed'},
+      urgencyCeilings: <String, NotificationUrgency>{},
+    );
+    const quietenedThenMuted = ClientNotificationPreferences(
+      mutedKinds: <String>{'completed'},
+      urgencyCeilings: <String, NotificationUrgency>{'completed': NotificationUrgency.normal},
+    );
+
+    test('a muted kind has no ceiling, whatever urgency came with it', () {
+      for (final declared in <ClientNotificationPreferences>[
+        quietenedThenMuted,
+        mutedThenQuietened,
+      ]) {
+        expect(declared.allowsKind(NotificationKind.completed), isFalse);
+        expect(
+          declared.ceilingFor(NotificationKind.completed),
+          NotificationUrgency.high,
+          reason: 'a muted kind must not advertise a ceiling the user replaced with off',
+        );
+        expect(
+          declared.urgencyFor(NotificationKind.completed, NotificationUrgency.high),
+          NotificationUrgency.high,
+          reason: 'a stale ceiling must never describe what a muted kind would accept',
+        );
+      }
+    });
+
+    test('a muted kind states one token on the wire, and it is off', () {
+      expect(quietenedThenMuted.toJson()['kinds'], <String, String>{'completed': 'off'});
+      expect(
+        quietenedThenMuted.toJson(),
+        mutedThenQuietened.toJson(),
+        reason: 'the order the two choices were made in cannot change what the Agent reads',
+      );
+    });
+
+    test('the parser keeps the mute and drops any ceiling for the same kind', () {
+      final parsed = ClientNotificationPreferences.tryParse(<String, dynamic>{
+        'enabled': true,
+        'kinds': <String, dynamic>{'completed': 'off', 'failed': 'normal'},
+      })!;
+
+      expect(parsed.mutedKinds, <String>{'completed'});
+      expect(parsed.urgencyCeilings.containsKey('completed'), isFalse);
+      expect(parsed.ceilingFor(NotificationKind.completed), NotificationUrgency.high);
+      expect(parsed.ceilingFor(NotificationKind.failed), NotificationUrgency.normal,
+          reason: 'the other kind keeps the choice its device declared');
+      expect(parsed.toJson()['kinds'], <String, String>{
+        'completed': 'off',
+        'failed': 'normal',
+      });
+    });
+
+    test('a declaration for a muted kind is not a product default', () {
+      expect(quietenedThenMuted.isProductDefault, isFalse);
+      expect(mutedThenQuietened.isProductDefault, isFalse);
+    });
+  });
+
   group('urgency application', () {
     test('the device ceiling lowers the Agent decision and never raises it', () {
       final parsed = ClientNotificationPreferences.tryParse(<String, dynamic>{

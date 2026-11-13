@@ -183,6 +183,11 @@ class _PreferencesCard extends StatelessWidget {
 }
 
 /// One kind: on/off, and how loudly it may interrupt.
+///
+/// The subtitle states what this device can actually do, not only what the kind
+/// is set to: while the OS refuses notifications, or while no notification
+/// service is reachable, the row says so instead of describing the alert style
+/// it would use if delivery worked.
 class _KindRow extends StatelessWidget {
   const _KindRow({
     required this.kind,
@@ -245,6 +250,10 @@ class _KindRow extends StatelessWidget {
 
   String _urgencyDescription(NotificationUrgency ceiling, {required bool enabled}) {
     if (!enabled) return l10n.notificationsUrgencyOff;
+    // Nothing reaches the OS without permission, so the row reports the block
+    // instead of a banner-and-sound claim the pipeline would refuse to honour.
+    if (state.unavailable) return l10n.notificationsUrgencyNoService;
+    if (!state.permission.canDisplay) return l10n.notificationsUrgencyBlockedByPermission;
     return ceiling.isInterruptive
         ? l10n.notificationsUrgencyAlertHint
         : l10n.notificationsUrgencyBannerOnlyHint;

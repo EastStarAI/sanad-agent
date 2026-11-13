@@ -204,6 +204,9 @@ void main() {
 
   testWidgets('shows each kind with its current urgency and lowers one', (tester) async {
     final adapter = _FakeAdapter();
+    // The urgency hint is a delivery claim, so this test states the OS answer it
+    // describes: permission granted.
+    adapter.permission = NotificationPermissionStatus.granted;
     final published = <NotificationPreferences>[];
     final cubit = await makeCubit(tester, adapter, publishPreferences: published.add);
 
@@ -259,6 +262,25 @@ void main() {
     expect(find.byKey(const ValueKey('notification_open_settings_btn')), findsOneWidget);
   });
 
+  testWidgets('the rows state the OS block instead of a delivery claim', (tester) async {
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.denied;
+    final cubit = await makeCubit(
+      tester,
+      adapter,
+      stored: <String, Object>{NotificationPreferencesStore.permissionRequestedKey: true},
+    );
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final l10n = lookupAppLocalizations(const Locale('en'));
+    expect(find.text(l10n.notificationsUrgencyBlockedByPermission), findsWidgets,
+        reason: 'a revoked permission means nothing is delivered, so no row may claim a banner');
+    expect(find.text(l10n.notificationsUrgencyAlertHint), findsNothing);
+    expect(find.text(l10n.notificationsUrgencyBannerOnlyHint), findsNothing);
+  });
+
   testWidgets('the test action reports the pipeline outcome in the page', (tester) async {
     final adapter = _FakeAdapter();
     final cubit = await makeCubit(tester, adapter);
@@ -276,6 +298,42 @@ void main() {
 
     expect(find.byKey(const ValueKey('notification_test_outcome')), findsOneWidget);
     expect(find.text(l10n.notificationsTestShown), findsOneWidget);
+  });
+
+  testWidgets('a refused platform call is reported as a failure, not as sent', (tester) async {
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+    cubit.attachTestSender(() async => NotificationDisplayOutcome.presentationFailed);
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final l10n = lookupAppLocalizations(const Locale('en'));
+    final button = find.byKey(const ValueKey('notification_test_btn'));
+    await tester.ensureVisible(button);
+    await tester.pumpAndSettle();
+    await tester.tap(button);
+    await tester.pumpAndSettle();
+
+    expect(find.text(l10n.notificationsTestFailed), findsOneWidget);
+    expect(find.text(l10n.notificationsTestShown), findsNothing,
+        reason: 'a call the platform refused must never be presented as success');
+  });
+
+  testWidgets('the test action stays unavailable without the running pipeline', (tester) async {
+    final adapter = _FakeAdapter();
+    adapter.permission = NotificationPermissionStatus.granted;
+    final cubit = await makeCubit(tester, adapter);
+
+    await tester.pumpWidget(_wrap(cubit, const NotificationsPage()));
+    await tester.pumpAndSettle();
+
+    final button = tester.widget<FilledButton>(
+      find.byKey(const ValueKey('notification_test_btn')),
+    );
+    expect(button.onPressed, isNull,
+        reason: 'Settings cannot raise a notification without the pipeline that owns the action');
   });
 
   testWidgets('a suppressed test explains the setting that stopped it', (tester) async {

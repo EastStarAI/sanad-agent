@@ -261,6 +261,25 @@ void main() {
       expect(profiles.allows(_instance, NotificationKind.blocked), isFalse);
     });
 
+    test('a muted kind is read as muted and never as a quietened one', () {
+      final profiles = ClientInstanceProfiles();
+      profiles.registerFromHello(const {
+        'client_instance_id': _instance,
+        'notifications': {
+          'enabled': true,
+          'kinds': {'completed': 'off'},
+        },
+      });
+
+      expect(profiles.allows(_instance, NotificationKind.completed), isFalse,
+          reason: 'the Agent reads the declaration as a ceiling, so a mute must gate delivery');
+      expect(
+        profiles.urgencyFor(_instance, NotificationKind.completed, NotificationUrgency.high),
+        NotificationUrgency.high,
+        reason: 'a muted kind has no ceiling to lower an Agent decision with',
+      );
+    });
+
     test('a well-formed empty declaration resets to the product default', () {
       final profiles = ClientInstanceProfiles();
       profiles.register(

@@ -193,7 +193,10 @@ class NotificationService {
   /// Applies one canonical envelope.
   ///
   /// Returns the display decision, or `null` when the event is not a
-  /// notification this Client understands.
+  /// notification this Client understands. A decision whose presentation the
+  /// platform refused is returned as
+  /// [NotificationDisplayOutcome.presentationFailed], so the Agent's own event
+  /// path and the user's probe both report what actually happened.
   Future<NotificationDisplayDecision?> handleEvent(Map<String, dynamic> event) async {
     if (_disposed) return null;
 
@@ -218,14 +221,32 @@ class NotificationService {
     );
 
     if (decision.shouldDisplay) {
-      await _display(payload);
-    } else {
-      _logger.fine('notification not raised: ${decision.reason}');
+      return await _display(payload) ? decision : _presentationFailure(decision);
     }
+    _logger.fine('notification not raised: ${decision.reason}');
     return decision;
   }
 
-  Future<void> _display(NotificationPayload payload) async {
+  /// Reports a decision whose presentation the platform refused.
+  ///
+  /// The policy answer and the delivery answer are different facts: the user's
+  /// settings allowed a notification and the adapter call still failed, so the
+  /// caller is told the presentation failed instead of being handed `display`
+  /// for a notification nobody saw.
+  NotificationDisplayDecision _presentationFailure(
+    NotificationDisplayDecision decided,
+  ) =>
+      NotificationDisplayDecision(
+        NotificationDisplayOutcome.presentationFailed,
+        kind: decided.kind,
+        sessionId: decided.sessionId,
+      );
+
+  /// Presents [payload], returning whether the platform accepted the call.
+  ///
+  /// A failure is logged and reported instead of thrown: one notification that
+  /// could not be raised must not reach the transport or the ask it describes.
+  Future<bool> _display(NotificationPayload payload) async {
     final copy = _copyResolver(payload.kind);
     final actions = <NotificationPresentationAction>[];
     if (_adapter.supportsApprovalActions) {
@@ -252,8 +273,10 @@ class NotificationService {
       await _adapter.show(request);
       _presented.add(payload.collapseKey);
       _logger.info('raised ${payload.kind.wire} notification');
+      return true;
     } catch (error, stack) {
       _logger.warning('could not raise ${payload.kind.wire} notification', error, stack);
+      return false;
     }
   }
 
@@ -272,6 +295,11 @@ class NotificationService {
   /// now. Everything a user setting controls — the global switch, the kind, the
   /// urgency ceiling, and the OS permission — is applied exactly as usual, which
   /// is what makes the result a real answer instead of a decorative one.
+  ///
+  /// The result is the policy decision, or
+  /// [NotificationDisplayOutcome.presentationFailed] when the platform refused
+  /// the call. A failed presentation is never reported as a notification that
+  /// was shown, because that is the one claim this probe exists to refuse.
   Future<NotificationDisplayDecision?> raiseTestNotification({
     required String title,
     required String body,
@@ -294,10 +322,9 @@ class NotificationService {
       platformSupported: _adapter.isSupported,
     );
     if (decision.shouldDisplay) {
-      await _display(payload);
-    } else {
-      _logger.fine('test notification not raised: ${decision.reason}');
+      return await _display(payload) ? decision : _presentationFailure(decision);
     }
+    _logger.fine('test notification not raised: ${decision.reason}');
     return decision;
   }
 

@@ -22,7 +22,8 @@ enum NotificationTestOutcome {
   /// This system has no notification surface to drive.
   unsupported,
 
-  /// The probe could not be built or presented.
+  /// The probe could not be built or presented, or no pipeline is attached to
+  /// run it. Never reported as a notification that was shown.
   failed,
 }
 
@@ -36,6 +37,7 @@ class NotificationSettingsState extends Equatable {
     this.preferences = const NotificationPreferences(),
     this.requestingPermission = false,
     this.sendingTest = false,
+    this.testSenderAttached = false,
     this.testOutcome,
     this.testSequence = 0,
   });
@@ -57,6 +59,12 @@ class NotificationSettingsState extends Equatable {
 
   /// A test notification is in flight.
   final bool sendingTest;
+
+  /// Whether the running pipeline attached a test action.
+  ///
+  /// Settings cannot raise a notification itself, so a probe without this
+  /// pipeline could only report a failure it did not cause.
+  final bool testSenderAttached;
 
   /// The outcome of the last test notification, for the result line.
   final NotificationTestOutcome? testOutcome;
@@ -87,7 +95,8 @@ class NotificationSettingsState extends Equatable {
 
   /// The test action needs a platform to raise something and a sender attached
   /// by the running pipeline.
-  bool get canSendTest => platformSupported && !sendingTest && !unavailable;
+  bool get canSendTest =>
+      platformSupported && testSenderAttached && !sendingTest && !unavailable;
 
   bool isKindEnabled(NotificationKind kind) => preferences.isKindEnabled(kind);
 
@@ -101,6 +110,7 @@ class NotificationSettingsState extends Equatable {
     NotificationPreferences? preferences,
     bool? requestingPermission,
     bool? sendingTest,
+    bool? testSenderAttached,
     NotificationTestOutcome? testOutcome,
     bool clearTestOutcome = false,
     int? testSequence,
@@ -113,6 +123,7 @@ class NotificationSettingsState extends Equatable {
       preferences: preferences ?? this.preferences,
       requestingPermission: requestingPermission ?? this.requestingPermission,
       sendingTest: sendingTest ?? this.sendingTest,
+      testSenderAttached: testSenderAttached ?? this.testSenderAttached,
       testOutcome: clearTestOutcome ? null : (testOutcome ?? this.testOutcome),
       testSequence: testSequence ?? this.testSequence,
     );
@@ -127,6 +138,7 @@ class NotificationSettingsState extends Equatable {
         preferences,
         requestingPermission,
         sendingTest,
+        testSenderAttached,
         testOutcome,
         testSequence,
       ];

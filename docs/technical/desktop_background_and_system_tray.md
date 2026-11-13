@@ -476,13 +476,17 @@ owns what the surface states.
 - **The global switch**, then one row per kind with its current urgency. A kind
   offers exactly two loudness choices — the product default (banner and sound)
   and banner only (no sound) — because those are what the adapters actually
-  implement; a third state, off, is the row switch itself. The listed kinds
+  implement; a third state, off, is the row switch itself. A row states what this
+  device can actually do: while the OS refuses permission, or while no
+  notification service is reachable, the row says so instead of describing an
+  alert style that would not appear. The listed kinds
   include the two Client-owned kinds (`connection_lost`, `auth_required`) so the
   taxonomy is one model on every platform, even though `174b` does not raise them.
 - **A test notification action** that runs the real pipeline. Its answer is one of
-  shown, suppressed by a kind setting, suppressed by the OS permission, or
-  unsupported on this system; a probe that always claims success would be worse
-  than no probe.
+  shown, suppressed by a kind setting, suppressed by the OS permission,
+  unsupported on this system, or failed to present; a probe that always claims
+  success would be worse than no probe. The action is offered only once the
+  running pipeline has attached its sender.
 - **Platform limits**, stated in the page rather than discovered later:
   - OS settings always win. A system-level block is not overridden by the in-app
     switch, and nothing is shown while it is in place.

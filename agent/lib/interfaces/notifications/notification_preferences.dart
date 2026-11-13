@@ -13,9 +13,12 @@
 /// a reconnecting Client re-declares, and an unregistered device is treated as
 /// the product default.
 ///
-/// Two invariants hold here rather than in the Client's UI:
+/// Three invariants hold here rather than in the Client's UI:
 /// - a kind can only be lowered, so a declaration can never raise a
 ///   notification above the product default;
+/// - a kind is off **or** quietened, never both. A muted kind holds no ceiling
+///   at all, so a declaration that ever states a mute and an urgency for the
+///   same kind reads as a mute: `off` wins, in either order.
 /// - an unknown kind or urgency token is ignored rather than stored, so an
 ///   older Agent never invents meaning for a newer Client's choice.
 library;
@@ -56,8 +59,16 @@ final class ClientNotificationPreferences {
       enabled && !mutedKinds.contains(kind.value);
 
   /// The loudest urgency this device accepts for [kind].
+  ///
+  /// A muted kind has no ceiling: the device asked not to be interrupted, so a
+  /// stale urgency must not be read as permission to deliver. The same holds for
+  /// every kind while the global switch is off. This is the Agent half of the
+  /// Client's off-wins rule, and it holds even for a declaration this build reads
+  /// from a shape that somehow states both.
   NotificationUrgency ceilingFor(NotificationKind kind) =>
-      urgencyCeilings[kind.value] ?? NotificationUrgency.high;
+      allowsKind(kind)
+          ? urgencyCeilings[kind.value] ?? NotificationUrgency.high
+          : NotificationUrgency.high;
 
   /// The urgency to dispatch [kind] with, given the Agent's own decision.
   ///
@@ -99,17 +110,27 @@ final class ClientNotificationPreferences {
     return ClientNotificationPreferences(
       enabled: enabled,
       mutedKinds: Set<String>.unmodifiable(muted),
-      urgencyCeilings: Map<String, NotificationUrgency>.unmodifiable(ceilings),
+      // Off wins: a kind this device muted never keeps a ceiling, whatever the
+      // declaration carried for it.
+      urgencyCeilings: Map<String, NotificationUrgency>.unmodifiable(
+        <String, NotificationUrgency>{
+          for (final entry in ceilings.entries)
+            if (!muted.contains(entry.key)) entry.key: entry.value,
+        },
+      ),
     );
   }
 
   /// The wire shape this model round-trips, used by tests and diagnostics.
+  ///
+  /// It restates the invariant it reads: one token per kind, and a muted kind is
+  /// `off` even if a ceiling was supplied alongside it.
   Map<String, dynamic> toJson() => <String, dynamic>{
         'enabled': enabled,
         'kinds': <String, String>{
           for (final kind in mutedKinds) kind: offToken,
           for (final entry in urgencyCeilings.entries)
-            entry.key: entry.value.wireName,
+            if (!mutedKinds.contains(entry.key)) entry.key: entry.value.wireName,
         },
       };
 

@@ -14,6 +14,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/notification_preferences.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_presence.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
+import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
 
 /// Records what the operating system was actually asked to present.
@@ -25,6 +26,10 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   NotificationPermissionStatus permission = NotificationPermissionStatus.granted;
   bool initialized = false;
   NotificationPlatformResponseCallback? onResponse;
+
+  /// Makes the next platform call fail, so the pipeline's failure reporting is
+  /// exercised through the real adapter boundary instead of a stub.
+  bool failShow = false;
 
   @override
   bool get isSupported => true;
@@ -52,7 +57,10 @@ class _FakeAdapter implements NotificationPlatformAdapter {
   Future<NotificationPlatformResponse?> readLaunchResponse() async => null;
 
   @override
-  Future<void> show(NotificationPresentationRequest request) async => shown.add(request);
+  Future<void> show(NotificationPresentationRequest request) async {
+    if (failShow) throw StateError('platform channel closed');
+    shown.add(request);
+  }
 
   @override
   Future<bool> cancel(int notificationId) async {
@@ -535,6 +543,29 @@ void main() {
       expect(decision!.shouldDisplay, isTrue,
           reason: 'the user asked for this notification right now');
       expect(adapter.shown, hasLength(1));
+    });
+
+    testWidgets('reports a refused platform call as a failed presentation', (tester) async {
+      await mount(tester);
+      adapter.failShow = true;
+
+      final decision = await service.raiseTestNotification(title: 'Test title', body: 'Test body');
+
+      expect(decision!.outcome, NotificationDisplayOutcome.presentationFailed);
+      expect(decision.shouldDisplay, isFalse,
+          reason: 'the settings allowed it and the platform still refused, so nothing was shown');
+      expect(adapter.shown, isEmpty);
+      expect(service.presentedCount, 0, reason: 'a failed call is not a presented notification');
+    });
+
+    testWidgets('an arrival the platform refuses is not reported as displayed', (tester) async {
+      await mount(tester);
+      adapter.failShow = true;
+
+      final decision = await service.handleEvent(_ask());
+
+      expect(decision!.outcome, NotificationDisplayOutcome.presentationFailed);
+      expect(adapter.shown, isEmpty);
     });
   });
 }

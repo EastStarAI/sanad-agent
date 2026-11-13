@@ -56,6 +56,14 @@ This contract applies to `client/lib/features/notifications/`.
   (banner and sound); a stored value only records a deliberate change, and
   `withKindUrgency` never stores a value that would raise a kind, so a corrupt
   file or a future build cannot make one louder.
+- A kind is off **or** quietened, never both on the wire. The two choices are
+  stored separately so unmuting restores the ceiling, but
+  `toAgentDeclaration` emits exactly one token per kind and `off` wins in either
+  order; `ceilingFor` answers the product default for a muted kind, so neither
+  the page nor the declaration can describe a style for a kind that delivers
+  nothing. The Agent reads the same rule
+  ([communication_protocols.md](../../../../docs/technical/communication_protocols.md)
+  §7.10).
 - The ceiling is applied at presentation — `NotificationService` asks the
   preferences for `urgencyFor(kind, agentUrgency)` — because every route, local
   socket, cloud socket, and future push, converges on that one call.
@@ -82,6 +90,14 @@ This contract applies to `client/lib/features/notifications/`.
   it as a test, so a probe can never be read as an Agent decision. It is never
   published to the relay.
 - A suppressed result is reported as a localized explanation, never as success.
+  A presentation the platform refused is its own outcome
+  (`NotificationDisplayOutcome.presentationFailed`): the probe reports a
+  localized failure instead of claiming it was shown, and the same outcome is
+  returned for an arrival whose platform call failed.
+- The action is unavailable until the running pipeline attaches its sender
+  (`NotificationSettingsState.canSendTest`), because Settings cannot raise a
+  notification itself and a probe without the pipeline could only report a
+  failure it did not cause.
 
 - `NotificationBridge` and `NotificationPresenceReporter` are composition only:
   they supply dependencies and report what is on screen. They contain no display
@@ -114,10 +130,12 @@ This contract applies to `client/lib/features/notifications/`.
   window, payload parsing, the ask registry, the action fail-closed rules, the
   macOS action-set derivation and registration, the action-label fallback, the
   cold-start outcome, the preference ceiling and its stored form, the
-  per-device declaration and its registration envelope, and the test-action
-  outcome mapping.
+  per-device declaration (including the off-wins precedence in either order) and
+  its registration envelope, and the test-action outcome mapping including a
+  refused platform call.
 - Widget tests own the end-to-end pipeline through a fake platform adapter, the
-  Settings surface (permission states, per-kind urgency, the test action, the
+  Settings surface (permission states, per-kind urgency, the row copy that states
+  an OS block instead of a delivery style, the test action and its failure, the
   stated limits), Arabic right-to-left rendering, and the window-presence
   projection driven by a `DesktopLifecycleManager`.
 - `client/test/guards/notifications_localization_guard_test.dart` owns the

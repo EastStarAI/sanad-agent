@@ -2,7 +2,9 @@
 
 **Status:** implemented — G0–G2 and G5 closed on this host; G3 partially
 executed (Linux and build evidence recorded, every platform that cannot run here
-is `[!]` with its owner); G4 closed for the boundaries this repository owns
+is `[!]` with its owner); G4 closed for the boundaries this repository owns.
+The review follow-up (B1 mute-versus-ceiling, W1 test-action honesty, W2/W3 copy
+and accuracy corrections) is applied on the same branch.
 **Owners:** `client/lib/features/notifications/` (model, store, service, settings
 cubit, declaration), `client/lib/features/settings/…/notifications_page.dart`,
 `agent/lib/interfaces/notifications/` (declaration, profiles, composer,
@@ -181,6 +183,23 @@ notification reports the same state instead of claiming success.
       settings page opens, then it reports the real state and offers a fix path.
       Proven by the cubit and page tests bound to
       `notification_permission_conflict` and `notification_open_settings_btn`.
+- [x] Given a kind is quietened and then muted — or muted and then quietened
+      again — when this device declares its choices, then the declaration states
+      `off` for that kind and never an urgency token, and the Agent reads it as
+      muted with no ceiling. Proven in `notification_preferences_scope_test.dart`
+      (both orders, the cubit, and a restart) and
+      `notification_preferences_test.dart` / `client_instance_profiles_test.dart`
+      (the Agent side of the same rule).
+- [x] Given the platform refuses the presentation call, when the user presses the
+      test action, then Settings reports a localized failure and never claims a
+      notification was shown. Proven in `notification_display_matrix_test.dart`,
+      `notification_preferences_scope_test.dart`, and
+      `notification_settings_page_test.dart`.
+- [x] Given the OS permission is revoked (or no notification service is
+      reachable), when the page renders, then a kind row states that block instead
+      of a banner-and-sound claim. Proven in
+      `notification_settings_page_test.dart` (`the rows state the OS block instead
+      of a delivery claim`).
 - [~] Given any supported platform, when the verification matrix row is executed,
       then its evidence is recorded in this file with date and build identity.
       Every row is either executed and recorded below or explicitly `[!]`.
@@ -205,6 +224,72 @@ notification reports the same state instead of claiming success.
 | Agent declaration | `agent/lib/interfaces/notifications/notification_preferences.dart` |
 | Agent application | `…/client_instance_profiles.dart`, `…/notification_payload.dart` (`composeDispatch` ceiling), `…/notification_dispatcher.dart` |
 
+## Review follow-up (blocker and warnings)
+
+Applied on `task/174f-preferences` after the implementation review.
+
+### B1 — a muted kind was declared as still on
+
+`NotificationPreferences.toAgentDeclaration` built one map from two passes: the
+off entries first and the urgency entries second. A kind present in both maps was
+therefore emitted with its urgency token, and the Agent — which reads the
+declaration as a ceiling — kept delivering it. The reachable order is
+quieten-then-mute (the urgency menu is disabled while a row is off) and the state
+survives a restart, so the defect was user-reachable.
+
+Fix, in both codebases:
+
+- `toAgentDeclaration` now emits one answer per kind: a muted kind is `off`,
+  otherwise a stored ceiling, otherwise the kind is absent. Precedence is a rule,
+  not map insertion order.
+- `NotificationPreferences.ceilingFor` answers the product default for a muted
+  kind, so no surface can describe a style for a kind that delivers nothing. The
+  stored ceiling is kept so unmuting restores what the user chose.
+- `ClientNotificationPreferences` (`agent/`) enforces the same rule: a muted kind
+  has no ceiling (`ceilingFor` → `high`), `tryParse` drops a ceiling for a muted
+  kind, and `toJson` emits only `off`.
+- Protocol §7.10 states the precedence and the Agent's read of it.
+
+Tests cover the two orders (`quietened-then-muted` and `muted-then-re-urgencied`),
+their equality on the wire, the restart path, the cubit publishing path, and the
+Agent's read of the same declaration.
+
+### W1 — the test action reported success when presentation failed
+
+`NotificationService._display` swallowed adapter failures while
+`raiseTestNotification` returned the `display` decision, so Settings said "Test
+notification sent" after a call the platform refused.
+
+- `_display` now returns whether the platform accepted the call.
+- The service returns `NotificationDisplayOutcome.presentationFailed` when the
+  policy said `display` and the presentation failed — for an arrival and for the
+  probe.
+- The cubit maps that outcome to `NotificationTestOutcome.failed` (localized
+  `notificationsTestFailed`), and a probe with no attached sender is `failed`
+  rather than `unsupported`, so the copy never blames the system for a pipeline
+  that is not there.
+
+### W2 — the row copy claimed delivery while the OS refused it
+
+A kind row described the alert style it would use. It now reports the block
+first: `notificationsUrgencyBlockedByPermission` while permission is not
+`granted`, and `notificationsUrgencyNoService` when the platform has no
+notification surface or no reachable service. Both keys are authored in `en` and
+`ar`.
+
+### W3 — accuracy corrections
+
+- `NotificationSettingsState.canSendTest` claimed a sender check it did not
+  perform. It now requires `testSenderAttached`, set when the running pipeline
+  attaches its sender, so Settings cannot offer a probe that can only fail.
+- `client/lib/features/notifications/AGENTS.md`,
+  `client/lib/features/settings/AGENTS.md`, protocol §7.10, and
+  `docs/technical/desktop_background_and_system_tray.md` §8.1 now state the
+  off-wins rule, the row-copy rule, the full test-outcome set including a failed
+  presentation, and the sender requirement.
+- The unit test that asserted a muted kind still advertises its ceiling was
+  replaced: a muted kind has no effective ceiling, and unmuting restores it.
+
 ## Verification record
 
 **Date:** 2026-11-13
@@ -228,9 +313,9 @@ All commands ran inside `client/` or `agent/` with `fvm`, except where noted.
 | `fvm flutter gen-l10n` (in `client/`) | Generated the localization Dart. Required first: `lib/l10n/app_localizations*.dart` is gitignored, so a fresh worktree cannot compile the Client without it. |
 | `fvm flutter analyze` | `No issues found!` |
 | `fvm dart analyze` (in `agent/`) | `No issues found!` |
-| `fvm flutter test test/unit/features/notifications test/widget/notifications test/guards` | `All tests passed!` — 177 tests |
+| `fvm flutter test test/unit/features/notifications test/widget/notifications test/guards` | `All tests passed!` — 189 tests (177 before the review follow-up) |
 | `fvm flutter test` (full fast suite) | `All tests passed!` — 2956 passed, 3 skipped (browser-only web guard) |
-| `fvm dart test test/interfaces/notifications` | `All tests passed!` — 93 tests |
+| `fvm dart test test/interfaces/notifications` | `All tests passed!` — 98 tests (93 before the review follow-up) |
 | `fvm dart test` (full agent suite) | 4888 passed, 24 skipped, 7 failed — all 7 in `test/evolution/` and caused by `Failed to load dynamic library 'libsqlite3.so'` on this host (pre-existing, unrelated to this task; the notifications suite is green) |
 | `fvm flutter build linux --release --dart-define-from-file=config/prod.json` | `✓ Built build/linux/arm64/release/bundle/sanad-client` |
 | `fvm flutter build web --release --dart-define-from-file=config/prod.json` | `✓ Built build/web` |
@@ -241,15 +326,18 @@ All commands ran inside `client/` or `agent/` with `fvm`, except where noted.
 New tests added by this task:
 
 - `client/test/unit/features/notifications/notification_preferences_scope_test.dart`
-  — the ceiling, the stored form, the declaration, and the test-action outcomes.
+  — the ceiling, the stored form, the declaration and its off-wins precedence in
+  both orders, the restart path, and the test-action outcomes.
 - `client/test/unit/features/notifications/notification_declaration_transport_test.dart`
   — the registration envelope the Agent reads.
 - `client/test/widget/notifications/notification_settings_rtl_test.dart` — Arabic
   rendering and direction.
 - `client/test/guards/notifications_localization_guard_test.dart` — no hard-coded
   string, no Arabic literal, and key parity across locales.
-- Extensions to `notification_settings_page_test.dart` and
-  `notification_display_matrix_test.dart`; the pre-existing
+- Extensions to `notification_settings_page_test.dart` (row-copy honesty, a
+  refused platform call, the sender gate) and
+  `notification_display_matrix_test.dart` (a refused presentation for the probe
+  and for an arrival); the pre-existing
   `notification_settings_cubit_test.dart` is unchanged and still green.
 - `agent/test/interfaces/notifications/notification_preferences_test.dart`,
   extensions to `client_instance_profiles_test.dart` and

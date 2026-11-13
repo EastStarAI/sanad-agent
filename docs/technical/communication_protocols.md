@@ -1395,6 +1395,12 @@ identity the hosted service already relays for a cloud connection:
 - `kinds` carries only a deliberate choice: `off` for a muted kind, and the
   lower urgency token (`low` or `normal`) for a kind the user quietened.
   `high` is the product default and is therefore absent by construction.
+- A kind appears **once**, and `off` wins. A Client stores its off choice and its
+  ceiling separately so that unmuting restores the ceiling, so both can be true
+  for one kind at the same time; the declaration states only the off token then.
+  The order the two choices were made in cannot change the result, and the Agent
+  reads the same rule: a muted kind has no ceiling, so `ceilingFor` answers the
+  product default instead of a stale urgency.
 - An absent key is not a reset. A well-formed but empty declaration is: it
   restores the product default for that instance.
 - An unknown kind token is kept as a typed token so a newer Client is not
@@ -1432,7 +1438,9 @@ and platform adapter, so its result reflects the global switch, the kind, the
 urgency ceiling, and the OS permission. It is the only event the Client
 fabricates, and its copy names it as a test. It is not deduplicated against the
 transports, ignores the post-connect quiet window, and ignores window presence,
-because a user-pressed probe is not an arrival.
+because a user-pressed probe is not an arrival. A platform that refuses the
+presentation call is reported as a failure, never as a notification that was
+shown.
 
 **Open obligation for the unstarted push tasks.** An `account`-scoped step names
 no device, so the Agent cannot apply per-device preferences to it without

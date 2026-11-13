@@ -25,6 +25,11 @@ import 'notification_urgency.dart';
 /// honoured only when it is strictly below that default, so neither a corrupt
 /// file nor a future build can raise a notification above what the product
 /// decided.
+///
+/// A kind is **off or quietened, never both**. The two choices are stored
+/// separately because switching a kind back on should restore the ceiling the
+/// user had chosen, but the declaration that leaves this device states one
+/// answer per kind and therefore has to name a winner: `off` does.
 class NotificationPreferences extends Equatable {
   const NotificationPreferences({
     this.enabled = true,
@@ -40,11 +45,20 @@ class NotificationPreferences extends Equatable {
 
   /// Per-kind lowered urgency ceilings. A missing entry means the product
   /// default; only values below [NotificationUrgency.defaultUrgency] are kept.
+  ///
+  /// A muted kind may still hold a ceiling so that switching it back on restores
+  /// what the user chose, but the ceiling is never declared or displayed while
+  /// the kind is off: see [toAgentDeclaration] and [ceilingFor].
   final Map<NotificationKind, NotificationUrgency> kindUrgencyOverrides;
 
   /// The urgency the user accepts for [kind], before the Agent's decision.
+  ///
+  /// A muted kind has no ceiling: it is off, so no urgency describes it and a
+  /// stale ceiling must not be presented as if this device would accept it.
   NotificationUrgency ceilingFor(NotificationKind kind) =>
-      kindUrgencyOverrides[kind] ?? NotificationUrgency.defaultUrgency;
+      isKindEnabled(kind)
+          ? kindUrgencyOverrides[kind] ?? NotificationUrgency.defaultUrgency
+          : NotificationUrgency.defaultUrgency;
 
   bool isKindEnabled(NotificationKind kind) => kindOverrides[kind] ?? true;
 
@@ -113,13 +127,20 @@ class NotificationPreferences extends Equatable {
   /// token, and nothing the relay is expected to read. A muted kind is `off`;
   /// a lowered kind carries its ceiling token; an untouched kind is absent and
   /// therefore means the product default.
+  ///
+  /// Exactly one token is emitted per kind, and `off` wins. The Agent treats the
+  /// declaration as a ceiling, so a kind that is both muted and quietened must
+  /// never reach the wire as a quietened kind: that would tell the Agent to
+  /// deliver it. The order the user made the two choices in cannot matter, which
+  /// is why precedence is decided here instead of by map insertion order.
   Map<String, dynamic> toAgentDeclaration() => <String, dynamic>{
         'enabled': enabled,
         'kinds': <String, String>{
-          for (final entry in kindOverrides.entries)
-            if (!entry.value) entry.key.wire: _offToken,
-          for (final entry in kindUrgencyOverrides.entries)
-            entry.key.wire: entry.value.wire,
+          for (final kind in NotificationKind.values)
+            if (!isKindEnabled(kind))
+              kind.wire: _offToken
+            else if (kindUrgencyOverrides[kind] case final urgency?)
+              kind.wire: urgency.wire,
         },
       };
 

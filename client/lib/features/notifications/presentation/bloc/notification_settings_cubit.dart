@@ -54,6 +54,8 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
   /// notification surface, in which case Settings reports it as unavailable.
   void attachTestSender(NotificationTestSender sender) {
     _testSender = sender;
+    if (isClosed) return;
+    emit(state.copyWith(testSenderAttached: true));
   }
 
   /// Reads the stored choices and the current OS permission.
@@ -131,12 +133,13 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
   /// The sender is the running pipeline, so the probe applies the same
   /// permission, preference, urgency, and platform rules a real notification
   /// does. A missing sender, a thrown error, or a suppressed decision becomes a
-  /// localized explanation instead of a silent press.
+  /// localized explanation instead of a silent press, and a presentation the
+  /// platform refused is reported as a failure rather than as success.
   Future<void> sendTestNotification() async {
     if (state.sendingTest) return;
     final sender = _testSender;
     if (sender == null) {
-      _emitTestOutcome(NotificationTestOutcome.unsupported);
+      _emitTestOutcome(NotificationTestOutcome.failed);
       return;
     }
     emit(state.copyWith(sendingTest: true, clearTestOutcome: true));
@@ -167,6 +170,7 @@ class NotificationSettingsCubit extends Cubit<NotificationSettingsState> {
         NotificationDisplayOutcome.suppressedDisabled => NotificationTestOutcome.kindDisabled,
         NotificationDisplayOutcome.suppressedPermission => NotificationTestOutcome.permissionDenied,
         NotificationDisplayOutcome.dropUnsupported => NotificationTestOutcome.unsupported,
+        NotificationDisplayOutcome.presentationFailed => NotificationTestOutcome.failed,
         _ => NotificationTestOutcome.failed,
       };
 

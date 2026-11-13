@@ -854,6 +854,8 @@
   "notificationsUrgencyBannerOnly": "لافتة فقط",
   "notificationsUrgencyBannerOnlyHint": "لافتة بدون صوت",
   "notificationsUrgencyOff": "إيقاف",
+  "notificationsUrgencyBlockedByPermission": "محظور بإذن النظام",
+  "notificationsUrgencyNoService": "لا توجد خدمة إشعارات في هذا النظام",
   "notificationsEnable": "تشغيل الإشعارات",
   "notificationsOpenSettings": "فتح إعدادات النظام",
   "notificationsAllow": "السماح بالإشعارات",
