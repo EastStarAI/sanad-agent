@@ -107,8 +107,9 @@ identifiers in process-tree and thinking-selection code). Pull request #430 on
 
 **Evidence:** `agent/lib/interfaces/notifications/notification_kind.dart` (typed
 kind value object, eight Agent kinds, two declared Client-owned kinds, every kind
-`defaultUrgency == high`), `notification_copy.dart` (16 kind templates + 5 action
-labels in `en` and `ar`, and the 21-key parity surface), `client_instance_profiles.dart`
+`defaultUrgency == high`), `notification_copy.dart` (one template per kind — 8 titles and
+8 bodies — plus 5 action labels, each in `en` and `ar`, and the 21-key parity
+surface), `client_instance_profiles.dart`
 (locale + notifiability registry with the `en` fallback),
 `notification_copy_parity_test.dart`, `client_instance_profiles_test.dart`, and
 `local_gateway_transport_test.dart` ("an authenticated hello registers the
@@ -272,3 +273,13 @@ Run from `agent/` with the FVM-managed SDK:
 - Per-device locale, quiet hours, and digesting are out of scope of plan 174.
 - `client/` is untouched: the 21 Client localization keys are recorded as
   expected-missing in the parity test and are authored by `174f`.
+- A suspension restored from a durable checkpoint after a restart is **not**
+  re-notified: `PlatformRuntimeBridge.requestToolPermission` is the only emitter
+  of `tool_permission_request`, and startup recovery restores the pending
+  decision without re-emitting it (the Client hydrates it from the session
+  payload). Notifying a restored ask needs a startup hook that this task's gates
+  do not name; it should be claimed before the desktop/mobile tasks ship.
+- The origin-first step names one Client instance, but the delivery scope is
+  still `platform_family`. Until the relay honors `target` (`174e`) and each
+  Client ignores an instruction that does not name it (`174b`/`174f`), a second
+  Client on the same route can see an origin-targeted instruction.
