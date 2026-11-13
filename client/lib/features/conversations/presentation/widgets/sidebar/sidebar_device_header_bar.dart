@@ -101,7 +101,7 @@ class _DeviceDropdown extends StatelessWidget {
 
     if (devices.isEmpty) {
       return Text(
-        l10n.noDevicesAvailable,
+        l10n.devicesNone,
         style: TextStyle(
           color: theme.colorScheme.onSurfaceVariant,
           fontSize: 13,
@@ -117,7 +117,7 @@ class _DeviceDropdown extends StatelessWidget {
         ],
         Expanded(
           child: Text(
-            activeDevice?.displayName(l10n) ?? l10n.noDevicesAvailable,
+            activeDevice?.displayName(l10n) ?? l10n.devicesNone,
             overflow: TextOverflow.ellipsis,
             style: TextStyle(
               color: theme.colorScheme.onSurface,

@@ -475,7 +475,6 @@ class FlutterLocalNotificationsAdapter implements NotificationPlatformAdapter {
   /// a language change inside a running session reaches the OS button without a
   /// restart. A request that carries no label keeps the copy `initialize`
   /// registered, because a blank button would be worse than a stale one.
-  @visibleForTesting
   static LinuxNotificationDetails linuxDetailsFor(NotificationPresentationRequest request) {
     return LinuxNotificationDetails(
       urgency: _linuxUrgency(request.urgency),

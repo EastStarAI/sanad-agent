@@ -121,7 +121,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text(arabic.noDevicesAvailable), findsOneWidget);
+    expect(find.text(arabic.devicesNone), findsOneWidget);
     expect(find.text('No devices'), findsNothing);
   });
 

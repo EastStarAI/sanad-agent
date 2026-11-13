@@ -1,10 +1,11 @@
 # 174g — Notification surface fixes from the enabled-state review
 
-**Status:** implemented on `task/174g-ui-fixes`, plus the independent review's
-warning and suggestion pass (§7: W1–W5, S1, S2, S4, S5 closed; S3 open and
-recorded). Analyzer and focused unit/widget coverage are green; the live
-re-capture is the orchestrator's, and the acceptance steps it should follow are in
-§6.
+**Status:** implemented on `task/174g-ui-fixes`, plus two independent review
+passes (§7 closes W1–W5, S1, S2, S4, S5 with S3 open and recorded; §8 closes the
+re-review's blocker B1 and warnings W-A/W-B). Both analyzers are clean and the
+**whole client fast suite** is green (`11:06 +3099 ~3: All tests passed!`); the
+live re-capture is the orchestrator's, and the acceptance steps it should follow
+are in §6.
 **Owners:** `client/lib/features/notifications/` (pipeline, readiness, Settings
 cubit, platform adapter), `client/lib/features/settings/…/notifications_page.dart`,
 `client/lib/features/devices/` and
@@ -151,6 +152,8 @@ last lines while preserving exit status.
 | `fvm flutter test test/widget/sidebar_device_header_localization_test.dart` | pass (L7/W4: 6 tests) |
 | `fvm flutter test test/guards/file_size_ratchet_guard_test.dart test/guards/locale_stable_widget_keys_guard_test.dart test/guards/no_hardcoded_font_guard_test.dart` | pass |
 | `fvm flutter test test/unit/services/device_inventory_source_test.dart test/unit/services/device_manager_test.dart test/unit/services/device_command_client_test.dart test/widget/device_name_editor_test.dart test/unit/bloc/session_cubit_test.dart test/features/mcp/mcp_server_management_screen_test.dart` | pass (114 tests, shared device surfaces) |
+| `fvm flutter test test/widget/device_workspace_sidebar_structure_test.dart test/widget/composer_device_inventory_states_test.dart test/widget/sidebar_device_header_localization_test.dart` | pass (33 tests) — the two suites that assert the sidebar copy, re-run after the copy decision below |
+| **`fvm flutter test` (whole `client/` suite)** | **`11:06 +3099 ~3: All tests passed!`** exit 0. No `--concurrency=1` needed: no test in the fast suite binds a shared port, and the run finished with only the three documented browser-target skips (`test/web/web_startup_platform_guard_test.dart`). This lane is now mandatory in this task's verification, because the previous round changed a shared sidebar widget and ran only the notification and guard suites. |
 
 Fail-before evidence, per behavior, with the exact test that moves:
 
@@ -230,8 +233,37 @@ otherwise.
 | **W3** — two Arabic assertions were dropped from the RTL test | Restored: `notificationsUrgencyAlert` and `notificationsUrgencyBannerOnly` are back in the translated-key list. |
 | **W4** — the device header still hard-coded copy and the guard did not scan it | Closed: `Device selector` (the semantics label), `Loading devices…`, `No devices`, and `Device Settings` are localized, the pre-existing Arabic plan reference in that file's comment is English again, and the notifications localization guard now scans the file — including literal arguments to `Semantics(...)`, not only `Text(...)`. |
 | **W5** — the English sentinel still surfaces on four settings pages | Narrowed, not completed: the L7 row now says **partially fixed** and §5 names the four pages and the reason (their surrounding copy is English, so translating only the name would mix languages). |
-| **S1** — `@visibleForTesting` on a production-used helper | Removed from `linuxDetailsFor`. |
+| **S1** — `@visibleForTesting` on a production-used helper | Removed from `linuxDetailsFor` (`notification_backend_native.dart`). The first attempt recorded this as closed while the edit had not applied; the re-review caught it and the annotation is gone now, with the other four testing seams in that file left alone. |
 | **S2** — the readiness gate had no bound | Closed: `NotificationPlatformReadiness.timeout` (5 s) bounds the wait; a stalled initialization now yields the read's own honest `unavailable` instead of a Settings page that never loads. Covered by a test with a 20 ms bound. |
 | **S3** — the production wiring is untested | Open and recorded in §5: mounting the bridge needs the whole dependency graph. |
 | **S4** — the pill lost the `button: true` role | Closed: the pill is wrapped in `Semantics(button: true)` and a widget test asserts the button node and its tap action inside the merged row. |
 | **S5** — the Arabic literals were documented, not deleted | Closed: `ConnectionStatus` and its unreferenced `displayName` extension are deleted. |
+
+## 8. Second review round (re-review rejection)
+
+The re-review rejected the warning round on one blocker and two warnings. All
+three are closed; nothing else it raised needed work.
+
+| Item | Outcome |
+| :--- | :--- |
+| **B1** — the full client suite was red: two existing widget tests still asserted the pre-localization sidebar copy | Closed. `fvm flutter test` now ends `11:06 +3099 ~3: All tests passed!` (exit 0), and `device_workspace_sidebar_structure_test.dart` plus `composer_device_inventory_states_test.dart` pass unmodified. The cause was the copy change below, not the localization itself. |
+| **W-A** — §7 claimed S1 was closed while the annotation was still in the tree | Closed in code and in the record: `@visibleForTesting` is gone from `linuxDetailsFor`, and the §7 row now states what actually happened instead of asserting an unapplied edit. |
+| **W-B** — two English strings changed silently during the move | Closed by keeping the shipped English copy byte-identical behind the new keys (see below), so no user-visible English wording changes in this task and the existing assertions remain valid behavioral statements. |
+
+### The copy decision (W-B)
+
+Localizing the sidebar header must not change what an English user reads, so the
+English source locale carries the exact strings that shipped:
+
+| Key | English | Arabic | Consumer |
+| :--- | :--- | :--- | :--- |
+| `devicesSelectorLabel` | `Device selector` | `محدِّد الجهاز` | the selector's semantics label |
+| `devicesLoading` | `Loading devices…` | `جارٍ تحميل الأجهزة…` | the loading state (existing key) |
+| `devicesNone` | `No devices` | `لا توجد أجهزة` | a settled empty list and the active-device fallback |
+| `devicesSettingsMenuItem` | `Device Settings` | `إعدادات الجهاز` | the device menu's settings row |
+
+`devicesNone` is a new key rather than a reuse of `noDevicesAvailable`: that key
+carries the sentence form (`No devices available.`) which the settings navigation
+already renders, and reusing it here would have changed the header's wording and
+put a full sentence in a one-row fallback. The header therefore keeps `No devices`
+in English and gains a short Arabic equivalent.

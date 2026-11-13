@@ -93,6 +93,7 @@
   "devices": "الأجهزة",
   "devicesSelectorLabel": "محدِّد الجهاز",
   "devicesSettingsMenuItem": "إعدادات الجهاز",
+  "devicesNone": "لا توجد أجهزة",
   "devicesThisDevice": "هذا الجهاز",
   "devicesLocalBadge": "محلي",
   "addDevice": "إضافة جهاز",
