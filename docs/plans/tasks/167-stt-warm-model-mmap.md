@@ -15,7 +15,7 @@ Make the local-dictation warm-model memory contract truthful: the daemon and the
 
 - **Confirmed defect (Issue #426):** the pinned native engine is whisper.cpp `1.9.5` (`agent/native/checksums.json`), which no longer exposes a `use_mmap` context parameter. Warm weights are copied into an anonymous CPU backend buffer, so the resident block is anonymous, unshareable, and unreclaimable — contradicting three code comments and `docs/technical/local_dictation.md`.
 - **Out of scope:** rebuilding or repinning the native shim, changing quantization or model choice, altering `stt.model_idle_minutes`, and any change to the warm-park lifecycle. Measurements only; no behaviour change.
-- **Deferred and tracked separately:** `sanad-dev switch --runtime current` cannot admit a handoff from a freshly created worktree (it reports `no source agent matches current` and aborts without mutation). Fix and investigation come after this task.
+- **Deferred and tracked separately:** `sanad-dev switch --runtime current` cannot admit a handoff from a freshly created worktree (it reports `no source agent matches current` and aborts without mutation) — tracked in Issue #428.
 - This task changes comments and documentation only. No executable code path, default, or wire contract changes.
 
 ## Gates
