@@ -13,11 +13,13 @@ to a configured provider account, identified by its provider instance, and may
 be available for OAuth or API-key providers when that provider exposes a safe
 account-usage API.
 
-The first supported account is ChatGPT through the `openai-codex` provider
-template. The experience remains capability-driven so future providers can add
-support without a client catalog change. This rollout order is about
-account-usage capability only and does not describe the provider setup list,
-whose order follows the provider registry.
+The supported accounts are ChatGPT through the `openai-codex` provider template
+and OpenCode Go through the `opencode-go` template. ChatGPT is an OAuth account;
+OpenCode Go is an API-key subscription with 5-hour (Session), Weekly, and
+Monthly windows and no reset credits. The experience remains capability-driven
+so future providers can add support without a client catalog change. This
+rollout order is about account-usage capability only and does not describe the
+provider setup list, whose order follows the provider registry.
 
 ## Placement and loading
 
@@ -40,13 +42,20 @@ The expanded disclosure may show:
 - safe provider details, when supplied;
 - the last update age and a per-account Refresh action.
 
+Window labels are localized from the typed window (Session, Weekly, Monthly).
+An unknown future type falls back to the daemon's label instead of disappearing.
+
 There are no placeholder rows. For example, a ChatGPT response containing only
 Weekly and Monthly displays exactly those two rows.
 
 Each window prioritizes the remaining value, such as `58% remaining`, and shows
 the used value as secondary information, such as `42% used`. Its progress bar
 represents consumption. Reset timing is rendered relative to the user's local
-time zone, with the full local time available as a tooltip.
+time zone, with the full local time available as a tooltip. Within six days, a
+countdown whose hour component is non-zero includes both days and hours (for
+example, `2 d 22 h`); an exact day boundary may show days alone, and longer
+horizons show the local date. The countdown owns its full `Resets …` sentence,
+so the prefix is never duplicated.
 
 ## Freshness and recovery
 
@@ -60,6 +69,14 @@ instance already has a request in flight. A failed background refresh preserves
 the previous values and adds a concise Retry message. Authentication failures
 show a sign-in-oriented message. Device switches, account removal, disposal,
 and late responses cannot move usage between accounts or devices.
+
+## Credential recovery
+
+`auth_required` means the account's credential needs user action. Account
+instances offer the same `Reconnect` flow as the instance form. API-key
+instances offer `Update API key`, which opens the instance edit form, because an
+OAuth reconnect cannot repair a static key. Neither action changes the provider
+card's readiness.
 
 ## Reset credits
 

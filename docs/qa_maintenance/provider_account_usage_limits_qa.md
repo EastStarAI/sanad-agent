@@ -29,6 +29,21 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | Credential needs sign-in | `auth_required` is returned with no raw provider error. |
 | Response request or provider instance does not match the pending request | The client ignores it. |
 
+## OpenCode Go adapter
+
+| Scenario | Expected result |
+|---|---|
+| Account returns rolling, weekly, and monthly windows | Exactly Session, Weekly, and Monthly cross the protocol with used percentages and UTC reset timestamps. |
+| `rolling` is absent | Only Weekly and Monthly render; no Session placeholder is created. |
+| `percent` is zero | The window renders as 0% used / 100% remaining. |
+| Row omits `resetsAt` | The row renders without a reset line. |
+| Payload contains no usable window | The result is `unavailable` with a Retry affordance, never an empty card. |
+| Endpoint returns `401` or `403` | The result is `auth_required` and the provider card keeps its status. |
+| Endpoint returns `404`, `429`, or `5xx` | The result is `unavailable`; Retry is offered. |
+| Snapshot has zero reset credits | No reset action is rendered. |
+| Instance uses an API key and usage needs a credential | `Update API key` opens the instance edit form; OAuth reconnect never starts. |
+| Instance uses an account and usage needs a credential | `Reconnect` still runs the shared account re-authentication. |
+
 ## Freshness and concurrency
 
 | Scenario | Expected result |
@@ -74,6 +89,31 @@ confirmation, count visibility, and authoritative snapshot replacement.
 - Verify `nothing_to_reset`, `no_credit`, `already_redeemed`, auth, network failure, and successful-reset/failed-refresh messaging.
 - Repeat with two configured ChatGPT accounts and verify credentials, snapshots, confirmation tokens, and resets never cross instance ids.
 
+
+## Live OpenCode Go acceptance
+
+Use a matched managed runtime with an isolated Sanad Home and a driver-enabled
+Client. Store the OpenCode Go API key in the Agent vault; never paste it into a
+command, log, or screenshot. The acceptance surface is Settings → Providers.
+
+1. Open `Usage & limits` for a READY API-key instance. Expect Session, Weekly,
+   and Monthly with used/remaining values and reset text; expect no reset action
+   when the snapshot reports zero reset credits.
+2. Edit the instance, choose `Replace or remove key` → `Replace with new key`,
+   store a deliberately invalid key, and save.
+3. Expect `NEEDS_AUTH`, the credential-rejected message, and a disclosure that
+   says `Update this provider's API key to view usage limits.` with an
+   `Update API key` action. No `Reconnect` action or OAuth flow may start.
+4. Activate `Update API key`. Expect `Edit Provider Instance`; replace the key
+   with the valid vault value and save.
+5. Expect `READY` and `Key accepted: <n> models`; reopen `Usage & limits` and
+   expect all three windows to return. A later refresh may move a window's used
+   percentage while the page stays on the same instance.
+
+Acceptance run on 2026-11-13 observed Session `2%` → `3%` used, Weekly `55%`,
+Monthly `55%`, resets of `1 h`, `2 d 22 h`, and `Mon, Nov 23, 17:03`, and no
+reset action at zero credits. The countdown rendered a single `Resets` prefix.
+The API-key recovery path behaved exactly as above.
 
 ## Automated daemon-backed fixture
 

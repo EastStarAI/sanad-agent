@@ -214,6 +214,63 @@ void main() {
   );
 
   testWidgets(
+    'reset countdown includes days and hours and never duplicates the prefix',
+    (tester) async {
+      final now = DateTime.now();
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: now,
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'opencode-go',
+                source: 'opencode_go',
+                fetchedAt: now,
+                windows: [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 10.0,
+                    resetAt: now.add(
+                      const Duration(days: 2, hours: 5, minutes: 5),
+                    ),
+                  ),
+                  ProviderUsageWindowDto(
+                    type: 'session',
+                    label: 'Session',
+                    usedPercent: 20.0,
+                    resetAt: now.add(const Duration(hours: 3, minutes: 5)),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Resets in 2 d 5 h'), findsOneWidget);
+      expect(find.text('Resets in 3 h'), findsOneWidget);
+      expect(find.textContaining('Resets Resets'), findsNothing);
+    },
+  );
+
+  testWidgets(
     'needsAttention shows a concise English message and a Retry button, no '
     'provider metadata is hidden',
     (tester) async {
@@ -307,6 +364,62 @@ void main() {
     },
   );
 
+  testWidgets(
+    'API-key auth_required opens the instance form instead of OAuth reconnect',
+    (tester) async {
+      var reconnects = 0;
+      var credentialUpdates = 0;
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          const ProviderUsageEntry(
+            phase: ProviderUsagePhase.needsAttention,
+            result: ProviderUsageResultDto(
+              status: 'auth_required',
+              providerInstanceId: 'a',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(
+            agent: null,
+            instanceId: 'a',
+            onReconnect: () => reconnects++,
+            isApiKeyAuth: true,
+            onUpdateCredential: () => credentialUpdates++,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Update API key'), findsOneWidget);
+      expect(
+        find.text('Update this provider\'s API key to view usage limits.'),
+        findsOneWidget,
+      );
+      expect(find.byIcon(Icons.key_outlined), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_reconnect_a')),
+        findsNothing,
+        reason: 'an API key cannot be repaired by the OAuth reconnect flow',
+      );
+
+      await tester.tap(
+        find.byKey(const Key('provider_usage_update_api_key_a')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(credentialUpdates, 1);
+      expect(reconnects, 0);
+    },
+  );
+
   testWidgets('the usage messages and labels are localized in Arabic', (
     tester,
   ) async {
@@ -344,6 +457,60 @@ void main() {
     expect(find.byKey(const Key('provider_usage_section_a')), findsOneWidget);
     expect(find.byKey(const Key('provider_usage_reconnect_a')), findsOneWidget);
     expect(find.byKey(const Key('provider_usage_message_a')), findsOneWidget);
+  });
+
+  testWidgets('window labels localize by typed window type with a label '
+      'fallback', (tester) async {
+    cubit.emit(
+      cubit.state.upsertEntry(
+        _localDeviceId,
+        'a',
+        ProviderUsageEntry(
+          phase: ProviderUsagePhase.fresh,
+          fetchedAt: DateTime.now(),
+          result: ProviderUsageResultDto(
+            status: 'available',
+            providerInstanceId: 'a',
+            snapshot: ProviderUsageSnapshotDto(
+              providerInstanceId: 'a',
+              providerTemplateId: 'opencode-go',
+              source: 'opencode_go_usage_api',
+              fetchedAt: DateTime.now().toUtc(),
+              windows: const [
+                ProviderUsageWindowDto(
+                  type: 'weekly',
+                  label: 'Weekly',
+                  usedPercent: 42,
+                  remainingPercent: 58,
+                ),
+                ProviderUsageWindowDto(
+                  type: 'rolling',
+                  label: 'Rolling window',
+                  usedPercent: 1,
+                  remainingPercent: 99,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        locale: 'ar',
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('الاستخدام والحدود'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('أسبوعي'), findsOneWidget);
+    expect(find.text('Weekly'), findsNothing);
+    // An unknown future type still renders the daemon's label instead of
+    // disappearing.
+    expect(find.text('Rolling window'), findsOneWidget);
   });
 
   testWidgets(

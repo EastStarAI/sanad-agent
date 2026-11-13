@@ -195,38 +195,15 @@ class _InstanceCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text(
-                            instance.displayName,
-                            key: Key('provider_instance_name_${instance.id}'),
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        if (instance.isDefault) ...[
-                          const SizedBox(width: 8),
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: theme.colorScheme.primaryContainer,
-                              borderRadius: BorderRadius.circular(6),
-                            ),
-                            child: Text(
-                              'Default',
-                              style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                                color: theme.colorScheme.onPrimaryContainer,
-                              ),
-                            ),
-                          ),
-                        ],
-                      ],
+                    Text(
+                      instance.displayName,
+                      key: Key('provider_instance_name_${instance.id}'),
+                      overflow: TextOverflow.ellipsis,
+                      maxLines: 1,
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
                     const SizedBox(height: 4),
                     Text(
@@ -274,24 +251,29 @@ class _InstanceCard extends StatelessWidget {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.end,
                 children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: isReady ? Colors.green.withValues(alpha: 0.1) : Colors.amber.withValues(alpha: 0.1),
-                      borderRadius: BorderRadius.circular(8),
-                      border: Border.all(
-                        color: isReady ? Colors.green.withValues(alpha: 0.3) : Colors.amber.withValues(alpha: 0.3),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (instance.isDefault) ...[
+                        _ProviderCardBadge(
+                          key: Key('provider_instance_default_${instance.id}'),
+                          label: 'Default',
+                          foreground: theme.colorScheme.onPrimaryContainer,
+                          background: theme.colorScheme.primaryContainer,
+                          border: theme.colorScheme.primary.withValues(alpha: 0.3),
+                        ),
+                        const SizedBox(width: 6),
+                      ],
+                      _ProviderCardBadge(
+                        key: Key('provider_instance_status_${instance.id}'),
+                        label: instance.status.toUpperCase(),
+                        foreground: isReady ? Colors.green : Colors.amber[800]!,
+                        background: (isReady ? Colors.green : Colors.amber)
+                            .withValues(alpha: 0.1),
+                        border: (isReady ? Colors.green : Colors.amber)
+                            .withValues(alpha: 0.3),
                       ),
-                    ),
-                    child: Text(
-                      instance.status.toUpperCase(),
-                      key: Key('provider_instance_status_${instance.id}'),
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: isReady ? Colors.green : Colors.amber[800],
-                      ),
-                    ),
+                    ],
                   ),
                   const SizedBox(height: 4),
                   Text(
@@ -332,6 +314,11 @@ class _InstanceCard extends StatelessWidget {
             // form exposes (issue 339 review 2).
             onReconnect: () =>
                 unawaited(context.read<ProviderSetupCubit>().reconnectInstance(instance)),
+            // A static API key cannot be repaired by the OAuth reconnect
+            // flow; send that case to the same edit form the card exposes.
+            isApiKeyAuth: instance.authMethod == 'api_key',
+            onUpdateCredential: () =>
+                context.read<ProviderSetupCubit>().selectInstanceForEdit(instance),
           ),
           const SizedBox(height: 12),
           const Divider(height: 1),
@@ -442,6 +429,49 @@ class _InstanceCard extends StatelessWidget {
               child: const Text('Delete'),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ProviderCardBadge extends StatelessWidget {
+  const _ProviderCardBadge({
+    super.key,
+    required this.label,
+    required this.foreground,
+    required this.background,
+    required this.border,
+  });
+
+  final String label;
+  final Color foreground;
+  final Color background;
+  final Color border;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 72,
+      height: 24,
+      padding: const EdgeInsets.symmetric(horizontal: 6),
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: background,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: border),
+      ),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Text(
+          label,
+          maxLines: 1,
+          softWrap: false,
+          style: TextStyle(
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+            color: foreground,
+          ),
         ),
       ),
     );

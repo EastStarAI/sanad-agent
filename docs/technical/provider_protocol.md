@@ -305,10 +305,14 @@ and only the windows returned by the adapter. Version 1 window types are
 and one side is derived when only used or remaining is supplied. Missing
 windows never create placeholders.
 
-The first adapter is ChatGPT account usage for `openai-codex`. It reads the
-account backend with the selected instance's bearer credential and optional
-account id. Adapter, service, and protocol failures do not mutate provider
-readiness or prevent model execution.
+Registered adapters are ChatGPT account usage for `openai-codex` and OpenCode Go
+usage for `opencode-go`. ChatGPT reads the account backend with the selected
+instance's bearer credential and optional account id. OpenCode Go reads its
+literal account-usage endpoint with the instance's API key and maps `rolling`,
+`weekly`, and `monthly` to Session, Weekly, and Monthly; it exposes no plan name
+or reset credits, and the endpoint is not derived from the instance's model base
+URL. Adapter, service, and protocol failures do not mutate provider readiness or
+prevent model execution.
 
 Flutter owns a projection keyed by `device id + provider_instance_id`. Provider
 cards render before capability or usage requests finish. Successful snapshots
@@ -319,7 +323,9 @@ requests, or mismatched instance responses cannot restore stale data. A failed
 background refresh preserves the prior snapshot and adds an inline `Retry` or
 sign-in message. `auth_required` renders a `Reconnect` action that runs the same
 account re-authentication as the instance form (see "Usage status never mutates
-the instance lifecycle"); every other failure renders `Retry` as a usage
+the instance lifecycle"). An API-key instance renders `Update API key` instead,
+which opens the instance edit form; an OAuth reconnect cannot repair a static
+key. Every other failure renders `Retry` as a usage
 refresh. Both labels and every usage sentence are localized in `en` and `ar`.
 
 The `Usage & limits` disclosure is absent for unsupported instances. It renders

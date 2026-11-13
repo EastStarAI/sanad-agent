@@ -418,6 +418,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
+              key: const Key('provider_credential_actions_button'),
               onPressed: () => setState(() => _showCredentialActions = true),
               icon: const Icon(Icons.key),
               label: Text(
@@ -427,6 +428,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           ),
         if (isApiKey && _showCredentialActions) ...[
           DropdownButtonFormField<String>(
+            key: const Key('provider_credential_action_field'),
             initialValue: _credentialAction,
             decoration: const InputDecoration(
               labelText: 'Credential Action',
@@ -434,17 +436,20 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
             ),
             items: [
               DropdownMenuItem(
+                key: const Key('provider_credential_action_keep'),
                 value: 'keep',
                 child: Text(
                   credential?.hasSecret == true ? 'Keep existing' : 'Keep as-is (no key stored)',
                 ),
               ),
               const DropdownMenuItem(
+                key: Key('provider_credential_action_replace'),
                 value: 'replace',
                 child: Text('Replace with new key'),
               ),
               if (credential?.hasSecret == true)
                 const DropdownMenuItem(
+                  key: Key('provider_credential_action_remove'),
                   value: 'remove',
                   child: Text('Remove credential'),
                 ),
@@ -456,6 +461,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           if (_credentialAction == 'replace') ...[
             const SizedBox(height: 12),
             TextFormField(
+              key: const Key('provider_new_api_key_field'),
               controller: _newKeyController,
               obscureText: true,
               decoration: const InputDecoration(
@@ -472,6 +478,7 @@ class _ProviderInstanceFormViewState extends State<ProviderInstanceFormView> {
           Align(
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
+              key: const Key('provider_credential_reconnect_button'),
               onPressed: () => _reconnect(instance),
               icon: const Icon(Icons.login),
               label: const Text('Reconnect account'),

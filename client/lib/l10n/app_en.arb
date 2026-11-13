@@ -1305,6 +1305,17 @@
       }
     }
   },
+  "providerUsageResetsInDaysHours": "Resets in {days} d {hours} h",
+  "@providerUsageResetsInDaysHours": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      },
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
   "providerUsageResetsOnDate": "Resets on {when}",
   "@providerUsageResetsOnDate": {
     "placeholders": {
@@ -1337,8 +1348,13 @@
   },
   "providerUsageResetAnyway": "Reset anyway",
   "providerUsageAuthRequired": "Account sign-in is required to view usage limits.",
+  "providerUsageApiKeyRequired": "Update this provider's API key to view usage limits.",
   "providerUsageUnavailable": "Usage information is temporarily unavailable. Please retry.",
   "providerUsageFailed": "Usage information could not be loaded. Please try again.",
   "providerUsageRetry": "Retry",
-  "providerUsageReconnect": "Reconnect"
+  "providerUsageReconnect": "Reconnect",
+  "providerUsageUpdateApiKey": "Update API key",
+  "providerUsageWindowSession": "Session",
+  "providerUsageWindowWeekly": "Weekly",
+  "providerUsageWindowMonthly": "Monthly"
 }
