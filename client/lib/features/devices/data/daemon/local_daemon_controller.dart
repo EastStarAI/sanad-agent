@@ -8,6 +8,13 @@ enum AgentLifecycleStatus {
   /// An installed agent newer than this client was kept and is running.
   newerAgentInUse,
   networkFailed,
+
+  /// The release chain could not be verified, so nothing was downloaded.
+  ///
+  /// The transport reached the release host and its certificate was refused.
+  /// Callers render a cause-and-remedy message for this outcome instead of a
+  /// retry prompt, because retrying cannot change a machine's trust set.
+  tlsTrustFailed,
   manifestInvalid,
   targetMismatch,
   downgradeRejected,
@@ -45,6 +52,8 @@ class AgentLifecycleResult {
       switch (status) {
         AgentLifecycleStatus.networkFailed =>
           'Could not reach the official release service. Try again when the network is available.',
+        AgentLifecycleStatus.tlsTrustFailed =>
+          'The secure connection to the release service could not be verified on this computer.',
         AgentLifecycleStatus.manifestInvalid => 'The official release metadata is invalid. Try again later.',
         AgentLifecycleStatus.targetMismatch => 'The available agent does not match this Sanad Client version.',
         AgentLifecycleStatus.newerAgentInUse =>
