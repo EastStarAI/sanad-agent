@@ -348,8 +348,11 @@ One policy answers "does this reach the operating system?", in this order:
    one sighting. A duplicate in a quiet window is consumed there and never
    replayed later.
 4. **Quiet window** — see 7.5.
-5. **Preferences** — the global switch and the per-kind switch. Every kind is
-   enabled by default; a stored value only records a deliberate change.
+5. **Preferences** — the global switch, the per-kind switch, and the per-kind
+   urgency ceiling. Every kind is enabled by default at banner-and-sound; a
+   stored value only records a deliberate change, and a ceiling can only lower
+   what the Agent decided. See §8.1 and
+   [communication_protocols.md](communication_protocols.md) §7.10.
 6. **OS permission** — nothing is shown while the OS has not granted it.
 7. **Presence** — the ask is suppressed only while the window is visible *and*
    the routed conversation surface is that exact session. A session on screen
@@ -451,4 +454,57 @@ that turns a `DesktopLifecycleManager` hide into a display decision. Real
 permission prompts, tray-hidden display, toast replacement, and notification
 clicks are proven only by a live desktop pass per platform; any platform that has
 not been exercised is listed as a limitation in
-`docs/plans/tasks/174b-desktop-os-notifications.md`.
+`docs/plans/tasks/174b-desktop-os-notifications.md`, and the preference surface
+of `174f` records its own per-platform evidence in
+`docs/plans/tasks/174f-notification-preferences-and-verification.md`.
+
+## 8. Notification preferences, test notification, and platform limits (Plan 174f)
+
+Settings → Notifications is the one place a user controls these, and every
+control is **device-scoped**: the choice is stored on this Client, never on the
+account, and never shared with another device. The wire shape and the Agent-side
+application are owned by
+[communication_protocols.md](communication_protocols.md) §7.10; this section
+owns what the surface states.
+
+### 8.1 What the page shows
+
+- **System permission** with the real state, read on open and on app resume. When
+  the OS refuses or revokes it while the in-app switch is on, the page says so and
+  offers the system notification pane; the switch is not silently forced off, and
+  no second prompt is offered where the platform has none (macOS).
+- **The global switch**, then one row per kind with its current urgency. A kind
+  offers exactly two loudness choices — the product default (banner and sound)
+  and banner only (no sound) — because those are what the adapters actually
+  implement; a third state, off, is the row switch itself. The listed kinds
+  include the two Client-owned kinds (`connection_lost`, `auth_required`) so the
+  taxonomy is one model on every platform, even though `174b` does not raise them.
+- **A test notification action** that runs the real pipeline. Its answer is one of
+  shown, suppressed by a kind setting, suppressed by the OS permission, or
+  unsupported on this system; a probe that always claims success would be worse
+  than no probe.
+- **Platform limits**, stated in the page rather than discovered later:
+  - OS settings always win. A system-level block is not overridden by the in-app
+    switch, and nothing is shown while it is in place.
+  - On iPhone and iPad a web notification arrives only when the site is installed
+    as a web app from the browser share menu; an ordinary browser tab receives
+    none. The line is rendered only on the web surface, so a desktop build does
+    not claim a limit it does not have.
+
+### 8.2 Localization
+
+Every string on this surface is authored in `client/lib/l10n/app_en.arb` and
+translated in `app_ar.arb`; no widget holds a literal and no Dart source holds an
+Arabic literal. `client/test/guards/notifications_localization_guard_test.dart`
+enforces all three (no hard-coded `Text(...)` literal, no Arabic literal, every
+referenced key authored in both locales), and
+`notification_settings_rtl_test.dart` proves the page renders right to left in
+Arabic with no English label leaking through.
+
+### 8.3 Verification record
+
+The per-platform matrix is recorded in
+[174f-notification-preferences-and-verification.md](../../docs/plans/tasks/174f-notification-preferences-and-verification.md),
+with the date and the build identity of each executed row. A platform without
+recorded evidence is marked `[!]` with the reason and the owner; nothing is
+claimed as verified because a mock passed.

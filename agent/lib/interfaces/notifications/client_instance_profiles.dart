@@ -9,6 +9,8 @@
 library;
 
 import 'notification_copy.dart';
+import 'notification_kind.dart';
+import 'notification_preferences.dart';
 
 /// One registered Client instance.
 final class ClientInstanceProfile {
@@ -16,6 +18,7 @@ final class ClientInstanceProfile {
     required this.clientInstanceId,
     required this.locale,
     required this.canNotify,
+    this.preferences = ClientNotificationPreferences.productDefault,
   });
 
   final String clientInstanceId;
@@ -30,6 +33,12 @@ final class ClientInstanceProfile {
   /// explicit `notification_capable: false` (a headless driver client, a build
   /// without notification support) makes the Agent skip the origin step.
   final bool canNotify;
+
+  /// The choices this device declared for itself.
+  ///
+  /// A device that declared nothing holds the product default, which is the
+  /// same answer as a device the Agent has never met.
+  final ClientNotificationPreferences preferences;
 }
 
 /// Bounded, in-memory registry of per-instance display facts.
@@ -67,8 +76,9 @@ class ClientInstanceProfiles {
   /// Number of remembered instances.
   int get length => _profiles.length;
 
-  /// Reads a locale and notification capability from an authenticated
-  /// `client.hello` envelope and registers them for [connectionKey].
+  /// Reads a locale, notification capability, and this device's notification
+  /// choices from an authenticated `client.hello` envelope and registers them
+  /// for [connectionKey].
   ///
   /// The envelope's top-level `locale` is authoritative. `metadata.locale` and
   /// the cloud `origin_client.locale` shape are accepted as the same value so a
@@ -88,22 +98,31 @@ class ClientInstanceProfiles {
       canNotify:
           hello['notification_capable'] ??
           (metadata is Map ? metadata['notification_capable'] : null),
+      notifications:
+          hello['notifications'] ??
+          (metadata is Map ? metadata['notifications'] : null),
       connectionKey: connectionKey,
     );
   }
 
   /// Registers display facts for [clientInstanceId], keeping previously known
-  /// values for the fields [locale] and [canNotify] leave unstated.
+  /// values for the fields [locale], [canNotify], and [notifications] leave
+  /// unstated.
   ///
   /// [connectionKey] names the connection that announced the facts, when the
   /// caller has one; it is what lets [forget] release one connection without
   /// erasing an instance another connection still holds. A malformed or
   /// unsupported locale is ignored rather than stored, so the instance keeps a
   /// defined fallback.
+  ///
+  /// [notifications] is the device's own declaration. An absent or unreadable
+  /// value keeps the previous choice, while a well-formed but empty declaration
+  /// is a deliberate reset to the product default.
   ClientInstanceProfile? register({
     required String clientInstanceId,
     Object? locale,
     Object? canNotify,
+    Object? notifications,
     Object? connectionKey,
   }) {
     final normalizedId = _normalize(clientInstanceId);
@@ -115,6 +134,9 @@ class ClientInstanceProfiles {
       clientInstanceId: normalizedId,
       locale: parsedLocale ?? previous?.locale ?? NotificationLocale.fallback,
       canNotify: parsedCapability ?? previous?.canNotify ?? true,
+      preferences: ClientNotificationPreferences.tryParse(notifications) ??
+          previous?.preferences ??
+          ClientNotificationPreferences.productDefault,
     );
     _profiles.remove(normalizedId);
     _profiles[normalizedId] = profile;
@@ -152,6 +174,31 @@ class ClientInstanceProfiles {
   /// ask into an immediate account-wide fan-out.
   bool canNotify(String? clientInstanceId) =>
       profileFor(clientInstanceId)?.canNotify ?? true;
+
+  /// Whether [clientInstanceId] wants a notification of [kind].
+  ///
+  /// An unknown instance wants it: the product default is enabled, and guessing
+  /// "off" for a device the Agent has never met would silently drop the first
+  /// notification a new device ever receives.
+  bool allows(
+    String? clientInstanceId,
+    NotificationKind kind,
+  ) =>
+      profileFor(clientInstanceId)?.preferences.allowsKind(kind) ?? true;
+
+  /// The urgency to dispatch [kind] to [clientInstanceId] with.
+  ///
+  /// The Agent's own decision is the ceiling for a device with no declaration,
+  /// and a declared preference can only lower it.
+  NotificationUrgency urgencyFor(
+    String? clientInstanceId,
+    NotificationKind kind,
+    NotificationUrgency fromAgent,
+  ) {
+    final profile = profileFor(clientInstanceId);
+    if (profile == null) return fromAgent;
+    return profile.preferences.urgencyFor(kind, fromAgent);
+  }
 
   /// Forgets [clientInstanceId] for one connection, or for every connection.
   ///

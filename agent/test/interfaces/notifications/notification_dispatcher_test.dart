@@ -421,4 +421,83 @@ void main() {
       expect(dispatcher.pendingCount, 1);
     });
   });
+
+  group('per-device preferences at dispatch', () {
+    test('a device that muted the kind is not sent the origin dispatch', () {
+      final harness = _Harness();
+      harness.profiles.register(
+        clientInstanceId: _desktopInstance,
+        notifications: const {
+          'kinds': {'permission_request': 'off'},
+        },
+      );
+
+      harness.dispatcher.onAskCreated(ask: _ask(), origin: _Harness.origin);
+
+      expect(harness.dispatches, isEmpty);
+      expect(
+        harness.dispatcher.isEscalationArmed(
+          sessionId: 'session-1',
+          requestId: 'request-1',
+        ),
+        isTrue,
+        reason: 'the escalation still runs, and the other devices keep the default',
+      );
+
+      harness.timers.fireAll();
+      expect(harness.dispatches, hasLength(1));
+      expect((harness.notificationOf(harness.dispatches.single)['target'] as Map)['scope'], 'account');
+    });
+
+    test('a muted origin never suppresses the ask for the other devices', () {
+      final harness = _Harness(attached: {_desktopInstance, _phoneInstance});
+      harness.profiles.register(
+        clientInstanceId: _desktopInstance,
+        notifications: const {
+          'enabled': false,
+        },
+      );
+
+      harness.dispatcher.onAskCreated(ask: _ask(), origin: _Harness.origin);
+
+      expect(harness.dispatches, isEmpty);
+      harness.timers.fireAll();
+      expect(harness.dispatches, hasLength(1), reason: 'the account step still happens');
+    });
+
+    test('a lowered urgency rides the dispatch the Agent publishes', () {
+      final harness = _Harness();
+      harness.profiles.register(
+        clientInstanceId: _desktopInstance,
+        notifications: const {
+          'kinds': {'permission_request': 'normal'},
+        },
+      );
+
+      harness.dispatcher.onAskCreated(ask: _ask(), origin: _Harness.origin);
+
+      final notification = harness.notificationOf(harness.dispatches.single);
+      expect(notification['urgency'], 'normal');
+      expect(
+        (notification['platform_hints'] as Map)['android_channel_id'],
+        'sanad_permission_request_normal',
+        reason: 'a lowered urgency picks the quieter channel instead of the default one',
+      );
+    });
+
+    test('a declaration for another device does not change this one', () {
+      final harness = _Harness(attached: {_desktopInstance});
+      harness.profiles.register(
+        clientInstanceId: _phoneInstance,
+        notifications: const {
+          'kinds': {'permission_request': 'off'},
+        },
+      );
+
+      harness.dispatcher.onAskCreated(ask: _ask(), origin: _Harness.origin);
+
+      expect(harness.dispatches, hasLength(1));
+      expect(harness.notificationOf(harness.dispatches.single)['urgency'], 'high');
+    });
+  });
 }

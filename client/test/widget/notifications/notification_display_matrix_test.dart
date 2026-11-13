@@ -13,6 +13,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_preferences.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_presence.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
 
 /// Records what the operating system was actually asked to present.
@@ -459,4 +460,84 @@ void main() {
       expect(adapter.shown, isEmpty);
     });
   });
+
+  group('per-device urgency ceiling on a real dispatch', () {
+    testWidgets('a lowered kind reaches the platform at the ceiling, not the Agent value', (tester) async {
+      await mount(tester);
+      preferences = const NotificationPreferences()
+          .withKindUrgency(NotificationKind.permissionRequest, NotificationUrgency.normal);
+
+      final decision = await service.handleEvent(_ask());
+
+      expect(decision!.shouldDisplay, isTrue);
+      expect(adapter.shown.single.urgency, NotificationUrgency.normal,
+          reason: 'the device ceiling is applied where every route converges');
+    });
+
+    testWidgets('an untouched kind keeps the Agent urgency', (tester) async {
+      await mount(tester);
+
+      await service.handleEvent(_ask());
+
+      expect(adapter.shown.single.urgency, NotificationUrgency.high);
+    });
+  });
+
+  group('user test notification', () {
+    testWidgets('runs the real pipeline and reaches the platform once', (tester) async {
+      await mount(tester);
+
+      final decision = await service.raiseTestNotification(title: 'Test title', body: 'Test body');
+
+      expect(decision!.shouldDisplay, isTrue);
+      expect(adapter.shown, hasLength(1));
+      expect(adapter.shown.single.title, 'Test title');
+      expect(adapter.shown.single.body, 'Test body');
+      expect(adapter.shown.single.id, isNonZero);
+    });
+
+    testWidgets('a second press replaces the same banner instead of stacking', (tester) async {
+      await mount(tester);
+
+      await service.raiseTestNotification(title: 'First', body: 'One');
+      await service.raiseTestNotification(title: 'Second', body: 'Two');
+
+      expect(adapter.shown, hasLength(2));
+      expect(adapter.shown.first.id, adapter.shown.last.id);
+    });
+
+    testWidgets('reports the user setting that suppresses it', (tester) async {
+      await mount(tester);
+      preferences = const NotificationPreferences().withKind(NotificationKind.completed, false);
+
+      final decision = await service.raiseTestNotification(title: 'Test title', body: 'Test body');
+
+      expect(decision!.outcome.name, 'suppressedDisabled');
+      expect(adapter.shown, isEmpty);
+    });
+
+    testWidgets('reports a missing OS permission instead of pretending', (tester) async {
+      await mount(tester);
+      permission = NotificationPermissionStatus.denied;
+
+      final decision = await service.raiseTestNotification(title: 'Test title', body: 'Test body');
+
+      expect(decision!.outcome.name, 'suppressedPermission');
+      expect(adapter.shown, isEmpty);
+    });
+
+    testWidgets('is not silenced by the post-connect quiet window', (tester) async {
+      await mount(tester);
+      service.onTransportConnected();
+
+      final decision = await service.raiseTestNotification(title: 'Test title', body: 'Test body');
+
+      expect(decision!.shouldDisplay, isTrue,
+          reason: 'the user asked for this notification right now');
+      expect(adapter.shown, hasLength(1));
+    });
+  });
 }
+
+/// Matcher for the 31-bit notification id the collapse key derives.
+final Matcher isNonZero = isNot(0);

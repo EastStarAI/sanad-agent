@@ -50,6 +50,14 @@ class SocketConnectionController {
   final Duration Function(int attempt) _localReconnectDelay;
   final CloudSocketFactory _cloudSocketFactory;
 
+  /// This device's notification choices, read at registration time.
+  ///
+  /// It travels inside the Client's own authenticated registration envelope, so
+  /// the Agent learns the preference of the device it is talking to and the relay
+  /// only forwards an opaque field it never reads. Nothing here is account-scoped
+  /// and nothing is written by another device.
+  final Map<String, dynamic>? Function()? _notificationDeclaration;
+
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   bool _explicitDisconnect = false;
@@ -82,6 +90,7 @@ class SocketConnectionController {
     bool localTransportEnabled = true,
     Duration Function(int attempt)? localReconnectDelay,
     CloudSocketFactory cloudSocketFactory = socket_io.io,
+    Map<String, dynamic>? Function()? notificationDeclaration,
     this.onRelayEvent,
     this.onCloudEvent,
     this.onLocalMessage,
@@ -90,6 +99,7 @@ class SocketConnectionController {
        _clientInstanceId = clientInstanceId,
        _clientMetadata = clientMetadata,
        _authToken = startToken,
+       _notificationDeclaration = notificationDeclaration,
        _transportMode = transportMode,
        _localCredentialProvider =
            localCredentialProvider ??
@@ -106,6 +116,7 @@ class SocketConnectionController {
     LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     bool enabled = true,
     Duration Function(int attempt)? reconnectDelay,
+    Map<String, dynamic>? Function()? notificationDeclaration,
     RelayEventHandler? onRelayEvent,
     CloudEventHandler? onCloudEvent,
     LocalMessageHandler? onLocalMessage,
@@ -119,6 +130,7 @@ class SocketConnectionController {
       localCredentialProvider: credentialProvider,
       localTransportEnabled: enabled,
       localReconnectDelay: reconnectDelay,
+      notificationDeclaration: notificationDeclaration,
       onRelayEvent: onRelayEvent,
       onCloudEvent: onCloudEvent,
       onLocalMessage: onLocalMessage,
@@ -285,6 +297,11 @@ class SocketConnectionController {
         'platform': AppPlatform.name,
         if (_clientInstanceId != null) 'client_instance_id': _clientInstanceId,
         if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+        // The same display declaration the local registration carries. The
+        // hosted service forwards it to the Agent as part of the client identity
+        // it already relays; it never reads a notification choice.
+        if (_notificationDeclaration?.call() case final declaration?)
+          'notifications': declaration,
         if (_clientInstanceId != null)
           'capabilities': const [
             'account_sessions_v1',
@@ -357,20 +374,49 @@ class SocketConnectionController {
   }
 
   void _sendLocalHello() {
-    if (_localSocket == null || _clientInstanceId == null) return;
-    _localSocket!.add(
-      jsonEncode({
-        'type': 'client.hello',
-        'protocol': 'sanad.identity_presence',
-        'version': 1,
-        'client_instance_id': _clientInstanceId,
-        if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
-        'capabilities': const [
-          'account_sessions_v1',
-          'delivery_presence_v1',
-        ],
-      }),
-    );
+    if (_localSocket == null) return;
+    final envelope = localHelloEnvelope();
+    if (envelope == null) return;
+    _localSocket!.add(jsonEncode(envelope));
+  }
+
+  /// The authenticated registration envelope this Client sends to a local Agent.
+  ///
+  /// Exposed so the notification declaration can be proven without a socket: it
+  /// is the same envelope that carries identity, display metadata, and locale, and
+  /// the Agent registers the notification choices from it exactly once per
+  /// connection.
+  Map<String, dynamic>? localHelloEnvelope() {
+    final instanceId = _clientInstanceId;
+    if (instanceId == null) return null;
+    final declaration = _notificationDeclaration?.call();
+    return <String, dynamic>{
+      'type': 'client.hello',
+      'protocol': 'sanad.identity_presence',
+      'version': 1,
+      'client_instance_id': instanceId,
+      if (_clientMetadata != null) 'metadata': _clientMetadata.toJson(),
+      if (declaration != null) 'notifications': declaration,
+      'capabilities': const [
+        'account_sessions_v1',
+        'delivery_presence_v1',
+      ],
+    };
+  }
+
+  /// Re-declares this device's notification choices to the Agent it is
+  /// connected to.
+  ///
+  /// The registration is a hello, so a change re-sends it on the same socket and
+  /// the Agent replaces only the facts it is told. A disconnected Client sends
+  /// nothing: the choices are already stored on this device, and the next
+  /// connect registers them. Desktop OS delivery is local, so a change never
+  /// needs the cloud relay, and the cloud route re-declares on its next
+  /// authentication instead of inventing a message the hosted service would have
+  /// to interpret.
+  void publishNotificationPreferences() {
+    if (_localSocket == null) return;
+    _sendLocalHello();
   }
 
   Future<void> _connectLocalWebSocket() async {

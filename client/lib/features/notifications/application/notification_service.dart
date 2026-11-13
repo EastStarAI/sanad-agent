@@ -12,6 +12,7 @@ import 'package:sanad_client/features/notifications/domain/models/notification_p
 import 'package:sanad_client/features/notifications/domain/models/notification_platform_adapter.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_preferences.dart';
 import 'package:sanad_client/features/notifications/domain/models/notification_presence.dart';
+import 'package:sanad_client/features/notifications/domain/models/notification_urgency.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_ask_registry.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_display_policy.dart';
 import 'package:sanad_client/features/notifications/domain/services/notification_quiet_window.dart';
@@ -95,6 +96,17 @@ class NotificationService {
   final DateTime Function() _clock;
   final List<StreamSubscription<Map<String, dynamic>>> _subscriptions = [];
   final Set<String> _presented = <String>{};
+
+  /// The identity `session_id` of the user's test notification.
+  ///
+  /// It is a fixed value so repeated test presses replace one banner instead of
+  /// stacking: the collapse key is derived from this session plus the kind.
+  static const String testSessionId = 'notification-test';
+
+  /// How long a test notification stays meaningful.
+  static const Duration testLifetime = Duration(minutes: 1);
+
+  int _testSequence = 0;
 
   bool _started = false;
   bool _disposed = false;
@@ -223,11 +235,14 @@ class NotificationService {
         actions.add(NotificationPresentationAction(id: action.id, label: label));
       }
     }
+    // The device's own ceiling is applied here, not by the Agent: a preference
+    // belongs to this device, and every route — local socket, cloud socket, or
+    // a future push — converges on this one presentation call.
     final request = NotificationPresentationRequest(
       id: payload.notificationId,
       title: payload.title.isNotEmpty ? payload.title : copy.title,
       body: payload.body.isNotEmpty ? payload.body : copy.body,
-      urgency: payload.urgency,
+      urgency: _readPreferences().urgencyFor(payload.kind, payload.urgency),
       payload: jsonEncode(payload.toPresentationPayload()),
       actions: actions,
       offersApprovalActions: payload.kind.supportsApprovalActions,
@@ -240,6 +255,79 @@ class NotificationService {
     } catch (error, stack) {
       _logger.warning('could not raise ${payload.kind.wire} notification', error, stack);
     }
+  }
+
+  /// Raises one user-initiated test notification through the real pipeline.
+  ///
+  /// The probe is the only event this feature fabricates, and it exists because
+  /// a user cannot otherwise tell a working setup from a silent one. It is
+  /// built as an ordinary envelope so the same parser, the same collapse
+  /// identity, the same display policy, and the same platform adapter run; the
+  /// copy it carries names it as a test so it can never be read as an Agent
+  /// decision.
+  ///
+  /// What it does not reproduce is what makes an arrival an interruption: it is
+  /// not deduplicated against the transports, it ignores the post-connect quiet
+  /// window, and it ignores window presence, because the user asked for it right
+  /// now. Everything a user setting controls — the global switch, the kind, the
+  /// urgency ceiling, and the OS permission — is applied exactly as usual, which
+  /// is what makes the result a real answer instead of a decorative one.
+  Future<NotificationDisplayDecision?> raiseTestNotification({
+    required String title,
+    required String body,
+    DateTime? now,
+  }) async {
+    if (_disposed) return null;
+    final at = now ?? _clock();
+    final payload = NotificationPayload.fromEvent(
+      _testEnvelope(title: title, body: body, at: at),
+    );
+    if (payload == null) return null;
+    final decision = NotificationDisplayPolicy.decide(
+      payload: payload,
+      alreadyProcessed: false,
+      preferences: _readPreferences(),
+      permission: _readPermission(),
+      quietWindowOpen: false,
+      presence: NotificationPresence.none,
+      now: at,
+      platformSupported: _adapter.isSupported,
+    );
+    if (decision.shouldDisplay) {
+      await _display(payload);
+    } else {
+      _logger.fine('test notification not raised: ${decision.reason}');
+    }
+    return decision;
+  }
+
+  /// One canonical envelope for the test probe.
+  ///
+  /// The urgency is the product default so the platform shows what a real alert
+  /// looks like; the user's ceiling then lowers it in [_display] like any other
+  /// notification.
+  Map<String, dynamic> _testEnvelope({
+    required String title,
+    required String body,
+    required DateTime at,
+  }) {
+    _testSequence += 1;
+    return <String, dynamic>{
+      'event': 'notification',
+      'event_id': 'test-${at.microsecondsSinceEpoch}-$_testSequence',
+      'payload': <String, dynamic>{
+        'kind': NotificationKind.completed.wire,
+        'urgency': NotificationUrgency.defaultUrgency.wire,
+        'title': title,
+        'body': body,
+        'deep_link': <String, String>{'session_id': testSessionId},
+        'collapse_key': NotificationCollapseKey.forAsk(
+          sessionId: testSessionId,
+          kind: NotificationKind.completed,
+        ),
+        'expires_at': at.toUtc().add(testLifetime).toIso8601String(),
+      },
+    };
   }
 
   /// Withdraws the ask notification of [sessionId] once the ask is resolved.

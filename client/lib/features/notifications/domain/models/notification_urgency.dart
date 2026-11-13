@@ -35,4 +35,16 @@ enum NotificationUrgency {
   /// than folded into a quiet summary.
   bool get isInterruptive =>
       this == NotificationUrgency.high || this == NotificationUrgency.critical;
+
+  /// The quieter of two urgencies.
+  ///
+  /// The enum is declared from quietest to loudest, so the index is the rank.
+  /// A preference can only ever lower a notification, which is why the display
+  /// pipeline asks for the lower of the Agent's decision and the device's
+  /// ceiling instead of letting either side win.
+  static NotificationUrgency lowerOf(
+    NotificationUrgency first,
+    NotificationUrgency second,
+  ) =>
+      first.index <= second.index ? first : second;
 }

@@ -35,6 +35,18 @@ enum NotificationUrgency {
     }
     return NotificationUrgency.high;
   }
+
+  /// The quieter of two urgencies.
+  ///
+  /// The enum is declared from loudest to quietest, so the index is the rank and
+  /// the larger index wins. A device preference can only lower a notification
+  /// (plan 174, locked decision 7), which is why the dispatcher asks for the
+  /// lower of the Agent's decision and the target device's ceiling.
+  static NotificationUrgency lowerOf(
+    NotificationUrgency first,
+    NotificationUrgency second,
+  ) =>
+      first.index >= second.index ? first : second;
 }
 
 /// One Agent-owned notification kind.

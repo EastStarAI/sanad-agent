@@ -43,7 +43,46 @@ This contract applies to `client/lib/features/notifications/`.
   Web resolves a total no-op through a conditional import, and mobile keeps the
   boundary free for its own push adapter.
 - Permission is requested only from an explicit Settings action. Nothing asks on
-  startup, on first event, or on first notification.
+  startup, on first event, or on first notification. A refusal or a revocation is
+  reported as it is; nothing rewrites the in-app switch on the user's behalf.
+
+## Per-Device Preferences
+- Every notification choice belongs to **this device**, never to the account. The
+  platform preferences file is the storage owner
+  (`NotificationPreferencesStore`), the choice is never uploaded, and another
+  device never writes it.
+- Two levels and one ceiling: the global switch, a per-kind off switch, and a
+  per-kind urgency ceiling. Every kind starts enabled at the product default
+  (banner and sound); a stored value only records a deliberate change, and
+  `withKindUrgency` never stores a value that would raise a kind, so a corrupt
+  file or a future build cannot make one louder.
+- The ceiling is applied at presentation — `NotificationService` asks the
+  preferences for `urgencyFor(kind, agentUrgency)` — because every route, local
+  socket, cloud socket, and future push, converges on that one call.
+- A change is announced to the Agent through the Client's authenticated
+  registration envelope (`client.hello` locally, the client identity the hosted
+  service relays for a cloud connection). The declaration names this device's
+  choice only; the relay forwards it and reads nothing. The Agent-side registry
+  and its dispatch application are owned by
+  [communication_protocols.md](../../../../docs/technical/communication_protocols.md)
+  §7.10.
+- Settings never derives a preference from conversation content, presence, or an
+  OS permission read, and it never presents an account-wide switch.
+
+## Test Notification
+- `NotificationService.raiseTestNotification` is the only event this feature
+  fabricates, and it exists only because a user cannot otherwise tell a working
+  setup from a silent one. It is a user action, never a producer decision.
+- It runs the real pipeline: the same envelope parser, the same collapse
+  identity, the same display policy, and the same adapter. It therefore honours
+  the global switch, the kind, the ceiling, and the OS permission.
+- It is not an arrival, so it ignores the transport-owned suppressions: no
+  deduplication, no post-connect quiet window, and no presence suppression.
+- Its copy is supplied by `NotificationCopySource.testNotificationCopy` and names
+  it as a test, so a probe can never be read as an Agent decision. It is never
+  published to the relay.
+- A suppressed result is reported as a localized explanation, never as success.
+
 - `NotificationBridge` and `NotificationPresenceReporter` are composition only:
   they supply dependencies and report what is on screen. They contain no display
   rule.
@@ -73,11 +112,19 @@ This contract applies to `client/lib/features/notifications/`.
 ## Verification
 - Unit tests own the display matrix, collapse keys, dedupe identity, the quiet
   window, payload parsing, the ask registry, the action fail-closed rules, the
-  macOS action-set derivation and registration, the action-label fallback, and
-  the cold-start outcome.
+  macOS action-set derivation and registration, the action-label fallback, the
+  cold-start outcome, the preference ceiling and its stored form, the
+  per-device declaration and its registration envelope, and the test-action
+  outcome mapping.
 - Widget tests own the end-to-end pipeline through a fake platform adapter, the
-  Settings surface, and the window-presence projection driven by a
-  `DesktopLifecycleManager`.
+  Settings surface (permission states, per-kind urgency, the test action, the
+  stated limits), Arabic right-to-left rendering, and the window-presence
+  projection driven by a `DesktopLifecycleManager`.
+- `client/test/guards/notifications_localization_guard_test.dart` owns the
+  localization invariant: no hard-coded widget string, no Arabic literal in Dart,
+  and every referenced key authored in both locales.
 - Real macOS, Windows, and Linux behavior is verified by a live desktop pass, not
   by mocks. A platform that has not been exercised is recorded as a limitation in
-  `docs/plans/tasks/174b-desktop-os-notifications.md`.
+  `docs/plans/tasks/174b-desktop-os-notifications.md`, and the `174f` preference
+  and localization surface records its own per-platform evidence in
+  `docs/plans/tasks/174f-notification-preferences-and-verification.md`.

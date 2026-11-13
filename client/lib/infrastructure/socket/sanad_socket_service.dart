@@ -85,6 +85,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     SocketConnectionController? connectionController,
     SocketCommandTransport? commandTransport,
     HostedMediaRelayClient? mediaRelayClient,
+    Map<String, dynamic>? Function()? notificationDeclaration,
   }) : _hardwareId = hardwareId {
     _connectionController = connectionController ??
         SocketConnectionController(
@@ -98,6 +99,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
           localTransportEnabled: localTransportEnabled,
           localReconnectDelay: localReconnectDelay,
           cloudSocketFactory: cloudSocketFactory,
+          notificationDeclaration: notificationDeclaration,
         );
 
     _mediaRelayClient = mediaRelayClient ??
@@ -120,6 +122,7 @@ class SanadSocketService implements ISocketService, ISocketGateway {
     LocalGatewayCredentialProvider credentialProvider = const LocalGatewayCredentialProvider(),
     bool enabled = true,
     Duration Function(int attempt)? reconnectDelay,
+    Map<String, dynamic>? Function()? notificationDeclaration,
   }) {
     return SanadSocketService(
       url: url,
@@ -130,8 +133,17 @@ class SanadSocketService implements ISocketService, ISocketGateway {
       localCredentialProvider: credentialProvider,
       localTransportEnabled: enabled,
       localReconnectDelay: reconnectDelay,
+      notificationDeclaration: notificationDeclaration,
     );
   }
+
+  /// Re-declares this device's notification choices to the connected Agent.
+  ///
+  /// Called when the user changes them. A no-op while disconnected, because the
+  /// stored choice is already the device's answer and the next registration
+  /// carries it.
+  void publishNotificationPreferences() =>
+      _connectionController.publishNotificationPreferences();
 
   void _wireConnectionHandlers() {
     _connectionController.onRelayEvent = (event, data) {

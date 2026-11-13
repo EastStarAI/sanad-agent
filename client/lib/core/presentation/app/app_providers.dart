@@ -90,6 +90,12 @@ class AppProviders extends StatelessWidget {
             final cubit = NotificationSettingsCubit(
               store: getIt<NotificationPreferencesStore>(),
               adapter: getIt<NotificationPlatformAdapter>(),
+              // A change belongs to this device, so it is re-declared to the
+              // Agent this Client is attached to. It never travels through the
+              // account: no other device's choices change, and the relay only
+              // forwards an opaque registration field.
+              publishPreferences: (_) => connectionCoordinator.localSocketService
+                  .publishNotificationPreferences(),
             );
             unawaited(cubit.load());
             return cubit;
