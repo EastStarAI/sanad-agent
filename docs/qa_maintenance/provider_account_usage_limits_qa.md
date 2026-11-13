@@ -29,6 +29,21 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | Credential needs sign-in | `auth_required` is returned with no raw provider error. |
 | Response request or provider instance does not match the pending request | The client ignores it. |
 
+## OpenCode Go adapter
+
+| Scenario | Expected result |
+|---|---|
+| Account returns rolling, weekly, and monthly windows | Exactly Session, Weekly, and Monthly cross the protocol with used percentages and UTC reset timestamps. |
+| `rolling` is absent | Only Weekly and Monthly render; no Session placeholder is created. |
+| `percent` is zero | The window renders as 0% used / 100% remaining. |
+| Row omits `resetsAt` | The row renders without a reset line. |
+| Payload contains no usable window | The result is `unavailable` with a Retry affordance, never an empty card. |
+| Endpoint returns `401` or `403` | The result is `auth_required` and the provider card keeps its status. |
+| Endpoint returns `404`, `429`, or `5xx` | The result is `unavailable`; Retry is offered. |
+| Snapshot has zero reset credits | No reset action is rendered. |
+| Instance uses an API key and usage needs a credential | `Update API key` opens the instance edit form; OAuth reconnect never starts. |
+| Instance uses an account and usage needs a credential | `Reconnect` still runs the shared account re-authentication. |
+
 ## Freshness and concurrency
 
 | Scenario | Expected result |

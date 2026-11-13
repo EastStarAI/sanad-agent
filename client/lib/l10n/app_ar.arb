@@ -819,8 +819,13 @@
   "providerUsageResetExhaustedBody": "{message} تعيد إعادة الضبط كامل الحصة ولا يمكن التراجع عنها.",
   "providerUsageResetAnyway": "إعادة الضبط على أي حال",
   "providerUsageAuthRequired": "يلزم تسجيل الدخول إلى الحساب لعرض حدود الاستخدام.",
+  "providerUsageApiKeyRequired": "حدّث مفتاح API لهذا المزود لعرض حدود الاستخدام.",
   "providerUsageUnavailable": "معلومات الاستخدام غير متاحة مؤقتًا. أعد المحاولة.",
   "providerUsageFailed": "تعذّر تحميل معلومات الاستخدام. أعد المحاولة.",
   "providerUsageRetry": "إعادة المحاولة",
-  "providerUsageReconnect": "إعادة الربط"
+  "providerUsageReconnect": "إعادة الربط",
+  "providerUsageUpdateApiKey": "تحديث مفتاح API",
+  "providerUsageWindowSession": "الجلسة",
+  "providerUsageWindowWeekly": "أسبوعي",
+  "providerUsageWindowMonthly": "شهري"
 }

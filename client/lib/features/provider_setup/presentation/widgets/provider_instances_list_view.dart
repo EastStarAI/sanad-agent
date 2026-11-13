@@ -332,6 +332,11 @@ class _InstanceCard extends StatelessWidget {
             // form exposes (issue 339 review 2).
             onReconnect: () =>
                 unawaited(context.read<ProviderSetupCubit>().reconnectInstance(instance)),
+            // A static API key cannot be repaired by the OAuth reconnect
+            // flow; send that case to the same edit form the card exposes.
+            isApiKeyAuth: instance.authMethod == 'api_key',
+            onUpdateCredential: () =>
+                context.read<ProviderSetupCubit>().selectInstanceForEdit(instance),
           ),
           const SizedBox(height: 12),
           const Divider(height: 1),
