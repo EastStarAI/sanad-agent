@@ -1348,6 +1348,7 @@
   "notificationsPermissionNotAskedBody": "Sanad has not asked for notification permission yet. Turn it on when you are ready.",
   "notificationsPermissionDeniedBody": "Notifications are turned off for Sanad in your system settings. Open them to allow alerts.",
   "notificationsPermissionUnavailableBody": "This system has no notification service available right now.",
+  "notificationsAskFallback": "your request",
   "notificationsUnsupportedBody": "Desktop notifications are available in the Sanad desktop app.",
   "notificationsEnable": "Enable notifications",
   "notificationsOpenSettings": "Open system settings",
@@ -1364,28 +1365,78 @@
   "notificationsKindProviderQuota": "Provider limits",
   "notificationsKindConnectionLost": "Lost connection",
   "notificationsKindAuthRequired": "Sign-in required",
-  "notificationTitlePermissionRequest": "Approval needed",
-  "notificationTitleUserQuestion": "Answer needed",
-  "notificationTitleBlocked": "Session blocked",
-  "notificationTitleFailed": "Run failed",
-  "notificationTitleCompleted": "Run finished",
-  "notificationTitleBackgroundTaskDone": "Background task finished",
-  "notificationTitleScheduledResult": "Schedule produced a result",
-  "notificationTitleProviderQuota": "Provider limit reached",
-  "notificationTitleConnectionLost": "Connection lost",
-  "notificationTitleAuthRequired": "Sign-in required",
-  "notificationBodyPermissionRequest": "A session is waiting for your approval.",
-  "notificationBodyUserQuestion": "A session is waiting for your answer.",
-  "notificationBodyBlocked": "A session cannot continue without you.",
-  "notificationBodyFailed": "A run ended in a failure.",
-  "notificationBodyCompleted": "A run produced the requested result.",
-  "notificationBodyBackgroundTaskDone": "A background command finished.",
-  "notificationBodyScheduledResult": "A scheduled run produced a result.",
-  "notificationBodyProviderQuota": "The selected provider is exhausted or rate limited.",
-  "notificationBodyConnectionLost": "Sanad can no longer reach the agent.",
-  "notificationBodyAuthRequired": "Sign in again to keep receiving updates.",
+  "notificationPermissionRequestTitle": "Approval needed",
+  "notificationUserQuestionTitle": "Answer needed",
+  "notificationBlockedTitle": "Session blocked",
+  "notificationFailedTitle": "Run failed",
+  "notificationCompletedTitle": "Run finished",
+  "notificationBackgroundTaskDoneTitle": "Background task finished",
+  "notificationScheduledResultTitle": "Schedule produced a result",
+  "notificationProviderQuotaTitle": "Provider limit reached",
+  "notificationConnectionLostTitle": "Connection lost",
+  "notificationAuthRequiredTitle": "Sign-in required",
+  "@notificationPermissionRequestBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "@notificationUserQuestionBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationPermissionRequestBody": "Approval requested: {ask}",
+  "notificationUserQuestionBody": "{ask}",
+  "notificationBlockedBody": "A session cannot continue without you.",
+  "@notificationFailedBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationFailedBody": "{ask}",
+  "@notificationCompletedBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationCompletedBody": "{ask}",
+  "@notificationBackgroundTaskDoneBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationBackgroundTaskDoneBody": "{ask}",
+  "@notificationScheduledResultBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationScheduledResultBody": "{ask}",
+  "@notificationProviderQuotaBody": {
+    "placeholders": {
+      "ask": {
+        "type": "String"
+      }
+    }
+  },
+  "notificationProviderQuotaBody": "{ask}",
+  "notificationConnectionLostBody": "Sanad can no longer reach the agent.",
+  "notificationAuthRequiredBody": "Sign in again to keep receiving updates.",
   "notificationActionOpen": "Open",
   "notificationActionAllowOnce": "Allow once",
+  "notificationActionAnswer": "Answer",
   "notificationActionAllowSession": "Allow for this session",
   "notificationActionDeny": "Deny"
 }

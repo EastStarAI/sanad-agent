@@ -14,6 +14,9 @@ class NotificationCopySource {
 
   final AppLocalizations _localizations;
 
+  /// Neutral stand-in for the ask sentence when a payload arrives without copy.
+  String get _askFallback => _localizations.notificationsAskFallback;
+
   /// Buttons offered with an approval ask, in the order the OS shows them.
   Map<NotificationActionIntent, String> get approvalActionLabels =>
       <NotificationActionIntent, String>{
@@ -30,29 +33,36 @@ class NotificationCopySource {
       );
 
   String _title(NotificationKind kind) => switch (kind) {
-        NotificationKind.permissionRequest => _localizations.notificationTitlePermissionRequest,
-        NotificationKind.userQuestion => _localizations.notificationTitleUserQuestion,
-        NotificationKind.blocked => _localizations.notificationTitleBlocked,
-        NotificationKind.failed => _localizations.notificationTitleFailed,
-        NotificationKind.completed => _localizations.notificationTitleCompleted,
-        NotificationKind.backgroundTaskDone => _localizations.notificationTitleBackgroundTaskDone,
-        NotificationKind.scheduledResult => _localizations.notificationTitleScheduledResult,
-        NotificationKind.providerQuota => _localizations.notificationTitleProviderQuota,
-        NotificationKind.connectionLost => _localizations.notificationTitleConnectionLost,
-        NotificationKind.authRequired => _localizations.notificationTitleAuthRequired,
+        NotificationKind.permissionRequest => _localizations.notificationPermissionRequestTitle,
+        NotificationKind.userQuestion => _localizations.notificationUserQuestionTitle,
+        NotificationKind.blocked => _localizations.notificationBlockedTitle,
+        NotificationKind.failed => _localizations.notificationFailedTitle,
+        NotificationKind.completed => _localizations.notificationCompletedTitle,
+        NotificationKind.backgroundTaskDone => _localizations.notificationBackgroundTaskDoneTitle,
+        NotificationKind.scheduledResult => _localizations.notificationScheduledResultTitle,
+        NotificationKind.providerQuota => _localizations.notificationProviderQuotaTitle,
+        NotificationKind.connectionLost => _localizations.notificationConnectionLostTitle,
+        NotificationKind.authRequired => _localizations.notificationAuthRequiredTitle,
       };
 
   String _body(NotificationKind kind) => switch (kind) {
-        NotificationKind.permissionRequest => _localizations.notificationBodyPermissionRequest,
-        NotificationKind.userQuestion => _localizations.notificationBodyUserQuestion,
-        NotificationKind.blocked => _localizations.notificationBodyBlocked,
-        NotificationKind.failed => _localizations.notificationBodyFailed,
-        NotificationKind.completed => _localizations.notificationBodyCompleted,
-        NotificationKind.backgroundTaskDone => _localizations.notificationBodyBackgroundTaskDone,
-        NotificationKind.scheduledResult => _localizations.notificationBodyScheduledResult,
-        NotificationKind.providerQuota => _localizations.notificationBodyProviderQuota,
-        NotificationKind.connectionLost => _localizations.notificationBodyConnectionLost,
-        NotificationKind.authRequired => _localizations.notificationBodyAuthRequired,
+        NotificationKind.permissionRequest => _localizations
+            .notificationPermissionRequestBody(_askFallback),
+        NotificationKind.userQuestion =>
+          _localizations.notificationUserQuestionBody(_askFallback),
+        NotificationKind.blocked => _localizations.notificationBlockedBody,
+        NotificationKind.failed =>
+          _localizations.notificationFailedBody(_askFallback),
+        NotificationKind.completed =>
+          _localizations.notificationCompletedBody(_askFallback),
+        NotificationKind.backgroundTaskDone =>
+          _localizations.notificationBackgroundTaskDoneBody(_askFallback),
+        NotificationKind.scheduledResult =>
+          _localizations.notificationScheduledResultBody(_askFallback),
+        NotificationKind.providerQuota =>
+          _localizations.notificationProviderQuotaBody(_askFallback),
+        NotificationKind.connectionLost => _localizations.notificationConnectionLostBody,
+        NotificationKind.authRequired => _localizations.notificationAuthRequiredBody,
       };
 
   /// The localized label for one kind, used by the per-kind Settings switches.

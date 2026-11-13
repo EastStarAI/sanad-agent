@@ -25,28 +25,18 @@ import 'package:test/test.dart';
 /// Client strings. Every entry leaving this set must be matched by the same
 /// key and the same placeholders in `client/lib/l10n/app_en.arb`, and the list
 /// must shrink to empty when `174f` lands.
-const Set<String> _expectedMissingClientKeys = {
-  'notificationActionAllowOnce',
-  'notificationActionAllowSession',
-  'notificationActionAnswer',
-  'notificationActionDeny',
-  'notificationActionOpen',
-  'notificationBackgroundTaskDoneBody',
-  'notificationBackgroundTaskDoneTitle',
-  'notificationBlockedBody',
-  'notificationBlockedTitle',
-  'notificationCompletedBody',
-  'notificationCompletedTitle',
-  'notificationFailedBody',
-  'notificationFailedTitle',
-  'notificationPermissionRequestBody',
-  'notificationPermissionRequestTitle',
-  'notificationProviderQuotaBody',
-  'notificationProviderQuotaTitle',
-  'notificationScheduledResultBody',
-  'notificationScheduledResultTitle',
-  'notificationUserQuestionBody',
-  'notificationUserQuestionTitle',
+const Set<String> _expectedMissingClientKeys = <String>{};
+
+/// Notification copy keys the Client owns for kinds the Agent never copies.
+///
+/// `authRequired` and `connectionLost` are decided by the Client alone, so the
+/// Agent carries no template for them and the parity check must not demand one.
+/// Every other Client key that starts with `notification` is shared vocabulary.
+const Set<String> _clientOnlyKeys = <String>{
+  'notificationAuthRequiredTitle',
+  'notificationAuthRequiredBody',
+  'notificationConnectionLostTitle',
+  'notificationConnectionLostBody',
 };
 
 final RegExp _placeholderPattern = RegExp(r'\{([a-zA-Z][a-zA-Z0-9]*)\}');
@@ -77,12 +67,15 @@ void main() {
     });
 
     test('the Client authors no notification key the Agent does not know', () {
-      final clientNotificationKeys = _messageKeys(
-        english,
-      ).where((key) => key.startsWith('notification')).toSet();
+      final clientNotificationKeys = _messageKeys(english)
+          .where((key) => key.startsWith('notification'))
+          .where((key) => !key.startsWith('notifications'))
+          .toSet();
 
       expect(
-        clientNotificationKeys.difference(NotificationCopy.clientKeys),
+        clientNotificationKeys
+            .difference(NotificationCopy.clientKeys)
+            .difference(_clientOnlyKeys),
         isEmpty,
         reason:
             'A Client notification key has no Agent counterpart, so the '
