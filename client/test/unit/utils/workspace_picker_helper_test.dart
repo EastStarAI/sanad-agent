@@ -1,7 +1,6 @@
-// The platform interface is the seam `file_selector` calls through; it ships
-// with the package but is only a transitive dependency, so it is referenced
-// directly here without a pubspec entry.
-// ignore: depend_on_referenced_packages
+// The platform interface is the seam `file_selector` calls through; it is a
+// declared dev dependency so this test can stub it and assert on the request
+// the host panel would read.
 import 'package:file_selector_platform_interface/file_selector_platform_interface.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';

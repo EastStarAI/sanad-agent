@@ -44,9 +44,10 @@ class WorkspacePickerHelper {
       if (debugOverride != null) {
         return debugOverride();
       }
-      // macOS `NSOpenPanel` defaults `canCreateDirectories` to false and
-      // `file_selector_macos` only forwards a non-null value, so the request
-      // must be explicit or the panel hides the New Folder affordance.
+      // The AppKit header documents a `YES` default for both directory panels,
+      // but this panel offered folder creation only when the value was sent
+      // explicitly (a runtime observation), and `file_selector_macos` forwards
+      // only non-null values; send the flag rather than rely on that default.
       return getDirectoryPath(
         confirmButtonText: confirmButtonText,
         canCreateDirectories: true,

@@ -59,8 +59,8 @@ A confirmed same-desktop local device picks its folder in the host's native dire
 
 | Platform | Contract |
 |---|---|
-| macOS | `NSOpenPanel.canCreateDirectories` is `false` at runtime unless the caller sets it, and `file_selector_macos` only assigns the property when the request carries a non-null value. The Client therefore sends `canCreateDirectories: true` explicitly; without that request the panel hides the New Folder affordance and a workspace can only adopt a folder that already exists. The AppKit `NSSavePanel.h` header documents a `YES` default, but that describes `NSSavePanel` (`true` there), not `NSOpenPanel`, so the header is not evidence for this panel. |
-| Windows | The Windows implementation carries no `canCreateDirectories` handling: its native folder dialog already offers folder creation and the request value is ignored, so the explicit request is a behaviour-preserving no-op there. |
+| macOS | `file_selector_macos` assigns the panel property only when the request carries a non-null value. The AppKit `NSSavePanel.h` header documents a default of `YES` for both `NSSavePanel` and `NSOpenPanel`, but this panel offered folder creation only when the Client sent `canCreateDirectories: true` explicitly (a runtime observation); without that request the New Folder affordance stays hidden and a workspace can only adopt a folder that already exists, so the Client always sends the flag rather than relying on the documented default. |
+| Windows | `file_selector_windows` carries no `canCreateDirectories` handling at all, so the plugin ignores the option and the explicit request cannot change the dialog there. The native Windows dialog's own folder-creation behaviour was not verified. |
 | Linux | `file_selector_linux` forwards the value as the GTK chooser's `create-folders` flag and keeps GTK's default, which already allows creating folders. |
 
 The flag is a request, never an authorization: the daemon still validates and registers the chosen path under its own workspace rules.
