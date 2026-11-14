@@ -62,7 +62,7 @@ dependencies:
   auto_updater: ^1.0.0
   path_provider: ^2.1.5
   path: ^1.9.1
-  file_selector: ^1.0.3
+  file_selector: ^1.1.0
   archive: ^4.0.7
   package_info_plus: ^9.0.0
   sanad_release_contract:
@@ -113,6 +113,10 @@ dev_dependencies:
   # attachment. A hand-rolled JSON check would accept the malformed shape that
   # the Gateway refuses. Never import it from `lib/`.
   socket_io_common: ^3.1.1
+  # Test-only: the workspace picker test asserts on the platform interface that
+  # `file_selector` calls through, so the seam it stubs is declared directly
+  # instead of being relied on as a transitive dependency.
+  file_selector_platform_interface: ^2.7.0
 
   # The "flutter_lints" package below contains a set of recommended lints to
   # encourage good coding practices. The lint set provided by the package is
