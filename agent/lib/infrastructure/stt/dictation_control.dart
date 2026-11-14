@@ -161,11 +161,17 @@ class DictationControl {
           final started = _service.prepareNativeRuntime();
           emit('stt_status', _service.statusPayload());
           if (!started) {
+            // Preparation is managed: `sanad-dev setup` awaits the acquisition
+            // tool in a source checkout, and a released Agent re-installs the
+            // verified runtime. Naming a raw developer command here was a dead
+            // end, because it fails under exactly the conditions that reach it.
             emit('dictation_error', {
               'code': 'prepare_unavailable',
               'reason': 'prepare_unavailable',
               'message':
-                  'Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.',
+                  'this build cannot prepare the native dictation runtime; a '
+                  'source checkout prepares it with sanad-dev setup, and a '
+                  'released Agent re-installs the verified runtime',
             });
           }
         default:

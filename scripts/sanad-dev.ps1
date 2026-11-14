@@ -61,7 +61,7 @@ Sanad development launcher
 Usage:
   sanad-dev                         Show this help without changing the environment.
   sanad-dev install [--force]       Install/verify FVM, pinned Flutter, and the user command.
-  sanad-dev setup [--force]         Ensure install, then resolve Contract, Agent, and Client packages.
+  sanad-dev setup [--force]         Ensure install, resolve every package, and prepare native dictation.
   sanad-dev run [all|agent|client]  Ensure install/setup, then launch the requested runtime.
   sanad-dev <runtime-command>       Run status, logs, restart, reload, stop, doctor, or switch.
 
@@ -330,11 +330,147 @@ function Invoke-Install([bool] $AllowExistingShim) {
   return $fvm
 }
 
-function Invoke-Setup([bool] $AllowExistingShim) {
+function Invoke-Setup([bool] $AllowExistingShim, [bool] $PrepareDictation = $false) {
   $fvm = Invoke-Install $AllowExistingShim
   Ensure-Dependencies $fvm
   Ensure-RuntimeCli $fvm | Out-Null
+  if ($PrepareDictation) { Invoke-DictationPreparation $fvm }
   return $fvm
+}
+
+# Prepares the native dictation runtime for this checkout, and waits for it.
+#
+# `agent/native/<tag>/` is not tracked in git, so a fresh checkout has no
+# runtime, and `agent/tool/ensure_native_stt.dart` is the one owner of download,
+# build, and verification. `setup` runs it here and reports the tool's own typed
+# result; `run` never waits, because the launcher starts the same tool detached
+# so the daemon can come up immediately. A failure is dictation-only: it is
+# reported with its stage, the durable log, and the managed retry, and never
+# fails setup.
+function Invoke-DictationPreparation([string] $FvmPath) {
+  $agentDir = Join-Path $ProjectDir 'agent'
+  $nativeDir = Join-Path $agentDir 'native'
+  $log = Join-Path $nativeDir '.stt-prepare.log'
+  $name = 'Preparing native dictation'
+  New-Item -ItemType Directory -Force -Path $nativeDir | Out-Null
+  # The log is the only durable record a failed build leaves behind, so it is
+  # kept on every platform, bounded rather than discarded to the null device.
+  Bound-DictationLog $log
+  if (-not (Test-Path $log)) { New-Item -ItemType File -Path $log | Out-Null }
+  $startOffset = (Get-Item $log).Length
+  Write-Host "`n==> $name"
+  $watch = [Diagnostics.Stopwatch]::StartNew()
+  # One appended handle, flushed per line: the build streams into the log as it
+  # runs, so an interrupted attempt keeps everything it produced, and memory
+  # never holds the whole compiler output.
+  $writer = [IO.StreamWriter]::new(
+    $log, $true, [Text.UTF8Encoding]::new($false))
+  $writer.AutoFlush = $true
+  Push-Location $agentDir
+  try {
+    $previousEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+      & $FvmPath dart run tool/ensure_native_stt.dart 2>&1 |
+        ForEach-Object {
+          # PS 5.1 wraps each stderr line in an ErrorRecord whose ToString()
+          # degrades to the exception type; TargetObject keeps the real line.
+          if ($_ -is [System.Management.Automation.ErrorRecord]) {
+            $writer.WriteLine([string]$_.TargetObject)
+          } else {
+            $writer.WriteLine("$_")
+          }
+        }
+    } catch {
+      $writer.WriteLine(
+        "sanad-dev: dictation preparation could not run: $($_.Exception.Message)")
+    } finally {
+      $ErrorActionPreference = $previousEap
+    }
+  } finally {
+    Pop-Location
+    $writer.Dispose()
+    $watch.Stop()
+  }
+  $result = Read-DictationResult $log $startOffset
+  $seconds = [int]$watch.Elapsed.TotalSeconds
+  if ($result -eq 'ready') {
+    Write-Stage $name "ready ($($seconds)s)"
+    return
+  }
+  if ($result -eq 'busy') {
+    # Another attempt holds the claim. The tool takes over a claim whose owner is
+    # gone, so reaching this means that attempt is genuinely live.
+    Write-Stage $name "already running ($($seconds)s)"
+    Write-Host '  another attempt is preparing dictation; it reports to'
+    Write-Host '  agent/native/.stt-prepare.log when it finishes'
+    return
+  }
+  Write-Stage $name "unavailable ($($seconds)s)"
+  # Only this attempt's output: a previous attempt's keys must never read as this
+  # failure's cause.
+  Read-DictationTail $log $startOffset | ForEach-Object { Write-Host $_ }
+  Write-Host 'Dictation is unavailable; the Agent runs without it.'
+  Write-Host '  log:   agent/native/.stt-prepare.log'
+  Write-Host '  retry: sanad-dev setup'
+}
+
+# The last lines this attempt wrote, for the failure report.
+function Read-DictationTail([string] $Log, [long] $Offset) {
+  if (-not (Test-Path $Log)) { return }
+  $stream = [IO.File]::Open($Log, 'Open', 'Read', 'ReadWrite')
+  try {
+    if ($stream.Length -le $Offset) { return }
+    [void]$stream.Seek($Offset, [IO.SeekOrigin]::Begin)
+    $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+    $lines = [Collections.Generic.List[string]]::new()
+    while (-not $reader.EndOfStream) {
+      $line = $reader.ReadLine()
+      if ($null -eq $line) { break }
+      $lines.Add($line)
+    }
+    $tail = [Math]::Max(0, $lines.Count - 12)
+    for ($i = $tail; $i -lt $lines.Count; $i++) { $lines[$i] }
+  } finally {
+    $stream.Dispose()
+  }
+}
+
+# Resets the durable preparation log to one header line when it outgrew its
+# bound, so a repeated retry can never grow it without limit.
+function Bound-DictationLog([string] $Log) {
+  if ((Test-Path $Log) -and ((Get-Item $Log).Length -gt 1048576)) {
+    [IO.File]::WriteAllText(
+      $Log,
+      "# native dictation preparation log reset: the previous attempt exceeded 1048576 bytes`n",
+      [Text.UTF8Encoding]::new($false))
+  }
+}
+
+# The machine key this attempt ended with, read from its own slice of the log.
+#
+# Everything before [Offset] belongs to a previous attempt (or to the daemon), so
+# parsing only the new bytes keeps a stale `ready` from answering for a failure.
+function Read-DictationResult([string] $Log, [long] $Offset) {
+  if (-not (Test-Path $Log)) { return '' }
+  $stream = [IO.File]::Open($Log, 'Open', 'Read', 'ReadWrite')
+  try {
+    if ($stream.Length -le $Offset) { return '' }
+    [void]$stream.Seek($Offset, [IO.SeekOrigin]::Begin)
+    $reader = [IO.StreamReader]::new($stream, [Text.UTF8Encoding]::new($false))
+    $result = ''
+    while (-not $reader.EndOfStream) {
+      $line = $reader.ReadLine()
+      if ($null -eq $line) { break }
+      $trimmed = $line.Trim()
+      if ($trimmed.StartsWith('native_stt_result=')) {
+        $result = $trimmed.Substring('native_stt_result='.Length).Trim()
+      }
+    }
+    return $result
+  } finally {
+    $stream.Dispose()
+  }
 }
 
 function Test-RuntimeCommandToleratesStaleCli {
@@ -392,11 +528,15 @@ try {
     exit 0
   }
   if ($command -eq 'setup') {
-    Invoke-Setup $true | Out-Null
+    Invoke-Setup $true $true | Out-Null
     exit 0
   }
   if ($command -in @('run', 'switch')) {
-    Invoke-Setup $true | Out-Null
+    # `run` never waits for a build: the launcher starts the same acquisition
+    # tool detached so the daemon and Client come up immediately. `setup` above
+    # awaits that tool instead, and `switch` prepares nothing because it only
+    # moves an already-running runtime group.
+    $fvm = Invoke-Setup $true $false
   }
   $runtimeCli = Require-RuntimeCli $command
   [string[]] $runtimeArgs = if ($command -eq 'run') {
@@ -405,6 +545,10 @@ try {
     [string[]]@($SanadArgs)
   }
   $env:SANAD_DEV_CALLER_DIR = $CallerDir
+  # The resolved FVM travels with the launcher: the detached dictation attempt it
+  # starts runs through a shell, which does not inherit `$fvm`. Commands that did
+  # not bootstrap leave it unset, and the launcher then falls back to `fvm`.
+  if ($fvm) { $env:SANAD_DEV_FVM_BIN = $fvm }
   Push-Location (Join-Path $ProjectDir 'client')
   try { & $runtimeCli @runtimeArgs; exit $LASTEXITCODE }
   finally { Pop-Location }

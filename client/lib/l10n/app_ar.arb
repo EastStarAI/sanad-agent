@@ -518,7 +518,7 @@
   "dictationNotHosted": "غير متاح للتنزيل بعد",
   "dictationUnavailableTitle": "الإملاء غير متاح على هذا الجهاز",
   "dictationRuntimePreparing": "جارٍ تجهيز محرك التفريغ (تنزيل أو بناء قيد التنفيذ)…",
-  "dictationRuntimeMissing": "محرك التفريغ غير مثبّت بعد. نفّذ `fvm dart run tool/ensure_native_stt.dart` داخل مجلد الوكيل.",
+  "dictationRuntimeMissing": "محرك التفريغ غير مثبّت بعد. يُجهّزه مشغّل Sanad تلقائيًا؛ استخدم «تجهيز الآن» لإعادة المحاولة.",
   "dictationRuntimeInstallFailed": "تعذّر تثبيت محرك التفريغ مع هذا الوكيل. الوكيل نفسه مثبّت ويعمل؛ استخدم «تجهيز الآن» لإعادة محاولة التنزيل.",
   "dictationUnsupportedPlatform": "هذه المنصة غير مدعومة بعد.",
   "dictationNotReadyTooltip": "الإملاء غير جاهز · اضغط للتفاصيل",
