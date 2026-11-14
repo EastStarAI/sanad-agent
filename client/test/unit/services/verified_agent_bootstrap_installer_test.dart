@@ -358,6 +358,50 @@ void main() {
     expect(File(target).readAsBytesSync(), bytes);
   });
 
+  // The Client shares the release contract with the Agent, so a manifest that
+  // adds a component after this build was compiled must not break Agent
+  // bootstrap: the unknown target is ignored and the selected artifact is still
+  // verified by size, SHA-256, and trust policy.
+  test('accepts a manifest that declares a target this build predates', () async {
+    final bytes = utf8.encode('forward-compatible-agent');
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: _sha256OfBytes(bytes),
+    );
+    manifest['artifacts'] = [
+      ...manifest['artifacts']! as List,
+      {
+        'component': 'agent-launcher',
+        'platform': 'macos',
+        'architecture': 'x64',
+        'format': 'executable',
+        'filename': 'sanad-agent-launcher-1.1.0-macos-x64',
+        'url':
+            'https://github.com/EastStarAI/sanad-agent/releases/download/'
+            'v1.1.0/sanad-agent-launcher-1.1.0-macos-x64',
+        'sha256': _sha256OfBytes([1, 2, 3]),
+        'size': 3,
+        'public': true,
+        'signature_type': 'github-attestation',
+      },
+    ];
+    final target = '${temporaryDirectory.path}/bin/sanad';
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target,
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient((request) async {
+        if (request.url.path.endsWith('release-manifest.json')) {
+          return http.Response(jsonEncode(manifest), 200);
+        }
+        return http.Response.bytes(bytes, 200);
+      }),
+    );
+
+    expect((await installer.install(targetVersion: '1.1.0')).isSuccess, isTrue);
+    expect(File(target).readAsBytesSync(), bytes);
+  });
+
   test('isolated artifact mirror keeps canonical manifest trust metadata', () async {
     final bytes = utf8.encode('mirrored-agent');
     final artifactFile = File('${temporaryDirectory.path}/artifact')..writeAsBytesSync(bytes);

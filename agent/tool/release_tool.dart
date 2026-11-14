@@ -218,6 +218,9 @@ Future<void> _generateManifest(
     'repository': repository,
     'artifacts': generated,
   });
+  // A release may not publish a target its own build cannot verify, so a new
+  // component is introduced together with its trust-policy entry.
+  manifest.requireKnownTrustTargets();
   final outputFile = File(output);
   await outputFile.parent.create(recursive: true);
   await outputFile.writeAsString(
@@ -234,6 +237,7 @@ Future<void> _verifyManifest(
   final manifest = ReleaseManifest.fromJsonString(
     await manifestFile.readAsString(),
   );
+  manifest.requireKnownTrustTargets();
   if (artifactsDirectory != null) {
     final directory = Directory(artifactsDirectory).absolute;
     for (final artifact in manifest.artifacts) {

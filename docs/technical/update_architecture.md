@@ -11,14 +11,47 @@ description: "The shared release manifest and the update ownership of the Sanad 
 canonical artifact names, supported platform/architecture pairs, and exact
 signature metadata. `release/contract/` parses both that contract and generated
 manifests. A manifest is accepted only when its schema, repository, tag,
-channel, version, commit, canonical URL, positive size, SHA-256, and exact
-component/platform signature type are valid.
+channel, version, commit, canonical URL, positive size, and SHA-256 are valid
+for every artifact, and when every artifact whose `component:platform` this
+build knows carries its exact signature metadata.
 
 `ReleaseArtifactTrustPolicy` is the shared metadata authority used by manifest
 validation, Client bootstrap, and Agent update. Unknown or empty signature
 metadata fails closed. Runtime checksum verification is distinct from protected
 release-pipeline provenance verification: a runtime never claims to validate a
 GitHub attestation locally.
+
+### Forward compatibility and the publisher gate
+
+A release may add a component or platform after an Agent or Client was
+compiled, and an installed binary cannot self-update past a parse failure. The
+manifest is therefore split into two rules that never trade one for the other:
+
+- **Parsing is forward-compatible.** `ReleaseManifest.validate()` resolves trust
+  metadata only for a target `ReleaseArtifactTrustPolicy.isKnownTarget`
+  recognizes. An additive target is ignored, never trusted: it stays listed in
+  `ReleaseManifest.unrecognizedTrustTargets`, and every structural rule
+  (repository, tag/version/channel, commit shape, duplicate filename, SHA-256
+  shape, positive size, HTTPS, marketing version, canonical URL) still applies
+  to it.
+- **Verification of what is installed is unchanged and mandatory.** A runtime
+  selects only the components it knows (`agent`, then `agent-runtime`), and
+  `validateMetadata` plus `verifyReleaseArtifactTrustDetailed` still run on the
+  selected artifact before download and before replacement. A known target with
+  a wrong, empty, or missing `signature_type` therefore still fails closed at
+  the same diagnostic stage as before.
+- **Publishing stays strict.** `ReleaseManifest.requireKnownTrustTargets()` is
+  called by `generate-manifest` and `verify-manifest`, so a release refuses to
+  publish a target its own build cannot verify; a new component is introduced
+  together with its policy entry in the same change.
+
+The remaining boundary is deliberate and documented rather than fixed: an
+install **older than a newly introduced target** still cannot parse a manifest
+that carries it, so it needs out-of-band recovery (see
+[Legacy Agent recovery](#legacy-agent-recovery)). The same applies to changing
+an existing target's trust metadata — for example the documented Windows
+Authenticode transition — which a pre-change binary correctly rejects and which
+needs its own bridge or recovery path.
 
 ## Trust by platform
 

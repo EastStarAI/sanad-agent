@@ -168,6 +168,188 @@ void main() {
     });
   });
 
+  // A release may add a component or platform after an Agent or Client was
+  // compiled, and that install can never self-update past a parse failure. The
+  // manifest therefore parses forward-compatibly while every artifact that is
+  // actually installed is still verified strictly.
+  group('forward-compatible parsing', () {
+    Map<String, dynamic> artifact({
+      required String component,
+      required String platform,
+      required String filename,
+      String format = 'executable',
+      String signatureType = 'github-attestation',
+    }) => {
+      'component': component,
+      'platform': platform,
+      'architecture': 'x64',
+      'format': format,
+      'filename': filename,
+      'url':
+          'https://github.com/EastStarAI/sanad-agent/releases/download/'
+          'v1.1.0/$filename',
+      'sha256': _sha256ForTest([1, 2, 3]),
+      'size': 3,
+      'public': true,
+      'signature_type': signatureType,
+    };
+
+    /// A component no shipping build knows: the exact shape of a target added
+    /// after this code was compiled.
+    Map<String, dynamic> futureTarget() => artifact(
+      component: 'agent-launcher',
+      platform: 'macos',
+      filename: 'sanad-agent-launcher-1.1.0-macos-x64',
+    );
+
+    Map<String, dynamic> manifestWith(List<Map<String, dynamic>> artifacts) {
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      json['artifacts'] = artifacts;
+      return json;
+    }
+
+    Map<String, dynamic> localAgent() => Map<String, dynamic>.from(
+      (_manifestJson(bytes: [1, 2, 3])['artifacts']! as List).single as Map,
+    );
+
+    test('parses the component set that first shipped the native runtime', () {
+      final manifest = ReleaseManifest.fromJson(
+        manifestWith([
+          localAgent(),
+          artifact(
+            component: 'agent-runtime',
+            platform: 'linux',
+            filename: 'sanad-agent-runtime-1.1.0-linux-x64.tar.gz',
+            format: 'tar.gz',
+          ),
+        ]),
+      );
+
+      expect(manifest.unrecognizedTrustTargets, isEmpty);
+      expect(
+        manifest.findArtifact(
+          component: 'agent',
+          platform: 'linux',
+          architecture: 'x64',
+        ),
+        isNotNull,
+      );
+      expect(
+        manifest.findArtifact(
+          component: 'agent-runtime',
+          platform: 'linux',
+          architecture: 'x64',
+        ),
+        isNotNull,
+      );
+    });
+
+    test('ignores a trust target this build was compiled before', () {
+      final manifest = ReleaseManifest.fromJson(
+        manifestWith([
+          localAgent(),
+          futureTarget(),
+          artifact(
+            component: 'agent',
+            platform: 'freebsd',
+            filename: 'sanad-agent-1.1.0-freebsd-x64',
+          ),
+        ]),
+      );
+
+      expect(manifest.artifacts, hasLength(3));
+      expect(manifest.unrecognizedTrustTargets, [
+        'agent-launcher:macos',
+        'agent:freebsd',
+      ]);
+      expect(
+        manifest.findArtifact(
+          component: 'agent',
+          platform: 'linux',
+          architecture: 'x64',
+        ),
+        isNotNull,
+      );
+    });
+
+    test('still fails closed for a known target with wrong trust metadata', () {
+      expect(
+        () => ReleaseManifest.fromJson(
+          manifestWith([
+            {...localAgent(), 'signature_type': 'authenticode'},
+            futureTarget(),
+          ]),
+        ),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('still fails closed for a known target with no trust metadata', () {
+      final agent = localAgent()..remove('signature_type');
+
+      expect(
+        () => ReleaseManifest.fromJson(manifestWith([agent])),
+        throwsA(isA<FormatException>()),
+      );
+    });
+
+    test('still applies every structural rule to an unknown target', () {
+      final broken = <String, Map<String, dynamic>>{
+        'non-canonical URL': {
+          ...futureTarget(),
+          'url': 'https://example.com/sanad-agent-launcher-1.1.0-macos-x64',
+        },
+        'invalid SHA-256': {...futureTarget(), 'sha256': '1234'},
+        'invalid size': {...futureTarget(), 'size': 0},
+        'duplicate filename': {
+          ...futureTarget(),
+          'filename': 'sanad-agent-1.1.0-linux-x64',
+        },
+      };
+
+      broken.forEach((label, entry) {
+        expect(
+          () => ReleaseManifest.fromJson(manifestWith([localAgent(), entry])),
+          throwsA(isA<FormatException>()),
+          reason: label,
+        );
+      });
+    });
+
+    test('never trusts an unknown target for installation', () async {
+      final manifest = ReleaseManifest.fromJson(
+        manifestWith([futureTarget()]),
+      );
+      final file = File(
+        '${Directory.systemTemp.path}/sanad-forward-compat-trust',
+      );
+      addTearDown(() async {
+        if (file.existsSync()) await file.delete();
+      });
+      await file.writeAsBytes([1, 2, 3]);
+
+      final result = await verifyReleaseArtifactTrustDetailed(
+        file,
+        artifact: manifest.artifacts.single,
+      );
+
+      expect(result.isTrusted, isFalse);
+      expect(result.stage, PlatformTrustStage.metadataValidation);
+    });
+
+    test('the publisher gate refuses to publish an unknown target', () {
+      final accepted = ReleaseManifest.fromJson(
+        _manifestJson(bytes: [1, 2, 3]),
+      );
+      expect(accepted.requireKnownTrustTargets, returnsNormally);
+
+      final manifest = ReleaseManifest.fromJson(
+        manifestWith([localAgent(), futureTarget()]),
+      );
+      expect(manifest.requireKnownTrustTargets, throwsA(isA<FormatException>()));
+    });
+  });
+
   group('macOS platform trust', () {
     test(
       'uses the exact Apple-anchored NanoSoft publisher requirement',
@@ -606,6 +788,63 @@ void main() {
         expect(script, contains(r'Remove-Item -LiteralPath $staged -Force'));
       },
     );
+
+    test('check offers an update from a manifest with an unknown target', () async {
+      final executable = File('${temporaryDirectory.path}/sanad')
+        ..writeAsStringSync('old');
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      json['artifacts'] = [
+        (json['artifacts']! as List).single,
+        {
+          'component': 'agent-launcher',
+          'platform': 'macos',
+          'architecture': 'x64',
+          'format': 'executable',
+          'filename': 'sanad-agent-launcher-1.1.0-macos-x64',
+          'url':
+              'https://github.com/EastStarAI/sanad-agent/releases/download/'
+              'v1.1.0/sanad-agent-launcher-1.1.0-macos-x64',
+          'sha256': _sha256ForTest([4, 5, 6]),
+          'size': 3,
+          'public': true,
+          'signature_type': 'github-attestation',
+        },
+      ];
+      final service = AgentUpdateService(
+        currentVersion: '1.0.0',
+        executablePath: executable.path,
+        isSourceManaged: false,
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        client: MockClient((_) async => http.Response(jsonEncode(json), 200)),
+      );
+
+      final result = await service.check();
+
+      expect(result.status, AgentUpdateStatus.updateAvailable);
+      expect(result.availableVersion, '1.1.0');
+    });
+
+    test('check still rejects broken trust on the local artifact', () async {
+      final executable = File('${temporaryDirectory.path}/sanad')
+        ..writeAsStringSync('old');
+      final json = _manifestJson(bytes: [1, 2, 3]);
+      ((json['artifacts']! as List).single as Map<String, dynamic>)
+          ['signature_type'] = 'authenticode';
+      final service = AgentUpdateService(
+        currentVersion: '1.0.0',
+        executablePath: executable.path,
+        isSourceManaged: false,
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        client: MockClient((_) async => http.Response(jsonEncode(json), 200)),
+      );
+
+      final result = await service.check();
+
+      expect(result.status, AgentUpdateStatus.manifestInvalid);
+      expect(result.message, contains('signature type'));
+    });
   });
 }
 
