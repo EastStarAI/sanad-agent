@@ -448,7 +448,7 @@ proving the publisher.
 |---|---|
 | `release-build` | Non-secret release builds and candidate retention |
 | `apple-signing` | Developer ID signing, notarization, and Sparkle signing |
-| `apple-testflight` | Apple Distribution export and optional Internal TestFlight upload |
+| `apple-testflight` | Apple Distribution export, optional Internal TestFlight upload, and App Store submission |
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |

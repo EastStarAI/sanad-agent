@@ -28,7 +28,7 @@ from the mixed Client, Agent, checksum, and update files on GitHub Releases.
 | Windows | [Download Sanad Client for Windows](https://downloads.sanad.eaststarai.com/client/windows) |
 | Linux | [Download Sanad Client for Linux](https://downloads.sanad.eaststarai.com/client/linux) |
 | Android | [Get Sanad Client on Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad) (listed as `Sanad Remote`) |
-| iPhone and iPad | [Download Sanad Client on the App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (listed as `Sanad Remote`) |
+| iOS/iPadOS | [Download Sanad Client on the App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (listed as `Sanad Remote`); the App Store version can lag behind the current Stable release. |
 | Web | [app.sanad.eaststarai.com](https://app.sanad.eaststarai.com) |
 
 These aliases exist only on the unprefixed Production downloads host. Their

@@ -85,8 +85,8 @@ On Android, install Sanad Client from
 [Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad)
 (the listing uses the store display name `Sanad Remote`). On iPhone and iPad,
 install Sanad Client from the
-[App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (the listing
-uses the same store display name).
+[App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (listed as
+`Sanad Remote`).
 
 > **Unsigned Windows build:** The current Windows release is unsigned. Download it
 > only through the official button above and follow the verification guidance in
