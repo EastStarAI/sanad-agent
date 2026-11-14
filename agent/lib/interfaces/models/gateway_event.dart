@@ -89,6 +89,14 @@ class GatewayResponse {
   /// Populated by `GatewayManager` from the originating platform descriptor.
   final OriginContext? origin;
 
+  /// Additive stream ordinal for assistant delta responses.
+  ///
+  /// Owned by the run's `StreamDeltaSequencer` and allocated before the in-flight
+  /// projection and before fan-out, so every platform copy carries the same
+  /// number. Terminal responses and non-stream events leave it null; a
+  /// consumer that never sees one keeps its previous best-effort behavior.
+  final int? streamSeq;
+
   GatewayResponse({
     required this.sessionId,
     this.platformId,
@@ -117,6 +125,7 @@ class GatewayResponse {
     String? eventId,
     DeliveryPolicy? delivery,
     this.origin,
+    this.streamSeq,
   }) : eventId = eventId ?? EventId.generate(),
        delivery =
            delivery ??
@@ -156,5 +165,6 @@ class GatewayResponse {
     eventId: eventId ?? this.eventId,
     delivery: delivery ?? this.delivery,
     origin: origin ?? this.origin,
+    streamSeq: streamSeq,
   );
 }

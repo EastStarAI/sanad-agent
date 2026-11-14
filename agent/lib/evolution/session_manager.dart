@@ -69,6 +69,10 @@ class SessionManager {
   /// restore it, but the text lives in a growable buffer that is materialized
   /// only when [getInFlightSnapshot] reads it. Rebuilding the accumulated
   /// string on every delta would copy the entire prefix per token.
+  ///
+  /// [seq] is the run-owned `stream_seq` of this delta. It is recorded so the
+  /// projection can state which deltas its text already contains; it is
+  /// projection metadata only and never becomes durable state.
   void appendInFlightDelta({
     required String sessionId,
     required String runId,
@@ -76,6 +80,7 @@ class SessionManager {
     required String? modelStepId,
     required String type,
     required String delta,
+    int? seq,
   }) {
     final existing = _inFlightStreams[sessionId];
     if (existing != null &&
@@ -85,7 +90,7 @@ class SessionManager {
           turnId: turnId,
           modelStepId: modelStepId,
         )) {
-      existing.append(delta);
+      existing.append(delta, seq: seq);
       return;
     }
     // A snapshot written whole by a caller is the seed for this stream only
@@ -106,7 +111,7 @@ class SessionManager {
       turnId: turnId,
       modelStepId: modelStepId,
       seed: seedContent,
-    )..append(delta);
+    )..append(delta, seq: seq);
   }
 
   Map<String, dynamic>? getInFlightSnapshot(String sessionId) {
@@ -539,6 +544,7 @@ class _InFlightStream {
   final StringBuffer _buffer;
   String? _materialized;
   int _materializedLength = -1;
+  int? _lastSeq;
   DateTime _updatedAt = DateTime.now();
 
   bool matches({
@@ -552,9 +558,10 @@ class _InFlightStream {
       this.turnId == turnId &&
       this.modelStepId == modelStepId;
 
-  void append(String delta) {
+  void append(String delta, {int? seq}) {
     if (delta.isEmpty) return;
     _buffer.write(delta);
+    if (seq != null) _lastSeq = seq;
     _updatedAt = DateTime.now();
   }
 
@@ -575,6 +582,10 @@ class _InFlightStream {
       'content': _materialized!,
       'timestamp': timestamp,
       'updated_at': timestamp,
+      // A whole-text projection, not a delta: a consumer adopts it as
+      // authoritative and reads [stream_seq] as the watermark its text covers.
+      'snapshot': true,
+      'stream_seq': ?_lastSeq,
     };
   }
 }

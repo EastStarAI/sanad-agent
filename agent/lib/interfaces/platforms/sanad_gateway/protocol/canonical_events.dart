@@ -137,6 +137,13 @@ class CanonicalEventTypes {
 
   static const String getSessionHistory = 'get_session_history';
   static const String sessionHistory = 'session_history';
+
+  /// Task 175 — narrow read of the in-flight stream projection. It never
+  /// paginates, projects rows, or rebuilds history: it answers with the one
+  /// running assistant stream (or an explicit `absent`) so a consumer that lost
+  /// or misordered deltas can adopt authoritative text without a full reload.
+  static const String sessionStreamState = 'session.stream_state';
+  static const String sessionStreamStateResult = 'session.stream_state_result';
   static const String getSessions = 'get_sessions';
   static const String sessionsList = 'sessions_list';
   static const String searchSessions = 'search_sessions';
