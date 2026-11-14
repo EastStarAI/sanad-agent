@@ -65,15 +65,17 @@ void main() {
   });
 
   group('loopback release host', () {
-    test('the embedded loopback fixture is still valid', () {
-      // The leaf expires on 2028-10-14. Rot silent into a handshake failure is
-      // avoided by failing here first with the regeneration recipe.
+    test('the embedded loopback fixture is inside its validity window', () {
+      // Absolute dates, so a skewed generating clock can never reintroduce a
+      // future-dated fixture: both bounds fail loudly with the recipe.
+      final now = DateTime.now().toUtc();
       expect(
-        DateTime.now().toUtc().isBefore(DateTime.utc(2028, 10, 14)),
+        now.isAfter(DateTime.utc(2025, 11, 1)) && now.isBefore(DateTime.utc(2028, 1, 1)),
         isTrue,
         reason:
             'Regenerate the embedded loopback fixture (see '
-            '_generateCertificateAuthority); it expired 2028-10-14.',
+            '_generateCertificateAuthority); it is valid 2025-11-01 to '
+            '2028-01-01 and must be replaced before that window closes.',
       );
     });
     late HttpServer server;
@@ -207,22 +209,24 @@ Map<String, dynamic> _agentManifest({
 /// exactly the two tests the Windows evidence rests on, so the suite reported
 /// success while proving nothing.
 ///
-/// The leaf is deliberately short-lived because macOS refuses a TLS server
-/// certificate whose validity exceeds 825 days, and the authority is a
-/// throwaway fixture with no production relationship that is reachable only
-/// over loopback. `the embedded loopback fixture is still valid` fails with a
-/// regeneration instruction before expiry can turn these assertions into a
-/// confusing handshake error.
+/// Both certificates carry **explicit calendar validity**, never `-days`. A
+/// relative window is stamped from the generating process's clock and timezone;
+/// with `TZ` unset, `openssl` writes local wall time as UTC, which produced a
+/// fixture dated two hours in the future. The suite then failed with
+/// `certificate is not yet valid` on every machine whose clock was correct,
+/// which is exactly how an earlier revision of this fixture shipped broken. The
+/// leaf is also kept under 825 days because macOS refuses a TLS server
+/// certificate with a longer validity.
 ///
-/// Regenerate with (leaf ≤ 825 days, SAN for both localhost and 127.0.0.1):
+/// Regenerate with `openssl ca`, whose `-startdate`/`-enddate` are absolute:
 ///
 /// ```
-/// openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 7300 \
-///   -keyout ca.key -out ca.pem -config ca.cnf
-/// openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr \
-///   -config leaf.cnf
-/// openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
-///   -days 700 -out leaf.pem -extfile leaf.cnf -extensions v3
+/// openssl ca -batch -selfsign -config ca.cnf -keyfile ca.key -in ca.csr \
+///   -out ca.pem -startdate 20200101000000Z -enddate 20450101000000Z \
+///   -extensions v3_ca
+/// openssl ca -batch -config ca.cnf -in leaf.csr -out leaf.pem \
+///   -startdate 20251101000000Z -enddate 20280101000000Z \
+///   -extensions v3_leaf
 /// ```
 ({
   String certificate,
@@ -257,57 +261,57 @@ String _pemBody(String body) {
 }
 
 const String _authorityBody =
-  'MIIC/zCCAeegAwIBAgIUWG7KUw091TvbhKdxwV7hwwVv0S8wDQYJKoZIhvcNAQELBQAwJzElMCMG'
-  'A1UEAwwcU2FuYWQgVGVzdCBSZWxlYXNlIEF1dGhvcml0eTAeFw0yNjExMTQyMjU1MDFaFw00NjEx'
-  'MDkyMjU1MDFaMCcxJTAjBgNVBAMMHFNhbmFkIFRlc3QgUmVsZWFzZSBBdXRob3JpdHkwggEiMA0G'
-  'CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDFfIOuyrUdKsqJg2Xf6HcVtHVFk0ybVaDoPDS0reOz'
-  'H/aOdAtf7mNnqKjwA3ndtU2nQEVLE+Voz7ehKhegyEdkL+pyd1BSWAQkGPqpN5dbkhhUXGWUWdV5'
-  'FqGbRTR8qg7PX/CLYGkq6mRv1MDSyxQyliiXXUnjDlPtVA3pGca0ZZ9lB7Rj8CC+/IJ2z890GVYw'
-  'flzIiZq3gRL8Yf2jqBDOqIk9JDp8vRTehvNJFBfCiQJCJgk11Xnfi71PKzoUljoF7R21DrW2ZeKI'
-  'cZODlutMIPnCvNq2ErYsDpR7uox830qqLWvDsbBjO/4eAvHERtkHsxSCH6f+zZWomq3emWVjAgMB'
-  'AAGjIzAhMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUAA4IB'
-  'AQBhBgmtsQBV3rsQS4zHQn3dEIreXbrzYRf8NYgoqF1YH6y0A2sP4o+Y6ScR3o5C4xcI8+IvVoZq'
-  'rpryVwTAodfFjsPSDEik2FJ5K8qOIKGJit2TVHBDjVHjmu7LFvYyZLaBaV3fWku9oP40EEyVKfIv'
-  'yq4mif+smBJia5bAfGTnXCRvhCKroak5nlgJLUW5TJEU6XIACC8aFOz1QGK4ksTdr2B2dQDwMOMz'
-  'FllQDW4L3LF29H3u1yj7RcnX8uD9vc9QvfkSyeRCDIDEE+Gk5z+PomFap1vMcXW3iu5qzMamuARu'
-  '2qnOkOjDXBzrSMtonfAJ2sW9fKipTHqvL1Yh0n+T';
+  'MIIC7TCCAdWgAwIBAgICEAAwDQYJKoZIhvcNAQELBQAwJzElMCMGA1UEAwwcU2FuYWQgVGVzdCBS'
+  'ZWxlYXNlIEF1dGhvcml0eTAeFw0yMDAxMDEwMDAwMDBaFw00NTAxMDEwMDAwMDBaMCcxJTAjBgNV'
+  'BAMMHFNhbmFkIFRlc3QgUmVsZWFzZSBBdXRob3JpdHkwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAw'
+  'ggEKAoIBAQCqRKkvCegz+9+i29Ji0xh1dnpzn/i951h3fsV2ld1raitV6ljP+TfeOijDfdWIn5aM'
+  'WTqVvoFJhVUqa+pS+9Nr7E9yMbPvB+6Ijh5w/ON4QXybwiqSnGUi4eeDseINpWMe9jUnkVkifg7I'
+  'TXU8I1l54Ch4iWXOhSXAOP0WeZhjgwsepqL5B0sC4pK8I0LiGZDZTq/qBBBbdkvqG86aZgUQgN2A'
+  'a/jHnVV/ttXgmoAqAPDFThHMBVBU4odzgMxmG9kQ1CjFYK+YbJZaxKu4mEEc4tc65/mCxK4DmW0A'
+  'N7QI6tWkGCawZvwjA8Pd18FftDFFeqsEWk6HLdNFrkr2l8ZlAgMBAAGjIzAhMA8GA1UdEwEB/wQF'
+  'MAMBAf8wDgYDVR0PAQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUAA4IBAQBGf/Siq8lan1RN/QJnRGlm'
+  'UwR3ljB3SkbB0cdo7WrGf4FMVXnpb9/mpAJjOA18MbXxzGmRzXNUGgo0vL6b/Ga/pWYnkkktqM5D'
+  '52QZUT2hoXeYtxzmsQ01SvWNS/rv+ZISAFqf9li0Q+HvpNzQWJb4cS2aPkobpGOqVP7RCWmQKq7z'
+  'ThYJ2wY/DDZF+tJFwZeygDMQC0jhtHreNo0+scFivD2VIVlg6hevglGXw/WLRUqm1oojBNU/9LBE'
+  'Gvgrn7knX4x+pQjoUUIl944GfLojMRvcV5NJBCb3AEU41Uk4HFAkN1jdnzBEid/sTmKweIH/k5Y0'
+  'iY3hzFgzxrzuV9tx';
 
 const String _leafBody =
-  'MIIDGjCCAgKgAwIBAgIUCjDLxbW7t8QgV+dkwvDAadPbxlAwDQYJKoZIhvcNAQELBQAwJzElMCMG'
-  'A1UEAwwcU2FuYWQgVGVzdCBSZWxlYXNlIEF1dGhvcml0eTAeFw0yNjExMTQyMjU1MDJaFw0yODEw'
-  'MTQyMjU1MDJaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC'
-  'AQoCggEBAMjcqT+7S3hzn/8FxwD0oMNTnI7VQprBVM2GSpCH4ZHKvN9PKPT84O8goEPWTDfcyUjg'
-  '01rVytuMe2OWBxnzEykE50Q+pmVoxQStk29kZD7RenMvWC62c+KMeBcLFBx3F2bt+qJ+rbqXxQFd'
-  'z733oTDofIb0cfuQkKrNML3bjV5xwKYycZ586A8u9YfEq0wFgmF5Cmr0BWVm91jpH1N+Go62pbwS'
-  'CndnQ934fSkPcI9tks1MYINM2nwjkQOIMs3H/cORrot+hoh5uWF+1o1S+91RkzwcIqUeoOxUW18L'
-  'R3PpqdUx7V0QKZVHxxNcxcxADc+l/sBnEG5vrpgwDc8w41UCAwEAAaNRME8wGgYDVR0RBBMwEYIJ'
-  'bG9jYWxob3N0hwR/AAABMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoG'
-  'CCsGAQUFBwMBMA0GCSqGSIb3DQEBCwUAA4IBAQAEo68yQoqzbswKwPkoybeC6bZNKxy/9aLgz7yr'
-  'RnLXe0IS+Z5BpZ9sn/cx0cXxXOk3HIbHDXFt9U/sxeu+7Oti0pCu3RgmYNs7MjpHmYAvtIcCekd9'
-  '4LfzrjlzS5efvH0v4Hz/2jQM0LQ5R0gapVOCN4s8uOztFobwtwYI2OqOQYUCa57gJ7KIS+hUGc7a'
-  'UMgJVskL0XwyCFLBW4QKXJJStU/bgM+svuF9UCNDVcnEzsxdYFXmncQHlM6ZxTgsU7b3SrcqSdj7'
-  '5MROjcSxZp30muFG30P9zAFQ3WbA3MTIdU31vlfR/7JXizMBoeLVhmny8cnl/+75Q7nFTy3kHE/2';
+  'MIIDCDCCAfCgAwIBAgICEAEwDQYJKoZIhvcNAQELBQAwJzElMCMGA1UEAwwcU2FuYWQgVGVzdCBS'
+  'ZWxlYXNlIEF1dGhvcml0eTAeFw0yNTExMDEwMDAwMDBaFw0yODAxMDEwMDAwMDBaMBQxEjAQBgNV'
+  'BAMMCWxvY2FsaG9zdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAJVUjDhozM8BCnP0'
+  'TcfXk5YJO9pIYND1DzYAd25lv6f4cOuHpz8zycgkAZjCWe2PFTc/Ze4KOE1BDQHhVV7U6k0dsbvS'
+  'NHofMnVZOsOkUAYSzC3dTsAK6VX8s2vOeUQbO5KamPf94ntTh2H0gyI2lrv6dmLzqJA1FpFz2i1u'
+  'ayYulOgXr+ZzXC8YKv0uYbgAGVL3Rq0QSoUv2CAPJN6b6hLHIcVAl7cgLnfZX4PQd70jzNK9sqYR'
+  'yfePDFW09cU11JXH+cU7GHWcF8qD0UyhZjApB+UC4HDch09hUODxobK2+kgxLGIASJswwgymUvgM'
+  '3b8nFP5y+y6yg7pmcw7y1ncCAwEAAaNRME8wGgYDVR0RBBMwEYIJbG9jYWxob3N0hwR/AAABMAwG'
+  'A1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUFBwMBMA0GCSqGSIb3'
+  'DQEBCwUAA4IBAQCSUpka+wrN0kTjY4ik6vwB8q7QZgwPw4lm46eRFRm5hygy1iwSm5r/sUbOb91/'
+  'su4jm335c8yeys7ghV+Y+Owm5eSFt4Pongp2LlK54UmoYESriJBHz3dzYtaRw3hl/diLj3kxIgaU'
+  'SvJnf2t+M6v+sD4TVbiOHgukk3xKoiPWjckvBf6GZTBS9oZRG9JR6ApyySHVquNOgcqDi2VuD3qx'
+  'mncN7FquvDZjCtSpoaGE51KzMxTq/GPPMktUlJ1IdckWaOaNjmWC1x6r01yGBtGdK5nt2LlhrG1H'
+  'E7mdrwEyWI1KOt/Qbj9mevz4Je6zaNxbVcPmcaTQOZLMrvLxgW1n';
 
 const String _leafKeyBody =
-  'MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDI3Kk/u0t4c5//BccA9KDDU5yO'
-  '1UKawVTNhkqQh+GRyrzfTyj0/ODvIKBD1kw33MlI4NNa1crbjHtjlgcZ8xMpBOdEPqZlaMUErZNv'
-  'ZGQ+0XpzL1gutnPijHgXCxQcdxdm7fqifq26l8UBXc+996Ew6HyG9HH7kJCqzTC9241eccCmMnGe'
-  'fOgPLvWHxKtMBYJheQpq9AVlZvdY6R9TfhqOtqW8Egp3Z0Pd+H0pD3CPbZLNTGCDTNp8I5EDiDLN'
-  'x/3Dka6LfoaIeblhftaNUvvdUZM8HCKlHqDsVFtfC0dz6anVMe1dECmVR8cTXMXMQA3Ppf7AZxBu'
-  'b66YMA3PMONVAgMBAAECggEALiuuyeQLGpJ1diEFV/5jT9LR23FBAKKtFBso26UoYCNam/gtwXa5'
-  'W65DuKQzW+nn6NUpMCmRmjrmCAOt+TSLNHQYlvLRu+DD3OnrSIEqm9f6Di0VV5N/+tTwK9fTlSF4'
-  '4yOT57M3yvrlAYXnYVLhHgVqzni1FK7r2h8Vc6bajZkuc/Uxhs34+wVXom6sGkCfnPTvWqivVdFm'
-  'KVuzuXNh5UaDnknULbbqwnUCGhf3hGj4LD5PbedB1vDYKdSj2W3vHF+Av3rbIgukghorWW5nBoZJ'
-  'obAfOn5NhJGM1Oa9ewslPmM37M/i8EBVQgYBU7TisNRI7ZNPu28nk7kyAv+SsQKBgQD7N2CkAT1I'
-  'J1g/wuXTBB+ePpLBwl8UTSj61TjwVFGTpt3Sehzy5w46FMDagm/gigEQFAY6MulO7gnqrI7c4XLW'
-  'ooe3FelpnGz0OwmgbhqR1FQ+mym2mpu4gWH9o8f5caofEUZf6ZqZ6k3xWDV3xch93+D9YxMmVr+k'
-  'Jpn1ggGq7QKBgQDMr9FLK+SNFdfnyyLLC0uGDMgUt0wvDaSEgFNn2KOe5d5mo1CI/tAjZcH82eRM'
-  'vuI5Tsrd4AytoeLX+Z1P8LQjSrJhLT9aVq4UtcdgUubwa/R3PI+93P5VCNVELIhRVa9C9VRjo0Px'
-  's5qi+UCNIsiDUt48h7bYjQwe0jLh4FBFCQKBgEjpSK4xAeVILg/LdEKrZrXZ+WQtEsVko6kxa2Yt'
-  'QsP04VquQGqrbvCih1qkEu57f1V4Slpn3lkfM1eeH5SyBk+POo6D2Ivjb6fu3ptmeWWr14uYIyIx'
-  'e1Kwko04FNksCTEdJWy+8zUK0PZkIJiTmd4WtUk1kSBGezacUYD066D9AoGBAI1JCumdaYwtOLPJ'
-  '1sFakY39ApqyD0cnXpkLTwcOVZqXxtUIA84cPSVB1w4mhNyoodS223cdcQLlDITRytFkL6NwqwJC'
-  'zkkYLd8jvnRxpPDtQ3iOeBWxFmkxyKvfJVUnFOveFZsVFhAfTi0SaYlCKi/jon0bnI2LhoM7yl15'
-  'jU6pAoGBALD1Ib1C1+9dtZaK7fV5YBtTyUWsu9uI+aJMZNqVtk95VApoy+vBFaLANAbASm4jyy/c'
-  'wKJVBGFWAvqTlCcq26ZzitFaJBCL/q9DerSwBb1DaRZWS/jlfhFj12eGX8wFjuUgY4BT33lGHEDF'
-  'iag9VUbIuH9rM8Z5ayqVg4bWJWY5';
+  'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCVVIw4aMzPAQpz9E3H15OWCTva'
+  'SGDQ9Q82AHduZb+n+HDrh6c/M8nIJAGYwlntjxU3P2XuCjhNQQ0B4VVe1OpNHbG70jR6HzJ1WTrD'
+  'pFAGEswt3U7ACulV/LNrznlEGzuSmpj3/eJ7U4dh9IMiNpa7+nZi86iQNRaRc9otbmsmLpToF6/m'
+  'c1wvGCr9LmG4ABlS90atEEqFL9ggDyTem+oSxyHFQJe3IC532V+D0He9I8zSvbKmEcn3jwxVtPXF'
+  'NdSVx/nFOxh1nBfKg9FMoWYwKQflAuBw3IdPYVDg8aGytvpIMSxiAEibMMIMplL4DN2/JxT+cvsu'
+  'soO6ZnMO8tZ3AgMBAAECggEAGsR2hBAJElwR5xoWLSnP2zeZgnWx4RLkYJ4xylizw6StfRKqYJJk'
+  'a5tErAC+hO4+c9JJ76LmV7a+4aTmHCMXQq59cvjpjjB0Z4OQnIwiCgypi9kdKiBqlg6/jKYMp7An'
+  '/A35OI7KX6fn3x+ot+PIHjb1rKQXhY32lykIpVcjHss5mqnfDXmmUErR6cMWpTZcun50gqrmKgJE'
+  'pZrRL8F9OOHRcoZaW5D/IXaol4dqKixQuLdUmzlwIqtTyFUUEC1CHEopC40Wl8bA6w7bn99PAb08'
+  'sZQhVLqFCR3QF+CRxK/fXiaLfxavafAUWHNEBOVcC+z/bDYHKuZeMHVUGbu6TQKBgQDM7eM73Hdu'
+  'Fx2wPcGX5Adbbwz3Rbyd/g2tc64qyNaOsmVOEs/AvDZoaJ+timrAoeSKYYVyY2JVBkelNDglr6Hk'
+  'NDIcyhcQsf/rduip9bICxGd64v5um+siITuToYjvbumJbfFoxJgsxEyDkuxijyDu4dqOj+5TqKVU'
+  '+C6E4LmmiwKBgQC6i4vbEwX4RZBp+iSjNM28nlzN99dz+t8e4DYpERTzxRTcnQNIoGHMix3jOEF+'
+  'Me7RMHE4BZ+jkyOLnilwfRqjoRHzILqTikShhwHPqnb9rHNoGLIVkW9bfaXAQwBHBX8ZDXY9l4pr'
+  'hMp1RT/DfkfBHfnqWpGcv8cCyVVIYvw5RQKBgEK6g2+OjmUOqeAle9BVs/+V3Yb28kAP5axBKslL'
+  'tHGqrUoK3hNINf8xci00ESbAkIZu0uE4c2B0NwgYROAgnHqOdHLjazdIfqjRg1k0Y8563acqGucx'
+  'ZhMq9xdPViOA3hKd9inDOjn5gWCmispdCMBAUsZxH42mMI/GcH9cHZeZAoGBALhWFxCXvsl0LF2c'
+  '8sFX94nQz5I0u/H+0KaZFswD9jlg4dmTSmBlI99VBWa3+3fxbbXHccnTPMoOJwzbcMWYyk8xZiRj'
+  'jhsngeRAHdkQ8N6Bn9UYujm36lt1UOopC0gjNVITTGlWq1DN+qZhlL3gtpUtwv0DHGrR0518SErs'
+  'jaMlAoGAF8C4/NI/pdETjpAgsQCJmmYgLjT9zykAeJ6BAjIVOm20KSLxDNx/OncoPI4STDXK4WAq'
+  'oANtN1+9jDdsVOWdzEMtNMt+03ntHuN+tuo90Z2S/z0BDL3UQxrks+xrx4gnECHumHgHRu5gNJBS'
+  'IVdaJ1xlCO5BsB2twVIn3cjIdDI=';
