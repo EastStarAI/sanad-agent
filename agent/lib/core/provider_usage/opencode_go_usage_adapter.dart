@@ -36,11 +36,7 @@ class _GoWindowSpec {
 }
 
 const _goWindowSpecs = <_GoWindowSpec>[
-  _GoWindowSpec(
-    'rolling',
-    ProviderUsageWindowType.session,
-    'Session',
-  ),
+  _GoWindowSpec('rolling', ProviderUsageWindowType.session, 'Session'),
   _GoWindowSpec('weekly', ProviderUsageWindowType.weekly, 'Weekly'),
   _GoWindowSpec('monthly', ProviderUsageWindowType.monthly, 'Monthly'),
 ];
@@ -95,13 +91,17 @@ class OpenCodeGoUsageAdapter implements ProviderUsageAdapter {
 
       if (resp.statusCode == 401 || resp.statusCode == 403) {
         // The key was rejected; surface auth_required without leaking the body.
-        _log.warning('OpenCode Go usage fetch rejected (HTTP ${resp.statusCode})');
+        _log.warning(
+          'OpenCode Go usage fetch rejected (HTTP ${resp.statusCode})',
+        );
         throw const ProviderUsageAuthException(
           'OpenCode Go API key is required to view usage.',
         );
       }
       if (!resp.isSuccess) {
-        _log.warning('OpenCode Go usage fetch failed (HTTP ${resp.statusCode})');
+        _log.warning(
+          'OpenCode Go usage fetch failed (HTTP ${resp.statusCode})',
+        );
         throw const ProviderUsageUnavailableException();
       }
 

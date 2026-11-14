@@ -61,9 +61,7 @@ void main() {
 
     test('false with no credential', () {
       expect(
-        adapter.canFetch(
-          context(httpClientFactory: _okFactory({})),
-        ),
+        adapter.canFetch(context(httpClientFactory: _okFactory({}))),
         isFalse,
       );
     });
@@ -129,18 +127,16 @@ void main() {
         ),
       );
 
-      expect(
-        snapshot.windows.map((w) => (w.type, w.label, w.usedPercent)),
-        [
-          ('session', 'Session', 3.0),
-          ('weekly', 'Weekly', 2.0),
-          ('monthly', 'Monthly', 2.0),
-        ],
-      );
-      expect(
-        snapshot.windows.map((w) => w.remainingPercent),
-        [97.0, 98.0, 98.0],
-      );
+      expect(snapshot.windows.map((w) => (w.type, w.label, w.usedPercent)), [
+        ('session', 'Session', 3.0),
+        ('weekly', 'Weekly', 2.0),
+        ('monthly', 'Monthly', 2.0),
+      ]);
+      expect(snapshot.windows.map((w) => w.remainingPercent), [
+        97.0,
+        98.0,
+        98.0,
+      ]);
       expect(
         snapshot.windows.first.resetAt,
         DateTime.utc(2026, 9, 16, 21, 44, 55, 176),
@@ -346,9 +342,7 @@ void main() {
 
     test('throws auth_required without a credential', () async {
       await expectLater(
-        adapter.fetch(
-          context(httpClientFactory: _okFactory({})),
-        ),
+        adapter.fetch(context(httpClientFactory: _okFactory({}))),
         throwsA(isA<ProviderUsageAuthException>()),
       );
     });
@@ -394,10 +388,7 @@ void main() {
       final registry = buildProviderUsageRegistry();
       expect(registry.supportsTemplate('openai-codex'), isTrue);
       expect(registry.supportsTemplate('opencode-go'), isTrue);
-      expect(
-        registry.adapterFor('opencode-go'),
-        isA<OpenCodeGoUsageAdapter>(),
-      );
+      expect(registry.adapterFor('opencode-go'), isA<OpenCodeGoUsageAdapter>());
       expect(registry.supportsTemplate('anthropic'), isFalse);
     });
   });
@@ -427,12 +418,7 @@ class _FakeClient implements ProviderUsageHttpClient {
   final List<_RecordedCall>? calls;
   bool closed = false;
 
-  _FakeClient({
-    this.jsonPayload,
-    this.rawBody,
-    this.status = 200,
-    this.calls,
-  });
+  _FakeClient({this.jsonPayload, this.rawBody, this.status = 200, this.calls});
 
   @override
   Future<ProviderUsageHttpResponse> get(

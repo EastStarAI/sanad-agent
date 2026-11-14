@@ -420,6 +420,56 @@ void main() {
     },
   );
 
+  testWidgets(
+    'API-key auth_required without an edit callback degrades to Retry',
+    (tester) async {
+      var reconnects = 0;
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          const ProviderUsageEntry(
+            phase: ProviderUsagePhase.needsAttention,
+            result: ProviderUsageResultDto(
+              status: 'auth_required',
+              providerInstanceId: 'a',
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(
+            agent: null,
+            instanceId: 'a',
+            onReconnect: () => reconnects++,
+            isApiKeyAuth: true,
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      // Without an edit callback there is nothing to open and no OAuth flow a
+      // static key could use, so the documented fallback is Retry - never a
+      // dead `needsAuth` button.
+      expect(find.byKey(const Key('provider_usage_retry_a')), findsOneWidget);
+      expect(find.text('Retry'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_update_api_key_a')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('provider_usage_reconnect_a')), findsNothing);
+
+      await tester.tap(find.byKey(const Key('provider_usage_retry_a')));
+      await tester.pumpAndSettle();
+
+      expect(reconnects, 0);
+    },
+  );
+
   testWidgets('the usage messages and labels are localized in Arabic', (
     tester,
   ) async {
@@ -484,6 +534,12 @@ void main() {
                   remainingPercent: 58,
                 ),
                 ProviderUsageWindowDto(
+                  type: 'session',
+                  label: 'Session',
+                  usedPercent: 5,
+                  remainingPercent: 95,
+                ),
+                ProviderUsageWindowDto(
                   type: 'rolling',
                   label: 'Rolling window',
                   usedPercent: 1,
@@ -507,10 +563,69 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('أسبوعي'), findsOneWidget);
+    expect(find.text('الجلسة'), findsOneWidget);
     expect(find.text('Weekly'), findsNothing);
     // An unknown future type still renders the daemon's label instead of
     // disappearing.
     expect(find.text('Rolling window'), findsOneWidget);
+  });
+
+  testWidgets('the reset countdown uses the Arabic singular, dual and plural '
+      'forms', (tester) async {
+    final now = DateTime.now();
+    cubit.emit(
+      cubit.state.upsertEntry(
+        _localDeviceId,
+        'a',
+        ProviderUsageEntry(
+          phase: ProviderUsagePhase.fresh,
+          fetchedAt: now,
+          result: ProviderUsageResultDto(
+            status: 'available',
+            providerInstanceId: 'a',
+            snapshot: ProviderUsageSnapshotDto(
+              providerInstanceId: 'a',
+              providerTemplateId: 'opencode-go',
+              source: 'opencode_go',
+              fetchedAt: now,
+              windows: [
+                ProviderUsageWindowDto(
+                  type: 'weekly',
+                  label: 'Weekly',
+                  usedPercent: 10.0,
+                  resetAt: now.add(
+                    const Duration(days: 2, hours: 5, minutes: 5),
+                  ),
+                ),
+                ProviderUsageWindowDto(
+                  type: 'session',
+                  label: 'Session',
+                  usedPercent: 20.0,
+                  resetAt: now.add(
+                    const Duration(days: 1, hours: 2, minutes: 5),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        locale: 'ar',
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('الاستخدام والحدود'));
+    await tester.pumpAndSettle();
+
+    // Two days is the Arabic dual (no numeral) and five hours is the plural.
+    expect(find.text('يُعاد الضبط بعد يومين و5 ساعات'), findsOneWidget);
+    // One day and two hours are both dual forms.
+    expect(find.text('يُعاد الضبط بعد يوم واحد وساعتين'), findsOneWidget);
   });
 
   testWidgets(

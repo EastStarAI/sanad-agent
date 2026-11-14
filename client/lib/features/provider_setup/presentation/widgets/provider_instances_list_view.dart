@@ -11,6 +11,7 @@ import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_discovery_notice.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_instance_test_notice.dart';
 import 'package:sanad_client/features/provider_setup/presentation/widgets/provider_usage_section.dart';
+import 'package:sanad_client/l10n/app_localizations.dart';
 
 const _kAccountMethods = ['device_code', 'loopback', 'external'];
 
@@ -157,6 +158,7 @@ class _InstanceCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context)!;
     final isOAuth = _kAccountMethods.contains(instance.authMethod);
     final isReady = instance.status == 'ready';
     final isDraft = instance.status == 'draft';
@@ -257,7 +259,7 @@ class _InstanceCard extends StatelessWidget {
                       if (instance.isDefault) ...[
                         _ProviderCardBadge(
                           key: Key('provider_instance_default_${instance.id}'),
-                          label: 'Default',
+                          label: l10n.providerInstanceDefaultBadge,
                           foreground: theme.colorScheme.onPrimaryContainer,
                           background: theme.colorScheme.primaryContainer,
                           border: theme.colorScheme.primary.withValues(alpha: 0.3),

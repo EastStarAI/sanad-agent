@@ -1209,6 +1209,7 @@
     }
   },
   "providerFormBackToList": "Back to providers",
+  "providerInstanceDefaultBadge": "Default",
   "providerUsageTitle": "Usage & limits",
   "providerUsageRefresh": "Refresh",
   "providerUsageUpdatedJustNow": "Updated just now",
@@ -1267,14 +1268,6 @@
   "@providerUsageRemainingPercent": {
     "placeholders": {
       "percent": {
-        "type": "String"
-      }
-    }
-  },
-  "providerUsageResetsAt": "Resets {when}",
-  "@providerUsageResetsAt": {
-    "placeholders": {
-      "when": {
         "type": "String"
       }
     }
