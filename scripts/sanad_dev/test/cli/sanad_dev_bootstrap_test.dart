@@ -334,7 +334,23 @@ void main() {
           reason: '${result.stdout}\n${result.stderr}',
         );
         expect(await shim.target(), foreign);
-        expect((await calls.readAsLines()).last, contains('dart compile exe'));
+        final invocations = await calls.readAsLines();
+        // The shim belongs to another checkout, so this setup still resolves
+        // every package and compiles the runtime CLI, then awaits exactly one
+        // dictation preparation — the same stage list as a fresh setup.
+        expect(
+          invocations.any(
+            (line) => line.contains('dart compile exe lib/sanad_dev_cli.dart -o'),
+          ),
+          isTrue,
+          reason: 'setup still compiles the runtime CLI',
+        );
+        expect(
+          invocations.where((line) => line.contains('ensure_native_stt')),
+          hasLength(1),
+          reason: 'setup prepares dictation once, and never twice',
+        );
+        expect(invocations.last, contains('agent|dart run tool/ensure_native_stt.dart'));
       },
     );
 
