@@ -27,11 +27,17 @@ certificate)
 
 ## Why it happens on Windows
 
-`dart:io`'s default `SecurityContext` takes trusted roots from the platform store
-on macOS, iOS, and Android, but from the Mozilla list bundled into the Dart SDK on
-Windows and Linux. A machine that inspects TLS replaces the chain with its own
-root, so verification fails on Windows even though the same network works for
-every other application:
+Certificate verification needs the issuer of the release host's chain, and
+`dart:io`/BoringSSL **never fetches a missing intermediate itself**. The Windows
+Flutter engine embeds no root list and imports `CertOpen*`, so it validates
+against the Windows certificate store — but it still refuses a chain whose
+issuer is absent locally, while browsers, `curl`, and the official installer
+complete that chain on the same machine by fetching the intermediate.
+
+Measured on the affected machine: `USERTrust ECC` was present as a root and
+**`Sectigo Public Server Authentication Root E46` was absent from both `Root`
+and `CA`**, which is exactly the intermediate GitHub's chain needs. Other causes
+produce the identical message:
 
 - Antivirus or endpoint security HTTPS/SSL scanning (Kaspersky, ESET, Avast,
   Bitdefender, Sophos, eScan).

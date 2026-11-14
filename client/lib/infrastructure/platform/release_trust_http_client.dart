@@ -7,11 +7,15 @@ import 'package:logging/logging.dart';
 
 /// Names a PEM bundle of additional trusted roots for release fetches.
 ///
-/// On Windows and Linux the Dart SDK verifies release hosts against a bundled
-/// Mozilla root list instead of the platform store, so an antivirus or proxy
-/// that inspects TLS fails those requests with `unable to get local issuer
-/// certificate`. This variable lets the machine's owner trust that one
-/// interception root explicitly.
+/// Certificate verification needs the issuer of the release host's chain, and
+/// `dart:io`/BoringSSL never fetches a missing intermediate itself. The Windows
+/// Flutter engine reads the Windows certificate store (the engine embeds no root
+/// list and imports `CertOpen*`), so a machine that lacks one intermediate of
+/// the published chain — or that inspects TLS — refuses this request with
+/// `unable to get local issuer certificate` while every OS-based client on the
+/// same machine succeeds, because those clients complete the chain by fetching
+/// the intermediate. This variable lets the machine's owner trust that root or
+/// intermediate explicitly.
 ///
 /// The bundle is additive: platform roots stay trusted and the release payload
 /// keeps its version, size, SHA-256, and platform-trust requirements. It never

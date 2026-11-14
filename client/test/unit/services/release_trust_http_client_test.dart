@@ -65,14 +65,22 @@ void main() {
   });
 
   group('loopback release host', () {
+    test('the embedded loopback fixture is still valid', () {
+      // The leaf expires on 2028-10-14. Rot silent into a handshake failure is
+      // avoided by failing here first with the regeneration recipe.
+      expect(
+        DateTime.now().toUtc().isBefore(DateTime.utc(2028, 10, 14)),
+        isTrue,
+        reason:
+            'Regenerate the embedded loopback fixture (see '
+            '_generateCertificateAuthority); it expired 2028-10-14.',
+      );
+    });
     late HttpServer server;
     late String authorityPath;
     late List<int> agentBytes;
 
-    final skipReason = _opensslUnavailableReason();
-
     setUp(() async {
-      if (skipReason != null) return;
       final authority = _generateCertificateAuthority(temporaryDirectory);
       authorityPath = authority.certificate;
       agentBytes = utf8.encode('verified-agent-over-tls');
@@ -105,7 +113,6 @@ void main() {
     });
 
     tearDown(() async {
-      if (skipReason != null) return;
       await server.close(force: true);
     });
 
@@ -136,7 +143,6 @@ void main() {
         expect(result.message, isNull);
         expect(target.existsSync(), isFalse);
       },
-      skip: skipReason,
     );
 
     test(
@@ -162,7 +168,6 @@ void main() {
         expect(result.status, AgentBootstrapStatus.installed);
         expect(await target.readAsBytes(), agentBytes);
       },
-      skip: skipReason,
     );
   });
 }
@@ -194,87 +199,115 @@ Map<String, dynamic> _agentManifest({
   ],
 };
 
-/// A localhost certificate authority and its leaf, generated at test time.
+/// A localhost authority and the leaf it issued, embedded as base64.
 ///
-/// No PEM material is tracked: the repository ignores `*.pem` and `*.key` so
-/// certificate material can never be committed by accident, and this fixture
-/// only has to exist for the duration of one test process. The bundle handed to
-/// the Client is the authority alone, exactly like an interception root whose
-/// leaf is presented by the release host.
+/// Embedded rather than generated at test time so the decisive assertions never
+/// depend on an external `openssl` binary. A skip-on-missing gate is not
+/// acceptable: on a Windows machine without Git's tools it silently skipped
+/// exactly the two tests the Windows evidence rests on, so the suite reported
+/// success while proving nothing.
+///
+/// The leaf is deliberately short-lived because macOS refuses a TLS server
+/// certificate whose validity exceeds 825 days, and the authority is a
+/// throwaway fixture with no production relationship that is reachable only
+/// over loopback. `the embedded loopback fixture is still valid` fails with a
+/// regeneration instruction before expiry can turn these assertions into a
+/// confusing handshake error.
+///
+/// Regenerate with (leaf ≤ 825 days, SAN for both localhost and 127.0.0.1):
+///
+/// ```
+/// openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 7300 \
+///   -keyout ca.key -out ca.pem -config ca.cnf
+/// openssl req -newkey rsa:2048 -nodes -keyout leaf.key -out leaf.csr \
+///   -config leaf.cnf
+/// openssl x509 -req -in leaf.csr -CA ca.pem -CAkey ca.key -CAcreateserial \
+///   -days 700 -out leaf.pem -extfile leaf.cnf -extensions v3
+/// ```
 ({
   String certificate,
   String leafCertificate,
   String leafKey,
 })
 _generateCertificateAuthority(Directory directory) {
-  File config(String name, String body) =>
-      File('${directory.path}/$name')..writeAsStringSync(body);
-
-  final authorityConfig = config('authority.cnf', '''
-[req]
-distinguished_name = dn
-x509_extensions = v3
-prompt = no
-[dn]
-CN = Sanad Test Authority
-[v3]
-basicConstraints = critical,CA:TRUE
-keyUsage = critical,keyCertSign,cRLSign
-''');
-  final leafConfig = config('leaf.cnf', '''
-[req]
-distinguished_name = dn
-prompt = no
-[dn]
-CN = localhost
-[v3]
-subjectAltName = DNS:localhost,IP:127.0.0.1
-basicConstraints = critical,CA:FALSE
-keyUsage = critical,digitalSignature,keyEncipherment
-extendedKeyUsage = serverAuth
-''');
-
-  final authorityKey = '${directory.path}/authority.key';
-  final authorityPem = '${directory.path}/authority-cert.pem';
-  final leafKey = '${directory.path}/localhost-key.pem';
-  final leafRequest = '${directory.path}/localhost.csr';
-  final leafPem = '${directory.path}/localhost-cert.pem';
-
-  for (final arguments in [
-    [
-      'req', '-x509', '-newkey', 'rsa:2048', '-sha256', '-nodes',
-      '-days', '2', '-keyout', authorityKey, '-out', authorityPem,
-      '-config', authorityConfig.path,
-    ],
-    [
-      'req', '-newkey', 'rsa:2048', '-nodes', '-keyout', leafKey,
-      '-out', leafRequest, '-config', leafConfig.path,
-    ],
-    [
-      'x509', '-req', '-in', leafRequest, '-CA', authorityPem,
-      '-CAkey', authorityKey, '-CAcreateserial', '-days', '2',
-      '-out', leafPem, '-extfile', leafConfig.path, '-extensions', 'v3',
-    ],
-  ]) {
-    final result = Process.runSync('openssl', arguments);
-    if (result.exitCode != 0) {
-      throw StateError('openssl could not create the loopback certificate.');
-    }
+  String materialise(String name, String base64Body, String label) {
+    final path = '${directory.path}/$name';
+    File(path).writeAsStringSync(
+      '-----BEGIN $label-----\n'
+      '${_pemBody(base64Body)}\n'
+      '-----END $label-----\n',
+    );
+    return path;
   }
+
   return (
-    certificate: authorityPem,
-    leafCertificate: leafPem,
-    leafKey: leafKey,
+    certificate: materialise('sanad-fixture-authority.pem', _authorityBody, 'CERTIFICATE'),
+    leafCertificate: materialise('sanad-fixture-leaf.pem', _leafBody, 'CERTIFICATE'),
+    leafKey: materialise('sanad-fixture-leaf-key.pem', _leafKeyBody, 'PRIVATE KEY'),
   );
 }
 
-String? _opensslUnavailableReason() {
-  try {
-    final result = Process.runSync('openssl', ['version']);
-    return result.exitCode == 0
-        ? null
-        : 'Requires the openssl CLI to mint a self-signed loopback certificate.';
-  } on ProcessException {
-    return 'Requires the openssl CLI to mint a self-signed loopback certificate.';
+String _pemBody(String body) {
+  final buffer = StringBuffer();
+  for (var index = 0; index < body.length; index += 64) {
+    final end = index + 64 > body.length ? body.length : index + 64;
+    buffer.writeln(body.substring(index, end));
   }
+  return buffer.toString().trimRight();
 }
+
+const String _authorityBody =
+  'MIIC/zCCAeegAwIBAgIUWG7KUw091TvbhKdxwV7hwwVv0S8wDQYJKoZIhvcNAQELBQAwJzElMCMG'
+  'A1UEAwwcU2FuYWQgVGVzdCBSZWxlYXNlIEF1dGhvcml0eTAeFw0yNjExMTQyMjU1MDFaFw00NjEx'
+  'MDkyMjU1MDFaMCcxJTAjBgNVBAMMHFNhbmFkIFRlc3QgUmVsZWFzZSBBdXRob3JpdHkwggEiMA0G'
+  'CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDFfIOuyrUdKsqJg2Xf6HcVtHVFk0ybVaDoPDS0reOz'
+  'H/aOdAtf7mNnqKjwA3ndtU2nQEVLE+Voz7ehKhegyEdkL+pyd1BSWAQkGPqpN5dbkhhUXGWUWdV5'
+  'FqGbRTR8qg7PX/CLYGkq6mRv1MDSyxQyliiXXUnjDlPtVA3pGca0ZZ9lB7Rj8CC+/IJ2z890GVYw'
+  'flzIiZq3gRL8Yf2jqBDOqIk9JDp8vRTehvNJFBfCiQJCJgk11Xnfi71PKzoUljoF7R21DrW2ZeKI'
+  'cZODlutMIPnCvNq2ErYsDpR7uox830qqLWvDsbBjO/4eAvHERtkHsxSCH6f+zZWomq3emWVjAgMB'
+  'AAGjIzAhMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0PAQH/BAQDAgEGMA0GCSqGSIb3DQEBCwUAA4IB'
+  'AQBhBgmtsQBV3rsQS4zHQn3dEIreXbrzYRf8NYgoqF1YH6y0A2sP4o+Y6ScR3o5C4xcI8+IvVoZq'
+  'rpryVwTAodfFjsPSDEik2FJ5K8qOIKGJit2TVHBDjVHjmu7LFvYyZLaBaV3fWku9oP40EEyVKfIv'
+  'yq4mif+smBJia5bAfGTnXCRvhCKroak5nlgJLUW5TJEU6XIACC8aFOz1QGK4ksTdr2B2dQDwMOMz'
+  'FllQDW4L3LF29H3u1yj7RcnX8uD9vc9QvfkSyeRCDIDEE+Gk5z+PomFap1vMcXW3iu5qzMamuARu'
+  '2qnOkOjDXBzrSMtonfAJ2sW9fKipTHqvL1Yh0n+T';
+
+const String _leafBody =
+  'MIIDGjCCAgKgAwIBAgIUCjDLxbW7t8QgV+dkwvDAadPbxlAwDQYJKoZIhvcNAQELBQAwJzElMCMG'
+  'A1UEAwwcU2FuYWQgVGVzdCBSZWxlYXNlIEF1dGhvcml0eTAeFw0yNjExMTQyMjU1MDJaFw0yODEw'
+  'MTQyMjU1MDJaMBQxEjAQBgNVBAMMCWxvY2FsaG9zdDCCASIwDQYJKoZIhvcNAQEBBQADggEPADCC'
+  'AQoCggEBAMjcqT+7S3hzn/8FxwD0oMNTnI7VQprBVM2GSpCH4ZHKvN9PKPT84O8goEPWTDfcyUjg'
+  '01rVytuMe2OWBxnzEykE50Q+pmVoxQStk29kZD7RenMvWC62c+KMeBcLFBx3F2bt+qJ+rbqXxQFd'
+  'z733oTDofIb0cfuQkKrNML3bjV5xwKYycZ586A8u9YfEq0wFgmF5Cmr0BWVm91jpH1N+Go62pbwS'
+  'CndnQ934fSkPcI9tks1MYINM2nwjkQOIMs3H/cORrot+hoh5uWF+1o1S+91RkzwcIqUeoOxUW18L'
+  'R3PpqdUx7V0QKZVHxxNcxcxADc+l/sBnEG5vrpgwDc8w41UCAwEAAaNRME8wGgYDVR0RBBMwEYIJ'
+  'bG9jYWxob3N0hwR/AAABMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoG'
+  'CCsGAQUFBwMBMA0GCSqGSIb3DQEBCwUAA4IBAQAEo68yQoqzbswKwPkoybeC6bZNKxy/9aLgz7yr'
+  'RnLXe0IS+Z5BpZ9sn/cx0cXxXOk3HIbHDXFt9U/sxeu+7Oti0pCu3RgmYNs7MjpHmYAvtIcCekd9'
+  '4LfzrjlzS5efvH0v4Hz/2jQM0LQ5R0gapVOCN4s8uOztFobwtwYI2OqOQYUCa57gJ7KIS+hUGc7a'
+  'UMgJVskL0XwyCFLBW4QKXJJStU/bgM+svuF9UCNDVcnEzsxdYFXmncQHlM6ZxTgsU7b3SrcqSdj7'
+  '5MROjcSxZp30muFG30P9zAFQ3WbA3MTIdU31vlfR/7JXizMBoeLVhmny8cnl/+75Q7nFTy3kHE/2';
+
+const String _leafKeyBody =
+  'MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDI3Kk/u0t4c5//BccA9KDDU5yO'
+  '1UKawVTNhkqQh+GRyrzfTyj0/ODvIKBD1kw33MlI4NNa1crbjHtjlgcZ8xMpBOdEPqZlaMUErZNv'
+  'ZGQ+0XpzL1gutnPijHgXCxQcdxdm7fqifq26l8UBXc+996Ew6HyG9HH7kJCqzTC9241eccCmMnGe'
+  'fOgPLvWHxKtMBYJheQpq9AVlZvdY6R9TfhqOtqW8Egp3Z0Pd+H0pD3CPbZLNTGCDTNp8I5EDiDLN'
+  'x/3Dka6LfoaIeblhftaNUvvdUZM8HCKlHqDsVFtfC0dz6anVMe1dECmVR8cTXMXMQA3Ppf7AZxBu'
+  'b66YMA3PMONVAgMBAAECggEALiuuyeQLGpJ1diEFV/5jT9LR23FBAKKtFBso26UoYCNam/gtwXa5'
+  'W65DuKQzW+nn6NUpMCmRmjrmCAOt+TSLNHQYlvLRu+DD3OnrSIEqm9f6Di0VV5N/+tTwK9fTlSF4'
+  '4yOT57M3yvrlAYXnYVLhHgVqzni1FK7r2h8Vc6bajZkuc/Uxhs34+wVXom6sGkCfnPTvWqivVdFm'
+  'KVuzuXNh5UaDnknULbbqwnUCGhf3hGj4LD5PbedB1vDYKdSj2W3vHF+Av3rbIgukghorWW5nBoZJ'
+  'obAfOn5NhJGM1Oa9ewslPmM37M/i8EBVQgYBU7TisNRI7ZNPu28nk7kyAv+SsQKBgQD7N2CkAT1I'
+  'J1g/wuXTBB+ePpLBwl8UTSj61TjwVFGTpt3Sehzy5w46FMDagm/gigEQFAY6MulO7gnqrI7c4XLW'
+  'ooe3FelpnGz0OwmgbhqR1FQ+mym2mpu4gWH9o8f5caofEUZf6ZqZ6k3xWDV3xch93+D9YxMmVr+k'
+  'Jpn1ggGq7QKBgQDMr9FLK+SNFdfnyyLLC0uGDMgUt0wvDaSEgFNn2KOe5d5mo1CI/tAjZcH82eRM'
+  'vuI5Tsrd4AytoeLX+Z1P8LQjSrJhLT9aVq4UtcdgUubwa/R3PI+93P5VCNVELIhRVa9C9VRjo0Px'
+  's5qi+UCNIsiDUt48h7bYjQwe0jLh4FBFCQKBgEjpSK4xAeVILg/LdEKrZrXZ+WQtEsVko6kxa2Yt'
+  'QsP04VquQGqrbvCih1qkEu57f1V4Slpn3lkfM1eeH5SyBk+POo6D2Ivjb6fu3ptmeWWr14uYIyIx'
+  'e1Kwko04FNksCTEdJWy+8zUK0PZkIJiTmd4WtUk1kSBGezacUYD066D9AoGBAI1JCumdaYwtOLPJ'
+  '1sFakY39ApqyD0cnXpkLTwcOVZqXxtUIA84cPSVB1w4mhNyoodS223cdcQLlDITRytFkL6NwqwJC'
+  'zkkYLd8jvnRxpPDtQ3iOeBWxFmkxyKvfJVUnFOveFZsVFhAfTi0SaYlCKi/jon0bnI2LhoM7yl15'
+  'jU6pAoGBALD1Ib1C1+9dtZaK7fV5YBtTyUWsu9uI+aJMZNqVtk95VApoy+vBFaLANAbASm4jyy/c'
+  'wKJVBGFWAvqTlCcq26ZzitFaJBCL/q9DerSwBb1DaRZWS/jlfhFj12eGX8wFjuUgY4BT33lGHEDF'
+  'iag9VUbIuH9rM8Z5ayqVg4bWJWY5';

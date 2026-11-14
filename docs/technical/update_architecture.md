@@ -64,12 +64,18 @@ releases.
 ### Release transport trust
 
 Artifact trust assumes the release metadata and bytes were fetched over a
-verified TLS connection. On macOS, iOS, and Android `dart:io`'s default
-`SecurityContext` takes roots from the platform store; on Windows and Linux it
-uses the Mozilla list bundled into the Dart SDK. A machine that inspects TLS
-(antivirus HTTPS scanning, a network proxy, a partial root store, or a skewed
-clock) therefore fails the handshake with `CERTIFICATE_VERIFY_FAILED: unable to
-get local issuer certificate` while the release surfaces themselves are healthy.
+verified TLS connection. Verification needs the issuer of the release host's
+chain, and `dart:io`/BoringSSL **never fetches a missing intermediate itself**,
+while every OS-based client does. The Windows Flutter engine embeds no root list
+and imports `CertOpen*`, so it validates against the Windows certificate store;
+the failure recorded in Issue #434 came from a machine whose store lacked
+`Sectigo Public Server Authentication Root E46`, which is exactly the
+intermediate GitHub's chain needs. Whenever a release edge serves that chain
+without the intermediate, the handshake is refused with
+`CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` while
+browsers, `curl`, and the official installer on the same machine succeed. The
+same refusal appears whenever anything inspects TLS (antivirus HTTPS scanning, a
+network proxy) or the store holds partial or stale anchors.
 
 `VerifiedAgentBootstrapInstaller` reports that as
 `AgentBootstrapStatus.tlsTrustFailed`, which the Client maps to
