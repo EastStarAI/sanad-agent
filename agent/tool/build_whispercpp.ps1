@@ -25,10 +25,28 @@
 # rejects `GGML_NATIVE=OFF` there with "use clang for GGML_CPU_ARM_ARCH" — so an
 # arm64 slice keeps native compilation and must not be published as portable;
 # no lane produces one. See `docs/technical/native_stt_runtime_platforms.md`.
+#
+# None of the above is true unless the value reaches CMake. PowerShell parses a
+# **bare** argument of the form `-DNAME=$value` as a parameter assignment and
+# does not expand the right-hand side, so `-DGGML_NATIVE=$ggmlNative` reached
+# CMake as the eleven literal characters `$ggmlNative`; CMake recorded
+# `GGML_NATIVE:BOOL=$ggmlNative` in `CMakeCache.txt`, and a non-empty string is
+# truthy in CMake, so ggml re-entered its native path and probed the build host
+# with `FindSIMD` instead of using the portable default. v1.0.23 shipped that:
+# the released `native/windows-x64/ggml-cpu.dll` contains AVX-512 code that the
+# documented `/arch:AVX2` floor forbids. The configure arguments are therefore
+# built as an **array** and splatted, because an array element is an
+# already-parsed value and is never re-read as `-D` syntax; the cache CMake
+# actually writes is then compared against the value this script asked for.
 param(
     [Parameter(Mandatory = $true)][string]$WhisperSrc,
     [string]$OutDir = "",
-    [string]$Arch = ""
+    [string]$Arch = "",
+    # Prints the resolved build inputs and writes nothing. It exists so the
+    # argument contract between `ensure_native_stt` and this script stays
+    # testable on a host that cannot build the requested slice, exactly like
+    # `SANAD_BUILD_PLAN_ONLY=1` in the POSIX builder.
+    [switch]$PlanOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -58,6 +76,29 @@ try {
     # and ggml aborts the configure rather than producing one.
     $ggmlNative = if ($Arch -eq 'x64') { 'OFF' } else { 'ON' }
 
+    # One array, splatted: every element is already parsed, so no element can be
+    # re-read as `-D` syntax and lose its expansion. See the header.
+    $configureArguments = @(
+        '-B', 'build'
+        '-DCMAKE_BUILD_TYPE=Release'
+        '-DBUILD_SHARED_LIBS=ON'
+        "-DGGML_NATIVE=$ggmlNative"
+        '-DGGML_METAL=OFF'
+        '-DWHISPER_BUILD_TESTS=OFF'
+        '-DWHISPER_BUILD_EXAMPLES=OFF'
+        '-A', $Arch
+    )
+
+    # Plan-only mode prints the resolved inputs and writes nothing.
+    if ($PlanOnly -or $env:SANAD_BUILD_PLAN_ONLY -eq '1') {
+        Write-Output "build_plan_arch=$Arch"
+        Write-Output "build_plan_ggml_native=$ggmlNative"
+        Write-Output "build_plan_out=$out"
+        Write-Output "build_plan_configure=$($configureArguments -join ' ')"
+        Write-Output "build_plan_required_cache=GGML_NATIVE:BOOL=$ggmlNative"
+        exit 0
+    }
+
     # A restored cache, or a developer's earlier build, can hold a CMakeCache
     # configured for a different generator platform. CMake then refuses to
     # reconfigure ("does not match the platform used previously") instead of
@@ -80,13 +121,29 @@ try {
             Remove-Item -Recurse -Force -LiteralPath $buildDir
         }
     }
-    cmake -B build -DCMAKE_BUILD_TYPE=Release `
-        -DBUILD_SHARED_LIBS=ON `
-        -DGGML_NATIVE=$ggmlNative `
-        -DGGML_METAL=OFF `
-        -DWHISPER_BUILD_TESTS=OFF `
-        -DWHISPER_BUILD_EXAMPLES=OFF -A $Arch
+    & cmake @configureArguments
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
+
+    # Fail closed on what CMake actually recorded, so a value that never reached
+    # ggml cannot reach a published runtime. A missing line, a literal
+    # `$ggmlNative`, or any other spelling is a defect in the arguments above —
+    # not a build to publish.
+    $recorded = ""
+    if (Test-Path -LiteralPath $cacheFile) {
+        $nativeLine = Select-String -LiteralPath $cacheFile -Pattern '^GGML_NATIVE:BOOL=(.*)$' |
+            Select-Object -First 1
+        if ($null -ne $nativeLine) {
+            $recorded = $nativeLine.Matches[0].Groups[1].Value.Trim()
+        }
+    }
+    if ($recorded -ne $ggmlNative) {
+        $seen = if ([string]::IsNullOrEmpty($recorded)) { "<missing>" } else { $recorded }
+        throw ("GGML_NATIVE cache contract violated for windows-$Arch`: CMakeCache.txt records " +
+            "GGML_NATIVE:BOOL=$seen, but the portable baseline requires exactly '$ggmlNative'. " +
+            "Refusing to build a runtime whose ggml path was not configured portable.")
+    }
+    Write-Host "GGML_NATIVE:BOOL=$recorded (windows-$Arch)"
+
     cmake --build build --config Release
     if ($LASTEXITCODE -ne 0) { throw "cmake build failed" }
 
