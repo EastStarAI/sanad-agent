@@ -123,6 +123,9 @@ void main() {
           // The manifest keeps canonical GitHub identity; only the bytes come
           // from the loopback host, exactly like an isolated artifact mirror.
           artifactMirrorUri: Uri.parse('https://127.0.0.1:${server.port}/'),
+          // The hosted fallback would be a real network call, and these tests
+          // assert the refusal itself rather than the fallback path.
+          fallbackManifestUri: null,
           // No bundle: the loopback authority must be refused.
           client: createReleaseTrustHttpClient(environment: const {}),
         );
@@ -148,6 +151,7 @@ void main() {
             'https://127.0.0.1:${server.port}/release-manifest.json',
           ),
           artifactMirrorUri: Uri.parse('https://127.0.0.1:${server.port}/'),
+          fallbackManifestUri: null,
           client: createReleaseTrustHttpClient(
             environment: {extraCaBundleEnvironmentVariable: authorityPath},
           ),

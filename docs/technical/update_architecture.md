@@ -91,10 +91,26 @@ verification:
 - An unreadable or malformed bundle is logged and ignored; it never fails an
   install, because the request still verifies against the platform roots. The
   path itself is never logged.
-- A mirrored manifest host is deliberately absent. A machine that cannot build a
-trusted chain to the release host cannot build one to our own host either, so a
-mirror would only add a second trusted fetch surface without fixing the reported
-failure.
+
+The Client also keeps a **hosted copy of the same manifest** as a resilience
+path, because a refused chain is host-specific rather than a general outage:
+
+- `SANAD_RELEASE_MANIFEST_FALLBACK_URL` names it
+  (`https://updates.sanad.eaststarai.com/release-manifest.json`), the byte
+  identical file that `deploy.yml` publishes and rolls back atomically for
+  Stable. An empty value disables the fallback.
+- It is tried **only** after the primary release host refuses its chain. A
+  refused certificate is host-specific and locally repairable; an HTTP error,
+  unparseable manifest, or unreachable network is a real failure and surfaces as
+  such without a second request.
+- Nothing about verification changes: the mirrored manifest must still declare
+  the exact target version, and the downloaded artifact must still pass size,
+  SHA-256, and platform trust against its canonical GitHub identity.
+- A lagging mirror fails closed as `targetMismatch`; it can never install a
+  different Agent than the Client requires.
+- Artifact bytes have no fallback. Only the metadata host is mirrored, so an
+  unverifiable artifact download is still reported as a trust failure.
+
 
 ## Exact Client–Agent pairing
 

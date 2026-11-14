@@ -71,6 +71,8 @@ network is intercepting; a hotspot that fails too means the machine intercepts.
 
 ## Remediate
 
+0. **Nothing to do first:** the Client already retries its own published manifest copy when the primary release host refuses its chain, so a single release edge serving an incomplete chain installs normally. Reaching this section means both hosts were refused.
+
 1. **Exempt Sanad from HTTPS scanning** (preferred when the machine's owner
    controls the security software). Disable SSL/HTTPS inspection for the Client,
    or add an exclusion for it, then press **Run local** again.
@@ -107,7 +109,7 @@ network is intercepting; a hotspot that fails too means the machine intercepts.
 | Check | Expected |
 |---|---|
 | Interception root trusted and **Run local** pressed | Install completes; the version, size, SHA-256, and platform-trust steps still run. |
-| No trust remediation applied | A localized cause-and-remedy message is shown and no artifact is written. |
+| No trust remediation applied | A localized cause-and-remedy message is shown and no artifact is written; the Client has already tried the hosted manifest copy and the chain was refused there too. |
 | Install log | Contains no `HandshakeException`, no `CERTIFICATE_VERIFY_FAILED`, and no BoringSSL path. |
 | `SANAD_EXTRA_CA_BUNDLE` pointing at a leaf certificate | Verification still fails closed; a leaf is not a trust anchor. |
 | `SANAD_EXTRA_CA_BUNDLE` pointing at a missing or malformed file | The fetch behaves as if it were unset; the Client logs a bounded warning without the path. |

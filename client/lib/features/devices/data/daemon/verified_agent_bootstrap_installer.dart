@@ -97,6 +97,7 @@ class VerifiedAgentBootstrapInstaller {
     PlatformArtifactVerifier? platformVerifier,
     PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Uri? artifactMirrorUri,
+    Object? fallbackManifestUri = _unsetFallbackManifest,
   }) : _client = client ?? createReleaseTrustHttpClient(),
        manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
@@ -105,10 +106,18 @@ class VerifiedAgentBootstrapInstaller {
        _detailedPlatformVerifier = detailedPlatformVerifier,
        _artifactMirrorUri =
            artifactMirrorUri ??
-           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl));
+           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl)),
+       fallbackManifestUri = identical(fallbackManifestUri, _unsetFallbackManifest)
+           ? _configuredFallbackManifest()
+           : fallbackManifestUri as Uri?;
 
   final String targetPath;
   final Uri manifestUri;
+
+  /// The project's own published copy of the same manifest, used only when the
+  /// primary release host cannot be verified on this computer.
+  final Uri? fallbackManifestUri;
+
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
@@ -120,31 +129,27 @@ class VerifiedAgentBootstrapInstaller {
     required String targetVersion,
     void Function(double progress)? onProgress,
   }) async {
+    final primary = await _loadManifest(manifestUri);
     ReleaseManifest manifest;
-    try {
-      final response = await _client.get(
-        manifestUri,
-        headers: const {'User-Agent': 'sanad-client'},
-      );
-      if (response.statusCode != HttpStatus.ok) {
-        return AgentBootstrapResult(
-          AgentBootstrapStatus.networkFailed,
-          message: 'Manifest request failed with HTTP ${response.statusCode}.',
-        );
+    if (primary.manifest != null) {
+      manifest = primary.manifest!;
+    } else if (primary.refusedChain && _fallbackApplies) {
+      // GitHub's chain is not verifiable here while our own host's is, so the
+      // identical published copy is fetched instead. Verification below is
+      // unchanged: version, size, SHA-256, and platform trust still decide.
+      final fallback = await _loadManifest(fallbackManifestUri!);
+      if (fallback.manifest == null) {
+        return fallback.failure ??
+            const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
       }
-      manifest = ReleaseManifest.fromJsonString(response.body);
-    } on FormatException catch (error) {
-      return AgentBootstrapResult(
-        AgentBootstrapStatus.manifestInvalid,
-        message: error.message,
+      _logger.info(
+        'Used the hosted release manifest because the primary release host '
+        'could not be verified on this computer.',
       );
-    } on TlsException catch (error) {
-      return _tlsTrustFailure('release manifest', error);
-    } catch (error) {
-      return AgentBootstrapResult(
-        AgentBootstrapStatus.networkFailed,
-        message: 'Unable to fetch the release manifest: $error',
-      );
+      manifest = fallback.manifest!;
+    } else {
+      return primary.failure ??
+          const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
     }
 
     final requested = ReleaseVersion.parse(targetVersion);
@@ -238,6 +243,74 @@ class VerifiedAgentBootstrapInstaller {
       );
     } finally {
       if (staged.existsSync()) await staged.delete();
+    }
+  }
+
+  static const Object _unsetFallbackManifest = Object();
+
+  /// True when a fallback manifest host is configured and differs from the
+  /// primary one; otherwise a refused chain is reported as such.
+  bool get _fallbackApplies {
+    final fallback = fallbackManifestUri;
+    return fallback != null && fallback != manifestUri;
+  }
+
+  static Uri? _configuredFallbackManifest() {
+    final configured = AppConfig.releaseManifestFallbackUrl.trim();
+    return configured.isEmpty ? null : Uri.parse(configured);
+  }
+
+  /// Fetches and parses one manifest candidate.
+  ///
+  /// [refusedChain] is separate from [failure] so the caller can decide whether
+  /// another host is worth trying: a refused certificate is host-specific, while
+  /// an HTTP error, unparseable body, or unreachable network is not.
+  Future<({ReleaseManifest? manifest, AgentBootstrapResult? failure, bool refusedChain})>
+  _loadManifest(Uri uri) async {
+    try {
+      final response = await _client.get(
+        uri,
+        headers: const {'User-Agent': 'sanad-client'},
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        return (
+          manifest: null,
+          failure: AgentBootstrapResult(
+            AgentBootstrapStatus.networkFailed,
+            message: 'Manifest request failed with HTTP ${response.statusCode}.',
+          ),
+          refusedChain: false,
+        );
+      }
+      return (
+        manifest: ReleaseManifest.fromJsonString(response.body),
+        failure: null,
+        refusedChain: false,
+      );
+    } on FormatException catch (error) {
+      return (
+        manifest: null,
+        failure: AgentBootstrapResult(
+          AgentBootstrapStatus.manifestInvalid,
+          message: error.message,
+        ),
+        refusedChain: false,
+      );
+    } on TlsException catch (error) {
+      return (
+        manifest: null,
+        failure: _tlsTrustFailure('release manifest', error),
+        refusedChain: true,
+      );
+    } catch (error) {
+      return (
+        manifest: null,
+        failure: AgentBootstrapResult(
+          AgentBootstrapStatus.networkFailed,
+          message: 'Unable to fetch the release manifest: $error',
+        ),
+        refusedChain: false,
+      );
     }
   }
 
