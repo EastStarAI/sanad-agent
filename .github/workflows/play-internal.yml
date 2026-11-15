@@ -30,6 +30,25 @@ on:
         description: Upload to Google Play (off builds and verifies only)
         type: boolean
         default: false
+  # Callable so a proven lane can be reused by a caller workflow without
+  # duplicating the build or the upload contract.
+  workflow_call:
+    inputs:
+      build_number:
+        required: true
+        type: string
+      build_name:
+        required: false
+        default: ''
+        type: string
+      track:
+        required: false
+        default: internal
+        type: string
+      upload:
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
