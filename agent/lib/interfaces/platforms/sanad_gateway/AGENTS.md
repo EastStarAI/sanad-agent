@@ -15,6 +15,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 ## Canonical Envelope
 - Use device-first canonical envelopes with explicit device, hardware, session, request, origin, and typed delivery identity.
 - Do not emit legacy agent type fields or legacy thread identity in new payloads.
+- `thought_stream` and `reasoning_stream` payloads carry the optional `stream_seq`: an integer that starts at `1` per stream key (`stream kind` + `model_step_id ?? run_id`) inside one run, increases by exactly `1`, and never wraps. It is allocated once at the stream source, so both transports serialize the identical value; a terminal event and every history row stay sequence-free.
 - Preserve opaque event id across transport copies and preserve run/model-step/tool-call distinctions.
 - A session-bound Local Gateway response retains the explicit device identity captured for that session. A later unrelated command on the same socket must not replace it with another device or hardware identity; socket identity is fallback-only when no session identity exists.
 - A newly accepted Local Gateway socket starts with the initialized Agent `hardware_id`, so platform-family events emitted before its first command still carry the canonical local inventory identity. Do not emit or accept a synthetic local runtime identity.
@@ -46,6 +47,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Session and History
 - `create_session` bootstraps without execution and preserves an explicit supplied title.
+- `session.stream_state` answers from the in-memory in-flight projection alone: the running stream with its `stream_seq` watermark and `snapshot: true`, or an explicit `absent` (`idle` or `unknown_session`). It never paginates, projects history rows, or rebuilds a timeline, and a request without a whole `session_id` fails typed as `invalid_request`.
 - Workspace-associated session events include workspace identity and recoverable display metadata.
 - Session lists use keyset ordering by the canonical activity timestamp then session id. Fork creation initializes the child at commit time so it leads the list; afterward only canonical user acceptance advances ordering.
 - Reject incompatible filters, malformed cursors, and non-positive limits explicitly.
@@ -59,6 +61,7 @@ This contract applies to `agent/lib/interfaces/platforms/sanad_gateway/`.
 
 ## Recovery Commands
 - Retry/continue route changes broadcast authoritative session preference confirmation to the Sanad client family only after runtime ownership succeeds.
+- A suspended-resume continuation publishes the same surfaces as a live turn: provider reasoning stays `reasoning_stream`, ordinary text stays `thought_stream`, and every delta keeps its stream key's ordinal rather than restarting the numbering a consumer already advanced.
 - Concurrent resume is idempotent; already-resuming never mutates or publishes a competing route.
 - Restart draft recovery is text-free until a first-writer claim succeeds; only the winning direct response carries recovered items.
 - User-stop recovery requires its private owner token for acknowledgment. Restart recovery requires the durable winning claimant id.

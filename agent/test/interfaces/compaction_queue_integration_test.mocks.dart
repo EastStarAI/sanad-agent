@@ -1344,6 +1344,7 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
     required String? modelStepId,
     required String? type,
     required String? delta,
+    int? seq,
   }) => super.noSuchMethod(
     Invocation.method(#appendInFlightDelta, [], {
       #sessionId: sessionId,
@@ -1352,6 +1353,7 @@ class MockSessionManager extends _i1.Mock implements _i4.SessionManager {
       #modelStepId: modelStepId,
       #type: type,
       #delta: delta,
+      #seq: seq,
     }),
     returnValueForMissingStub: null,
   );

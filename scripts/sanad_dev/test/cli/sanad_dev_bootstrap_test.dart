@@ -41,8 +41,26 @@ void main() {
       expect(result.stdout, contains('live:'));
       expect(result.stdout, contains('ready ('));
       expect(
-        invocations.last,
+        invocations[5],
         contains('dart compile exe lib/sanad_dev_cli.dart -o'),
+      );
+      // A fresh checkout ends by preparing native dictation: the acquisition
+      // tool is the one owner of download/build/verify, and `setup` awaits it so
+      // the checkout reaches a runtime without a manual Dart command.
+      expect(invocations, hasLength(7));
+      expect(
+        invocations[6],
+        contains('agent|dart run tool/ensure_native_stt.dart'),
+      );
+      // The stage reports what the tool actually said, so a wrapper that only
+      // looked at an exit status cannot pass this.
+      expect(
+        await File(
+          '${fixture.path}${Platform.pathSeparator}agent'
+          '${Platform.pathSeparator}native'
+          '${Platform.pathSeparator}.stt-prepare.log',
+        ).readAsString(),
+        contains('native_stt_result=ready'),
       );
       final runtimeArtifacts =
           await Directory(
@@ -56,6 +74,48 @@ void main() {
       expect(await shim.exists(), isTrue);
       expect(await shim.target(), contains(fixture.path));
       expect(result.stdout, contains('PATH configured for new terminals'));
+    });
+
+    test('a failed dictation preparation never fails setup', () async {
+      // Dictation is optional: the Agent must keep installing and starting even
+      // when the native runtime cannot be acquired. The failure is reported with
+      // its durable log and the managed retry instead of a manual command.
+      final result = await runBootstrap(
+        const ['setup'],
+        environment: const {'FAIL_DICTATION': '1'},
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stdout, contains('Preparing native dictation'));
+      expect(
+        result.stderr,
+        contains('Dictation is unavailable; the Agent runs without it.'),
+      );
+      expect(result.stderr, contains('agent/native/.stt-prepare.log'));
+      expect(result.stderr, contains('retry: sanad-dev setup'));
+      expect(result.stderr, contains('cmake is not installed'));
+      // The log is the durable evidence: a wrapper that ignored the tool's
+      // machine keys would report success here, so the content is asserted.
+      final log = await File(
+        '${fixture.path}${Platform.pathSeparator}agent'
+        '${Platform.pathSeparator}native'
+        '${Platform.pathSeparator}.stt-prepare.log',
+      ).readAsString();
+      expect(log, contains('native_stt_result=failed'));
+      expect(log, contains('native_stt_failure=prerequisite_missing'));
+    });
+
+    test('a busy dictation preparation reports a concurrent attempt', () async {
+      // Another attempt holds the claim. Nothing was prepared, so `setup` must
+      // say so instead of reporting a ready runtime it never acquired.
+      final result = await runBootstrap(
+        const ['setup'],
+        environment: const {'FAIL_DICTATION': 'busy'},
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stdout, contains('already running'));
+      expect(result.stderr, isNot(contains('Dictation is unavailable')));
     });
 
     test(
@@ -72,8 +132,11 @@ void main() {
           result.stdout,
           isNot(contains('Resolving package dependencies')),
         );
+        // Only the dictation stage runs again: install, dependency resolution,
+        // and the runtime compile are all idempotent and silent when current.
         final invocations = await calls.readAsLines();
-        expect(invocations, isEmpty);
+        expect(invocations, hasLength(1));
+        expect(invocations.single, contains('tool/ensure_native_stt.dart'));
       },
     );
 
@@ -99,7 +162,9 @@ void main() {
           reason: '${result.stdout}\n${result.stderr}',
         );
         expect(await stamp.readAsString(), expectedFingerprint);
-        expect(await calls.readAsString(), isEmpty);
+        final invocations = await calls.readAsLines();
+        expect(invocations, hasLength(1));
+        expect(invocations.single, contains('tool/ensure_native_stt.dart'));
       },
     );
 
@@ -218,6 +283,12 @@ void main() {
           invocations[6],
           contains('runtime|run --config config/dev.json'),
         );
+        // `run` never waits for dictation: the launcher prepares the runtime in
+        // the background, so the bootstrap stages stay identical to `setup`'s.
+        expect(
+          invocations.any((line) => line.contains('ensure_native_stt')),
+          isFalse,
+        );
         expect(
           await Link(
             '${userBin.path}${Platform.pathSeparator}sanad-dev',
@@ -263,7 +334,23 @@ void main() {
           reason: '${result.stdout}\n${result.stderr}',
         );
         expect(await shim.target(), foreign);
-        expect((await calls.readAsLines()).last, contains('dart compile exe'));
+        final invocations = await calls.readAsLines();
+        // The shim belongs to another checkout, so this setup still resolves
+        // every package and compiles the runtime CLI, then awaits exactly one
+        // dictation preparation — the same stage list as a fresh setup.
+        expect(
+          invocations.any(
+            (line) => line.contains('dart compile exe lib/sanad_dev_cli.dart -o'),
+          ),
+          isTrue,
+          reason: 'setup still compiles the runtime CLI',
+        );
+        expect(
+          invocations.where((line) => line.contains('ensure_native_stt')),
+          hasLength(1),
+          reason: 'setup prepares dictation once, and never twice',
+        );
+        expect(invocations.last, contains('agent|dart run tool/ensure_native_stt.dart'));
       },
     );
 
@@ -544,7 +631,14 @@ void main() {
       reason: '${reuseResult.stdout}\n${reuseResult.stderr}',
     );
     expect(await runtimeStamp.readAsString(), expectedFingerprint);
-    expect(await calls.readAsString(), isEmpty);
+    // A ready runtime is never rebuilt, so the only stage a repeated `setup`
+    // runs is the dictation preparation, which is always attempted.
+    final reuseInvocations = await calls.readAsLines();
+    expect(reuseInvocations, hasLength(1));
+    expect(
+      reuseInvocations.single,
+      contains('agent|dart run tool/ensure_native_stt.dart'),
+    );
     expect(installedShim.existsSync(), isTrue);
     expect(await installedShim.readAsString(), '@echo foreign checkout');
   }, skip: !Platform.isWindows, timeout: const Timeout(Duration(minutes: 2)));

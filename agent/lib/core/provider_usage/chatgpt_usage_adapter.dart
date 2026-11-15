@@ -24,6 +24,7 @@ import 'package:logging/logging.dart';
 
 import 'provider_usage_adapter.dart';
 import 'provider_usage_models.dart';
+import 'provider_usage_parsing.dart';
 
 /// Fixed mapping from ChatGPT `/wham/usage` window keys to Sanad window types.
 ///
@@ -291,7 +292,7 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     if (raw is! Map<String, dynamic>) return null;
     final usedRaw = raw['used_percent'];
     if (usedRaw == null) return null;
-    final used = _safePercent(usedRaw);
+    final used = parseUsagePercent(usedRaw);
     if (used == null) return null;
 
     final pair = derivePercentPair(usedRaw: used);
@@ -300,41 +301,9 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       label: spec.label,
       usedPercent: pair.used,
       remainingPercent: pair.remaining,
-      resetAt: _parseResetAt(raw['reset_at']),
+      resetAt: parseUsageResetAt(raw['reset_at']),
       detail: _parseDetail(raw),
     );
-  }
-
-  double? _safePercent(Object? raw) {
-    double? v;
-    if (raw is num) {
-      v = raw.toDouble();
-    } else {
-      v = double.tryParse(raw?.toString() ?? '');
-    }
-    if (v == null || v.isNaN || v.isInfinite) return null;
-    if (v < 0) return 0.0;
-    if (v > 100) return 100.0;
-    return v;
-  }
-
-  DateTime? _parseResetAt(Object? raw) {
-    if (raw == null) return null;
-    if (raw is num) {
-      // Unix seconds → UTC.
-      return DateTime.fromMillisecondsSinceEpoch(
-        (raw.toDouble() * 1000).round(),
-        isUtc: true,
-      );
-    }
-    final text = raw.toString().trim();
-    if (text.isEmpty) return null;
-    var normalised = text;
-    if (normalised.endsWith('Z')) {
-      normalised = '${normalised.substring(0, normalised.length - 1)}+00:00';
-    }
-    final dt = DateTime.tryParse(normalised);
-    return dt?.toUtc();
   }
 
   String? _parseDetail(Map<String, dynamic> win) {

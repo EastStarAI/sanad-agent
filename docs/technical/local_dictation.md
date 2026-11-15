@@ -202,6 +202,55 @@ Streaming exists to keep the contract honest, not because Arabic streaming is
 available: no sherpa-packaged Arabic streaming model exists today, so the only
 streaming entry is English and labelled experimental.
 
+### The default thread count
+
+An explicit `stt.threads` always wins, and the accepted range stays `1..16`.
+Without the key the daemon resolves a default through one owner,
+`defaultSttThreads` in `agent/lib/infrastructure/stt/stt_settings.dart`, which
+answers from the running ABI (`defaultSttThreadsFor`, so the policy is testable
+from any host). It applies on every path that returns before the key is read,
+including a missing `config.yaml`, because a literal constructor default would
+silently disable whichever carve-out the host depends on.
+
+| ABI | fewer than 8 logical processors | 8 or more |
+|---|---|---|
+| `windowsX64` | `min(4, cores)` | `4` |
+| every other host | `min(4, cores)` | `6` |
+
+An unknown, unreadable, or non-positive core count resolves to four rather than
+to a count derived from it. Because the resolver owns the value on every path,
+a host with no `config.yaml` at all follows this table too, instead of the
+constructor's literal four.
+
+The two halves have different evidence and must not be merged:
+
+- **Non-Windows wide machines keep six** because the Apple-silicon Metal decode
+  curve plateaus at five threads — 1607 ms at 4, 1060 ms at 5, 1069 ms at 6,
+  1049 ms at 8 for the same 6 s sample on `egy-whisper-turbo-ggml-q8`. That
+  result belongs to the Metal path and is not generalized to Windows.
+- **Windows x64 is CPU inference** and does not inherit that curve. The accepted
+  Windows benchmark
+  (`docs/plans/tasks/windows-stt-cpu-thermal-benchmark.md`) compared 2, 4, and 6
+  threads against one fixed model, audio fixture, and AVX2-safe runtime. In its
+  certified evidence set, `matrix-ar-final`, the 4-thread row clears the
+  investigator-chosen interactive thresholds — **median** RTF 0.628 against
+  0.65, and a **median** 27.55 CPU-seconds against 30 — while the 6-thread row
+  saved 1.27 s of **median** wall time in that set for 6.31 more CPU-seconds per
+  utterance. The 4 → 6 ordering held in every paired set — that certified 1.27 s
+  plus 0.84 s, 1.50 s, and 1.63 s in the three corroborating sets — but no single
+  value is a resolved difference.
+
+That benchmark is a latency and CPU-cost result only. Temperature, package
+power, and fan behaviour were **not** measured — no hardware-monitoring driver
+was installed — so this default claims nothing about heat or energy; the
+CPU-seconds, utilization, and post-stop idle observations are proxies, not a
+thermal result. Windows arm64 keeps the pre-existing resolver policy: it has no
+producing runtime lane, and the accepted measurement covers x64 only, so the cap
+is deliberately not generalized beyond the measured ABI.
+
+The resolved count is what the existing decode log line reports (`threads=`), so
+a host's effective width stays identifiable without a new field.
+
 ### Builds without the sherpa engine
 
 The sherpa engine is a swappable package, and the Linux arm64 Agent is built
@@ -366,6 +415,37 @@ origin:
   (`agent/lib/infrastructure/stt/stt_write_bounds.dart`), shared by the isolate
   pipeline and the in-process seam so the rule has a single owner and neither
   file outgrows the 1000-line ratchet.
+- **Every handle is closed by the isolate that opened it, and `close()` waits for
+  both.** A dictation install deletes or renames the `.partial` in the statement
+  after `close()` returns, and Windows refuses either while any handle is open —
+  including one this same process holds. Neither ending an isolate nor dropping
+  the last reference releases its descriptor (measured: `Isolate.kill` leaves the
+  file open after the isolate's own `exit` event), so the writer closes its own
+  handle on every path it can take, the flusher does the same on `exit` and after
+  a refused flush, and `close()` asks the flusher directly over a parent-facing
+  channel — it reports `gone` only after its `closeSync()` — then awaits both
+  isolate exits. `gone` and the exit are **different events and different
+  completers**: `gone` proves the descriptor was closed by the isolate whose
+  handle it was, while the isolate keeps running until its own `onExit` fires, and
+  only that event (or a spawn that never produced an isolate) may count as an
+  exit. Conflating them made `close()` report an exit it never observed. Three
+  details carry the guarantee:
+  - **The flusher handoff is a state, not a value.** The channel arrives
+    asynchronously after the spawn, so `close()` first waits for the handoff to
+    settle — channel received, or no handle, or isolate exited — and only then
+    decides whether there is a handle to ask. Sampling the channel once and
+    reading "not here yet" as "no handle" stranded one append descriptor per
+    immediate cancel (17/200 measured by review; 63/200 on another host).
+  - **One teardown, shared.** Every concurrent `close()` awaits the same
+    completion, so a second caller cannot return while the flusher is still inside
+    `closeSync`; a caller that arrives after the teardown settled gets a no-op,
+    and the typed failure is rethrown once — by the close that ran it.
+
+  `close()` never short-circuits: a pipeline whose writer or flusher already ended
+  still tears down and still rethrows its typed failure, because the alternative
+  is a `.partial` that can never be repaired, activated, or removed until the
+  daemon exits. Killing an isolate remains only as the net for a flusher that
+  never took a command channel.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s

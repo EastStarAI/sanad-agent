@@ -43,7 +43,8 @@ either: 1/2/3/4 workers measured 29.4/31.0/30.1/28.4 MB/s.
 | Invariant | Test |
 |---|---|
 | Native and pure-Dart digests are byte-identical, every chunking, including a chunk wider than the native window | `test/stt/stt_digest_test.dart` |
-| The shipped digest is the native one where the OS provides it, and is measurably faster | `test/stt/stt_digest_test.dart` |
+| The shipped digest is the native one where the OS provides it | `test/stt/stt_digest_test.dart` |
+| The native digest is measurably faster: the median of five alternating paired trials stays at 2.5× the pure-Dart path | `test/stt/stt_digest_cost_test.dart` |
 | The pipeline never accepts more than `kSttWriteWindowBytes` while the disk is stalled | `test/stt/stt_download_pipeline_test.dart` |
 | Exactly one write is in flight, and `close()` drains what it accepted | `test/stt/stt_download_pipeline_test.dart` |
 | A refused write reaches the store's typed codes (`storage_full`, otherwise `download_failed`) across the isolate boundary | `test/stt/stt_download_pipeline_test.dart` |

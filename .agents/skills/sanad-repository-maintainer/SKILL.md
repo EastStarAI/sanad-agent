@@ -34,7 +34,13 @@ If the authenticated role cannot perform an operation, stop. Do not seek a bypas
 2. Map changed paths to `maintainer-reviewed`, `security-reviewed`, and `release-reviewed` using `.github/GOVERNANCE.md` and `.github/workflows/ci.yml`.
 3. Apply a protected review label only after an authorized maintainer confirms the corresponding review. A label is review evidence, not a mechanism for hiding a failure. Label changes start no run of their own, so after applying or removing one, dispatch `protected-labels.yml` with the pull request number and confirm the re-verification run and the resulting aggregate check.
 4. Preserve read-only, secret-free execution for fork pull requests.
-5. Merge only through the repository's enabled squash flow and only after the responsible maintainer authorizes the merge. When the merge queue is enabled, enqueue instead of merging directly: update the branch, resolve conflicts, verify the head commit, then run `gh pr merge <number> --squash --match-head-commit <sha>`. The merge agent owns branch freshness and conflicts; a coordinator only reviews and dispatches. A merge group that cannot be attributed to exactly one pull request fails the protected-label check, so keep one pull request per queued build.
+5. Merge only through the repository's enabled squash flow and only after the responsible maintainer authorizes the merge. `main` requires the pull-request head to contain the current `main` tip, and there is no merge queue, so the sequence is fixed:
+   1. Update the branch with `gh pr update-branch <number>` when it is behind, and resolve conflicts with the repository's fail-closed merge procedure.
+   2. Verify the head commit, the complete diff, resolved conversations, and the mandatory non-protected label set.
+   3. Re-check the protected labels against the current head: read the `completed_at` of the latest Public CI run's `Verify protected review labels` job, read `GET /issues/N/events` for `labeled` and `unlabeled` events on a protected label after that time, and dispatch `protected-labels.yml` when any exist or the data is ambiguous; require a green `All required checks pass` on the same head before continuing.
+   4. Merge with `gh pr merge <number> --squash --match-head-commit <sha>`. A rejection because the branch is behind restarts step 1, at most three times, then stop and report the blocker instead of retrying again.
+
+   The merge agent owns branch freshness, conflicts, and the label re-check; a coordinator only reviews and dispatches.
 6. Verify the resulting default-branch commit, CI result, branch cleanup, and any bounded downstream notification.
 
 Use short status queries. Do not leave indefinite watch or follow commands running.

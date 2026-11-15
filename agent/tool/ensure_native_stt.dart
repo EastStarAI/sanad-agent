@@ -33,6 +33,23 @@
 ///
 /// Environment fallbacks: `SANAD_STT_BASE_URL`, `WHISPER_CPP_SRC`,
 /// `SOURCE_DATE_EPOCH` (archive timestamps; default `0`).
+///
+/// Every run ends with three machine keys, so a launcher, a CI log, or an issue
+/// report can name what happened without reading prose:
+///
+///   `native_stt_stage=<inspect|download|build|verify|ready>`
+///   `native_stt_result=<ready|failed|busy>`
+///   `native_stt_failure=<typed cause>`   (only when it failed)
+///
+/// The causes are `unsupported_platform`, `target_mismatch`,
+/// `prerequisite_missing`, `download_failed`, `checksum_mismatch`,
+/// `extract_failed`, `build_failed`, `verification_failed`, `not_relocatable`,
+/// `instruction_set_above_baseline`, `publish_failed`, `stage_failed`, and
+/// `acquisition_failed` (the generic last resort). `busy` means another attempt
+/// holds `native/.stt-preparing`; it exits 0 because nothing failed and starting
+/// a second attempt would stage the same runtime directory twice. The claim is
+/// atomic, an expired or dead-owner claim is taken over automatically, and
+/// `--force` overrides a live one deliberately.
 library;
 
 import 'dart:io';
@@ -62,22 +79,44 @@ Future<void> main(List<String> args) async {
     exit(2);
   }
   final nativeRoot = Directory(_nativeRoot);
-  // Tell the daemon an install is in progress, so the UI can say "preparing"
-  // instead of "missing" while this runs. Pure inspection never marks.
-  final marker = File('${nativeRoot.path}/$sttPreparingMarkerName');
-  if (!options.inspectsOnly) _writeMarker(marker);
+  final report = _PreparationReport();
+  // One acquisition at a time. The development launcher, `sanad-dev setup`, and
+  // the daemon's Client-triggered retry all run this tool, and two of them
+  // staging into `native/<tag>.tmp` at once leaves a half-built runtime behind.
+  // The claim is one atomic exclusive create on the shared preparing marker, so
+  // a second attempt loses the race and reports `busy` instead of staging the
+  // same directory. An expired claim, or one whose owner is provably gone, is
+  // taken over; `--force` is the deliberate override for a stuck live attempt.
+  if (!options.inspectsOnly &&
+      !sttClaimPreparation(nativeRoot, pid: pid, force: options.force)) {
+    stdout.writeln('native_stt_result=busy');
+    stdout.writeln('native_stt_stage=inspect');
+    stdout.writeln(
+      'another native dictation preparation is already running '
+      '(native/$sttPreparingMarkerName); it releases the marker when it '
+      'finishes, and a killed attempt stops holding it as soon as its process '
+      'is gone',
+    );
+    return;
+  }
   var code = 0;
   try {
-    code = await _run(options, nativeRoot);
+    code = await _run(options, nativeRoot, report);
   } finally {
-    if (!options.inspectsOnly) _clearMarker(marker);
+    if (!options.inspectsOnly) sttClearPreparationMarker(nativeRoot);
   }
+  report.printOutcome(succeeded: code == 0);
   if (code != 0) exit(code);
 }
 
-Future<int> _run(_Options options, Directory nativeRoot) async {
+Future<int> _run(
+  _Options options,
+  Directory nativeRoot,
+  _PreparationReport report,
+) async {
   final target = SttNativeTarget.tryCurrent();
   if (target == null) {
+    report.fail('unsupported_platform');
     stderr.writeln('''
 This machine has no native dictation runtime target.
 
@@ -91,6 +130,7 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
   if (expectedTarget != null && expectedTarget != target.tag) {
     // The release matrix labels a runner by the payload it must produce; a
     // silent mismatch would stage one architecture into another's payload.
+    report.fail('target_mismatch');
     stderr.writeln(
       'native_stt_target_mismatch: expected $expectedTarget but this host is '
       '${target.tag}',
@@ -108,21 +148,32 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
   final directory = '${nativeRoot.path}/${target.nativeDirectory}';
 
   if (options.verify) {
+    report.stage = 'verify';
     final verification = await verifySttRuntime(
       nativeRoot: nativeRoot,
       target: target,
       manifest: manifest,
     );
     _printVerification(verification, version);
-    if (!verification.ok) return 1;
-    if (!await _printLoaderResolution(target, directory)) return 1;
-    if (!await _printInstructionSets(target, directory)) return 1;
+    if (!verification.ok) {
+      report.fail('verification_failed');
+      return 1;
+    }
+    if (!await _printLoaderResolution(target, directory)) {
+      report.fail('not_relocatable');
+      return 1;
+    }
+    if (!await _printInstructionSets(target, directory)) {
+      report.fail('instruction_set_above_baseline');
+      return 1;
+    }
     if (options.stageDirectory == null && options.archiveDirectory == null) {
+      report.stage = 'ready';
       return 0;
     }
     // `--verify` composes with staging so one command both gates and packages
     // the same bytes; the verification is reused, never recomputed.
-    return _stageAndArchive(
+    final staged = await _stageAndArchive(
       options: options,
       target: target,
       manifest: manifest,
@@ -130,10 +181,13 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
       version: version,
       verification: verification,
     );
+    if (staged != 0) report.fail('stage_failed');
+    return staged;
   }
 
   final state = await _localState(directory, target, manifest);
   if (!options.force && state.isReady) {
+    report.stage = 'ready';
     if (state.checksumMismatches.isEmpty) {
       stdout.writeln(
         'native stt ready: $directory (whisper.cpp $version, ${target.tag})',
@@ -158,10 +212,15 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
       manifest: manifest,
       nativeRoot: nativeRoot,
       version: version,
+      report: report,
     );
-    if (!installed) return 2;
+    if (!installed) {
+      report.fail('acquisition_failed');
+      return 2;
+    }
   }
 
+  report.stage = 'verify';
   final prepared = await verifySttRuntime(
     nativeRoot: nativeRoot,
     target: target,
@@ -169,22 +228,26 @@ Linux (x64, arm64). The agent keeps running without it; dictation reports
     requireManifestEntry: false,
   );
   if (!prepared.ok) {
+    report.fail('verification_failed');
     stderr.writeln(
       'native stt runtime is not usable: ${prepared.problems.join(', ')}',
     );
     return 2;
   }
+  report.stage = 'ready';
 
   if (options.stageDirectory == null && options.archiveDirectory == null) {
     return 0;
   }
-  return _stageAndArchive(
+  final staged = await _stageAndArchive(
     options: options,
     target: target,
     manifest: manifest,
     nativeRoot: nativeRoot,
     version: version,
   );
+  if (staged != 0) report.fail('stage_failed');
+  return staged;
 }
 
 /// Installs the runtime through the first available channel.
@@ -194,7 +257,9 @@ Future<bool> _install({
   required SttRuntimeManifest manifest,
   required Directory nativeRoot,
   required String version,
+  required _PreparationReport report,
 }) async {
+  report.stage = 'acquire';
   final wantsDownload =
       (options.baseUrl?.isNotEmpty ?? false) ||
       (options.archiveUrl?.isNotEmpty ?? false);
@@ -205,6 +270,7 @@ Future<bool> _install({
       target: target,
       manifest: manifest,
       nativeRoot: nativeRoot,
+      report: report,
     )) {
       return true;
     }
@@ -218,6 +284,7 @@ Future<bool> _install({
       manifest: manifest,
       nativeRoot: nativeRoot,
       version: version,
+      report: report,
     );
     if (built) return true;
   }
@@ -233,10 +300,12 @@ Future<bool> _install({
       manifest: manifest,
       nativeRoot: nativeRoot,
       version: version,
+      report: report,
     );
     if (built) return true;
   }
 
+  report.fail('prerequisite_missing');
   stderr.writeln('''
 Could not prepare the native dictation runtime for ${target.tag}.
 
@@ -579,7 +648,9 @@ Future<bool> _download({
   required SttNativeTarget target,
   required SttRuntimeManifest manifest,
   required Directory nativeRoot,
+  required _PreparationReport report,
 }) async {
+  report.stage = 'download';
   final request = sttArchiveRequest(
     target: target,
     manifest: manifest,
@@ -591,6 +662,7 @@ Future<bool> _download({
   if (request == null) {
     // One explicit message per precondition: a missing pin is a different
     // problem from an unusable URL, and both fail closed.
+    report.fail('prerequisite_missing');
     if (manifest.archiveHashFor(target) == null) {
       stderr.writeln(
         'the manifest records no pinned archive hash for ${target.tag}; '
@@ -612,10 +684,12 @@ Future<bool> _download({
     stdout.writeln('downloading ${request.url}');
     final curl = Process.runSync('curl', ['-fL', request.url, '-o', tmp.path]);
     if (curl.exitCode != 0) {
+      report.fail('download_failed');
       stderr.writeln('download failed: ${curl.stderr}');
       return false;
     }
     if (await sha256OfFile(tmp) != request.sha256) {
+      report.fail('checksum_mismatch');
       stderr.writeln('archive checksum mismatch for ${request.fileName}');
       return false;
     }
@@ -624,6 +698,7 @@ Future<bool> _download({
     staging.createSync(recursive: true);
     final tar = Process.runSync('tar', ['-xzf', tmp.path, '-C', staging.path]);
     if (tar.exitCode != 0) {
+      report.fail('extract_failed');
       stderr.writeln('extract failed: ${tar.stderr}');
       staging.deleteSync(recursive: true);
       return false;
@@ -641,6 +716,7 @@ Future<bool> _download({
       directoryPath: source,
     );
     if (!checked.ok) {
+      report.fail('verification_failed');
       stderr.writeln(
         'downloaded runtime failed verification: ${checked.problems.join(', ')}',
       );
@@ -648,6 +724,7 @@ Future<bool> _download({
       return false;
     }
     if (!_publish(source, '${nativeRoot.path}/${target.nativeDirectory}')) {
+      report.fail('publish_failed');
       staging.deleteSync(recursive: true);
       return false;
     }
@@ -745,13 +822,17 @@ Future<bool> _build(
   required SttRuntimeManifest manifest,
   required Directory nativeRoot,
   required String version,
+  required _PreparationReport report,
 }) async {
+  report.stage = 'build';
   if (!Directory(whisperSrc).existsSync()) {
+    report.fail('prerequisite_missing');
     stderr.writeln('whisper source not found at $whisperSrc');
     return false;
   }
   final cmake = Process.runSync('cmake', ['--version']);
   if (cmake.exitCode != 0) {
+    report.fail('prerequisite_missing');
     stderr.writeln('cmake is not installed');
     return false;
   }
@@ -786,6 +867,25 @@ Future<bool> _build(
   stdout.write(result.stdout);
   stderr.write(result.stderr);
   if (result.exitCode != 0) {
+    report.fail('build_failed');
+    _discard(stagingDir);
+    return false;
+  }
+  // The builder enforces this immediately, but the tool is the boundary that
+  // stages and publishes: a cache that does not record the portable baseline
+  // means the flag never reached ggml, so the produced libraries are compiled
+  // for whatever CPU built them. Refuse them here rather than publish a runtime
+  // that traps on the floor its directory name claims.
+  final cacheFile = File('$whisperSrc/build/CMakeCache.txt');
+  final cacheProblem = sttGgmlNativeCacheProblem(
+    target: target,
+    cache: cacheFile.existsSync() ? cacheFile.readAsStringSync() : '',
+  );
+  if (cacheProblem != null) {
+    stderr.writeln(
+      'refusing the ${target.tag} build: $cacheProblem '
+      '(${cacheFile.path})',
+    );
     _discard(stagingDir);
     return false;
   }
@@ -799,6 +899,7 @@ Future<bool> _build(
     directoryPath: staging,
   );
   if (!built.ok) {
+    report.fail('verification_failed');
     stderr.writeln(
       'build produced an unusable runtime for ${target.tag}: '
       '${built.problems.join(', ')}',
@@ -810,6 +911,7 @@ Future<bool> _build(
     stdout.writeln('build warnings: ${built.warnings.join(', ')}');
   }
   if (!_publish(staging, '${nativeRoot.path}/${target.nativeDirectory}')) {
+    report.fail('publish_failed');
     _discard(stagingDir);
     return false;
   }
@@ -824,25 +926,34 @@ void _discard(Directory staging) {
   if (staging.existsSync()) staging.deleteSync(recursive: true);
 }
 
-void _writeMarker(File marker) {
-  try {
-    marker
-      ..parent.createSync(recursive: true)
-      ..writeAsStringSync(
-        DateTime.now().toUtc().toIso8601String(),
-        flush: true,
-      );
-  } on Object {
-    // A read-only checkout simply skips the marker; the daemon then reports
-    // `native_runtime_missing` for the few minutes this takes.
-  }
-}
+class _PreparationReport {
+  /// The stage the attempt is in: `inspect`, `download`, `build`, `verify`,
+  /// `ready`.
+  String stage = 'inspect';
 
-void _clearMarker(File marker) {
-  try {
-    if (marker.existsSync()) marker.deleteSync();
-  } on Object {
-    // Leftover markers expire by age (see DictationService.readiness).
+  /// The first blocking cause, if any.
+  ///
+  /// First wins on purpose: the earliest failure is the root cause, while every
+  /// later one is a consequence of the channel it already lost.
+  String? failure;
+
+  void fail(String code) {
+    failure ??= code;
+  }
+
+  /// Prints the terminal machine keys a launcher, CI log, or issue report reads.
+  ///
+  /// They are one line each and always printed, because the alternative is
+  /// prose no caller can act on: `native_stt_stage` names the stage that
+  /// stopped, `native_stt_failure` the typed cause, and `native_stt_result` the
+  /// outcome. `sanad-dev` turns the same three values into its one diagnostic
+  /// line.
+  void printOutcome({required bool succeeded}) {
+    final result = succeeded ? 'ready' : 'failed';
+    stdout.writeln('native_stt_stage=$stage');
+    stdout.writeln('native_stt_result=$result');
+    final cause = failure;
+    if (cause != null) stdout.writeln('native_stt_failure=$cause');
   }
 }
 

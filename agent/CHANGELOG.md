@@ -1,3 +1,9 @@
+## 1.0.24
+
+- Released every dictation download file handle: `IsolateWritePipeline.close()` always tears the pipeline down, is idempotent, hands the flusher its command channel, waits for the flusher's own `closeSync()` confirmation, and awaits both isolate exits before returning or rethrowing the recorded typed failure; it previously returned early whenever `_done` was already set (exactly the state after a writer or flusher failure) and otherwise raced the writeback handle, and killing an isolate releases nothing, which broke the model store's rename, checksum-mismatch delete, and resume repair on Windows where an open handle refuses both delete and rename.
+- Closed what the refused-write dictation test opens and moved the dictation cost gate into `test/stt/stt_pipeline_cost_test.dart` so it owns a process — both arms warmed, five alternating paired trials, a median verdict, and every trial printed — instead of measuring beside other suites and charging the isolate for their contention; `Native dictation` gains bash and pwsh steps for the new file.
+- Developer and CI tooling: every `apt-get` call site in `ci.yml` and `release.yml` goes through `.github/actions/apt-install`, which bounds the acquire phase, retries `update` plus `install` with backoff, and fails with one actionable error, so a stalled mirror costs a bounded failure instead of a lost 20-45 minute lane; a `main` push that fast-forwards to the commit a validated run just proved re-runs only the lanes that run has not already proved; and a tag release promotes the validated candidate's exact bytes when a validation run on `main` proves that same commit, so the published artifacts are the ones that passed rather than a rebuild.
+
 ## 1.0.23
 
 - Dictation model downloads resume where they stopped instead of restarting, write with bounded memory, show the model size, real progress, and time left, survive a closed sheet, a device switch, or a reconnect, and stop only when cancelled.

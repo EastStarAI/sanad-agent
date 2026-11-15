@@ -67,6 +67,12 @@ class ConversationEventHandler {
     final eventSessionId = event['session_id'] as String? ?? payload['session_id'] as String?;
     final runtimeStatus = payload['status'] as String?;
 
+    if (eventType == 'session.stream_state_result') {
+      // Reply to the ordering owner's narrow repair query. It is consumed by
+      // that owner alone and must never become a timeline row.
+      return;
+    }
+
     if (eventType == 'session.execution_state_changed') {
       _conversationStore.applyExecutionPayload(
         payload,
@@ -259,6 +265,12 @@ class ConversationEventHandler {
     }
 
     if (eventType == 'stopped') {
+      _conversationStore.noteStreamTerminal(
+        sessionId: eventSessionId,
+        modelStepId: payload['model_step_id']?.toString(),
+        runId: runId,
+        turnTerminal: true,
+      );
       _conversationStore.removeRunningThinkingStep(
         modelStepId: payload['model_step_id']?.toString(),
         runId: runId,
@@ -325,6 +337,14 @@ class ConversationEventHandler {
         }
       }
     } else if (eventType == 'stopped' || eventType == 'error') {
+      if (eventType == 'error') {
+        // An error the mapper cannot express still ends the turn's streams.
+        _conversationStore.noteStreamTerminal(
+          sessionId: eventSessionId,
+          runId: runId,
+          turnTerminal: true,
+        );
+      }
       if (runId != null && runId.isNotEmpty) {
         _conversationStore.removeThinkingByRunId(runId);
       } else if (eventType == 'stopped') {

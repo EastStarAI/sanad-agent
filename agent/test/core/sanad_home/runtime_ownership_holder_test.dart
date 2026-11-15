@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:isolate';
@@ -7,6 +8,22 @@ import 'package:sanad_agent/core/constants.dart';
 import 'package:sanad_agent/core/sanad_home/runtime_ownership.dart';
 import 'package:sanad_agent/core/sanad_home/sanad_home_bootstrap.dart';
 import 'package:test/test.dart';
+
+/// Failure deadline for the spawned helper to report that it holds the lock.
+///
+/// The readiness line is the contract, so this only bounds the wait. It matches
+/// the sibling `runtime_ownership_test.dart`: 3× the 36 s worst-case Dart
+/// spawn-and-compile cost measured on the slowest release lane
+/// (`macos-15-intel`), because a fixed 10 s budget sat below a single spawn
+/// there and failed this case twice on that lane.
+const _helperReadyBudget = Duration(seconds: 120);
+
+/// Failure deadline for the helper to exit after it is told to release.
+const _helperExitBudget = Duration(seconds: 120);
+
+/// Stays above the helper spawn plus both deadlines above so a stalled helper
+/// reports its own assertion instead of a test-runner timeout.
+const _ownershipTestTimeout = Timeout(Duration(minutes: 5));
 
 void main() {
   late Directory home;
@@ -92,12 +109,45 @@ void main() {
       final stderrSubscription = holder.stderr
           .transform(utf8.decoder)
           .listen(helperStderr.write);
+
+      // Says how the child ended, or that it outlived its own exit deadline.
+      // It only explains a readiness failure, so it never replaces it.
+      Future<String> exitReport() async {
+        try {
+          return 'exit ${await holder.exitCode.timeout(_helperExitBudget)}';
+        } on TimeoutException {
+          return 'still running ${_helperExitBudget.inSeconds} s after the '
+              'readiness failure';
+        }
+      }
+
       try {
-        final ready = await holder.stdout
-            .transform(utf8.decoder)
-            .transform(const LineSplitter())
-            .first
-            .timeout(const Duration(seconds: 10));
+        late final String ready;
+        try {
+          ready = await holder.stdout
+              .transform(utf8.decoder)
+              .transform(const LineSplitter())
+              .first
+              .timeout(_helperReadyBudget);
+        } on StateError {
+          // stdout closed before the readiness line: the helper died instead.
+          fail(
+            'Runtime lock helper closed its stdout before readiness '
+            '(pid ${holder.pid}, ${await exitReport()}): '
+            '${helperStderr.toString().trim()}',
+          );
+        } on TimeoutException {
+          // Alive but silent. Terminate it so the failure owns no process, and
+          // report the phase, the pid, and whatever it wrote to stderr: the
+          // old bare `TimeoutException` said none of that.
+          holder.kill();
+          fail(
+            'Runtime lock helper did not report readiness within '
+            '${_helperReadyBudget.inSeconds} s '
+            '(pid ${holder.pid}, ${await exitReport()}): '
+            '${helperStderr.toString().trim()}',
+          );
+        }
         expect(ready, 'locked');
 
         final recorded = SanadRuntimeOwnership.readHolder();
@@ -124,12 +174,12 @@ void main() {
 
         holder.stdin.writeln('release');
         await holder.stdin.flush();
-        expect(await holder.exitCode.timeout(const Duration(seconds: 10)), 0);
+        expect(await holder.exitCode.timeout(_helperExitBudget), 0);
       } finally {
         holder.kill();
         await stderrSubscription.cancel();
       }
-    });
+    }, timeout: _ownershipTestTimeout);
 
     test('an unreadable or absent record never blocks acquisition', () async {
       holderFile().writeAsStringSync('not json');

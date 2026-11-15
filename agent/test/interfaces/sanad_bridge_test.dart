@@ -127,7 +127,6 @@ void main() {
           sessionId: 'session-ordinary-stream',
           message: Message(
             role: MessageRole.assistant,
-            reasoning: '   ',
             content: 'Visible answer',
           ),
           isComplete: false,
@@ -135,6 +134,23 @@ void main() {
       );
       expect(ordinary.type, CanonicalEventTypes.thoughtStream);
       expect(ordinary.payload['content'], 'Visible answer');
+
+      // A reasoning chunk that is only whitespace still belongs to the
+      // reasoning stream: the ordinal was already allocated on that key, so
+      // reclassifying it here would drop the chunk and desynchronize the event
+      // from its own sequence.
+      final whitespaceReasoning = AgentToCanonical.translate(
+        GatewayResponse(
+          sessionId: 'session-whitespace-reasoning',
+          message: Message(role: MessageRole.assistant, reasoning: '\n'),
+          isComplete: false,
+          modelStepId: 'step-whitespace-reasoning',
+          streamSeq: 3,
+        ),
+      );
+      expect(whitespaceReasoning.type, CanonicalEventTypes.reasoningStream);
+      expect(whitespaceReasoning.payload['content'], '\n');
+      expect(whitespaceReasoning.payload['stream_seq'], 3);
     });
 
     test(

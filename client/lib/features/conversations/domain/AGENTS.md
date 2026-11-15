@@ -49,6 +49,17 @@ This contract applies to `client/lib/features/conversations/domain/`.
 - Accepted replay removes only the matched visible tail and retains turn/run/message tombstones against late events; identity-incomplete legacy events remain blocked until authoritative reconciliation.
 - Fold compaction transitions by logical `compaction_id`; terminal status is immutable, so hydration or retry may enrich the same terminal status but cannot switch `completed` and `failed`.
 
+## Stream Ordering
+
+- `DeviceConversationStore` owns the single `StreamDeltaOrderGate` of its device. Every live assistant delta passes the gate before it can touch the timeline; no cubit, widget, or transport owner may order, hold, or drop a delta itself.
+- The gate keys ordering by `(stream kind, model_step_id ?? run_id)` inside one session, applies a contiguous ordinal immediately, drops a duplicate or stale ordinal, and holds a delta that is ahead of its predecessor in one bounded window.
+- Bounded means bounded: a stream key holds at most 32 deltas and 64 KiB for at most 500 ms, one session tracks at most 8 streams, and tracked sessions are capped too. Exceeding any bound drops the buffered text rather than growing.
+- A gap that the window cannot close asks the Agent for `session.stream_state` once, never more than once per 2 s per session and never while a request is in flight. An `absent` answer keeps the last good text and waits for the terminal event; the Client never invents text and never reloads history to repair one stream.
+- A repair answer belongs to the stream that asked for it. A session switch or reset, a turn terminal, or disposal retires it completely: it is neither applied nor allowed to mutate the current ordering state, so it can never inject text into another conversation or reopen a closed step.
+- A snapshot replaces the visible running text exactly and adopts its watermark; every later delta at or below that watermark is stale.
+- A terminal event seals its step's keys, so a late delta can never reopen a closed stream or append after the final answer. Session switch, reset, and disposal release every buffer, timer, and request entry.
+- A delta without an ordinal keeps plain arrival order for the whole life of that stream; ordering never assumes a version.
+
 ## Snapshot and Attention Safety
 - Apply execution, attention, suspension, route, queue, and runtime-notice updates only to their matching session.
 - Equal revisions are idempotent only when authoritative payloads agree; a newer elapsed-time observation may refresh the same execution revision without becoming competing execution state. Reject stale or otherwise conflicting snapshots.
