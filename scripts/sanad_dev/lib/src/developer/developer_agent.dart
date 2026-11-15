@@ -44,6 +44,7 @@ Future<bool> handleAgentRestart(
   String? sanadHomePath,
   bool exitOnError = true,
   bool guardForeignActivity = true,
+  bool Function() isAgentToolCall = hasAgentToolRequester,
   ForeignActivityDetector? detectActivity,
 }) async {
   final instance = await selectAgentInstance(
@@ -157,6 +158,27 @@ Future<bool> handleAgentRestart(
     final responseData = data;
     if (response.statusCode == 200 && responseData?['success'] == true) {
       print('✓ Daemon Response: ${responseData?['message'] ?? body}');
+      // A restart requested from inside one of the daemon's own sessions has a
+      // circular dependency no probe can break: the daemon exits only after
+      // this command's tool result is durable, and that result cannot be
+      // persisted until this command returns. Waiting for the replacement here
+      // would therefore wait on itself until both sides time out, so a
+      // tool-origin call reports the accepted handoff and lets the supervisor
+      // finish the restart. Replacement proof stays available to the operator
+      // through the supervisor journal and `sanad-dev status`; every external
+      // caller keeps the generation-verified probe below.
+      if (isAgentToolCall()) {
+        print(
+          'Agent restart accepted for the requesting tool call '
+          '(pre-restart owner pid ${previousDaemonPid ?? 'unknown'}); the '
+          'supervisor completes it once this tool result is durable.',
+        );
+        print(
+          'Verify the replacement with "sanad-dev status" or the supervisor '
+          'journal at ${p.join(activeHome, 'logs', 'agent-supervisor.log')}.',
+        );
+        return true;
+      }
       print(
         'Waiting for local agent daemon on port ${instance.port} to complete restart...',
       );
