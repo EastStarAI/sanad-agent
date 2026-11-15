@@ -247,7 +247,13 @@ class WhisperCppLibrary {
 
   static List<String> _windowsDependencyFailures = const [];
 
-  /// Opens a ggml model with mmap. Throws [SttException] with the C reason.
+  /// Opens a ggml model and throws [SttException] carrying the C reason.
+  ///
+  /// Warm weights are private and anonymous: the pinned engine
+  /// (`whisper.cpp` 1.9.5) no longer takes a `use_mmap` context parameter, so
+  /// the loader reads the file into a CPU backend buffer instead of leaving it
+  /// file-backed. Budget roughly the model file size as resident memory per
+  /// warm daemon, and do not expect pages the kernel can reclaim or share.
   ///
   /// [useGpu] selects Metal; whisper.cpp binds the backend when the model is
   /// created, so a CPU fallback means reopening the model with this flag off.
