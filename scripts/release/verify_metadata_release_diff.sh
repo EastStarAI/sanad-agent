@@ -24,6 +24,8 @@ docs/operations/release_and_signing.md
 release/contract/pubspec.yaml
 release/release-contract.json
 release/release-notes.md
+release/store-whats-new.ar.txt
+release/store-whats-new.en.txt
 PATHS
 )
 actual_paths="$(git diff --name-only "$base_ref...$head_ref" | LC_ALL=C sort)"
@@ -98,7 +100,7 @@ validate_changed_lines() {
 
 while IFS= read -r path; do
   case "$path" in
-    agent/CHANGELOG.md|release/release-notes.md) ;;
+    agent/CHANGELOG.md|release/release-notes.md|release/store-whats-new.ar.txt|release/store-whats-new.en.txt) ;;
     *) validate_changed_lines "$path" ;;
   esac
 done <<< "$actual_paths"

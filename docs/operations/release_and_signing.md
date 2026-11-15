@@ -465,7 +465,7 @@ unprotected artifacts.
 | Secret name | Purpose | Owner and rotation |
 |---|---|---|
 | `MACOS_DEVELOPER_ID_P12_BASE64` / `MACOS_DEVELOPER_ID_P12_PASSWORD` | macOS application and agent signing | NanoSoft LY LLC; rotate on expiry, compromise, or publisher change |
-| `APPLE_API_PRIVATE_KEY_P8_BASE64` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` | notarization and App Store Connect uploads | NanoSoft LY LLC; scoped CI key, revoke and replace on compromise |
+| `APPLE_API_PRIVATE_KEY_P8_BASE64` / `APPLE_API_KEY_ID` / `APPLE_API_ISSUER_ID` | notarization, App Store Connect uploads, and App Store review submission | NanoSoft LY LLC; scoped CI key with the App Manager role, revoke and replace on compromise |
 | `APPLE_DISTRIBUTION_P12_BASE64` / `APPLE_DISTRIBUTION_P12_PASSWORD` | iOS distribution signing | NanoSoft LY LLC; rotate on expiry or compromise |
 | `IOS_APP_STORE_PROFILE_BASE64` | `com.eaststarai.sanad` App Store profile | NanoSoft LY LLC; regenerate when certificate, entitlement, or App ID changes |
 | `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` | Future Windows Authenticode signed-only transition | Release owner; not yet available and not required while the temporary unsigned policy is active |
@@ -521,6 +521,43 @@ because the shorter product names were unavailable; this does not change the
 installed display name. The App Store is the public iOS/iPadOS distribution
 channel; Internal TestFlight remains the pre-release lane for signed builds that
 have not reached App Store review yet.
+
+### App Store review submission lane
+
+`.github/workflows/appstore-submit.yml` is the only automated App Store
+submission path. It builds and uploads nothing: the Internal TestFlight lane
+already produced and uploaded the IPA, so this lane owns everything after that
+upload. It runs manually, or through its guarded `workflow_call`, inside the
+`apple-testflight` Environment whose App Manager API key it reuses, so it adds no
+secret and no Environment. `scripts/release/appstore_submit.py` performs the
+steps with the Python standard library and `openssl` only.
+
+- **Steps:** wait for the uploaded build to finish processing, answer export
+  compliance from `ITSAppUsesNonExemptEncryption=false` in
+  `client/ios/Runner/Info.plist`, reuse or create the `appStoreVersion`, copy the
+  released version's localizations, review detail, and screenshots, apply the
+  curated store copy, attach the build, create or reuse a review submission,
+  submit it, and verify `WAITING_FOR_REVIEW`.
+- **Release option:** versions are created with `releaseType: AFTER_APPROVAL`, so
+  Apple publishes the version as soon as review passes. There is no
+  post-approval hold, so the metadata, screenshots, and build must be final
+  before the lane submits.
+- **Store copy:** the App Store and Google Play lanes share
+  `release/store-whats-new.en.txt` and `release/store-whats-new.ar.txt`. Each
+  file starts with `# <version>` and carries three or four short user-facing
+  bullets with no technical detail; the enforced limit is 500 characters per
+  language because Play is stricter than the App Store. A missing file, a stale
+  version line, or an oversized body fails closed. The Arabic file is required
+  only when the listing already carries an `ar-SA` localization.
+- **Fail closed:** a contract version or build-number mismatch, a bundle or app
+  id mismatch, an unexpected processing or version state, a version already
+  released or in review, a previous version in `PENDING_DEVELOPER_RELEASE`,
+  another review submission in flight, or store copy that does not name the
+  release stops the lane before its first write. Re-runs are idempotent: an
+  already attached build, an equal What's New body, a draft submission, or a
+  version already `WAITING_FOR_REVIEW` is reused instead of duplicated.
+- **Dry run:** `submit: false` is the default. It resolves the entire plan
+  read-only, which is the review step before a real submission.
 
 ## Google Play publisher
 

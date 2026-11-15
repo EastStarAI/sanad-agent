@@ -1138,6 +1138,7 @@ jobs:
           scripts/release/test_generate_client_download_redirects.sh
           scripts/release/test_deploy_production_asset.sh
           scripts/release/test_verify_metadata_release_diff.sh
+          python3 scripts/release/test_appstore_submit.py
           scripts/release/test_promote_release_candidate.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
