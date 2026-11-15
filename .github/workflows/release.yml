@@ -1437,3 +1437,59 @@ jobs:
       deploy_updates: true
       deploy_installers: true
     secrets: inherit
+
+  # Store publication is dispatched instead of run here. App Store Connect build
+  # processing alone is bounded at 30 minutes, and this workflow's completion is
+  # what the Discord announcement and the Production surface verifier wait for, so
+  # the store work runs in its own workflow that can neither delay this run nor fail
+  # it. The dispatch shares the Production Web deploy's exact gate, so both start at
+  # the same instant: the stores never wait for the Web deploy and the Web deploy
+  # never waits for them.
+  store-publication-dispatch:
+    name: Dispatch Stable store publication
+    needs: [validate, publish, client-download-aliases]
+    if: >-
+      ${{ always() && !cancelled() && needs.client-download-aliases.result == 'success'
+      && needs.validate.outputs.channel == 'stable'
+      && (vars.RELEASE_PLAY_PUBLICATION == 'enabled' || vars.RELEASE_APPSTORE_PUBLICATION == 'enabled') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      - name: Dispatch the store workflow at the released tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate.outputs.tag }}
+          PLAY_SWITCH: ${{ vars.RELEASE_PLAY_PUBLICATION }}
+          APPSTORE_SWITCH: ${{ vars.RELEASE_APPSTORE_PUBLICATION }}
+        run: |
+          set -euo pipefail
+          # The tag is the ref, so every workflow this one calls runs the released
+          # contract, store copy, and signing scripts rather than `main`.
+          status=dispatched
+          if ! gh workflow run release-stores.yml \
+            --ref "$RELEASE_TAG" \
+            -f release_run_id="${{ github.run_id }}"; then
+            status=failed
+          fi
+          {
+            printf '### Store publication %s\n\n' "$status"
+            printf -- '- Release: %s\n' "$RELEASE_TAG"
+            printf -- '- Play switch: %s\n' "${PLAY_SWITCH:-unset}"
+            printf -- '- App Store switch: %s\n' "${APPSTORE_SWITCH:-unset}"
+            printf -- '- Run: %s/%s/actions/workflows/release-stores.yml\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY"
+            printf '  (runs at the %s ref, in parallel with this run)\n' "$RELEASE_TAG"
+          } >> "$GITHUB_STEP_SUMMARY"
+          # The release is already published here, and this workflow's conclusion is
+          # what the announcement and the Production surface verifier read, so a
+          # dispatch problem is reported as an error annotation with its recovery
+          # command instead of failing a released version. No step of this workflow
+          # is allowed to fail silently: every step that can degrade the release
+          # fails it, and this one cannot degrade the release itself.
+          if [[ "$status" != dispatched ]]; then
+            echo "::error::Could not dispatch release-stores.yml at $RELEASE_TAG. Run it by hand: gh workflow run release-stores.yml --ref $RELEASE_TAG"
+          fi

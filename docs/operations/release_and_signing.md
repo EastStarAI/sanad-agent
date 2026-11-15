@@ -455,6 +455,10 @@ proving the publisher.
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
 | `client-downloads-production` | Restricted Production deployment of Stable Client redirects, Web, Appcast, and canonical installer sources |
 
+No environment is added for store publication: `.github/workflows/release-stores.yml`
+reuses `google-play-publishing` and `apple-testflight`, and the job that dispatches
+it enters none of them.
+
 Signing Environments keep signing secrets isolated and accept deployments only from their exact custom release refs, but they do not require a human reviewer. The one human release decision belongs to `release-publication`, which requires the repository owner after the complete signed candidate, metadata, checksums, SBOM, attestations, and private Draft exist. The release owner may additionally add required reviewers to any signing Environment outside Git; that remains an optional protection and no workflow depends on it. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; that Environment remains non-interactive and tag-restricted so the already approved Stable release can deploy aliases and Production assets without a second approval. Separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
@@ -540,6 +544,12 @@ workflow is limited to `EastStarAI/sanad-agent` on `main` or a `v*` tag because
 this lane publishes without a further approval step, and it reuses the
 `apple-testflight` Environment and the three App Store Connect API secrets the
 TestFlight lane already owns, so it adds no credential.
+
+For a published Stable release, `.github/workflows/release-stores.yml` reuses the
+release's own IPA: it downloads the `client-ios-private` artifact from the release
+run, uploads it through `client/release/ios/upload_ipa.sh` — the same script
+`Internal TestFlight` uses — and then calls this workflow. The lane still never
+builds, signs, or uploads a binary.
 
 Each App Store Connect behaviour the previous bespoke submission client
 hand-rolled belongs to fastlane instead:
@@ -648,6 +658,12 @@ on the universal APK built from the same sources. The release workflow still
 builds its own APK and AAB inline without those checks and migrates to this
 script next, so two producers exist until that migration lands.
 
+For a published Stable release, `.github/workflows/release-stores.yml` calls this
+lane with `track: production`, `rollout_fraction: 1`, and `upload: true`. The lane
+always passes `--if-present skip`, so re-running the store workflow for the same tag
+reports the release that is already there instead of consuming the `versionCode`
+a second time (see [Stable release store publication](#stable-release-store-publication)).
+
 `scripts/release/publish_play_bundle.py` opens one edit, uploads the bundle,
 refuses to commit when the accepted `versionCode` differs from the contracted
 one, and only then updates the track. Existing releases on the target track are
@@ -684,6 +700,101 @@ identity from the upload response. A bundle whose identity is wrong while its AP
 is right is therefore caught by Google, not by CI. Because `versionCode` is
 consumed by an upload and never reused, every dispatch must pick a number above
 the highest uploaded one.
+
+## Stable release store publication
+
+A published Stable release is also published to both stores, with no manual
+dispatch. It is still one deliberate step with one owner approval: nothing reaches
+a store before the `release-publication` Environment has made the Draft public.
+
+`.github/workflows/release.yml` ends with a short `store-publication-dispatch` job
+that shares the Production Web deploy's exact gate — the same
+`needs: [validate, publish, client-download-aliases]` and the same
+`channel == 'stable'` condition, so it becomes runnable at the same instant the
+Web deploy starts. It only dispatches
+`.github/workflows/release-stores.yml` at the released tag
+(`gh workflow run … --ref "$RELEASE_TAG"`) and finishes in seconds.
+
+That indirection is the design, not an accident. App Store Connect build
+processing alone is bounded at 30 minutes, and `release.yml`'s completion is what
+the Discord announcement and the Production surface verifier wait for, so store
+work must never extend that run. Dispatching also selects code by ref: the store
+workflow and every lane it calls run the tag's `release/release-contract.json`,
+`release/store-whats-new.*.txt`, `scripts/release/*`, and `client/ios/fastlane/Fastfile`,
+not `main`'s next release. Publishing is therefore reproducible from the tag alone.
+
+`gh workflow run` is used because it is the only event a `GITHUB_TOKEN` still
+starts; the retired `release: published` subscription starts nothing, which is why
+the Discord announcement follows the completing run instead.
+
+Each store is switched by a repository variable and skips silently when it is not
+`enabled`:
+
+| Variable | `enabled` | unset or any other value |
+|---|---|---|
+| `RELEASE_PLAY_PUBLICATION` | Google Play, `production` track, `completed` at 100% | Play job is skipped: nothing is built, no credential is read |
+| `RELEASE_APPSTORE_PUBLICATION` | App Store upload plus review submission | Both Apple jobs are skipped |
+
+There is no rehearsal mode: `publish_play_bundle.py --dry-run` still uploads the
+bundle and permanently consumes its `versionCode`, so "off" means do nothing. A
+real rehearsal is a manual dispatch of `release-stores.yml` with the switch off.
+
+The two stores are independent jobs with no dependency between them, so a Play
+failure cannot skip or fail the App Store chain and neither can delay the release
+run. `release-stores.yml` creates no tag, no Release, and no approval gate of its
+own; it can only move an already published release into the stores.
+
+| Surface | Source of the binary | Why |
+|---|---|---|
+| Google Play | rebuilt by `play-upload.yml` at the tag | the lane owns the only signed-AAB producer that proves application ID, version name, version code, and signature (`build_signed_aab.sh`), and the AAB is not a published artifact, so reusing the release's unproven inline build would be a net loss |
+| App Store | the release's own `client-ios-private` artifact | `client-ios` already runs the single-owner `build_signed_ipa.sh` with the same Apple Distribution identity and the reviewed App Store profile, and `ExportOptions.plist` exports `method = app-store-connect` with `manageAppVersionAndBuildNumber = false`, so the IPA is the store binary with the contracted build number |
+
+The App Store upload downloads that artifact from the release workflow run named by
+the dispatch (`actions/download-artifact` with `run-id`), refuses a run whose
+`head_sha` is not the tag's commit, and passes it to
+`client/release/ios/upload_ipa.sh`. That script is the single owner of the upload
+for both `Internal TestFlight` and this lane: it proves the IPA's bundle
+identifier, marketing version, build number, signing team, and absence of
+`get-task-allow` before it writes the App Store Connect key or calls `altool`.
+Private release artifacts are retained for 14 days
+(`RELEASE_ARTIFACT_RETENTION_DAYS`), so the App Store half of a store re-run is
+only possible while that artifact exists; after that, dispatch
+`appstore-submit.yml` directly.
+
+### Re-running one store for the same tag
+
+A `release.yml` run cannot be repeated for a published tag, but the store workflow
+can, and every store lane treats "already done" as success instead of a failure:
+
+| Lane | Re-run behaviour |
+|---|---|
+| Google Play | `--if-present skip` reads the target track before uploading and reports success when the contracted `versionCode` already carries the requested status and rollout fraction. A rejection naming an already-used `versionCode` is rewritten into the action that fixes it — bump `release/release-contract.json`, because Google never reuses one |
+| App Store upload | `fastlane ios build_upload_state` asks fastlane for the latest build in the same marketing version and skips the upload when it is at or above the contracted build, which App Store Connect would reject as a duplicate |
+| App Store submission | `fastlane ios submit_review` returns success for a version that is already `WAITING_FOR_REVIEW`, `IN_REVIEW`, approved, processing, or live, instead of failing on the duplicate-version error; the decision lives in `client/ios/fastlane/store_state.rb` and is proven offline by `test_store_state.rb` |
+
+Duplicate protection also comes from identity, not only from state: the Play
+workflow re-validates the contracted `versionCode` against the upload response, and
+the App Store lanes refuse any version or build that differs from the tag's
+contract.
+
+### Accepted ordering risk
+
+Stores start with the Web deploy rather than after it, so a `deploy.yml` failure
+can land after a store has already shipped. That is accepted deliberately:
+
+- **Google Play at 100% is irreversible.** A `completed` production release has no
+  documented halt or unpublish path; the remedy is a new, higher `versionCode`.
+- **The App Store is recoverable.** A version can be withdrawn while it is
+  `WAITING_FOR_REVIEW`, and with `.github/workflows/appstore-submit.yml` releasing
+automatically only after approval it can still be removed from sale afterwards.
+- **The risk is about delivery, not the binary.** The store binaries come from a
+  commit that already passed the complete release matrix and the macOS suite, and
+  a new Android build meeting the previously deployed Web is the ordinary state of
+  every install that has not updated yet.
+
+A store failure is reported by the store workflow's own job summaries and its red
+run; it never reddens the release run and never blocks the Discord announcement or
+the Production surface verification.
 
 ## Atomic publication and rollback
 

@@ -85,14 +85,16 @@ jobs:
         env:
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
-          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_P8_BASE64 }}
+          APPLE_API_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_P8_BASE64 }}
+          BUILD_NAME: ${{ steps.contract.outputs.version }}
+          BUILD_NUMBER: ${{ inputs.build_number }}
         run: |
-          test -n "$APPLE_API_KEY_ID"
-          mkdir -p "$HOME/.appstoreconnect/private_keys"
-          printf '%s' "$APPLE_API_KEY_BASE64" | base64 -D \
-            > "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
-          chmod 600 "$HOME/.appstoreconnect/private_keys/AuthKey_${APPLE_API_KEY_ID}.p8"
+          set -euo pipefail
+          # `release/ios/upload_ipa.sh` is the single owner of the upload: it
+          # proves the IPA's bundle, version, build, and signing team, then
+          # uploads. The Stable store publication calls the same script.
           ipa="$(find build/ios/ipa -maxdepth 1 -name '*.ipa' -print -quit)"
-          xcrun altool --upload-app --type ios --file "$ipa" \
-            --apiKey "$APPLE_API_KEY_ID" \
-            --apiIssuer "$APPLE_API_ISSUER_ID"
+          bash release/ios/upload_ipa.sh \
+            --ipa="$ipa" \
+            --version="$BUILD_NAME" \
+            --build="$BUILD_NUMBER"

@@ -523,6 +523,24 @@ workflow artifact is not published. Verify after every upload that Production
 `assetlinks.json` still lists both the upload certificate and the Play
 app-signing certificates.
 
+For a Stable release the Approved production upload is automatic: `release.yml`
+dispatches `.github/workflows/release-stores.yml` at the released tag in the same
+instant it starts the Production Web deploy, the Play job runs `production` at
+100%, and the App Store job uploads the release's own IPA and submits the version.
+Verify a release on both stores with:
+
+1. `gh run list --workflow release-stores.yml --limit 1` and read the run's summary
+   table: it names both switches and the result of each store job.
+2. Play Console: the production track shows the contracted `versionCode` as a
+   completed release, and the release notes are the curated `en-US` and `ar` text.
+3. App Store Connect: the version carries the contracted build number, its What's
+   New is the curated `en-US` text, and the version state moved to
+   `WAITING_FOR_REVIEW` or later.
+4. Re-run safety: dispatching `release-stores.yml` again for the same tag reports
+   the already published Play release and the already uploaded build as success
+   instead of consuming either identity twice. A store failure reddens only that
+   store's run; the release run and its announcement are unaffected.
+
 The Windows workflow and installer produce the approved unsigned `1.0.0`
 artifacts without a PFX requirement, retain WinSparkle DSA for client updates,
 and require explicit disclosure plus checksum, manifest, SBOM, and provenance
