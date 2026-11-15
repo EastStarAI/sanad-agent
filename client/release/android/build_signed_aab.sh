@@ -7,16 +7,14 @@
 #   android/key.properties   owns the upload keystore path, aliases and passwords
 #   android/app/build.gradle owns the applicationId and the signing config
 #
-# This script owns the Android binary for the Play upload lane. The release
-# workflow still builds its own APK and AAB inline and has no package or version
-# verification of its own; it migrates to this script next, so today two producers
-# exist and only this one proves the artifact identity.
+# The identity proof itself belongs to release/android/verify_android_release.sh,
+# which the Play store publication also runs on the artifact a release already
+# built. This script calls it twice: a pre-flight before Gradle so a wrong package
+# never costs a build, and the full proof afterwards.
 #
-# The AAB carries no room for a post-hoc signature check, so the version identity
-# is proven on the universal APK that Gradle builds from the same sources, and
-# Play itself proves the bundle identity when the upload returns its versionCode.
-# A bundle whose identity is wrong but whose APK is right is therefore caught by
-# Google, not here.
+# The release workflow still builds its own APK and AAB inline; the store
+# publication reuses that artifact instead of rebuilding, and proves it with the
+# same shared script this one uses.
 #
 # Usage:
 #   release/android/build_signed_aab.sh --build-name 1.0.23 --build-number 24
@@ -25,6 +23,10 @@
 #
 # Runs from the client/ directory.
 set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+verify_script="$script_dir/verify_android_release.sh"
+test -f "$verify_script" || { echo "Missing $verify_script" >&2; exit 2; }
 
 package_id="com.eaststarai.sanad"
 build_name=""
@@ -92,23 +94,15 @@ test -f android/key.properties || {
 }
 
 # The applicationId is the store identity; a mismatch would publish to another
-# listing, so it is proven here rather than discovered after an upload.
-declared_package="$(
-  sed -nE 's/^[[:space:]]*applicationId[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' \
-    android/app/build.gradle | head -n 1
-)"
-test "$declared_package" = "$package_id" || {
-  echo "Package drift: android/app/build.gradle declares '${declared_package:-none}' but the store identity is '$package_id'" >&2
-  exit 1
-}
+# listing, so it is proven before Gradle rather than discovered after a build.
+gradle_file="android/app/build.gradle"
+bash "$verify_script" --package "$package_id" --preflight --gradle-file "$gradle_file"
 
-build_tools="${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools"
-test -d "$build_tools" || { echo "No Android build-tools under '$build_tools'" >&2; exit 2; }
-tools="$(ls "$build_tools" | sort -V | tail -n 1)"
-apksigner="$build_tools/$tools/apksigner"
-aapt2="$build_tools/$tools/aapt2"
-test -x "$apksigner" || { echo "Missing apksigner at $apksigner" >&2; exit 2; }
-test -x "$aapt2" || { echo "Missing aapt2 at $aapt2" >&2; exit 2; }
+android_home="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+test -n "$android_home" || {
+  echo "ANDROID_HOME is not set; the Android SDK is required to build the bundle." >&2
+  exit 2
+}
 
 echo "Building signed Android bundle ${build_name} (${build_number}) with ${package_id}"
 
@@ -123,29 +117,16 @@ fvm flutter build apk --release \
 
 aab="build/app/outputs/bundle/release/app-release.aab"
 apk="build/app/outputs/flutter-apk/app-release.apk"
-test -s "$aab" || { echo "No app bundle at $aab" >&2; exit 1; }
-test -s "$apk" || { echo "No APK at $apk" >&2; exit 1; }
 
-"$apksigner" verify --verbose "$apk" >/dev/null
-
-badging="$("$aapt2" dump badging "$apk")"
-badging_package="$(sed -nE "s/^package: name='([^']+)'.*/\1/p" <<<"$badging")"
-badging_version_code="$(sed -nE "s/^package: .*versionCode='([^']+)'.*/\1/p" <<<"$badging")"
-badging_version_name="$(sed -nE "s/^package: .*versionName='([^']+)'.*/\1/p" <<<"$badging")"
-
-failures=()
-[[ "$badging_package" == "$package_id" ]] || \
-  failures+=("the APK declares package '${badging_package:-none}' instead of '$package_id'")
-[[ "$badging_version_code" == "$build_number" ]] || \
-  failures+=("the APK declares versionCode '${badging_version_code:-none}' instead of '$build_number'")
-[[ "$badging_version_name" == "$build_name" ]] || \
-  failures+=("the APK declares versionName '${badging_version_name:-none}' instead of '$build_name'")
-if [ "${#failures[@]}" -ne 0 ]; then
-  for failure in "${failures[@]}"; do
-    echo "::error::Android artifact verification failed: $failure" >&2
-  done
-  exit 1
-fi
+# Identity, badging, and the shared signer certificate of both artifacts.
+bash "$verify_script" \
+  --package "$package_id" \
+  --version-name "$build_name" \
+  --version-code "$build_number" \
+  --apk "$apk" \
+  --aab "$aab" \
+  --gradle-file "$gradle_file" \
+  --android-home "$android_home"
 
 mkdir -p "$output_dir"
 aab_target="$output_dir/sanad-client-${artifact_version}-android-universal.aab"
@@ -153,6 +134,5 @@ apk_target="$output_dir/sanad-client-${artifact_version}-android-universal.apk"
 cp "$aab" "$aab_target"
 cp "$apk" "$apk_target"
 
-echo "Verified Android artifacts: ${package_id} versionName=${build_name} versionCode=${build_number}"
 echo "Bundle ready: $aab_target"
 echo "APK ready: $apk_target"

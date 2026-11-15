@@ -104,14 +104,18 @@ jobs:
     if: >-
       ${{ github.repository == 'EastStarAI/sanad-agent'
       && vars.RELEASE_PLAY_PUBLICATION == 'enabled' }}
-    # The lane rebuilds and proves the signed App Bundle itself, so the published
-    # bytes are never an unverified copy and one workflow owns the Play upload.
+    # The lane publishes the release's own signed App Bundle, proving its identity
+    # with the same shared script the build path uses, so one workflow owns the
+    # Play upload and no second build is created for the same release. Without a
+    # release run id it falls back to building the bundle itself.
     uses: ./.github/workflows/play-upload.yml
     permissions:
       contents: read
+      actions: read
     with:
       build_number: ${{ needs.resolve.outputs.build }}
       build_name: ${{ needs.resolve.outputs.version }}
+      prebuilt_run_id: ${{ inputs.release_run_id }}
       track: production
       status: auto
       rollout_fraction: '1'

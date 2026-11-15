@@ -1,11 +1,12 @@
 name: Play upload lane
 
-# Uploads one signed Android App Bundle to a Google Play track. It builds the
-# bundle from the current checkout, uploads it through
+# Uploads one signed Android App Bundle to a Google Play track. It either builds
+# the bundle from the current checkout, uploads it through
 # scripts/release/publish_play_bundle.py, and verifies that the target track
-# carries the expected versionCode afterwards. It creates no tag and no GitHub
-# Release, so the Stable release workflow stays unchanged until it calls this
-# lane.
+# carries the expected versionCode afterwards, or - when a caller names a release
+# run - reuses that release's signed bundle instead of building a second one.
+# Either way it creates no tag and no GitHub Release, so the Stable release
+# workflow stays unchanged until it calls this lane.
 #
 # Testing tracks (`internal`, `alpha`, `beta`) default to a chosen release
 # status and never roll out automatically. The `production` track is reached by
@@ -80,9 +81,20 @@ on:
         required: false
         default: false
         type: boolean
+      # A dispatch always builds, so this input exists only for a caller. Naming
+      # the release run makes the published bytes the ones the release built and
+      # proved, instead of a second APK and AAB that only claim to be the same
+      # release.
+      prebuilt_run_id:
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: read
+  # Reading the release run's artifact, which every download in the reuse path
+  # needs; a caller cannot grant more than it holds, so callers request it too.
+  actions: read
 
 concurrency:
   group: play-upload
@@ -106,6 +118,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+        if: inputs.prebuilt_run_id == ''
       - id: identity
         name: Resolve the build identity
         shell: bash
@@ -149,6 +162,7 @@ jobs:
           # so a listing problem never costs a full Gradle run.
           python3 scripts/release/store_whats_new.py --version "$BUILD_NAME"
       - name: Restore Android signing material
+        if: inputs.prebuilt_run_id == ''
         working-directory: client
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -168,6 +182,7 @@ jobs:
           } > android/key.properties
           chmod 600 android/key.properties
       - name: Build and verify the signed App Bundle
+        if: inputs.prebuilt_run_id == ''
         working-directory: client
         env:
           BUILD_NAME: ${{ steps.identity.outputs.build_name }}
@@ -180,6 +195,39 @@ jobs:
             --build-number="$BUILD_NUMBER" \
             --env-config=config/prod.json \
             --output-dir=../dist
+      - name: Download the release App Bundle
+        if: inputs.prebuilt_run_id != ''
+        uses: actions/download-artifact@v5
+        with:
+          name: client-android
+          path: dist
+          run-id: ${{ inputs.prebuilt_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the release App Bundle identity
+        if: inputs.prebuilt_run_id != ''
+        shell: bash
+        env:
+          BUILD_NAME: ${{ steps.identity.outputs.build_name }}
+          BUILD_NUMBER: ${{ steps.identity.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          # The release uploads the universal APK beside its bundle, and the
+          # shared proof reads both: the bundle carries no readable manifest, so
+          # the installed identity comes from the APK Gradle signed in the same
+          # invocation and the bundle's own signer certificate has to match it.
+          shopt -s nullglob
+          bundles=(dist/*.aab)
+          apks=(dist/*.apk)
+          if [[ "${#bundles[@]}" -ne 1 || "${#apks[@]}" -ne 1 ]]; then
+            echo "::error::the release artifact must carry exactly one bundle and one APK, found ${#bundles[@]} and ${#apks[@]}"
+            exit 1
+          fi
+          bash client/release/android/verify_android_release.sh \
+            --package "$PLAY_PACKAGE_ID" \
+            --version-name "$BUILD_NAME" \
+            --version-code "$BUILD_NUMBER" \
+            --apk "${apks[0]}" \
+            --aab "${bundles[0]}"
       - uses: actions/upload-artifact@v4
         with:
           name: play-upload-android

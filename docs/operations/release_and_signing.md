@@ -628,10 +628,11 @@ Client.
 (`workflow_dispatch`) and callable (`workflow_call`), and both jobs are restricted
 to `EastStarAI/sanad-agent` so a foreign caller cannot enter the signing or Play
 Environments through the reusable entry point. It accepts an explicit
-`build_number`, an optional `build_name`, a `track`, a `status`, and a
-`rollout_fraction`. Every input reaches the shell through `env:` and is
-re-validated in the step that uses it, because a called workflow receives
-free-form strings instead of a choice menu.
+`build_number`, an optional `build_name`, a `track`, a `status`, a
+`rollout_fraction`, and a `prebuilt_run_id`. Every input reaches the shell
+through `env:` and is re-validated in the step that uses it, because a called
+workflow receives free-form strings instead of a choice menu. `prebuilt_run_id`
+exists only for a caller: a dispatch always builds.
 
 `track` is one of `internal`, `alpha`, `beta`, or `production`.
 
@@ -650,13 +651,25 @@ permanent store release such as `1.0.23 (27)` under the contract version without
 that version ever being released. Bump the contract first, or pass `build_name`
 explicitly.
 
-`client/release/android/build_signed_aab.sh` owns the Android binary for this
-lane: it pins `--build-name`/`--build-number` to the contracted identity, refuses
-a missing `android/key.properties` and a non-positive build number, proves the
-`applicationId`, and verifies package, version name, version code, and signature
-on the universal APK built from the same sources. The release workflow still
-builds its own APK and AAB inline without those checks and migrates to this
-script next, so two producers exist until that migration lands.
+The lane publishes the bundle the release already built. When a caller passes
+`prebuilt_run_id`, the build job downloads that run's `client-android` artifact
+and verifies it instead of building a second bundle; a dispatch, or a call with
+no run id, builds the bundle itself. Both paths end in the same publication step,
+so one workflow still owns the Play upload.
+
+`client/release/android/verify_android_release.sh` is the single owner of the
+Android identity proof. It proves the `applicationId` declared by
+`android/app/build.gradle`, refuses a missing bundle or APK, verifies the APK
+signature and reads its badging, and requires the bundle's signer certificate to
+match the APK's. The bundle carries no readable manifest without bundletool, so
+the version identity comes from the universal APK Gradle signs in the same
+invocation, and the certificate comparison carries that provenance onto the
+bundle; Play proves the `versionCode` once more from the upload response. Both
+`client/release/android/build_signed_aab.sh` and the lane's reuse step call this
+script, and the build script runs it twice: `--preflight` before Gradle so a
+wrong package never costs a build, and the full proof afterwards. The build
+script itself keeps the keystore, `--build-name`/`--build-number`, and
+environment-config guards.
 
 For a published Stable release, `.github/workflows/release-stores.yml` calls this
 lane with `track: production`, `rollout_fraction: 1`, and `upload: true`. The lane
@@ -689,17 +702,17 @@ language. A missing file, a stale version line, empty text, or text over the lim
 refuses the run before any credential is loaded, and the build job proves the same
 text before it spends time on Gradle.
 
-`client/release/android/test_build_signed_aab.sh` and
+`client/release/android/test_build_signed_aab.sh`,
+`client/release/android/test_verify_android_release.sh`, and
 `scripts/release/test_publish_play_bundle.py` run in the `release-security` CI
 job. They assert the guard messages rather than the exit status alone, so a case
 cannot pass by failing on an unrelated step first, and they run offline with no
 network and no credentials.
 
-The AAB has no post-hoc signature check, so Play itself proves the bundle
-identity from the upload response. A bundle whose identity is wrong while its APK
-is right is therefore caught by Google, not by CI. Because `versionCode` is
-consumed by an upload and never reused, every dispatch must pick a number above
-the highest uploaded one.
+The bundle is JAR-signed, so `keytool` can read its signer certificate even
+though its manifest stays binary, and that signer must equal the signer of the
+APK in the same artifact set. Because `versionCode` is consumed by an upload and
+never reused, every dispatch must pick a number above the highest uploaded one.
 
 ## Stable release store publication
 
@@ -746,7 +759,7 @@ own; it can only move an already published release into the stores.
 
 | Surface | Source of the binary | Why |
 |---|---|---|
-| Google Play | rebuilt by `play-upload.yml` at the tag | the lane owns the only signed-AAB producer that proves application ID, version name, version code, and signature (`build_signed_aab.sh`), and the AAB is not a published artifact, so reusing the release's unproven inline build would be a net loss |
+| Google Play | the release's own `client-android` artifact | `client-android` builds both the bundle and the universal APK with the restored upload keystore, and a release build refuses to start without it (`android/app/build.gradle` throws for every release task), so the lane downloads that artifact and proves it with the shared `verify_android_release.sh` instead of building the same release a second time |
 | App Store | the release's own `client-ios-private` artifact | `client-ios` already runs the single-owner `build_signed_ipa.sh` with the same Apple Distribution identity and the reviewed App Store profile, and `ExportOptions.plist` exports `method = app-store-connect` with `manageAppVersionAndBuildNumber = false`, so the IPA is the store binary with the contracted build number |
 
 The App Store upload downloads that artifact from the release workflow run named by
@@ -757,9 +770,10 @@ for both `Internal TestFlight` and this lane: it proves the IPA's bundle
 identifier, marketing version, build number, signing team, and absence of
 `get-task-allow` before it writes the App Store Connect key or calls `altool`.
 Private release artifacts are retained for 14 days
-(`RELEASE_ARTIFACT_RETENTION_DAYS`), so the App Store half of a store re-run is
-only possible while that artifact exists; after that, dispatch
-`appstore-submit.yml` directly.
+(`RELEASE_ARTIFACT_RETENTION_DAYS`), so both halves of a store re-run are only
+possible while the release's `client-android` and `client-ios-private` artifacts
+exist. After that, a Play re-run builds the bundle again, and the App Store half
+needs a direct `appstore-submit.yml` dispatch.
 
 ### Re-running one store for the same tag
 
@@ -787,10 +801,11 @@ can land after a store has already shipped. That is accepted deliberately:
 - **The App Store is recoverable.** A version can be withdrawn while it is
   `WAITING_FOR_REVIEW`, and with `.github/workflows/appstore-submit.yml` releasing
 automatically only after approval it can still be removed from sale afterwards.
-- **The risk is about delivery, not the binary.** The store binaries come from a
-  commit that already passed the complete release matrix and the macOS suite, and
-  a new Android build meeting the previously deployed Web is the ordinary state of
-  every install that has not updated yet.
+- **The risk is about delivery, not the binary.** Both store binaries are the
+  release's own artifacts from a commit that already passed the complete release
+  matrix and the macOS suite, and a released Android bundle meeting the
+  previously deployed Web is the ordinary state of every install that has not
+  updated yet.
 
 A store failure is reported by the store workflow's own job summaries and its red
 run; it never reddens the release run and never blocks the Discord announcement or

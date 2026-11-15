@@ -1149,6 +1149,23 @@ jobs:
           # step re-validates the track set the called path cannot constrain.
           test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -ge 2
           grep -F '^(internal|alpha|beta|production)$' .github/workflows/play-upload.yml
+          # The Play lane publishes the bundle the release already built and proved:
+          # the caller names the release run, the lane downloads that run's
+          # client-android artifact, and one shared script owns the identity proof
+          # for both the build and the reuse path. These patterns stay free of
+          # expression syntax, which a run block would expand before grep sees it.
+          grep -F 'prebuilt_run_id:' .github/workflows/release-stores.yml
+          grep -F 'inputs.release_run_id' .github/workflows/release-stores.yml
+          test "$(grep -Fc 'inputs.prebuilt_run_id' .github/workflows/play-upload.yml)" -ge 3
+          grep -F 'name: client-android' .github/workflows/play-upload.yml
+          grep -F 'bash client/release/android/verify_android_release.sh' .github/workflows/play-upload.yml
+          grep -F 'verify_android_release.sh' client/release/android/build_signed_aab.sh
+          # A dispatch has no release run to reuse, so it always builds.
+          if sed -n '/^  workflow_dispatch:/,/^  workflow_call:/p' .github/workflows/play-upload.yml |
+            grep -Fq 'prebuilt_run_id:'; then
+            echo "::error::A dispatched Play upload must build the bundle, not reuse one."
+            exit 1
+          fi
           # Store publication is dispatched, never run inside the release workflow,
           # because the release workflow's completion is what the announcement and
           # the surface verifier wait for. The dispatch shares the Production Web
@@ -1188,11 +1205,13 @@ jobs:
           # them is Ruby too.
           ruby -c client/ios/fastlane/Fastfile
           ruby client/ios/fastlane/test_store_state.rb
-      - name: Verify the signed App Bundle guards
+      - name: Verify the Android release identity guards
         if: needs.classify.outputs.release == 'true'
         working-directory: client
         shell: bash
-        run: bash release/android/test_build_signed_aab.sh
+        run: |
+          bash release/android/test_build_signed_aab.sh
+          bash release/android/test_verify_android_release.sh
       - name: Parse PowerShell release helpers
         shell: pwsh
         run: |
