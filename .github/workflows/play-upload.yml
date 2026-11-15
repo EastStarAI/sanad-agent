@@ -8,10 +8,10 @@ name: Play upload lane
 # lane.
 #
 # Testing tracks (`internal`, `alpha`, `beta`) default to a chosen release
-# status and never roll out automatically. The `production` track is reachable
-# only by an explicit dispatch that also chooses a staged rollout fraction; it is
-# never a side effect of a testing upload, and the tracked policy in
-# docs/operations/release_and_signing.md governs it.
+# status and never roll out automatically. The `production` track is reached by
+# a dispatch, or a release pipeline calling this lane, that also chooses a staged
+# rollout fraction; it is never a side effect of a testing upload, and the
+# tracked policy in docs/operations/release_and_signing.md governs it.
 on:
   workflow_dispatch:
     inputs:

@@ -12,11 +12,11 @@ Tracks:
   internal, alpha, beta   testing tracks. `--status auto` resolves to
                           `completed` on internal and `draft` on alpha/beta, so
                           a closed-testing upload is never published by default.
-  production              explicit store release. The status follows
-                          `--rollout-fraction`: `inProgress` with `userFraction`
-                          below 1, `completed` at exactly 1. `--status` must stay
-                          `auto` because a staged rollout is the only accepted
-                          way to reach production.
+  production              store release. The status follows `--rollout-fraction`:
+                          `inProgress` with `userFraction` below 1, and `completed`
+                          at exactly 1 for a full rollout. `--status` must stay
+                          `auto`, so the rollout fraction alone decides how much
+                          of production receives the build.
 
 Existing releases on the target track are read first. Releases Play can hold
 beside the new one are kept, so an upload never silently drops the previous

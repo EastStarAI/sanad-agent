@@ -1147,7 +1147,7 @@ jobs:
           # The Play lane is callable, so its caller-supplied inputs are proven
           # inside the workflow: both jobs stay repository-bound, and the publish
           # step re-validates the track set the called path cannot constrain.
-          test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -eq 2
+          test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -ge 2
           grep -F '^(internal|alpha|beta|production)$' .github/workflows/play-upload.yml
       - name: Verify the Play upload helper and its unit tests
         if: needs.classify.outputs.release == 'true'

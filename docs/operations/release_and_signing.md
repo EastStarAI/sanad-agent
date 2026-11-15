@@ -455,7 +455,7 @@ proving the publisher.
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
 | `client-downloads-production` | Restricted Production deployment of Stable Client redirects, Web, Appcast, and canonical installer sources |
 
-Signing Environments keep signing secrets isolated and accept deployments only from their exact custom release refs, but they do not require a human reviewer. The one human release decision belongs to `release-publication`, which requires the repository owner after the complete signed candidate, metadata, checksums, SBOM, attestations, and private Draft exist. `google-play-publishing` is the exception that must not stay unreviewed: because it now accepts production uploads, it must require a reviewer as well, and that protection is maintained by the release owner outside Git because a workflow cannot verify it. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; that Environment remains non-interactive and tag-restricted so the already approved Stable release can deploy aliases and Production assets without a second approval. Separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
+Signing Environments keep signing secrets isolated and accept deployments only from their exact custom release refs, but they do not require a human reviewer. The one human release decision belongs to `release-publication`, which requires the repository owner after the complete signed candidate, metadata, checksums, SBOM, attestations, and private Draft exist. The release owner may additionally add required reviewers to any signing Environment outside Git; that remains an optional protection and no workflow depends on it. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; that Environment remains non-interactive and tag-restricted so the already approved Stable release can deploy aliases and Production assets without a second approval. Separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
 
@@ -540,21 +540,21 @@ Client.
   never reused. A rejected or superseded upload still consumes its
   `versionCode`, so the pubspec build number always moves forward.
 - **Promotion:** internal test track first, then closed testing, then the
-  production track with a staged rollout. Production is reached only by an
-  explicit operator dispatch of the Play upload lane, or by a later release
-  pipeline calling that same lane for a specific release; it is never a side
-  effect of a testing upload, and the service account holds production release
-  permission only for that explicit path.
+  production track with a staged rollout. Production is reached by a dispatch of
+  the Play upload lane, or by the release pipeline calling that same lane for a
+  specific release; it is never a side effect of a testing upload, and the
+  service account's production release permission is used only by that lane.
 - **Publication scope:** the AAB is a build output and handoff artifact only. It
   is not attached to public releases and is not a user install source.
 - **Automation:** uploading from CI is permitted only as a job that enters a
-  protected Environment holding the Play service-account credential. Each
-  production upload names its staged rollout fraction when it is dispatched; no
-  workflow publishes to production as an unreviewed side effect of another job.
+  protected Environment holding the Play service-account credential. Publication
+  is unattended, and each production upload carries the staged rollout fraction it
+  was dispatched or called with; no workflow publishes to production as an
+  unreviewed side effect of another job.
 
 ### Play upload lane
 
-`.github/workflows/play-upload.yml` is the store lane. It is manual
+`.github/workflows/play-upload.yml` is the store lane. It is dispatchable
 (`workflow_dispatch`) and callable (`workflow_call`), and both jobs are restricted
 to `EastStarAI/sanad-agent` so a foreign caller cannot enter the signing or Play
 Environments through the reusable entry point. It accepts an explicit
@@ -601,9 +601,9 @@ unusable bodies, and a failed discard all stay inside the same error path, so
 every failure discards the edit instead of leaving it open. The lane creates no
 tag and no GitHub Release.
 
-`google-play-publishing` must require a reviewer before a production upload is
-dispatched. That protection lives in the Environment settings and cannot be
-verified by the workflow, so the release owner maintains it outside Git.
+Store publication is unattended: the lane runs to completion without a human
+approval step. The release owner may optionally add required reviewers to
+`google-play-publishing` outside Git, which changes no part of this workflow.
 
 Every store release carries the curated `release/store-whats-new.en.txt` and
 `release/store-whats-new.ar.txt` text as its `releaseNotes` for `en-US` and `ar`.
