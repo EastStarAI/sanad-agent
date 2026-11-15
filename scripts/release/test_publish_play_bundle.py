@@ -306,5 +306,165 @@ class UploadPayload(unittest.TestCase):
         self.assertEqual([note["language"] for note in release["releaseNotes"]], ["en-US", "ar"])
 
 
+class PublishedReleaseMatch(unittest.TestCase):
+    """Only an exact re-run counts as already published."""
+
+    @staticmethod
+    def release(status: str, *codes: int, fraction: float | None = None) -> dict:
+        entry = {"status": status, "versionCodes": [str(code) for code in codes]}
+        if fraction is not None:
+            entry["userFraction"] = fraction
+        return entry
+
+    def test_a_completed_release_with_the_version_code_matches(self) -> None:
+        existing = [self.release("completed", 27)]
+        self.assertIsNotNone(play.published_release(existing, 27, "completed", None))
+
+    def test_a_staged_release_matches_only_its_own_fraction(self) -> None:
+        existing = [self.release("inProgress", 27, fraction=0.2)]
+        self.assertIsNotNone(play.published_release(existing, 27, "inProgress", 0.2))
+        self.assertIsNone(play.published_release(existing, 27, "inProgress", 0.5))
+
+    def test_a_staged_release_without_a_fraction_does_not_match(self) -> None:
+        existing = [self.release("inProgress", 27)]
+        self.assertIsNone(play.published_release(existing, 27, "inProgress", 0.2))
+
+    def test_a_different_status_does_not_match(self) -> None:
+        existing = [self.release("draft", 27)]
+        self.assertIsNone(play.published_release(existing, 27, "completed", None))
+
+    def test_a_different_version_code_does_not_match(self) -> None:
+        existing = [self.release("completed", 26)]
+        self.assertIsNone(play.published_release(existing, 27, "completed", None))
+
+    def test_an_empty_track_does_not_match(self) -> None:
+        self.assertIsNone(play.published_release([], 27, "completed", None))
+
+
+class ReRunIsIdempotent(unittest.TestCase):
+    """A second store run for the same tag must not consume the versionCode again."""
+
+    def setUp(self) -> None:
+        self.work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.work)
+        self.notes = os.path.join(self.work, "release")
+        write_store_text(self.notes, "1.0.27")
+        self.bundle = os.path.join(self.work, "bundle.aab")
+        with open(self.bundle, "wb") as handle:
+            handle.write(b"bundle")
+
+    def run_main(self, *extra: str, existing: list[dict], upload_error: Exception | None = None):
+        """Run main() with the store replaced by the given track state."""
+        uploads: list[str] = []
+        discards: list[str] = []
+
+        def fake_upload(token, package, edit, bundle):
+            uploads.append(bundle)
+            if upload_error is not None:
+                raise upload_error
+            return {"versionCode": 27, "sha256": "f" * 64}
+
+        def fake_track_releases(token, package, edit, track):
+            return existing
+
+        argv = [
+            "publish_play_bundle.py",
+            "--bundle", self.bundle,
+            "--package", "com.eaststarai.sanad",
+            "--track", "production",
+            "--rollout-fraction", "1",
+            "--expect-version-code", "27",
+            "--version-name", "1.0.27",
+            "--store-notes-dir", self.notes,
+        ] + list(extra)
+
+        def fake_request(token, url, method="GET", payload=None, raw=None):
+            # The post-commit verification re-reads every track, so it must report
+            # the release this run published.
+            if method == "GET" and url.endswith("/tracks"):
+                return {
+                    "tracks": [
+                        {"track": "production", "releases": [{"versionCodes": ["27"]}]}
+                    ]
+                }
+            return {"id": "edit-1"}
+
+        outcome: dict = {}
+        with mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(sys, "stdout", new=io.StringIO()) as stdout, \
+                mock.patch.object(sys, "stderr", new=io.StringIO()), \
+                mock.patch.object(play, "load_key", return_value={}), \
+                mock.patch.object(play, "access_token", return_value="token"), \
+                mock.patch.object(play, "edit_id", return_value="edit-1"), \
+                mock.patch.object(play, "track_releases", side_effect=fake_track_releases), \
+                mock.patch.object(play, "upload", side_effect=fake_upload), \
+                mock.patch.object(play, "discard", side_effect=lambda t, p, e: discards.append(e)), \
+                mock.patch.object(play, "_request", side_effect=fake_request):
+            try:
+                outcome["code"] = play.main()
+            except play.PlayError as error:
+                outcome["error"] = str(error)
+        outcome["stdout"] = stdout.getvalue()
+        outcome["uploads"] = uploads
+        outcome["discards"] = discards
+        return outcome
+
+    def test_skip_reports_success_without_uploading_again(self) -> None:
+        result = self.run_main(
+            "--if-present", "skip",
+            existing=[{"status": "completed", "versionCodes": ["27"]}],
+        )
+        self.assertEqual(result.get("code"), 0)
+        self.assertEqual(result["uploads"], [])
+        self.assertEqual(result["discards"], ["edit-1"])
+        self.assertIn("already completed", result["stdout"])
+        self.assertIn("nothing to upload", result["stdout"])
+
+    def test_skip_reports_success_for_a_staged_rollout(self) -> None:
+        result = self.run_main(
+            "--if-present", "skip", "--rollout-fraction", "0.2",
+            existing=[{"status": "inProgress", "versionCodes": ["27"], "userFraction": 0.2}],
+        )
+        self.assertEqual(result.get("code"), 0)
+        self.assertEqual(result["uploads"], [])
+
+    def test_the_default_still_uploads(self) -> None:
+        result = self.run_main(existing=[{"status": "completed", "versionCodes": ["27"]}])
+        self.assertEqual(result.get("code"), 0)
+        self.assertEqual(result["uploads"], [self.bundle])
+
+    def test_skip_uploads_when_the_state_is_different(self) -> None:
+        result = self.run_main(
+            "--if-present", "skip",
+            existing=[{"status": "draft", "versionCodes": ["27"]}],
+        )
+        self.assertEqual(result["uploads"], [self.bundle])
+
+    def test_skip_uploads_when_the_track_is_empty(self) -> None:
+        result = self.run_main("--if-present", "skip", existing=[])
+        self.assertEqual(result["uploads"], [self.bundle])
+
+    def test_a_consumed_version_code_becomes_actionable(self) -> None:
+        result = self.run_main(
+            "--if-present", "skip",
+            existing=[],
+            upload_error=play.PlayError(
+                "POST upload failed: APK specifies a version code that has already been used."
+            ),
+        )
+        self.assertIn("already consumed", result.get("error", ""))
+        self.assertIn("release/release-contract.json", result.get("error", ""))
+        self.assertEqual(result["discards"], ["edit-1"])
+
+    def test_an_unrelated_upload_failure_stays_unchanged(self) -> None:
+        result = self.run_main(
+            "--if-present", "skip",
+            existing=[],
+            upload_error=play.PlayError("POST upload failed: denied", status=403),
+        )
+        self.assertIn("denied", result.get("error", ""))
+        self.assertNotIn("already consumed", result.get("error", ""))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

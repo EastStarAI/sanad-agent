@@ -23,6 +23,16 @@ beside the new one are kept, so an upload never silently drops the previous
 version. Play permits one active (`draft`/`inProgress`) release per track, so an
 active release that cannot be kept is reported and replaced.
 
+Re-runs:
+
+  A published release must be re-runnable for the same tag without a second
+  upload, because Play consumes a versionCode permanently and rejects the
+  duplicate. `--if-present skip` reads the track before uploading and reports
+  success when the contracted versionCode is already there with the requested
+  status and rollout fraction. `--if-present fail` (the default) keeps the old
+  behaviour. A rejection that names an already-used versionCode is rewritten into
+  the action that fixes it instead of surfacing Google's wording.
+
 Every release carries the curated store text from `release/store-whats-new.*.txt`
 for `en-US` and `ar`. The text is validated before any credential is loaded, so a
 missing file, a text written for another version, or a text over the store limit
@@ -36,7 +46,7 @@ Usage:
   publish_play_bundle.py --bundle <path> --package com.eaststarai.sanad
     --track internal --expect-version-code 25 --version-name 1.0.24
     [--status auto] [--rollout-fraction 0.2] [--store-notes-dir release]
-    [--dry-run]
+    [--if-present fail|skip] [--dry-run]
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -62,7 +73,11 @@ SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 
 TRACKS = ("internal", "alpha", "beta", "production")
 STATUSES = ("auto", "draft", "completed")
+IF_PRESENT = ("fail", "skip")
 TESTING_TRACK_STATUS = {"internal": "completed", "alpha": "draft", "beta": "draft"}
+# Play's own wording for a versionCode it has already consumed. Re-uploading one is
+# permanent, so the message is rewritten into the action that fixes it.
+CONSUMED_VERSION_CODE = re.compile(r"already been used|already used", re.IGNORECASE)
 
 
 class PlayError(RuntimeError):
@@ -230,6 +245,30 @@ def track_releases(token: str, package: str, edit: str, track: str) -> list[dict
     return payload.get("releases") or []
 
 
+def published_release(
+    existing: list[dict], version_code: int, status: str, user_fraction: float | None
+) -> dict | None:
+    """Return the release that already carries this versionCode as requested.
+
+    A re-run of the same release must be a no-op instead of a second upload: Google
+    Play consumes a versionCode permanently, so re-uploading one is rejected. Only
+    an exact match counts, because a release that carries the versionCode in a
+    different state still has to be published.
+    """
+    for entry in existing:
+        codes = {int(code) for code in entry.get("versionCodes") or []}
+        if version_code not in codes:
+            continue
+        if entry.get("status") != status:
+            continue
+        if user_fraction is not None:
+            current = entry.get("userFraction")
+            if current is None or abs(float(current) - user_fraction) > 1e-9:
+                continue
+        return entry
+    return None
+
+
 def merge_releases(existing: list[dict], release: dict, track: str) -> list[dict]:
     """Keep the releases Play can hold beside the new one and report what is replaced."""
     entering = {int(code) for code in release["versionCodes"]}
@@ -264,6 +303,7 @@ def main() -> int:
     parser.add_argument("--status", default="auto", choices=STATUSES)
     parser.add_argument("--rollout-fraction", default=0.2, type=float)
     parser.add_argument("--store-notes-dir", default="release")
+    parser.add_argument("--if-present", default="fail", choices=IF_PRESENT)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -293,7 +333,31 @@ def main() -> int:
     print(f"Play edit {edit} opened for {args.package}")
 
     try:
-        uploaded = upload(token, args.package, edit, args.bundle)
+        # The target track is read before any upload, so `--if-present skip` can
+        # answer a re-run without consuming the versionCode a second time.
+        existing = track_releases(token, args.package, edit, args.track)
+        if args.if_present == "skip":
+            published = published_release(
+                existing, args.expect_version_code, status, user_fraction
+            )
+            if published is not None:
+                discard(token, args.package, edit)
+                print(
+                    f"versionCode {args.expect_version_code} is already "
+                    f"{published.get('status')} on track '{args.track}'; nothing to upload."
+                )
+                return 0
+
+        try:
+            uploaded = upload(token, args.package, edit, args.bundle)
+        except PlayError as error:
+            if CONSUMED_VERSION_CODE.search(str(error)):
+                raise PlayError(
+                    f"versionCode {args.expect_version_code} was already consumed by an"
+                    " earlier upload; Google Play never reuses one, so bump"
+                    " release/release-contract.json before publishing again"
+                ) from error
+            raise
         accepted = int(uploaded.get("versionCode", -1))
         print(f"Bundle accepted: versionCode={accepted} sha256={uploaded.get('sha256', '?')[:16]}…")
         if accepted != args.expect_version_code:
@@ -311,7 +375,6 @@ def main() -> int:
         }
         if user_fraction is not None:
             release["userFraction"] = user_fraction
-        existing = track_releases(token, args.package, edit, args.track)
         track = {
             "track": args.track,
             "releases": merge_releases(existing, release, args.track),

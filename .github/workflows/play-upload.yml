@@ -239,4 +239,5 @@ jobs:
             --version-name "$BUILD_NAME" \
             --store-notes-dir release \
             --status "$RELEASE_STATUS" \
-            --rollout-fraction "$ROLLOUT_FRACTION"
+            --rollout-fraction "$ROLLOUT_FRACTION" \
+            --if-present skip

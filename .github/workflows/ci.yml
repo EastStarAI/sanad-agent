@@ -1149,6 +1149,33 @@ jobs:
           # step re-validates the track set the called path cannot constrain.
           test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -ge 2
           grep -F '^(internal|alpha|beta|production)$' .github/workflows/play-upload.yml
+          # Store publication is dispatched, never run inside the release workflow,
+          # because the release workflow's completion is what the announcement and
+          # the surface verifier wait for. The dispatch shares the Production Web
+          # deploy's gate, so both start at the same instant.
+          grep -F 'name: Dispatch Stable store publication' .github/workflows/release.yml
+          grep -F 'gh workflow run release-stores.yml' .github/workflows/release.yml
+          grep -F -- "--ref \"\$RELEASE_TAG\"" .github/workflows/release.yml
+          test "$(grep -Fc 'needs: [validate, publish, client-download-aliases]' .github/workflows/release.yml)" -ge 2
+          grep -F 'vars.RELEASE_PLAY_PUBLICATION' .github/workflows/release-stores.yml
+          grep -F 'vars.RELEASE_APPSTORE_PUBLICATION' .github/workflows/release-stores.yml
+          grep -F 'uses: ./.github/workflows/play-upload.yml' .github/workflows/release-stores.yml
+          grep -F 'uses: ./.github/workflows/appstore-submit.yml' .github/workflows/release-stores.yml
+          grep -F 'name: client-ios-private' .github/workflows/release-stores.yml
+          grep -F 'bash client/release/ios/upload_ipa.sh' .github/workflows/release-stores.yml
+          grep -F 'bash release/ios/upload_ipa.sh' .github/workflows/testflight.yml
+          test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/release-stores.yml)" -ge 3
+          # A Release published with the repository token starts no other workflow,
+          # so a store lane may never depend on that event, and the store workflow
+          # stays a leaf that no other workflow calls.
+          if grep -E '^  release:' .github/workflows/release-stores.yml; then
+            echo "::error::Store publication must not rely on the token-suppressed release event."
+            exit 1
+          fi
+          if grep -F 'workflow_call:' .github/workflows/release-stores.yml; then
+            echo "::error::The store workflow is dispatched, never called as a reusable workflow."
+            exit 1
+          fi
       - name: Verify the Play upload helper and its unit tests
         if: needs.classify.outputs.release == 'true'
         shell: bash
@@ -1157,6 +1184,10 @@ jobs:
           python3 -I -m py_compile scripts/release/store_whats_new.py
           python3 -I scripts/release/test_store_whats_new.py
           python3 -I scripts/release/test_publish_play_bundle.py
+          # The App Store re-run decisions are pure Ruby, and the lane that uses
+          # them is Ruby too.
+          ruby -c client/ios/fastlane/Fastfile
+          ruby client/ios/fastlane/test_store_state.rb
       - name: Verify the signed App Bundle guards
         if: needs.classify.outputs.release == 'true'
         working-directory: client
@@ -1280,7 +1311,7 @@ jobs:
           }
           require_for_paths maintainer-reviewed '^(\.github/|GOVERNANCE\.md$|CONTRIBUTING\.md$|CODE_OF_CONDUCT\.md$)'
           require_for_paths security-reviewed '^(SECURITY\.md$|shared/auth_lock/|agent/lib/core/auth/|agent/lib/capabilities/permissions/)'
-          if grep -Eq '^(CODE_SIGNING_POLICY\.md$|release/|client/release/|scripts/install\.(sh|ps1)$|\.github/workflows/(release|deploy|testflight)\.yml$)' "$RUNNER_TEMP/changed" &&
+          if grep -Eq '^(CODE_SIGNING_POLICY\.md$|release/|client/release/|scripts/install\.(sh|ps1)$|\.github/workflows/(release|deploy|testflight|play-upload|appstore-submit|release-stores)\.yml$)' "$RUNNER_TEMP/changed" &&
             ! has_label release-reviewed; then
             if scripts/release/verify_metadata_release_diff.sh "$BASE_SHA" "$HEAD_SHA"; then
               echo "Exact metadata-only release preparation does not require release-reviewed."

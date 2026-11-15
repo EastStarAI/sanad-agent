@@ -7,6 +7,7 @@
 require "json"
 require "fastlane_core/build_watcher"
 require "spaceship"
+require_relative "store_state"
 
 # CI logs stay quiet and no lane ever reports usage for this repository.
 opt_out_usage
@@ -63,6 +64,16 @@ def remove_empty_localizations(app, version, listed_locales)
   end
 end
 
+# The version record this lane would act on: the live version when the marketing
+# version already shipped, otherwise the editable one. Returns nil when App Store
+# Connect holds neither, which is what a first submission looks like.
+def current_version(app, version)
+  platform = Spaceship::ConnectAPI::Platform::IOS
+  candidates = [app.get_live_app_store_version(platform: platform),
+                app.get_edit_app_store_version(platform: platform)]
+  candidates.compact.find { |candidate| candidate.version_string == version }
+end
+
 platform :ios do
   desc "Prepare an uploaded iOS build for App Store review, then submit it when asked"
   lane :submit_review do
@@ -87,6 +98,15 @@ platform :ios do
 
     app = Spaceship::ConnectAPI::App.find(app_identifier)
     UI.user_error!("No App Store Connect record for #{app_identifier}") unless app
+
+    # The store workflow is re-runnable for one tag, and a version that already
+    # left the editable state is a completed submission rather than a failure.
+    # Checking the state first also skips the build-processing wait below.
+    state = current_version(app, version)&.app_version_state
+    if SanadStoreState.already_submitted?(state)
+      UI.success("#{version} (#{build}) is already #{state} in App Store Connect; nothing to submit")
+      next
+    end
 
     # Prove the build is processed before any version write, and fail closed on a
     # build that never appears. `deliver` then selects exactly this build number,
@@ -149,5 +169,41 @@ platform :ios do
         "#{version} (#{build}) is prepared in App Store Connect; dispatch again with submit enabled"
       end
     )
+  end
+
+  desc "Report whether a build number already exists in App Store Connect"
+  lane :build_upload_state do
+    app_identifier = ENV.fetch("APPSTORE_APP_IDENTIFIER")
+    version = ENV.fetch("APPSTORE_VERSION")
+    build = ENV.fetch("APPSTORE_BUILD_NUMBER")
+
+    # `latest_testflight_build_number` is fastlane's own TestFlight query, so the
+    # repository keeps no hand-written App Store Connect client. A missing build
+    # reports 0 instead of raising, which is what makes a first run work.
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APPLE_API_KEY_ID"),
+      issuer_id: ENV.fetch("APPLE_API_ISSUER_ID"),
+      key_filepath: ENV.fetch("APPLE_API_KEY_PATH"),
+      in_house: false
+    )
+    latest = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: app_identifier,
+      version: version,
+      platform: "ios",
+      initial_build_number: 0
+    ).to_i
+    present = SanadStoreState.build_present?(latest: latest, wanted: build)
+    UI.message("Latest TestFlight build for #{version} is #{latest}; build #{build} is #{present ? 'already uploaded' : 'not uploaded'}")
+
+    output = ENV["GITHUB_OUTPUT"].to_s
+    if output.empty?
+      UI.message("present=#{present} latest_build=#{latest}")
+    else
+      File.open(output, "a") do |handle|
+        handle.puts("present=#{present}")
+        handle.puts("latest_build=#{latest}")
+      end
+    end
   end
 end

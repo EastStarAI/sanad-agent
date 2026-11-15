@@ -39,6 +39,8 @@ The first line names the release version, for example `1.0.27`, followed by a bl
 
 Both stores enforce a hard limit: Google Play accepts 500 characters per language and the App Store accepts 4000. `scripts/release/store_whats_new.py` owns that check for both lanes, and publication refuses when a file is missing, its first line names another version, the text is empty, or the text is over the limit. The App Store lane asks the same loader for its `en-US` and `ar-SA` text with `--limit app-store`, which also maps the shared `ar` file to the App Store's own `ar-SA` language code. Bumping the contract does not rewrite these files, so a release refuses to publish under a version whose text has not been written yet.
 
+A published Stable release sends both files to both stores with no manual dispatch: `.github/workflows/release-stores.yml` runs at the released tag and each store lane reads the text from that tag, so the copy that ships is the copy that was reviewed with the release. See [Stable release store publication](../docs/operations/release_and_signing.md#stable-release-store-publication).
+
 ## Agent native dictation runtime
 
 Every Agent platform also declares one `agent-runtime` artifact:
