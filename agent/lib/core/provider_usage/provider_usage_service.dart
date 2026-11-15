@@ -121,13 +121,16 @@ class ProviderUsageService {
   ///
   /// Concurrent retries with the same instance-scoped idempotency key share
   /// one operation. Each caller still receives its own request correlation id.
+  /// [creditId] targets one specific credit; the cache key includes it so a
+  /// retry for a different row can never replay another row's outcome.
   Future<ProviderUsageResetResult> resetUsage({
     required String instanceId,
     required String idempotencyKey,
     String? requestId,
     String? confirmationToken,
+    String? creditId,
   }) async {
-    final cacheKey = '$instanceId:$idempotencyKey';
+    final cacheKey = '$instanceId:$idempotencyKey:${creditId ?? ''}';
     final cached = _idempotency[cacheKey];
     if (cached != null) return _withRequestId(cached, requestId);
 
@@ -137,6 +140,7 @@ class ProviderUsageService {
         instanceId: instanceId,
         idempotencyKey: idempotencyKey,
         confirmationToken: confirmationToken,
+        creditId: creditId,
       ),
     );
     try {
@@ -152,6 +156,7 @@ class ProviderUsageService {
     required String instanceId,
     required String idempotencyKey,
     String? confirmationToken,
+    String? creditId,
   }) async {
     const requestId = null;
     if (idempotencyKey.trim().isEmpty) {
@@ -244,6 +249,7 @@ class ProviderUsageService {
       final mutation = await adapter.reset(
         context,
         idempotencyKey: idempotencyKey,
+        creditId: creditId,
       );
       ProviderUsageSnapshot? refreshed;
       var refreshFailed = false;
@@ -305,6 +311,8 @@ class ProviderUsageService {
   String _snapshotFingerprint(ProviderUsageSnapshot snapshot) => jsonEncode({
     'fetched_at': snapshot.fetchedAt.toUtc().toIso8601String(),
     'resets': snapshot.availableResets,
+    'applicable_resets': snapshot.applicableResets,
+    'reset_credits': snapshot.resetCredits.map((c) => c.toMap()).toList(),
     'windows': snapshot.windows.map((w) => w.toMap()).toList(),
   });
 

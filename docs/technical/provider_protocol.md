@@ -300,10 +300,45 @@ response.
 
 A snapshot carries `provider_instance_id`, `provider_template_id`, `source`,
 `fetched_at`, optional plan and safe details, non-negative `available_resets`,
-and only the windows returned by the adapter. Version 1 window types are
-`session`, `weekly`, and `monthly`. Percentages are normalized to `[0, 100]`,
-and one side is derived when only used or remaining is supplied. Missing
-windows never create placeholders.
+an optional non-negative `applicable_resets`, an optional `reset_credits` list,
+and only the windows returned by the adapter. Each reset-credit entry carries
+display-safe UTC `expires_at` and optional `granted_at`, plus an optional opaque
+`credit_id`; the provider's title, description, reset type, profile id, and
+account id never cross the protocol. The `credit_id` exists only so a row's own
+action can target that credit: it is never rendered, never placed in a tooltip,
+and never written to a log. `available_resets` remains authoritative for the
+reset count, while `reset_credits` supplies the per-credit display detail.
+
+The two reset-credit facts come from different ChatGPT documents. The count is
+read from `rate_limit_reset_credits.available_count` (plus
+`applicable_available_count`) inside `GET /backend-api/wham/usage`; the
+per-credit list is a **separate** document, `GET
+/backend-api/wham/rate-limit-reset-credits`, requested with the same headers and
+only when the count is above zero. That second request is non-fatal: a non-2xx
+response, a non-JSON body, or a transport error yields the count-only snapshot
+with no rows. `applicable_resets` is omitted when the provider does not report
+it, and `0` means credits exist but cannot be applied right now. A credit whose
+`expires_at` has already passed is dropped by the adapter even when its `status`
+still reads `available`, because it can no longer be spent; the authoritative
+count is unaffected, so the Client falls back to the count line. A `reset_credits`
+entry without `credit_id` still crosses (an older daemon), and the Client then
+keeps the single action instead of offering per-row targets it cannot honour.
+
+Both documents are pinned by reference-derived fixtures,
+`agent/test/fixtures/chatgpt_usage_reference_shape.json` and
+`agent/test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json`, each
+carrying a `_fixture_note` provenance header. They are reverse-engineered, not
+captured from the user's account, so a live capture still confirms the field
+names; a rename drops the rows and degrades to the count-only fallback.
+
+A consumed credit resets one window, not the whole account: the reference
+transcript of `POST /wham/rate-limit-reset-credits/consume` reports
+`windows_reset=1` while the exhausted 7-day window drops from 100% to 0% and the
+5-hour window keeps its used percentage, so a credit must never be described as
+resetting both windows.
+Version 1 window types are `session`, `weekly`, and `monthly`. Percentages are
+normalized to `[0, 100]`, and one side is derived when only used or remaining is
+supplied. Missing windows never create placeholders.
 
 Registered adapters are ChatGPT account usage for `openai-codex` and OpenCode Go
 usage for `opencode-go`. ChatGPT reads the account backend with the selected
@@ -917,9 +952,9 @@ A bounded retry on the current provider follows the same durable ownership bound
 
 ### Provider usage reset
 
-`provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`.
+`provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`, and accepts an optional `credit_id` that targets one credit from the snapshot. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`. Without `credit_id` the daemon keeps the original consume request and the provider spends its default credit, so an older client stays compatible; the daemon's idempotency cache is keyed by the instance, the key, and the targeted credit so a retry for one row can never replay another row's outcome.
 
-The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol.
+The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key` and the same `credit_id`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol, and the credit identifier never enters a log.
 
 ## Exact-Route Model Capabilities & Thinking Controls (Plan 77 / Task 77i5)
 

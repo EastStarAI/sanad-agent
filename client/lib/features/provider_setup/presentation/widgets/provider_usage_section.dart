@@ -521,39 +521,77 @@ class _ResetControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final count = snapshot.availableResets;
+    final countLabel = count == 1
+        ? l10n.providerUsageResetAvailableSingle
+        : l10n.providerUsageResetsAvailable(count);
+    final credits = snapshot.resetCredits.where((credit) => credit.expiresAt != null).toList()
+      ..sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
+    // A credit the provider will not let us spend yet still exists: keep its row
+    // and its dates, disable that row's action, and say why. An unknown value
+    // (null) keeps the previous behaviour.
+    final applicable = snapshot.applicableResets;
+    final canReset = applicable == null || applicable > 0;
+    // An older daemon sends the rows without their opaque ids. Every row would
+    // then advertise a target it cannot honour (the press would spend the
+    // provider's default credit), so the layout falls back to the single action
+    // on the first row instead of guessing.
+    final canTargetPerRow = credits.every((credit) => credit.creditId != null);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                count == 1
-                    ? AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetAvailableSingle
-                    : AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetsAvailable(count),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+        if (credits.isEmpty) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  countLabel,
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
               ),
+              // The count-only fallback has no credit to target, so it keeps the
+              // original consume request.
+              _resetButton(context, l10n, canReset: canReset),
+            ],
+          ),
+          if (!canReset) _resetBlockedHint(context, l10n),
+        ] else ...[
+          // The daemon's `available_resets` stays authoritative: when the
+          // detail rows disagree with it, the combined count remains visible
+          // instead of disappearing with the count-only fallback.
+          if (credits.length != count) ...[
+            Text(
+              countLabel,
+              key: Key('provider_usage_reset_count_$instanceId'),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
             ),
-            TextButton.icon(
-              onPressed: entry.resetInProgress ? null : () => _start(context),
-              icon: entry.resetInProgress
-                  ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.restart_alt, size: 14),
-              label: Text(
-                AppLocalizations.of(context)!.providerUsageResetLimits,
-              ),
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-            ),
+            const SizedBox(height: 4),
           ],
-        ),
+          for (var i = 0; i < credits.length; i++) ...[
+            _ResetCreditRow(
+              instanceId: instanceId,
+              index: i,
+              expiresAt: credits[i].expiresAt!,
+              // Every row owns its action so a press spends that credit; the
+              // shared applicability rule still disables all of them together.
+              // Without ids only the first row keeps the single action.
+              trailing: canTargetPerRow || i == 0
+                  ? _resetButton(
+                      context,
+                      l10n,
+                      canReset:
+                          canReset &&
+                          _isSpendable(credits[i].expiresAt!),
+                      rowIndex: i,
+                      creditId: credits[i].creditId,
+                    )
+                  : null,
+            ),
+            // The blocked explanation belongs to the first row's action.
+            if (i == 0 && !canReset) _resetBlockedHint(context, l10n),
+          ],
+        ],
         if (entry.resetResult != null && entry.resetResult!.status != 'confirmation_required')
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -571,7 +609,62 @@ class _ResetControls extends StatelessWidget {
     );
   }
 
-  Future<void> _start(BuildContext context) async {
+  Widget _resetButton(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required bool canReset,
+    int? rowIndex,
+    String? creditId,
+  }) {
+    return TextButton.icon(
+      // One key per action: the count-only fallback keeps the shared name, a
+      // credit row adds its index so a test can press exactly that row.
+      key: Key(
+        'provider_usage_reset_action_$instanceId'
+        '${rowIndex == null ? '' : '_$rowIndex'}',
+      ),
+      onPressed: entry.resetInProgress || !canReset
+          ? null
+          : () => _start(context, creditId),
+      icon: entry.resetInProgress
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: AppProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.restart_alt, size: 14),
+      label: Text(l10n.providerUsageResetLimits),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+    );
+  }
+
+  /// A credit whose expiry has already passed cannot be redeemed, even if the
+  /// daemon still listed it.
+  bool _isSpendable(DateTime expiresAt) =>
+      expiresAt.toLocal().isAfter(DateTime.now());
+
+  /// Explains why the credit actions are unavailable. Indented to the row text
+  /// so it reads as part of the first row.
+  Widget _resetBlockedHint(BuildContext context, AppLocalizations l10n) {
+    return Padding(
+      key: Key('provider_usage_reset_blocked_$instanceId'),
+      padding: const EdgeInsets.only(top: 2, bottom: 4),
+      child: Text(
+        l10n.providerUsageResetNotApplicable,
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.6),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _start(BuildContext context, String? creditId) async {
     final exhausted = snapshot.windows.any((window) => window.isExhausted);
     if (exhausted) {
       final approved = await showDialog<bool>(
@@ -601,7 +694,11 @@ class _ResetControls extends StatelessWidget {
       );
       if (approved != true || !context.mounted) return;
     }
-    final result = await cubit.reset(instanceId: instanceId, agent: agent);
+    final result = await cubit.reset(
+      instanceId: instanceId,
+      agent: agent,
+      creditId: creditId,
+    );
     if (!context.mounted || result.status != 'confirmation_required') return;
     final token = result.confirmationToken;
     if (token == null) return;
@@ -635,8 +732,109 @@ class _ResetControls extends StatelessWidget {
         instanceId: instanceId,
         agent: agent,
         confirmationToken: token,
+        creditId: creditId,
       );
     }
+  }
+}
+
+/// One banked reset credit with its local expiration time (Task 174).
+/// One banked reset credit (Task 174).
+///
+/// The leading side stacks the generic title over the relative expiry; the
+/// trailing side carries that row's own action. The exact instant is only in the
+/// tooltip, formatted with the app locale.
+class _ResetCreditRow extends StatelessWidget {
+  final String instanceId;
+  final int index;
+  final DateTime expiresAt;
+
+  /// This row's own reset action: it redeems this credit, never another one.
+  final Widget? trailing;
+
+  const _ResetCreditRow({
+    required this.instanceId,
+    required this.index,
+    required this.expiresAt,
+    required this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final local = expiresAt.toLocal();
+    // The tooltip is the only place the exact instant is shown, so it must use
+    // the app locale: a default-locale DateFormat would print `Dec` inside an
+    // otherwise Arabic card.
+    final locale = Localizations.localeOf(context).toString();
+    final absolute = DateFormat('EEEE, MMMM d, y, HH:mm', locale).format(local);
+    return Padding(
+      key: Key('provider_usage_reset_credit_${instanceId}_$index'),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          // CrossAxisAlignment.start is direction-aware, so the two lines hug
+          // the leading edge in both LTR and RTL.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.providerUsageResetCreditLabel,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Tooltip(
+                  key: Key(
+                    'provider_usage_reset_credit_expiry_${instanceId}_$index',
+                  ),
+                  message: absolute,
+                  child: Text(
+                    _relativeExpiry(l10n, local),
+                    key: Key(
+                      'provider_usage_reset_expiry_${instanceId}_$index',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+
+  /// Mirrors the window countdown wording ("Resets in 2 d 5 h") for a credit
+  /// that must be spent before it expires. Long horizons stay relative on
+  /// purpose: the exact instant lives in the tooltip.
+  String _relativeExpiry(AppLocalizations l10n, DateTime local) {
+    final delta = local.difference(DateTime.now());
+    // A past expiry is not imminent: saying so would invite a press that must
+    // fail. The row keeps the plain fact instead.
+    if (delta.isNegative) return l10n.providerUsageResetCreditExpired;
+    if (delta.inMinutes < 1) {
+      return l10n.providerUsageResetCreditExpiresInMoment;
+    }
+    if (delta.inHours < 1) {
+      return l10n.providerUsageResetCreditExpiresInMinutes(delta.inMinutes);
+    }
+    if (delta.inHours < 24) {
+      return l10n.providerUsageResetCreditExpiresInHours(delta.inHours);
+    }
+    final days = delta.inDays;
+    final hours = delta.inHours % 24;
+    if (hours == 0) return l10n.providerUsageResetCreditExpiresInDays(days);
+    return l10n.providerUsageResetCreditExpiresInDaysHours(days, hours);
   }
 }
 

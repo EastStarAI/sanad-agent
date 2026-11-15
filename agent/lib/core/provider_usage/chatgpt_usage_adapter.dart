@@ -11,8 +11,18 @@
 //     is synthesised when ChatGPT omits it (current behaviour: Weekly + Monthly
 //     only). The mapping is fixed in code, not inferred from a `primary_window`
 //     label, and is covered by fixtures for missing/combined windows.
-//   • Parses `rate_limit_reset_credits.available_count` into
-//     `availableResets` (non-negative int; 0 hides the Reset button).
+//   • Parses `rate_limit_reset_credits.available_count` (and the optional
+//     `applicable_available_count`) into `availableResets` / `applicableResets`
+//     (non-negative ints; a zero count hides the Reset button).
+//   • The per-credit list is NOT part of this payload: only the dedicated
+//     `GET <base>/rate-limit-reset-credits` document carries `credits[]`, so a
+//     non-zero count triggers one extra request. That request is optional: a
+//     non-2xx, a timeout, or a non-JSON body degrades the card to the count
+//     alone — never a throw, never a body in logs. Entries cross the protocol
+//     as display-safe UTC `expires_at`/`granted_at` plus an opaque `credit_id`
+//     used only to target that row's redemption; provider titles, descriptions,
+//     and reset types never leave the adapter, and the id is never rendered or
+//     logged.
 //   • Ignores unknown fields for forward compatibility.
 //   • Never logs the URL query, headers, raw response, token, or account id.
 //   • Throws typed exceptions; messages are display-safe and never include the
@@ -122,7 +132,11 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
         );
       }
 
-      return _mapPayload(decoded, context);
+      final resetCount = _parseResetCount(decoded['rate_limit_reset_credits']);
+      final resetCredits = resetCount > 0
+          ? await _fetchResetCredits(client, context, headers)
+          : const <ProviderUsageResetCredit>[];
+      return _mapPayload(decoded, context, resetCredits);
     } on ProviderUsageException {
       rethrow;
     } on FormatException {
@@ -139,10 +153,17 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     }
   }
 
+  /// Consumes at most one credit.
+  ///
+  /// ChatGPT accepts a targeted redemption: the body carries the opaque
+  /// `credit_id` of the row the user pressed beside the daemon idempotency key.
+  /// Without a credit id the request keeps its original shape and the provider
+  /// spends its default credit.
   @override
   Future<ProviderUsageResetAdapterResult> reset(
     ProviderUsageContext context, {
     required String idempotencyKey,
+    String? creditId,
   }) async {
     final cred = context.credential;
     final token = cred?.accessToken ?? cred?.apiKey;
@@ -159,7 +180,11 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
           ..._buildHeaders(token, context.accountId),
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'redeem_request_id': idempotencyKey}),
+        body: jsonEncode({
+          'redeem_request_id': idempotencyKey,
+          if (creditId != null && creditId.trim().isNotEmpty)
+            'credit_id': creditId.trim(),
+        }),
         timeout: fetchTimeout,
       );
       if (response.statusCode == 401 || response.statusCode == 403) {
@@ -222,9 +247,10 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
   }
 
   /// Resolves the usage endpoint URL. Mirrors the reference split:
-  /// base URLs containing `/backend-api` use the ChatGPT `/wham/...` paths;
-  /// everything else uses `/api/codex/...` (Task 55 §3.3).
-  String _resolveUsageUrl(String baseUrl) {
+  /// Resolves the provider's ChatGPT-style API base (Task 55 §3.3):
+  /// base URLs containing `/backend-api` use the ChatGPT `/wham/...` family;
+  /// everything else uses `/api/codex/...`.
+  String _resolveWhamBase(String baseUrl) {
     var normalised = baseUrl.trim();
     if (normalised.isEmpty) {
       normalised = 'https://chatgpt.com/backend-api/codex';
@@ -233,15 +259,50 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     if (normalised.endsWith('/codex')) {
       normalised = normalised.substring(0, normalised.length - '/codex'.length);
     }
-    final prefix = normalised.contains('/backend-api')
+    return normalised.contains('/backend-api')
         ? '$normalised/wham'
         : '$normalised/api/codex';
-    return '$prefix/usage';
   }
 
-  String _resolveConsumeUrl(String baseUrl) {
-    final usage = _resolveUsageUrl(baseUrl);
-    return '${usage.substring(0, usage.length - '/usage'.length)}/rate-limit-reset-credits/consume';
+  String _resolveUsageUrl(String baseUrl) => '${_resolveWhamBase(baseUrl)}/usage';
+
+  /// The list endpoint. `rate_limit_reset_credits` on `/usage` carries only the
+  /// count; the per-credit detail (status, granted/expiry) lives here.
+  String _resolveResetCreditsUrl(String baseUrl) =>
+      '${_resolveWhamBase(baseUrl)}/rate-limit-reset-credits';
+
+  String _resolveConsumeUrl(String baseUrl) =>
+      '${_resolveWhamBase(baseUrl)}/rate-limit-reset-credits/consume';
+
+  /// Reads the optional per-credit detail document.
+  ///
+  /// This call never fails the snapshot: reset-credit detail is decoration on a
+  /// valid count, so any transport, status, or shape problem yields an empty
+  /// list and the Client renders the count alone. The body never reaches a log.
+  Future<List<ProviderUsageResetCredit>> _fetchResetCredits(
+    ProviderUsageHttpClient client,
+    ProviderUsageContext context,
+    Map<String, String> headers,
+  ) async {
+    try {
+      final resp = await client.get(
+        Uri.parse(_resolveResetCreditsUrl(context.baseUrl)),
+        headers: headers,
+        timeout: fetchTimeout,
+      );
+      if (!resp.isSuccess) {
+        _log.fine(
+          'ChatGPT reset-credit detail unavailable (HTTP ${resp.statusCode})',
+        );
+        return const [];
+      }
+      final decoded = jsonDecode(resp.body);
+      if (decoded is! Map<String, dynamic>) return const [];
+      return _parseResetCredits(decoded);
+    } catch (_) {
+      _log.fine('ChatGPT reset-credit detail could not be read');
+      return const [];
+    }
   }
 
   // ── Defensive parsing ────────────────────────────────────────────────
@@ -249,6 +310,7 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
   ProviderUsageSnapshot _mapPayload(
     Map<String, dynamic> payload,
     ProviderUsageContext context,
+    List<ProviderUsageResetCredit> resetCredits,
   ) {
     final rateLimit =
         (payload['rate_limit'] as Map<String, dynamic>?) ?? const {};
@@ -260,9 +322,11 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     }
 
     final planName = _titleCaseSlug(payload['plan_type']);
-    final availableResets = _parseResetCount(
-      payload['rate_limit_reset_credits'],
-    );
+    final resetCounts = payload['rate_limit_reset_credits'];
+    // The count stays sourced from this payload; the credit rows come from the
+    // dedicated list document read by `_fetchResetCredits`.
+    final availableResets = _parseResetCount(resetCounts);
+    final applicableResets = _parseApplicableResetCount(resetCounts);
     final extraDetails = _parseExtraDetails(payload, availableResets);
 
     if (windows.isEmpty && extraDetails.isEmpty && planName == null) {
@@ -281,6 +345,8 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       planName: planName,
       windows: windows,
       availableResets: availableResets,
+      applicableResets: applicableResets,
+      resetCredits: resetCredits,
       extraDetails: extraDetails,
     );
   }
@@ -325,6 +391,66 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       return v < 0 ? 0 : v;
     }
     return 0;
+  }
+
+  /// Parses the optional `applicable_available_count`.
+  ///
+  /// Returns null when the provider omits it or sends a non-numeric value, so
+  /// "unknown" never reads as "not applicable".
+  int? _parseApplicableResetCount(Object? raw) {
+    if (raw is! Map<String, dynamic>) return null;
+    final count = raw['applicable_available_count'];
+    if (count is num) {
+      final v = count.toInt();
+      return v < 0 ? 0 : v;
+    }
+    return null;
+  }
+
+  /// Parses the dedicated `rate-limit-reset-credits` document.
+  ///
+  /// The per-credit list is not part of `/usage`: that payload carries only
+  /// `available_count` (and sometimes `applicable_available_count`). Each entry
+  /// here carries `status`, `granted_at`, `expires_at`, and an opaque `id` the
+  /// adapter keeps only for targeted redemption. Provider `title`,
+  /// `description`, and `reset_type` are dropped: they are provider copy, and
+  /// the protocol never carries them.
+  ///
+  /// Only credits that are available and carry a valid, not-yet-passed expiry
+  /// cross the protocol: an expired credit cannot be spent, so carrying it would
+  /// offer an action that must fail. The list is sorted by earliest expiry so the
+  /// Client can render the most urgent credit first.
+  List<ProviderUsageResetCredit> _parseResetCredits(Object? raw) {
+    if (raw is! Map<String, dynamic>) return const [];
+    final credits = raw['credits'];
+    if (credits is! List) return const [];
+
+    final now = DateTime.now().toUtc();
+    final parsed = <ProviderUsageResetCredit>[];
+    for (final item in credits) {
+      if (item is! Map<String, dynamic>) continue;
+      final status = item['status']?.toString().trim().toLowerCase();
+      if (status != null && status.isNotEmpty && status != 'available') {
+        continue;
+      }
+      final expiresAt = parseUsageResetAt(item['expires_at']);
+      if (expiresAt == null) continue;
+      // `status` can still read `available` for a credit the account has
+      // already let expire, so the timestamp is the authority.
+      if (!expiresAt.isAfter(now)) continue;
+      final rawId = item['id']?.toString().trim();
+      parsed.add(
+        ProviderUsageResetCredit(
+          expiresAt: expiresAt,
+          grantedAt: parseUsageResetAt(item['granted_at']),
+          creditId: rawId == null || rawId.isEmpty || rawId.length > 256
+              ? null
+              : rawId,
+        ),
+      );
+    }
+    parsed.sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
+    return parsed;
   }
 
   List<String> _parseExtraDetails(Map<String, dynamic> payload, int resets) {

@@ -1,0 +1,25 @@
+{
+  "_fixture_note": "reference-derived; live confirmation by the owner pending. Shape taken from the reverse-engineered GET /backend-api/wham/usage document (mesomya/openusage-windows, aaamosh/codex-reset, getagentseal/codeburn, openai/codex#37455). The real payload carries NO credits[] array inside rate_limit_reset_credits: the per-credit list lives on GET /backend-api/wham/rate-limit-reset-credits.",
+  "plan_type": "plus",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 12,
+      "reset_at": 1792685961,
+      "limit_window_seconds": 18000
+    },
+    "secondary_window": {
+      "used_percent": 41,
+      "reset_at": 1792858761,
+      "limit_window_seconds": 604800
+    }
+  },
+  "credits": {
+    "has_credits": false,
+    "unlimited": false,
+    "balance": 0
+  },
+  "rate_limit_reset_credits": {
+    "available_count": 2,
+    "applicable_available_count": 1
+  }
+}
