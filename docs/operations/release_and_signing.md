@@ -528,9 +528,10 @@ have not reached App Store review yet.
 submission, and `.github/workflows/appstore-submit.yml` is its only entry point.
 The lane never builds, signs, or uploads a binary: `Internal TestFlight` uploads
 the build, and this lane waits for App Store Connect to finish processing it,
-writes the version's `releaseNotes` for `en-US` and `ar-SA` from the curated store
-copy Google Play also publishes, sets the version to release automatically after
-approval, and submits it. One dispatch with `submit` disabled prepares the version
+writes the version's `releaseNotes` for the locales the live App Store listing
+already has (`en-US` today) from the curated store copy Google Play also
+publishes, sets the version to release automatically after approval, and submits
+it. One dispatch with `submit` disabled prepares the version
 for inspection; the same dispatch with `submit` enabled submits it. The version
 and build come from `release/release-contract.json`, and a dispatch that names
 anything else is refused before a credential is used. fastlane is pinned in
@@ -548,18 +549,27 @@ hand-rolled belongs to fastlane instead:
 | Token renewal | `Spaceship::ConnectAPI::TokenRefreshMiddleware` refreshes an expired JWT before each request, and `APIClient#with_asc_retry` refreshes and retries on 401 |
 | Throttling and server errors | `APIClient#with_asc_retry` retries 429 with exponential backoff and 500/504 up to five attempts |
 | Build processing | `FastlaneCore::BuildWatcher` polls the exact version and build number and stops at the configured timeout |
-| Missing listing locale | `Deliver::UploadMetadata` creates the `appStoreVersionLocalization` for every language in the notes map |
+| Listing languages | The lane reads the localizations of `App#get_live_app_store_version` and hands `deliver` notes only for those locales, because `Deliver::UploadMetadata` enables every other language in the notes map as an empty localization |
 
 Screenshots are deliberately untouched: `skip_screenshots: true` skips fastlane's
 screenshot upload, its deletion pass, and its upload-completion wait, so a version
 keeps exactly the media App Store Connect already holds and the lane never adds,
 replaces, or removes a screenshot. The version must therefore already carry its
 screenshots before the first submission, because Apple's submission validation
-fails closed when they are missing. A version created through the API starts
-without localizations of its own, so the notes map also creates the `en-US` and
-`ar-SA` localization records; it creates no media. Apple shows no What's New on an
-app's first App Store version, so fastlane logs that it is skipping the notes and
-continues; every later version publishes them.
+fails closed when they are missing. A new version inherits the localizations of
+the live version, so the version this lane prepares already carries the listing
+text of every locale the listing publishes and the lane only writes `releaseNotes`
+into those locales. The lane never adds a language: a version localization enabled
+by a notes map entry carries no description, keywords, or support URL, and App
+Review refuses to submit a version that has one. Arabic therefore stays absent
+from What's New until the full `ar-SA` listing is filled in App Store Connect, at
+which point the lane picks the locale up on its own and the curated Arabic copy
+ships with it. If no curated locale is on the live listing the lane stops instead
+of creating one. Before writing metadata the lane also deletes a localization that
+the live listing does not publish and that has no description, which is the empty
+record an earlier run of this lane created, and it logs one line per deletion.
+Apple shows no What's New on an app's first App Store version, so fastlane logs
+that it is skipping the notes and continues; every later version publishes them.
 
 fastlane submits from a version in `PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`,
 `REJECTED`, `METADATA_REJECTED`, `WAITING_FOR_REVIEW`, or `INVALID_BINARY`. A
