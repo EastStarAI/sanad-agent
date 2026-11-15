@@ -585,6 +585,7 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
     required String providerInstanceId,
     required String idempotencyKey,
     String? confirmationToken,
+    String? creditId,
     DeviceConfig? agent,
   }) async {
     final payload = await _request(
@@ -593,6 +594,9 @@ class ProviderSetupClientImpl extends ProviderSetupClient {
         'provider_instance_id': providerInstanceId,
         'idempotency_key': idempotencyKey,
         if (confirmationToken != null) 'confirmation_token': confirmationToken,
+        // Targets the credit whose row was pressed; absent keeps the legacy
+        // request so an older daemon still spends its default credit.
+        if (creditId != null) 'credit_id': creditId,
       },
       expectedEvent: 'provider.usage.reset_result',
       agent: agent,

@@ -84,6 +84,14 @@ void main() {
           ),
         ],
         availableResets: 2,
+        applicableResets: 1,
+        resetCredits: [
+          ProviderUsageResetCredit(
+            expiresAt: DateTime.utc(2026, 7, 25, 9),
+            grantedAt: DateTime.utc(2026, 7, 18, 9),
+            creditId: 'RateLimitResetCredit_abc',
+          ),
+        ],
         extraDetails: const ['Credits balance: \$5.00'],
       );
       final decoded = ProviderUsageSnapshot.fromMap(
@@ -91,6 +99,16 @@ void main() {
       );
       expect(decoded.providerInstanceId, s.providerInstanceId);
       expect(decoded.availableResets, 2);
+      expect(decoded.applicableResets, 1);
+      expect(decoded.resetCredits.single.creditId, 'RateLimitResetCredit_abc');
+      expect(
+        decoded.resetCredits.single.expiresAt,
+        DateTime.utc(2026, 7, 25, 9),
+      );
+      expect(
+        decoded.resetCredits.single.grantedAt,
+        DateTime.utc(2026, 7, 18, 9),
+      );
       expect(decoded.windows.single.type, 'weekly');
       expect(decoded.extraDetails.single, 'Credits balance: \$5.00');
       expect(decoded.hasContent, isTrue);
@@ -107,6 +125,19 @@ void main() {
       expect(s.hasContent, isFalse);
     });
 
+    test('reset credits alone count as content', () {
+      final s = ProviderUsageSnapshot(
+        providerInstanceId: 'i',
+        providerTemplateId: 't',
+        source: 's',
+        fetchedAt: DateTime.utc(2026),
+        resetCredits: [
+          ProviderUsageResetCredit(expiresAt: DateTime.utc(2026, 7, 25)),
+        ],
+      );
+      expect(s.hasContent, isTrue);
+    });
+
     test('default availableResets is 0', () {
       final s = ProviderUsageSnapshot(
         providerInstanceId: 'i',
@@ -115,6 +146,18 @@ void main() {
         fetchedAt: DateTime.utc(2026),
       );
       expect(s.availableResets, 0);
+    });
+
+    test('absent applicable count stays absent on the wire', () {
+      final s = ProviderUsageSnapshot(
+        providerInstanceId: 'i',
+        providerTemplateId: 't',
+        source: 's',
+        fetchedAt: DateTime.utc(2026),
+        availableResets: 1,
+      );
+      expect(s.applicableResets, isNull);
+      expect(s.toMap().containsKey('applicable_resets'), isFalse);
     });
   });
 

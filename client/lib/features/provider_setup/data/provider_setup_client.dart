@@ -169,6 +169,7 @@ abstract class ProviderSetupClient {
     required String providerInstanceId,
     required String idempotencyKey,
     String? confirmationToken,
+    String? creditId,
     DeviceConfig? agent,
   }) async => ProviderUsageResetResultDto(
     status: 'unsupported',

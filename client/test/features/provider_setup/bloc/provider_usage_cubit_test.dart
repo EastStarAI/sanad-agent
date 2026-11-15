@@ -35,6 +35,8 @@ class _FakeUsageClient implements ProviderSetupClient {
   Future<void> Function()? usageResetLatency;
   Future<void> Function()? modelSnapshotLatency;
   final List<(String, String, String?)> resetCalls = [];
+  /// Credit id carried by each reset call, in call order.
+  final List<String?> requestedCreditIds = [];
   ProviderUsageResetResultDto? resetResult;
 
   /// `model.snapshot` call count and scripted instance list (97h catalog).
@@ -83,9 +85,11 @@ class _FakeUsageClient implements ProviderSetupClient {
     required String providerInstanceId,
     required String idempotencyKey,
     String? confirmationToken,
+    String? creditId,
     DeviceConfig? agent,
   }) async {
     resetCalls.add((providerInstanceId, idempotencyKey, confirmationToken));
+    requestedCreditIds.add(creditId);
     await usageResetLatency?.call();
     return resetResult ??
         ProviderUsageResetResultDto(
@@ -1107,5 +1111,39 @@ void main() {
     expect(client.resetCalls.last.$1, 'a');
     expect(client.resetCalls.last.$2, client.resetCalls.first.$2);
     expect(client.resetCalls.last.$3, 'confirm-a');
+  });
+
+  test('reset forwards the pressed credit id and keeps it across confirmation', () async {
+    final client = _FakeUsageClient();
+    client.resetResult = const ProviderUsageResetResultDto(
+      status: 'confirmation_required',
+      providerInstanceId: 'a',
+      message: 'Resetting now may waste this credit.',
+      confirmationToken: 'confirm-a',
+    );
+    final cubit = ProviderUsageCubit(client: client, localDeviceId: _localDeviceId);
+    addTearDown(cubit.close);
+    await cubit.onInstancesLoaded(agent: _local, instanceIds: const ['a']);
+
+    final confirmation = await cubit.reset(
+      instanceId: 'a',
+      agent: _local,
+      creditId: 'credit-second',
+    );
+    expect(confirmation.confirmationToken, 'confirm-a');
+
+    client.resetResult = const ProviderUsageResetResultDto(
+      status: 'reset',
+      providerInstanceId: 'a',
+      message: 'Done.',
+    );
+    await cubit.reset(
+      instanceId: 'a',
+      agent: _local,
+      confirmationToken: confirmation.confirmationToken,
+      creditId: 'credit-second',
+    );
+
+    expect(client.requestedCreditIds, ['credit-second', 'credit-second']);
   });
 }

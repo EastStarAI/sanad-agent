@@ -17,13 +17,13 @@ import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.da
 import 'package:sanad_agent/core/provider_runtime/provider_readiness_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_state_service.dart';
 import 'package:sanad_agent/core/provider_runtime/recent_model_selection_service.dart';
-import 'package:sanad_agent/core/provider_usage/provider_usage_models.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_service.dart';
 import 'package:sanad_agent/interfaces/models/delivery/models.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 
 import '../sanad_protocol_bridge.dart';
 import 'provider_model_projection.dart';
+import 'provider_usage_command_mapper.dart';
 
 /// Handles provider setup, model selection, credentials, auth, and instance
 /// lifecycle commands for the Sanad protocol.
@@ -974,88 +974,20 @@ class ProviderCommandHandler {
 
   // ── Task 55: Provider account usage limits ─────────────────────────────
 
-  /// Builds the `provider.usage.result` envelope for a `provider.usage.get`
-  /// command. Delegates to [ProviderUsageService] when registered; otherwise
-  /// returns `unsupported` for every instance so the client hides the section
-  /// cleanly without an error (Task 55 §3.4).
-  Future<Map<String, dynamic>> buildUsageGetEnvelope(
-    CanonicalEvent event,
-  ) async {
-    final requestId = event.payload['request_id'] as String?;
-    final instanceId = event.payload['provider_instance_id'] as String? ?? '';
+  /// Task 55 usage envelopes. The command mapping lives in
+  /// [ProviderUsageCommandMapper] so this handler stays inside its size ratchet;
+  /// the payload fields and emitted envelopes are unchanged.
+  ProviderUsageCommandMapper get _usageEnvelopes => ProviderUsageCommandMapper(
+    usageService: _usageService,
+    buildEnvelope: _bridge.buildAgentEventEnvelope,
+  );
 
-    final result =
-        _usageService != null
-              ? await _usageService.getUsage(
-                  instanceId: instanceId,
-                  requestId: requestId,
-                )
-              : ProviderUsageResult.unsupported(instanceId)
-          ..requestId = requestId;
+  Future<Map<String, dynamic>> buildUsageGetEnvelope(CanonicalEvent event) =>
+      _usageEnvelopes.buildGet(event);
 
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.providerUsageResult,
-        payload: result.toMap(),
-      ),
-    );
-  }
+  Future<Map<String, dynamic>> buildUsageResetEnvelope(CanonicalEvent event) =>
+      _usageEnvelopes.buildReset(event);
 
-  Future<Map<String, dynamic>> buildUsageResetEnvelope(
-    CanonicalEvent event,
-  ) async {
-    final requestId = event.payload['request_id'] as String?;
-    final instanceId = event.payload['provider_instance_id'] as String? ?? '';
-    final idempotencyKey = event.payload['idempotency_key'] as String? ?? '';
-    final confirmationToken = event.payload['confirmation_token'] as String?;
-    final result = _usageService == null
-        ? ProviderUsageResetResult(
-            status: ProviderUsageResetStatus.unsupported,
-            providerInstanceId: instanceId,
-            requestId: requestId,
-            message: 'Usage resets are not supported for this account.',
-          )
-        : await _usageService.resetUsage(
-            instanceId: instanceId,
-            idempotencyKey: idempotencyKey,
-            requestId: requestId,
-            confirmationToken: confirmationToken,
-          );
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.providerUsageResetResult,
-        payload: result.toMap(),
-      ),
-    );
-  }
-
-  /// Builds the `provider.usage.support_result` envelope. Returns a per-instance
-  /// map of `supported` flags so the client can decide which instances warrant
-  /// a `Usage & limits` disclosure without issuing a full fetch for each one
-  /// (Task 55 §3.5).
-  Future<Map<String, dynamic>> buildUsageSupportEnvelope(
-    CanonicalEvent event,
-  ) async {
-    final requestId = event.payload['request_id'] as String?;
-
-    final instanceIds =
-        (event.payload['provider_instance_ids'] as List?)
-            ?.map((e) => e.toString())
-            .toList() ??
-        const <String>[];
-
-    final support = <String, bool>{};
-    if (_usageService != null) {
-      for (final id in instanceIds) {
-        support[id] = _usageService.supportsUsage(id);
-      }
-    }
-
-    return _bridge.buildAgentEventEnvelope(
-      CanonicalEvent(
-        type: CanonicalEventTypes.providerUsageSupportResult,
-        payload: {'request_id': requestId, 'support': support},
-      ),
-    );
-  }
+  Future<Map<String, dynamic>> buildUsageSupportEnvelope(CanonicalEvent event) =>
+      _usageEnvelopes.buildSupport(event);
 }

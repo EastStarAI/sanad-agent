@@ -344,7 +344,7 @@ Track S is independent of Waves 1–3 and has no feature dependency.
 | A6 `engine/context/context_compaction_engine.dart` | Task 118 (`in_progress`) owns the file; no next feature touches it |
 | `base_anthropic_adapter.dart` | runner-up from the study; no next feature touches it |
 | `session_execution_state_coordinator.dart`, `compaction_boundary_repository.dart`, `schedule_model.dart`, `local_gateway_cli_client.dart`, `tool_execution_coordinator.dart`, `linux_service_manager.dart` | one cohesive owner each by contract; size is many cohesive methods, not mixed concerns |
-| `handlers/provider_command_handler.dart` split | blocked on 138-06 characterization tests and has no next-feature need |
+| `handlers/provider_command_handler.dart` split | blocked on 138-06 characterization tests and has no next-feature need. Task 174 has since moved the provider-usage command mapping into `handlers/provider_usage_command_mapper.dart`, which brought the handler under the 1,000-line ratchet and removed its allowlist entry; the remaining setup/model/auth workflows stay together |
 | `scripts/sanad_dev/**` | already decomposed, largest file 680 lines |
 | `scripts/flutter_driver_cli/flutter_vm_controller.dart` | dev tooling changed by #266; its tests live in the Client package |
 
