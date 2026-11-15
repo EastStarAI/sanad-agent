@@ -88,6 +88,10 @@ instead of collapsing them into a single `N resets available` line.
       the existing `available_resets` behavior.
 - [x] Parse, filter, sort, and attach available credits in the ChatGPT adapter.
 - [x] Include reset credits in the reset confirmation fingerprint.
+- [x] Keep the usage command mapping in
+      `agent/lib/interfaces/platforms/sanad_gateway/handlers/provider_usage_command_mapper.dart`
+      so `provider_command_handler.dart` stays under the 1,000-line size ratchet
+      without an allowlist entry.
 
 ### G2 — Client DTO, controls, and localization
 
