@@ -676,7 +676,7 @@ unverified library is never extracted or loaded.
 | `scripts/install.sh` / `scripts/install.ps1` | Warn, continue the install, keep the verified Agent and any predecessor runtime. The predecessor is restored locally when the failure happened after it was moved aside. |
 | Agent self-update (`agent_update_service.dart`) | Replace the executable and report `restart_required`; the outcome travels as `runtime_status` and a message suffix. There is no `runtime_failed` update status. |
 | Client bootstrap (`verified_agent_bootstrap_installer.dart`) | `isSuccess` depends only on the verified Agent; the runtime outcome is reported as `runtimeFailureCause`. |
-| `sanad-dev` launcher probe | A missing or unbuildable runtime only prints guidance and keeps the run going; dictation becomes available when the build finishes. |
+| `sanad-dev` launcher probe | A missing or unbuildable runtime never blocks `run`: the daemon and Client start immediately, the attempt is detached so it survives the launcher, and the failed stage, typed cause, and log land in `agent/native/.stt-prepare.log` (`sanad-dev setup` reports them on the terminal). Dictation becomes available when a later attempt succeeds. |
 
 The reason is machine-readable and durable. The failing component records one
 code in `<exe dir>/native/.runtime-install-failed`
@@ -725,6 +725,79 @@ the budget without that measurement would only hide the unknown. The observed
 Apple Silicon figure (build 18.3 s in this worktree) is recorded in
 `REPORT.md` §10, not used to justify a blanket increase.
 
+## Source-checkout preparation (`sanad-dev`)
+
+A source checkout never ships `agent/native/<tag>/`, so the first run of a fresh
+clone has no dictation runtime. Three entry points reach the one acquisition
+owner, `tool/ensure_native_stt.dart`, and they differ in whether they wait for
+it:
+
+| Entry point | Behavior |
+|---|---|
+| `sanad-dev setup` | Runs the tool **awaited** and reports the tool's own machine keys, then always exits 0. Dictation is optional; a failed preparation must not fail the setup that a developer depends on. This is the entry point that answers "did it work?". |
+| `sanad-dev run` | Starts the tool **detached** (the shell owns the log) and returns without watching it, so the daemon and Client come up immediately. It prints where the result will appear, because a launcher that exits cannot honestly report a verdict. The library is only opened when a session starts, so no restart is involved. |
+| Daemon `prepareRuntime` (the Client's Set up now) | Starts the tool detached for a source checkout, or re-installs the verified runtime for a released Agent. |
+
+`switch` prepares nothing: it moves an already-running runtime group, so there is
+no checkout to bootstrap and no attempt to start.
+
+The detached attempt is deliberate. An attached child (a pipe, or a poll timer
+that keeps the event loop alive) either dies with `sanad-dev run` or holds the
+terminal behind a multi-minute compile; both were observed while this contract
+was being established. Owning the log through the shell is what lets the attempt
+outlive the launcher.
+
+Nothing is discarded. Every attempt appends to
+`agent/native/.stt-prepare.log`, and a failed attempt is reported once with its
+stage, typed cause, that log, and the managed `sanad-dev setup` retry. Windows
+used to redirect the detached installer to `NUL`, which deleted exactly the
+diagnostic a fresh Windows checkout needed. Every writer — the launcher, the
+PowerShell wrapper, and the daemon — appends UTF-8 without a BOM, because they
+share one file and a PowerShell `>>` redirect would append UTF-16 into it.
+
+**Bounded at attempt boundaries.** A build streams a megabyte of compiler output,
+so each writer resets the log to one header line before it starts an attempt when
+the previous one pushed it past 1 MiB
+(`sttPreparationLogLimitBytes` / `nativeSttLogLimitBytes`). The reset has to
+happen before the redirect opens the file: afterwards the shell owns the handle
+and no one can truncate it. Wrappers write the header instead of deleting the
+file, so the log is always a readable artifact.
+
+**One attempt at a time, atomically.** `agent/native/.stt-preparing` is the
+shared claim: the tool creates it with one exclusive create before staging
+anything, writes its own pid into it, and removes it when it finishes. A second
+attempt loses that create and reports `busy` instead of staging the same
+`native/<tag>.tmp` directory twice. Readiness reports
+`native_runtime_preparing` while the claim is younger than 30 minutes, and the
+launcher checks the same file before spawning.
+
+**Safe recovery from a killed attempt.** The claim names its owner's pid, so a
+marker whose process is provably gone is not an attempt: it expires immediately
+(`kill -0` on POSIX, `tasklist` on Windows) and the next attempt takes it over.
+A marker with no readable pid is treated as live until it ages out, because a
+claim nobody can disprove must never be cleared by guesswork. `--force` remains
+the deliberate override for a *stuck but live* attempt; nothing in the launcher
+needs it.
+
+**`busy` is never `ready`.** Both wrappers read `native_stt_result=` from the
+attempt's own slice of the log — the bytes after the offset that existed when the
+attempt started, so an earlier attempt's `ready` can never answer for this one.
+Only `ready` prints a ready stage; `busy` prints "already running" with the log,
+and anything else prints the failed stage, the tail, and the retry.
+
+**Typed result.** The tool always ends with machine keys, so a launcher, CI log,
+or issue report can name the outcome without reading prose:
+`native_stt_stage=<inspect|download|build|verify|ready>`,
+`native_stt_result=<ready|failed|busy>`, and `native_stt_failure=<cause>` where
+the cause is one of `unsupported_platform`, `target_mismatch`,
+`prerequisite_missing`, `download_failed`, `checksum_mismatch`,
+`extract_failed`, `build_failed`, `verification_failed`, `not_relocatable`,
+`instruction_set_above_baseline`, `publish_failed`, `stage_failed`, or the
+generic `acquisition_failed`. `busy` exits 0: another attempt holds the claim and
+nothing failed. `sanad-dev` parses those same keys, which is why the keys are a
+contract between the two packages rather than a log detail
+(`agent/test/tool/native_runtime_package_contract_test.dart`).
+
 ## CI coverage
 
 `.github/workflows/ci.yml` keeps one `native-stt` job per desktop runner:
@@ -764,7 +837,8 @@ live acceptance run on Intel hardware.
 | `agent/test/core/update/agent_update_runtime_policy_test.dart` | Agent self-update completes with `restart_required` on a runtime download error or checksum mismatch and records the cause; a verified runtime installs and clears it |
 | `agent/test/core/update/agent_runtime_bundle_test.dart` | verification order, layout allowlist, Windows staging, and the recorded failure cause per status |
 | `client/test/unit/services/verified_agent_bootstrap_installer_test.dart` | Client bootstrap: a runtime download/checksum/layout failure never fails the install and records the cause; a verified runtime installs |
-| `scripts/sanad_dev/test/runtime/lifecycle/native_runtime_probe_test.dart` | architecture-qualified probe, one bounded legacy alias, unknown host pair, and a failing installer that never blocks `run` |
+| `scripts/sanad_dev/test/runtime/lifecycle/native_runtime_probe_test.dart` | architecture-qualified probe, one bounded legacy alias, unknown host pair, ready means no attempt, one attempt per checkout, an in-flight marker that is never repeated, stale-marker expiry, bounded log rotation, and a typed failure that never throws into `run` |
+| `agent/test/tool/native_runtime_package_contract_test.dart` (`development launcher preparation contract`) | the tool and the launcher agree on the machine keys, the preparing marker, and the 30-minute window; no preparation surface discards output to the null device; `setup` waits while `run` never does |
 | `agent/test/stt/native_runtime_smoke_test.dart` | real load of the built runtime (skips without one, fails when `SANAD_STT_REQUIRE_NATIVE=1`) |
 | `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, Linux `$ORIGIN` relocatability, the loader gate, the instruction-set guard (SVE/I8MM/BF16 and AVX-512 listings rejected, dotprod and AVX2 accepted, mangled names ignored, missing disassembler stated), staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
 | `agent/test/tool/stt_native_archive_test.dart` | reproducible tar.gz bytes, header fields, checksums, entry order |

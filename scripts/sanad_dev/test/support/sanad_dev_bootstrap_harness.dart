@@ -164,6 +164,26 @@ fi
 printf '%s|%s\\n' "\$PWD" "\$*" >> '${calls.path}'
 printf 'live:%s:%s\\n' "\$PWD" "\$*"
 if [ "\${FAIL_STAGE:-}" = "\${1:-}-\${2:-}" ]; then exit 42; fi
+if [ "\${1:-}" = dart ] && [ "\${2:-}" = run ] &&
+   [ "\${3:-}" = tool/ensure_native_stt.dart ]; then
+  # The real tool always ends with machine keys; the wrapper reads them, so the
+  # fixture answers like the real one instead of only exiting 0.
+  if [ "\${FAIL_DICTATION:-}" = busy ]; then
+    echo native_stt_result=busy
+    echo native_stt_stage=inspect
+    exit 0
+  fi
+  if [ -n "\${FAIL_DICTATION:-}" ]; then
+    echo 'cmake is not installed'
+    echo native_stt_stage=build
+    echo native_stt_result=failed
+    echo native_stt_failure=prerequisite_missing
+    exit 2
+  fi
+  echo native_stt_stage=ready
+  echo native_stt_result=ready
+  exit 0
+fi
 if [ "\${1:-}" = install ]; then
   touch .fake-fvm-installed
 elif [ "\${1:-}" = dart ] && [ "\${2:-}" = pub ]; then

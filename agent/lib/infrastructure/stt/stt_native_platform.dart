@@ -261,6 +261,166 @@ const List<String> _linuxLibraries = [
 /// downloads, so readiness can report "preparing" instead of "missing".
 const String sttPreparingMarkerName = '.stt-preparing';
 
+/// How long one preparing marker is trusted as evidence of a running attempt.
+///
+/// The marker is removed when the tool finishes, so its age is only used to
+/// expire the marker a killed attempt left behind. Every consumer — readiness,
+/// the tool's own single-flight guard, and the development launcher — reads this
+/// one value, so an attempt can never be "running" for one of them and "stale"
+/// for another.
+const Duration sttPreparingMarkerMaxAge = Duration(minutes: 30);
+
+/// Upper bound of the durable preparation log.
+///
+/// The log keeps the attempt that produced the current state. When a previous
+/// attempt pushed it past this bound, the next writer resets it to
+/// [sttPreparationLogResetHeader] instead of appending to an unbounded file.
+const int sttPreparationLogLimitBytes = 1024 * 1024;
+
+/// Durable attempt log inside the native root.
+///
+/// Every writer — the acquisition tool, the development launcher, the platform
+/// wrappers, and this package — appends to this one file, and none of them may
+/// discard it: it is the only record a failed or interrupted attempt leaves.
+const String sttPreparationLogFileName = '.stt-prepare.log';
+
+/// First line of a preparation log that was reset for exceeding its bound.
+const String sttPreparationLogResetHeader =
+    '# native dictation preparation log reset: the previous attempt exceeded ';
+
+/// True when [nativeRoot] holds a preparing marker young enough to mean that
+/// an acquisition attempt is still running.
+///
+/// A future timestamp counts as fresh: a clock that moved backwards must never
+/// turn a live attempt into a second concurrent one, and the bound expires it
+/// like any other stale marker.
+///
+/// A marker that names a process which is provably gone expires immediately.
+/// That is the safe repair for the attempt a killed launcher left behind: the
+/// claim is never replaced while its owner could still be running, and a dead
+/// claim can never block retries for the full window.
+bool sttPreparationInFlight(Directory nativeRoot, {DateTime? now}) {
+  final marker = File('${nativeRoot.path}/$sttPreparingMarkerName');
+  if (!marker.existsSync()) return false;
+  try {
+    final age = (now ?? DateTime.now()).difference(marker.lastModifiedSync());
+    if (age >= sttPreparingMarkerMaxAge) return false;
+    final owner = sttPreparationMarkerOwner(nativeRoot);
+    if (owner != null && !_processAlive(owner)) return false;
+    return true;
+  } on FileSystemException {
+    return false;
+  }
+}
+
+/// Process id recorded in [nativeRoot]'s preparing marker, or null.
+///
+/// The marker body is the owner's pid. A marker written before that rule (an
+/// ISO timestamp) yields null, which every caller reads as "unknown owner" and
+/// therefore as live: an unreadable claim must never be cleared by guesswork.
+int? sttPreparationMarkerOwner(Directory nativeRoot) {
+  final marker = File('${nativeRoot.path}/$sttPreparingMarkerName');
+  try {
+    if (!marker.existsSync()) return null;
+    final first = marker.readAsStringSync().trim().split(RegExp(r'\s+')).first;
+    return int.tryParse(first);
+  } on FileSystemException {
+    return null;
+  } on FormatException {
+    return null;
+  }
+}
+
+/// Claims [nativeRoot]'s preparing marker for [pid] without ever replacing a
+/// live claim.
+///
+/// Returns false when another attempt still holds it. The claim is one atomic
+/// exclusive create, so two attempts starting in the same instant cannot both
+/// proceed and stage the same runtime directory; the loser reports `busy`. An
+/// existing claim is only taken over when it is expired or its owner is gone
+/// ([sttPreparationInFlight]), and [force] is the deliberate override for a
+/// claim whose owner is alive but stuck.
+bool sttClaimPreparation(
+  Directory nativeRoot, {
+  required int pid,
+  bool force = false,
+}) {
+  final marker = File('${nativeRoot.path}/$sttPreparingMarkerName');
+  try {
+    marker.parent.createSync(recursive: true);
+  } on FileSystemException {
+    // A read-only checkout cannot mark, and readiness then reports "missing"
+    // for the few minutes the attempt takes. Nothing to claim, nothing to lose.
+    return true;
+  }
+  if (force) sttClearPreparationMarker(nativeRoot);
+  for (var attempt = 0; attempt < 2; attempt++) {
+    try {
+      marker.createSync(exclusive: true);
+      marker.writeAsStringSync('$pid', flush: true);
+      return true;
+    } on FileSystemException {
+      if (sttPreparationInFlight(nativeRoot)) return false;
+      sttClearPreparationMarker(nativeRoot);
+    }
+  }
+  return false;
+}
+
+/// Removes [nativeRoot]'s preparing marker, if any.
+void sttClearPreparationMarker(Directory nativeRoot) {
+  try {
+    final marker = File('${nativeRoot.path}/$sttPreparingMarkerName');
+    if (marker.existsSync()) marker.deleteSync();
+  } on FileSystemException {
+    // A marker that survives expires by age, so this stays best-effort.
+  }
+}
+
+/// Resets [nativeRoot]'s preparation log when it exceeds its bound.
+///
+/// Called before an attempt starts, so the log holds at most one attempt's
+/// output plus the header. The write is done here rather than by the shell
+/// redirect that follows, because that redirect has already opened the file. A
+/// live attempt's log is never touched: its owner is still writing to it.
+void resetBoundedSttPreparationLog(Directory nativeRoot) {
+  final log = File('${nativeRoot.path}/$sttPreparationLogFileName');
+  try {
+    if (!log.existsSync() || log.lengthSync() <= sttPreparationLogLimitBytes) {
+      return;
+    }
+    if (sttPreparationInFlight(nativeRoot)) return;
+    log.writeAsStringSync(
+      '$sttPreparationLogResetHeader$sttPreparationLogLimitBytes bytes\n',
+      flush: true,
+    );
+  } on FileSystemException {
+    // A log that cannot be bounded must not stop the attempt.
+  }
+}
+
+/// True when [pid] is still running.
+///
+/// Unknown answers count as alive: clearing a claim whose owner might still be
+/// staging a runtime is the one outcome that corrupts a build.
+bool _processAlive(int pid) {
+  if (pid <= 0) return false;
+  try {
+    if (Platform.isWindows) {
+      final result = Process.runSync(
+        'tasklist',
+        ['/FI', 'PID eq $pid', '/NH', '/FO', 'CSV'],
+        runInShell: true,
+      );
+      return '${result.stdout}'.contains('"$pid"');
+    }
+    final result = Process.runSync('/bin/sh', ['-c', 'kill -0 $pid']);
+    return result.exitCode == 0;
+  } on Object {
+    return true;
+  }
+}
+
 /// Absolute candidate paths for the shim, in probe order.
 ///
 /// The packaged layout puts `native/<tag>/` beside the executable; a source

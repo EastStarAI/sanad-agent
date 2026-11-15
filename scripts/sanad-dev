@@ -57,7 +57,7 @@ Sanad development launcher
 Usage:
   sanad-dev                         Show this help without changing the environment.
   sanad-dev install [--force]       Install/verify FVM, pinned Flutter, and the user command.
-  sanad-dev setup [--force]         Ensure install, then resolve Contract, Agent, and Client packages.
+  sanad-dev setup [--force]         Ensure install, resolve every package, and prepare native dictation.
   sanad-dev run [all|agent|client]  Ensure install/setup, then launch the requested runtime.
   sanad-dev <runtime-command>       Run status, logs, restart, reload, stop, doctor, or switch.
 
@@ -345,10 +345,99 @@ run_install() {
 }
 
 run_setup() {
-  local force="$1" allow_existing_shim="$2"
+  local force="$1" allow_existing_shim="$2" prepare_dictation="${3:-false}"
   run_install "$force" "$allow_existing_shim"
   ensure_dependencies
   ensure_runtime_cli
+  if [ "$prepare_dictation" = true ]; then
+    run_dictation_prepare
+  fi
+}
+
+# Prepares the native dictation runtime for this checkout, and waits for it.
+#
+# `agent/native/<tag>/` is not tracked in git, so a fresh checkout has no
+# runtime, and `agent/tool/ensure_native_stt.dart` is the one owner of download,
+# build, and verification. `setup` runs it here and reports the tool's own typed
+# result; `run` never waits, because the launcher starts the same tool detached
+# so the daemon can come up immediately. A failure is dictation-only: it is
+# reported with its stage, the durable log, and the managed retry, and never
+# fails setup.
+run_dictation_prepare() {
+  local agent_dir="$PROJECT_DIR/agent"
+  local log="$agent_dir/native/.stt-prepare.log"
+  local name='Preparing native dictation' started offset result
+  mkdir -p "$agent_dir/native"
+  # The log is the only durable record a failed build leaves behind, so it is
+  # kept on every platform, bounded rather than discarded to the null device.
+  bound_dictation_log "$log"
+  offset=$(dictation_log_size "$log")
+  started=$SECONDS
+  printf '\n==> %s\n' "$name"
+  # The redirect streams each line as the tool prints it: an interrupted build
+  # keeps everything it produced up to that point.
+  (cd "$agent_dir" && "$FVM_BIN" dart run tool/ensure_native_stt.dart >>"$log" 2>&1) || true
+  result=$(dictation_attempt_result "$log" "$offset")
+  case "$result" in
+    ready)
+      stage "$name" "ready ($((SECONDS - started))s)"
+      return 0
+      ;;
+    busy)
+      # Another attempt holds the claim. The tool takes over a claim whose owner
+      # is gone, so reaching this means that attempt is genuinely live.
+      stage "$name" "already running ($((SECONDS - started))s)"
+      echo '  another attempt is preparing dictation; it reports to' >&2
+      echo '  agent/native/.stt-prepare.log when it finishes' >&2
+      return 0
+      ;;
+  esac
+  stage "$name" "unavailable ($((SECONDS - started))s)"
+  # Only this attempt's output: a previous attempt's keys must never read as
+  # this failure's cause.
+  dictation_attempt_tail "$log" "$offset" >&2 || true
+  echo 'Dictation is unavailable; the Agent runs without it.' >&2
+  echo '  log:   agent/native/.stt-prepare.log' >&2
+  echo '  retry: sanad-dev setup' >&2
+  return 0
+}
+
+# Byte size of the durable preparation log, or 0 when it does not exist yet.
+dictation_log_size() {
+  if [ ! -f "$1" ]; then
+    printf '0'
+    return 0
+  fi
+  wc -c <"$1" | tr -d ' '
+}
+
+# Resets the durable preparation log to one header line when it outgrew its
+# bound, so a repeated retry can never grow it without limit.
+bound_dictation_log() {
+  local log="$1"
+  if [ "$(dictation_log_size "$log")" -gt 1048576 ]; then
+    printf '# native dictation preparation log reset: the previous attempt exceeded %s bytes\n' \
+      '1048576' >"$log"
+  fi
+}
+
+# The machine key this attempt ended with, read from its own slice of the log.
+#
+# Everything before [offset] belongs to a previous attempt (or to the daemon),
+# so parsing only the new bytes keeps a stale `ready` from answering for a
+# failed run.
+dictation_attempt_result() {
+  local log="$1" offset="$2"
+  [ -f "$log" ] || return 0
+  dictation_attempt_tail "$log" "$offset" |
+    sed -n 's/^native_stt_result=//p' | tail -n 1
+}
+
+# The last lines this attempt wrote, for the failure report.
+dictation_attempt_tail() {
+  local log="$1" offset="$2"
+  [ -f "$log" ] || return 0
+  tail -c "+$((offset + 1))" "$log" | tail -n 12
 }
 
 # Commands that must keep working on a stale prepared runtime.
@@ -412,14 +501,16 @@ main() {
       return 0
       ;;
     setup)
-      run_setup "$force" true
+      run_setup "$force" true true
       return 0
       ;;
     run)
-      run_setup "$force" true
+      # `run` never waits for a build: the launcher starts the same acquisition
+      # tool detached so the daemon and Client come up immediately.
+      run_setup "$force" true false
       ;;
     switch)
-      run_setup false true
+      run_setup false true false
       ;;
     *)
       ;;
@@ -431,7 +522,12 @@ main() {
     for arg in "$@"; do [ "$arg" != --force ] && runtime_args+=("$arg"); done
   fi
   cd "$PROJECT_DIR/client"
-  SANAD_DEV_CALLER_DIR="$CALLER_DIR" "$RUNTIME_CLI" "${runtime_args[@]}"
+  # The resolved FVM travels with the launcher: the detached dictation attempt it
+  # starts runs through a shell, which does not inherit `$FVM_BIN`. A runtime
+  # command that redispatched to an already prepared CLI never installed FVM, so
+  # the variable is optional rather than required.
+  SANAD_DEV_FVM_BIN="${FVM_BIN:-}" SANAD_DEV_CALLER_DIR="$CALLER_DIR" \
+    "$RUNTIME_CLI" "${runtime_args[@]}"
 }
 
 main "$@"
