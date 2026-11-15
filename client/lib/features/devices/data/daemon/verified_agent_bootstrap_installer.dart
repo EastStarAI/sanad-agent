@@ -1,13 +1,23 @@
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:logging/logging.dart';
 import 'package:sanad_client/core/config/app_config.dart';
 import 'package:sanad_client/features/devices/data/daemon/agent_runtime_archive.dart';
+import 'package:sanad_client/infrastructure/platform/release_trust_http_client.dart';
 import 'package:sanad_release_contract/release_contract.dart';
 
 enum AgentBootstrapStatus {
   installed,
   networkFailed,
+
+  /// The release host's chain could not be verified on this computer.
+  ///
+  /// Distinct from [networkFailed] because the transport worked and the
+  /// certificate was refused: the cause is the machine's trust set (antivirus
+  /// or proxy TLS inspection, a partial root store, or a skewed clock), not
+  /// reachability, and no automatic retry can fix it.
+  tlsTrustFailed,
   manifestInvalid,
   targetMismatch,
   unsupportedTarget,
@@ -76,6 +86,8 @@ class AgentBootstrapResult {
 }
 
 class VerifiedAgentBootstrapInstaller {
+  static final _logger = Logger('VerifiedAgentBootstrapInstaller');
+
   VerifiedAgentBootstrapInstaller({
     required this.targetPath,
     http.Client? client,
@@ -85,7 +97,8 @@ class VerifiedAgentBootstrapInstaller {
     PlatformArtifactVerifier? platformVerifier,
     PlatformArtifactDetailedVerifier? detailedPlatformVerifier,
     Uri? artifactMirrorUri,
-  }) : _client = client ?? http.Client(),
+    Object? fallbackManifestUri = _unsetFallbackManifest,
+  }) : _client = client ?? createReleaseTrustHttpClient(),
        manifestUri = manifestUri ?? Uri.parse(AppConfig.releaseManifestUrl),
        operatingSystem = operatingSystem ?? Platform.operatingSystem,
        architecture = architecture ?? _architecture(),
@@ -93,10 +106,18 @@ class VerifiedAgentBootstrapInstaller {
        _detailedPlatformVerifier = detailedPlatformVerifier,
        _artifactMirrorUri =
            artifactMirrorUri ??
-           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl));
+           (AppConfig.releaseArtifactMirrorUrl.trim().isEmpty ? null : Uri.parse(AppConfig.releaseArtifactMirrorUrl)),
+       fallbackManifestUri = identical(fallbackManifestUri, _unsetFallbackManifest)
+           ? _configuredFallbackManifest()
+           : fallbackManifestUri as Uri?;
 
   final String targetPath;
   final Uri manifestUri;
+
+  /// The project's own published copy of the same manifest, used only when the
+  /// primary release host cannot be verified on this computer.
+  final Uri? fallbackManifestUri;
+
   final String operatingSystem;
   final String architecture;
   final http.Client _client;
@@ -108,29 +129,27 @@ class VerifiedAgentBootstrapInstaller {
     required String targetVersion,
     void Function(double progress)? onProgress,
   }) async {
+    final primary = await _loadManifest(manifestUri);
     ReleaseManifest manifest;
-    try {
-      final response = await _client.get(
-        manifestUri,
-        headers: const {'User-Agent': 'sanad-client'},
-      );
-      if (response.statusCode != HttpStatus.ok) {
-        return AgentBootstrapResult(
-          AgentBootstrapStatus.networkFailed,
-          message: 'Manifest request failed with HTTP ${response.statusCode}.',
-        );
+    if (primary.manifest != null) {
+      manifest = primary.manifest!;
+    } else if (primary.refusedChain && _fallbackApplies) {
+      // GitHub's chain is not verifiable here while our own host's is, so the
+      // identical published copy is fetched instead. Verification below is
+      // unchanged: version, size, SHA-256, and platform trust still decide.
+      final fallback = await _loadManifest(fallbackManifestUri!);
+      if (fallback.manifest == null) {
+        return fallback.failure ??
+            const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
       }
-      manifest = ReleaseManifest.fromJsonString(response.body);
-    } on FormatException catch (error) {
-      return AgentBootstrapResult(
-        AgentBootstrapStatus.manifestInvalid,
-        message: error.message,
+      _logger.info(
+        'Used the hosted release manifest because the primary release host '
+        'could not be verified on this computer.',
       );
-    } catch (error) {
-      return AgentBootstrapResult(
-        AgentBootstrapStatus.networkFailed,
-        message: 'Unable to fetch the release manifest: $error',
-      );
+      manifest = fallback.manifest!;
+    } else {
+      return primary.failure ??
+          const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
     }
 
     final requested = ReleaseVersion.parse(targetVersion);
@@ -215,6 +234,8 @@ class VerifiedAgentBootstrapInstaller {
           message: 'Could not install the verified agent: $error',
         );
       }
+    } on TlsException catch (error) {
+      return _tlsTrustFailure('agent artifact', error);
     } catch (error) {
       return AgentBootstrapResult(
         AgentBootstrapStatus.downloadFailed,
@@ -222,6 +243,74 @@ class VerifiedAgentBootstrapInstaller {
       );
     } finally {
       if (staged.existsSync()) await staged.delete();
+    }
+  }
+
+  static const Object _unsetFallbackManifest = Object();
+
+  /// True when a fallback manifest host is configured and differs from the
+  /// primary one; otherwise a refused chain is reported as such.
+  bool get _fallbackApplies {
+    final fallback = fallbackManifestUri;
+    return fallback != null && fallback != manifestUri;
+  }
+
+  static Uri? _configuredFallbackManifest() {
+    final configured = AppConfig.releaseManifestFallbackUrl.trim();
+    return configured.isEmpty ? null : Uri.parse(configured);
+  }
+
+  /// Fetches and parses one manifest candidate.
+  ///
+  /// [refusedChain] is separate from [failure] so the caller can decide whether
+  /// another host is worth trying: a refused certificate is host-specific, while
+  /// an HTTP error, unparseable body, or unreachable network is not.
+  Future<({ReleaseManifest? manifest, AgentBootstrapResult? failure, bool refusedChain})>
+  _loadManifest(Uri uri) async {
+    try {
+      final response = await _client.get(
+        uri,
+        headers: const {'User-Agent': 'sanad-client'},
+      );
+      if (response.statusCode != HttpStatus.ok) {
+        return (
+          manifest: null,
+          failure: AgentBootstrapResult(
+            AgentBootstrapStatus.networkFailed,
+            message: 'Manifest request failed with HTTP ${response.statusCode}.',
+          ),
+          refusedChain: false,
+        );
+      }
+      return (
+        manifest: ReleaseManifest.fromJsonString(response.body),
+        failure: null,
+        refusedChain: false,
+      );
+    } on FormatException catch (error) {
+      return (
+        manifest: null,
+        failure: AgentBootstrapResult(
+          AgentBootstrapStatus.manifestInvalid,
+          message: error.message,
+        ),
+        refusedChain: false,
+      );
+    } on TlsException catch (error) {
+      return (
+        manifest: null,
+        failure: _tlsTrustFailure('release manifest', error),
+        refusedChain: true,
+      );
+    } catch (error) {
+      return (
+        manifest: null,
+        failure: AgentBootstrapResult(
+          AgentBootstrapStatus.networkFailed,
+          message: 'Unable to fetch the release manifest: $error',
+        ),
+        refusedChain: false,
+      );
     }
   }
 
@@ -360,6 +449,22 @@ class VerifiedAgentBootstrapInstaller {
       if (stagedArchive.existsSync()) await stagedArchive.delete();
       if (stagedDir.existsSync()) await stagedDir.delete(recursive: true);
     }
+  }
+
+  /// Reports an untrusted release chain without echoing the BoringSSL text.
+  ///
+  /// The exception stays in the log because it names the refused certificate
+  /// stage; the outcome stays actionable because every caller can render a
+  /// localized cause and remedy for [AgentBootstrapStatus.tlsTrustFailed].
+  static AgentBootstrapResult _tlsTrustFailure(
+    String surface,
+    TlsException error,
+  ) {
+    _logger.warning(
+      'TLS trust verification failed for the $surface '
+      '(${error.runtimeType}).',
+    );
+    return const AgentBootstrapResult(AgentBootstrapStatus.tlsTrustFailed);
   }
 
   static String _architecture() {

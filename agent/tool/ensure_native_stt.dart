@@ -871,6 +871,24 @@ Future<bool> _build(
     _discard(stagingDir);
     return false;
   }
+  // The builder enforces this immediately, but the tool is the boundary that
+  // stages and publishes: a cache that does not record the portable baseline
+  // means the flag never reached ggml, so the produced libraries are compiled
+  // for whatever CPU built them. Refuse them here rather than publish a runtime
+  // that traps on the floor its directory name claims.
+  final cacheFile = File('$whisperSrc/build/CMakeCache.txt');
+  final cacheProblem = sttGgmlNativeCacheProblem(
+    target: target,
+    cache: cacheFile.existsSync() ? cacheFile.readAsStringSync() : '',
+  );
+  if (cacheProblem != null) {
+    stderr.writeln(
+      'refusing the ${target.tag} build: $cacheProblem '
+      '(${cacheFile.path})',
+    );
+    _discard(stagingDir);
+    return false;
+  }
   // A partially built or cross-architecture folder would be published as
   // "ready" and then fail to load in the daemon, so refuse to swap it in.
   final built = await verifySttRuntime(
