@@ -525,8 +525,9 @@ app-signing certificates.
 
 For a Stable release the Approved production upload is automatic: `release.yml`
 dispatches `.github/workflows/release-stores.yml` at the released tag in the same
-instant it starts the Production Web deploy, the Play job runs `production` at
-100%, and the App Store job uploads the release's own IPA and submits the version.
+instant it starts the Production Web deploy, the Play job publishes the release's
+own bundle to `production` at 100%, and the App Store job uploads the release's
+own IPA and submits the version.
 Verify a release on both stores with:
 
 1. `gh run list --workflow release-stores.yml --limit 1` and read the run's summary
