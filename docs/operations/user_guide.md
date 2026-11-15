@@ -332,7 +332,9 @@ Open Provider Settings on the selected device to:
 - view **Usage & limits** for supported instances.
 
 ChatGPT Subscription currently exposes Session and Weekly usage windows.
-Unsupported providers do not display invented usage values.
+OpenCode Go exposes its 5-hour (Session), Weekly, and Monthly windows. Usage is
+read-only for OpenCode Go: it has no reset credits. Unsupported providers do
+not display invented usage values.
 
 ## Work with an active session
 
