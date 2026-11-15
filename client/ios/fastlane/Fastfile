@@ -1,0 +1,109 @@
+# Submits a build that is already uploaded and processed in App Store Connect and
+# releases it automatically once Apple approves. This lane never builds, signs, or
+# uploads a binary: `.github/workflows/testflight.yml` owns the upload. Every App
+# Store Connect behaviour it relies on is fastlane's own; the mechanism table and
+# the screenshot/state limits live in `docs/operations/release_and_signing.md`.
+
+require "json"
+require "fastlane_core/build_watcher"
+require "spaceship"
+
+# CI logs stay quiet and no lane ever reports usage for this repository.
+opt_out_usage
+
+default_platform(:ios)
+
+ROOT = File.expand_path("../../..", __dir__)
+RELEASE_CONTRACT = File.join(ROOT, "release", "release-contract.json")
+STORE_COPY = File.join(ROOT, "scripts", "release", "store_whats_new.py")
+STORE_COPY_DIRECTORY = File.join(ROOT, "release")
+
+def contract_identity
+  contract = JSON.parse(File.read(RELEASE_CONTRACT))
+  [contract.fetch("version").to_s, contract.fetch("build_number").to_s]
+end
+
+# `store_whats_new.py` is the single owner of the curated store copy, so the lane
+# asks it for the published text instead of reading or validating it again.
+def store_release_notes(version)
+  output = sh("python3", STORE_COPY, "--version", version,
+              "--directory", STORE_COPY_DIRECTORY, "--limit", "app-store", "--json",
+              log: false)
+  notes = JSON.parse(output)
+  missing = ["en-US", "ar-SA"] - notes.keys
+  UI.user_error!("Store copy is not published for #{missing.join(' and ')}") unless missing.empty?
+  notes
+end
+
+platform :ios do
+  desc "Prepare an uploaded iOS build for App Store review, then submit it when asked"
+  lane :submit_review do
+    contract_version, contract_build = contract_identity
+    version = ENV.fetch("APPSTORE_VERSION", contract_version)
+    build = ENV.fetch("APPSTORE_BUILD_NUMBER", contract_build)
+    unless version == contract_version && build == contract_build
+      UI.user_error!("App Store identity mismatch: release/release-contract.json declares " \
+                     "#{contract_version} (#{contract_build}) but this run asked for " \
+                     "#{version} (#{build}); prepare the release contract before submitting")
+    end
+
+    app_identifier = ENV.fetch("APPSTORE_APP_IDENTIFIER")
+    submit = ENV.fetch("APPSTORE_SUBMIT", "false") == "true"
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APPLE_API_KEY_ID"),
+      issuer_id: ENV.fetch("APPLE_API_ISSUER_ID"),
+      key_filepath: ENV.fetch("APPLE_API_KEY_PATH"),
+      in_house: false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    UI.user_error!("No App Store Connect record for #{app_identifier}") unless app
+
+    # Prove the build is processed before any version write, and fail closed on a
+    # build that never appears. `deliver` then selects exactly this build number,
+    # which is also what stops it from falling back to "latest".
+    FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+      app_id: app.id,
+      platform: "ios",
+      app_version: version,
+      build_version: build,
+      poll_interval: 30,
+      timeout_duration: Integer(ENV.fetch("APPSTORE_PROCESSING_TIMEOUT_SECONDS"))
+    )
+
+    deliver(
+      api_key: api_key,
+      app_identifier: app_identifier,
+      app_version: version,
+      build_number: build,
+      skip_binary_upload: true,
+      # The version keeps whatever media the App Store Connect record already
+      # carries: this skips the upload, the deletion, and the processing wait.
+      skip_screenshots: true,
+      # The only metadata this lane writes. A locale present only in this hash is
+      # created on the version, so `ar-SA` is listed even when only `en-US` is.
+      release_notes: store_release_notes(version),
+      automatic_release: true,
+      # Info.plist declares ITSAppUsesNonExemptEncryption = false, which is the
+      # build's export-compliance answer. App Review reads the IDFA answer from the
+      # App Store Connect App Privacy record: the API has no IDFA field, and this
+      # binary links no advertising or tracking API.
+      submission_information: { export_compliance_uses_encryption: false },
+      submit_for_review: submit,
+      # Precheck cannot check in-app purchases with an API key and audits metadata
+      # this lane deliberately does not change.
+      run_precheck_before_submit: false,
+      # Skip the local HTML metadata preview, which needs a browser.
+      force: true
+    )
+
+    UI.success(
+      if submit
+        "#{version} (#{build}) is submitted for review and releases automatically after approval"
+      else
+        "#{version} (#{build}) is prepared in App Store Connect; dispatch again with submit enabled"
+      end
+    )
+  end
+end

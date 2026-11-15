@@ -83,6 +83,14 @@ class StoreText(unittest.TestCase):
         )
         self.assertEqual(notes[0]["text"], text)
 
+    def test_app_store_target_uses_app_store_language_codes(self) -> None:
+        self.write_release()
+        notes = store_whats_new.release_notes(
+            self.work, "1.0.27", store_whats_new.APP_STORE_LIMIT, target="app-store"
+        )
+        self.assertEqual([note["language"] for note in notes], ["en-US", "ar-SA"])
+        self.assertEqual(notes[1]["text"], "- إصلاح أول.\n- إصلاح ثانٍ.")
+
 
 class RepositoryStoreText(unittest.TestCase):
     """The text committed for this release satisfies the lane it feeds."""

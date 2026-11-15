@@ -1,0 +1,6 @@
+source "https://rubygems.org"
+
+# The App Store review submission lane only ever talks to App Store Connect, so
+# it pins fastlane and nothing else. `Gemfile.lock` records the resolved graph;
+# run every Ruby command in this directory through `bundle exec`.
+gem "fastlane", "2.241.2"

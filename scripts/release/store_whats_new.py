@@ -7,8 +7,9 @@ release notes are the technical release document.
 
 One file per language is shared by the App Store and Google Play:
 
-  release/store-whats-new.en.txt   published as `en-US`
-  release/store-whats-new.ar.txt   published as `ar`
+  release/store-whats-new.en.txt   published as `en-US` on both stores
+  release/store-whats-new.ar.txt   published as `ar` (Google Play) or `ar-SA`
+                                   (App Store), which names its own languages
 
 The first line names the release version, for example `1.0.27`, so text written
 for another release can never ship under the version being built. Google Play
@@ -19,11 +20,13 @@ partial or stale listing.
 
 Usage:
   store_whats_new.py --version 1.0.27 [--directory release] [--limit play]
+  store_whats_new.py --version 1.0.27 --limit app-store --json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 
@@ -31,8 +34,11 @@ PLAY_LIMIT = 500
 APP_STORE_LIMIT = 4000
 LIMITS = {"play": PLAY_LIMIT, "app-store": APP_STORE_LIMIT}
 
-# (file locale, store language code)
-LOCALES = (("en", "en-US"), ("ar", "ar"))
+# (file locale, store language code) per store target
+LOCALES = {
+    "play": (("en", "en-US"), ("ar", "ar")),
+    "app-store": (("en", "en-US"), ("ar", "ar-SA")),
+}
 
 
 class StoreNotesError(RuntimeError):
@@ -69,11 +75,13 @@ def read_text(directory: str, version: str, locale: str, limit: int) -> str:
     return text
 
 
-def release_notes(directory: str, version: str, limit: int = PLAY_LIMIT) -> list[dict]:
+def release_notes(
+    directory: str, version: str, limit: int = PLAY_LIMIT, target: str = "play"
+) -> list[dict]:
     """Return the release notes resource for every published language."""
     return [
         {"language": language, "text": read_text(directory, version, locale, limit)}
-        for locale, language in LOCALES
+        for locale, language in LOCALES[target]
     ]
 
 
@@ -82,8 +90,18 @@ def main() -> int:
     parser.add_argument("--version", required=True)
     parser.add_argument("--directory", default="release")
     parser.add_argument("--limit", default="play", choices=tuple(LIMITS))
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="print one object keyed by the store language code",
+    )
     args = parser.parse_args()
-    for note in release_notes(args.directory, args.version, LIMITS[args.limit]):
+    # `--limit` names the store, and each store names its own languages.
+    notes = release_notes(args.directory, args.version, LIMITS[args.limit], args.limit)
+    if args.json:
+        print(json.dumps({note["language"]: note["text"] for note in notes}))
+        return 0
+    for note in notes:
         print(f"{note['language']}: {len(note['text'])} characters")
     return 0
 
