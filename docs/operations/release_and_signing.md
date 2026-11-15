@@ -522,6 +522,56 @@ installed display name. The App Store is the public iOS/iPadOS distribution
 channel; Internal TestFlight remains the pre-release lane for signed builds that
 have not reached App Store review yet.
 
+### App Store review submission
+
+`client/ios/fastlane/Fastfile` owns the App Store version record and the review
+submission, and `.github/workflows/appstore-submit.yml` is its only entry point.
+The lane never builds, signs, or uploads a binary: `Internal TestFlight` uploads
+the build, and this lane waits for App Store Connect to finish processing it,
+writes the version's `releaseNotes` for `en-US` and `ar-SA` from the curated store
+copy Google Play also publishes, sets the version to release automatically after
+approval, and submits it. One dispatch with `submit` disabled prepares the version
+for inspection; the same dispatch with `submit` enabled submits it. The version
+and build come from `release/release-contract.json`, and a dispatch that names
+anything else is refused before a credential is used. fastlane is pinned in
+`client/ios/Gemfile` and resolved in the committed `client/ios/Gemfile.lock`; the
+workflow is limited to `EastStarAI/sanad-agent` on `main` or a `v*` tag because
+this lane publishes without a further approval step, and it reuses the
+`apple-testflight` Environment and the three App Store Connect API secrets the
+TestFlight lane already owns, so it adds no credential.
+
+Each App Store Connect behaviour the previous bespoke submission client
+hand-rolled belongs to fastlane instead:
+
+| Behaviour | Owning mechanism |
+|---|---|
+| Token renewal | `Spaceship::ConnectAPI::TokenRefreshMiddleware` refreshes an expired JWT before each request, and `APIClient#with_asc_retry` refreshes and retries on 401 |
+| Throttling and server errors | `APIClient#with_asc_retry` retries 429 with exponential backoff and 500/504 up to five attempts |
+| Build processing | `FastlaneCore::BuildWatcher` polls the exact version and build number and stops at the configured timeout |
+| Missing listing locale | `Deliver::UploadMetadata` creates the `appStoreVersionLocalization` for every language in the notes map |
+
+Screenshots are deliberately untouched: `skip_screenshots: true` skips fastlane's
+screenshot upload, its deletion pass, and its upload-completion wait, so a version
+keeps exactly the media App Store Connect already holds and the lane never adds,
+replaces, or removes a screenshot. The version must therefore already carry its
+screenshots before the first submission, because Apple's submission validation
+fails closed when they are missing. A version created through the API starts
+without localizations of its own, so the notes map also creates the `en-US` and
+`ar-SA` localization records; it creates no media. Apple shows no What's New on an
+app's first App Store version, so fastlane logs that it is skipping the notes and
+continues; every later version publishes them.
+
+fastlane submits from a version in `PREPARE_FOR_SUBMISSION`, `DEVELOPER_REJECTED`,
+`REJECTED`, `METADATA_REJECTED`, `WAITING_FOR_REVIEW`, or `INVALID_BINARY`. A
+version already in `READY_FOR_REVIEW` is outside that set, so preparing or
+submitting it stops on App Store Connect's duplicate-version error instead; submit
+such a version in App Store Connect. `submission_information` carries only
+`export_compliance_uses_encryption: false`, which matches
+`ITSAppUsesNonExemptEncryption` in `client/ios/Runner/Info.plist`. The App Store
+Connect API exposes no IDFA field and deliver ignores `add_id_info_uses_idfa`, so
+the App Privacy answers in App Store Connect own that declaration; the binary
+links no advertising or tracking API and declares no tracking usage.
+
 ## Google Play publisher
 
 Android is published only through Google Play under the package identity

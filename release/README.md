@@ -37,7 +37,7 @@ Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use 
 
 The first line names the release version, for example `1.0.27`, followed by a blank line and three or four short bullets with no technical detail. The text is written for the release and is never extracted from `release/release-notes.md`, because a store listing is a mobile summary while the release notes are the technical release document.
 
-Both stores enforce a hard limit: Google Play accepts 500 characters per language and the App Store accepts 4000. `scripts/release/store_whats_new.py` owns that check for both lanes, and publication refuses when a file is missing, its first line names another version, the text is empty, or the text is over the limit. Bumping the contract does not rewrite these files, so a release refuses to publish under a version whose text has not been written yet.
+Both stores enforce a hard limit: Google Play accepts 500 characters per language and the App Store accepts 4000. `scripts/release/store_whats_new.py` owns that check for both lanes, and publication refuses when a file is missing, its first line names another version, the text is empty, or the text is over the limit. The App Store lane asks the same loader for its `en-US` and `ar-SA` text with `--limit app-store`, which also maps the shared `ar` file to the App Store's own `ar-SA` language code. Bumping the contract does not rewrite these files, so a release refuses to publish under a version whose text has not been written yet.
 
 ## Agent native dictation runtime
 
