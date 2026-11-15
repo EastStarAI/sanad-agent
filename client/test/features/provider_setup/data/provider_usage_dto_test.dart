@@ -39,4 +39,24 @@ void main() {
     expect(snapshot.availableResets, 1);
     expect(snapshot.resetCredits, isEmpty);
   });
+
+  test('parses the optional applicable reset count', () {
+    Map<String, dynamic> wire(Object? applicable) => {
+      'provider_instance_id': 'a',
+      'provider_template_id': 'openai-codex',
+      'source': 'chatgpt_usage_api',
+      'fetched_at': '2026-11-13T10:00:00Z',
+      'available_resets': 1,
+      if (applicable != null) 'applicable_resets': applicable,
+    };
+
+    expect(ProviderUsageSnapshotDto.fromJson(wire(0)).applicableResets, 0);
+    expect(ProviderUsageSnapshotDto.fromJson(wire(1)).applicableResets, 1);
+    // Absent or unparseable stays unknown, never "not applicable".
+    expect(ProviderUsageSnapshotDto.fromJson(wire(null)).applicableResets, isNull);
+    expect(
+      ProviderUsageSnapshotDto.fromJson(wire('nope')).applicableResets,
+      isNull,
+    );
+  });
 }

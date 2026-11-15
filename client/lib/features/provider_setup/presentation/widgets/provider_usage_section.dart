@@ -528,6 +528,11 @@ class _ResetControls extends StatelessWidget {
         : l10n.providerUsageResetsAvailable(count);
     final credits = snapshot.resetCredits.where((credit) => credit.expiresAt != null).toList()
       ..sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
+    // A credit the provider will not let us spend yet still exists: keep its row
+    // and its dates, disable the single action, and say why. An unknown value
+    // (null) keeps the previous behaviour.
+    final applicable = snapshot.applicableResets;
+    final canReset = applicable == null || applicable > 0;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -540,7 +545,7 @@ class _ResetControls extends StatelessWidget {
                   style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
                 ),
               ),
-              _resetButton(context, l10n),
+              _resetButton(context, l10n, canReset: canReset),
             ],
           )
         else ...[
@@ -565,9 +570,23 @@ class _ResetControls extends StatelessWidget {
           // jumping sides depending on the payload shape.
           Align(
             alignment: AlignmentDirectional.centerEnd,
-            child: _resetButton(context, l10n),
+            child: _resetButton(context, l10n, canReset: canReset),
           ),
         ],
+        if (!canReset)
+          Padding(
+            key: Key('provider_usage_reset_blocked_$instanceId'),
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              l10n.providerUsageResetNotApplicable,
+              style: TextStyle(
+                fontSize: 11,
+                color: Theme.of(
+                  context,
+                ).colorScheme.onSurface.withValues(alpha: 0.6),
+              ),
+            ),
+          ),
         if (entry.resetResult != null && entry.resetResult!.status != 'confirmation_required')
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -585,9 +604,15 @@ class _ResetControls extends StatelessWidget {
     );
   }
 
-  Widget _resetButton(BuildContext context, AppLocalizations l10n) {
+  Widget _resetButton(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required bool canReset,
+  }) {
     return TextButton.icon(
-      onPressed: entry.resetInProgress ? null : () => _start(context),
+      onPressed: entry.resetInProgress || !canReset
+          ? null
+          : () => _start(context),
       icon: entry.resetInProgress
           ? const SizedBox(
               width: 14,

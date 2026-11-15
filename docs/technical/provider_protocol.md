@@ -300,16 +300,29 @@ response.
 
 A snapshot carries `provider_instance_id`, `provider_template_id`, `source`,
 `fetched_at`, optional plan and safe details, non-negative `available_resets`,
-an optional `reset_credits` list, and only the windows returned by the adapter.
-Each reset-credit entry carries display-safe UTC `expires_at` and optional
-`granted_at`; the provider's title, description, profile id, and account id
-never cross the protocol. `available_resets` remains authoritative for the
-reset action, while `reset_credits` supplies the per-credit display detail.
-The ChatGPT `credits[]` field names are an assumed provider shape, not a
-captured contract: `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json`
-pins what the adapter reads, and a live capture must confirm `status`,
-`expires_at`, and `granted_at`; a rename silently degrades to the count-only
-fallback.
+an optional non-negative `applicable_resets`, an optional `reset_credits` list,
+and only the windows returned by the adapter. Each reset-credit entry carries
+display-safe UTC `expires_at` and optional `granted_at`; the provider's title,
+description, profile id, and account id never cross the protocol.
+`available_resets` remains authoritative for the reset action, while
+`reset_credits` supplies the per-credit display detail.
+
+The two reset-credit facts come from different ChatGPT documents. The count is
+read from `rate_limit_reset_credits.available_count` (plus
+`applicable_available_count`) inside `GET /backend-api/wham/usage`; the
+per-credit list is a **separate** document, `GET
+/backend-api/wham/rate-limit-reset-credits`, requested with the same headers and
+only when the count is above zero. That second request is non-fatal: a non-2xx
+response, a non-JSON body, or a transport error yields the count-only snapshot
+with no rows. `applicable_resets` is omitted when the provider does not report
+it, and `0` means credits exist but cannot be applied right now.
+
+Both documents are pinned by reference-derived fixtures,
+`agent/test/fixtures/chatgpt_usage_reference_shape.json` and
+`agent/test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json`, each
+carrying a `_fixture_note` provenance header. They are reverse-engineered, not
+captured from the user's account, so a live capture still confirms the field
+names; a rename drops the rows and degrades to the count-only fallback.
 Version 1 window types are `session`, `weekly`, and `monthly`. Percentages are
 normalized to `[0, 100]`, and one side is derived when only used or remaining is
 supplied. Missing windows never create placeholders.

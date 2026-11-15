@@ -120,14 +120,20 @@ void main() {
         expect(snap.fetchedAt.isUtc, isTrue);
         expect(snap.windows[0].resetAt?.isUtc, isTrue);
 
-        // The recorded HTTP call carries Authorization but never a leaked
-        // account id when none was supplied.
-        expect(calls.single.headers?['Authorization'], 'Bearer tok-a');
+        // The usage call carries Authorization but never a leaked account id
+        // when none was supplied, and the optional detail call reuses the same
+        // headers (it only adds a different path).
+        expect(calls.first.headers?['Authorization'], 'Bearer tok-a');
         expect(
-          calls.single.headers?.containsKey('ChatGPT-Account-Id'),
+          calls.first.headers?.containsKey('ChatGPT-Account-Id'),
           isFalse,
         );
-        expect(calls.single.url, 'https://chatgpt.com/backend-api/wham/usage');
+        expect(calls.first.url, 'https://chatgpt.com/backend-api/wham/usage');
+        expect(calls.last.headers?['Authorization'], 'Bearer tok-a');
+        expect(
+          calls.last.url,
+          'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
+        );
       },
     );
 
@@ -400,80 +406,59 @@ void main() {
     });
 
     test(
-      'parses available reset credits with UTC expiry, sorted and sanitized',
+      'the /usage payload alone keeps the count and yields no credit rows',
       () async {
-        final payload = {
-          'rate_limit': {
-            'primary_window': {'used_percent': 10},
-          },
-          'rate_limit_reset_credits': {
-            'available_count': 3,
-            'credits': [
-              {
-                'status': 'available',
-                'title': 'Full reset (Weekly + 5 hr)',
-                'description': 'provider-private',
-                'profile_user_id': 'PROFILE-LEAK',
-                'granted_at': '2026-11-01T10:00:00Z',
-                'expires_at': '2026-11-20T10:00:00Z',
-              },
-              {'status': 'redeemed', 'expires_at': '2026-11-10T10:00:00Z'},
-              {'status': 'available', 'expires_at': '2026-11-15T10:00:00Z'},
-              {'status': 'available', 'expires_at': 'not-a-date'},
-              {'status': 'available'},
-            ],
-          },
-        };
+        // Regression for the bug the live test found: the per-credit list is not
+        // in this document, so a parser that looks for
+        // `rate_limit_reset_credits.credits[]` here silently renders a
+        // count-only card. The detail call below fails on purpose.
+        final calls = <_RecordedCall>[];
         final ctx = context(
-          instanceId: 'inst-credits',
-          credential: oauthCred('inst-credits'),
-          httpClientFactory: _okFactory(payload),
+          instanceId: 'inst-usage-only',
+          credential: oauthCred('inst-usage-only'),
+          httpClientFactory: _routedFactory({
+            '/usage': _Route.json(
+              _fixture('test/fixtures/chatgpt_usage_reference_shape.json'),
+            ),
+            '/rate-limit-reset-credits': _Route.error(500),
+          }, calls),
         );
+
         final snap = await adapter.fetch(ctx);
 
-        expect(snap.availableResets, 3);
-        expect(snap.resetCredits, hasLength(2));
-        expect(snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()), [
-          '2026-11-15T10:00:00.000Z',
-          '2026-11-20T10:00:00.000Z',
+        expect(snap.availableResets, 2);
+        expect(snap.applicableResets, 1);
+        expect(snap.resetCredits, isEmpty);
+        expect(calls.map((c) => c.url), [
+          'https://chatgpt.com/backend-api/wham/usage',
+          'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits',
         ]);
-        expect(
-          snap.resetCredits.last.grantedAt?.toIso8601String(),
-          '2026-11-01T10:00:00.000Z',
-        );
-        expect(snap.resetCredits.every((c) => c.expiresAt!.isUtc), isTrue);
-
-        final mapText = snap.toMap().toString();
-        expect(mapText, isNot(contains('PROFILE-LEAK')));
-        expect(mapText, isNot(contains('Full reset')));
-        expect(mapText, isNot(contains('provider-private')));
-        expect(snap.toMap()['reset_credits'] as List, hasLength(2));
       },
     );
 
     test(
-      'the assumed reset-credit fixture parses with the field names under test',
+      'reads the dedicated detail document into sorted, sanitized credits',
       () async {
-        // ASSUMED SHAPE - CONFIRM IN THE LIVE TEST.
-        //
-        // `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json` is not
-        // a captured live response: it pins the field names this adapter reads
-        // (`rate_limit_reset_credits.credits[].status`, `.expires_at`,
-        // `.granted_at`). A rename in the real payload drops every credit and
-        // the Client silently falls back to `N resets available`, so the live
-        // test must confirm the shape before this contract is trusted.
-        final payload = _fixture(
-          'test/fixtures/chatgpt_reset_credits_assumed_shape.json',
-        );
+        final calls = <_RecordedCall>[];
         final ctx = context(
-          instanceId: 'inst-assumed',
-          credential: oauthCred('inst-assumed'),
-          httpClientFactory: _okFactory(payload),
+          instanceId: 'inst-credits',
+          credential: oauthCred('inst-credits'),
+          httpClientFactory: _routedFactory({
+            '/usage': _Route.json(
+              _fixture('test/fixtures/chatgpt_usage_reference_shape.json'),
+            ),
+            '/rate-limit-reset-credits': _Route.json(
+              _fixture(
+                'test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json',
+              ),
+            ),
+          }, calls),
         );
 
         final snap = await adapter.fetch(ctx);
 
-        expect(snap.availableResets, 3);
+        expect(calls, hasLength(2));
+        expect(snap.availableResets, 2);
         expect(
           snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()),
           ['2026-11-16T10:00:00.000Z', '2026-11-20T10:00:00.000Z'],
@@ -483,13 +468,159 @@ void main() {
           snap.resetCredits.map((c) => c.grantedAt?.toIso8601String()),
           ['2026-11-02T10:00:00.000Z', '2026-11-01T10:00:00.000Z'],
         );
+        expect(snap.resetCredits.every((c) => c.expiresAt!.isUtc), isTrue);
 
         final mapText = snap.toMap().toString();
-        expect(mapText, isNot(contains('profile-assumed-leak')));
+        expect(mapText, isNot(contains('RateLimitResetCredit_synthetic')));
+        expect(mapText, isNot(contains('codex_rate_limits')));
         expect(mapText, isNot(contains('Full reset')));
         expect(mapText, isNot(contains('provider-private')));
       },
     );
+
+    test('a zero count makes exactly one request', () async {
+      final calls = <_RecordedCall>[];
+      final ctx = context(
+        instanceId: 'inst-zero',
+        credential: oauthCred('inst-zero'),
+        httpClientFactory: _routedFactory({
+          '/usage': _Route.json({
+            'rate_limit': {
+              'primary_window': {'used_percent': 10},
+            },
+            'rate_limit_reset_credits': {'available_count': 0},
+          }),
+          '/rate-limit-reset-credits': _Route.json(
+            _fixture(
+              'test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json',
+            ),
+          ),
+        }, calls),
+      );
+
+      final snap = await adapter.fetch(ctx);
+
+      expect(snap.availableResets, 0);
+      expect(snap.resetCredits, isEmpty);
+      expect(calls, hasLength(1), reason: 'no detail call at zero credits');
+    });
+
+    test('a failing detail call degrades to the count without throwing', () async {
+      for (final route in [
+        _Route.error(500),
+        _Route.error(404),
+        _Route.raw(200, 'not json at all'),
+        _Route.raw(200, '[]'),
+        _Route.throwing(),
+      ]) {
+        final ctx = context(
+          instanceId: 'inst-degraded',
+          credential: oauthCred('inst-degraded'),
+          httpClientFactory: _routedFactory({
+            '/usage': _Route.json({
+              'rate_limit': {
+                'primary_window': {'used_percent': 10},
+              },
+              'rate_limit_reset_credits': {'available_count': 1},
+            }),
+            '/rate-limit-reset-credits': route,
+          }, <_RecordedCall>[]),
+        );
+
+        final snap = await adapter.fetch(ctx);
+
+        expect(snap.availableResets, 1);
+        expect(snap.resetCredits, isEmpty);
+        expect(snap.windows, isNotEmpty);
+      }
+    });
+
+    test('status and expiry filtering drops unusable entries', () async {
+      final ctx = context(
+        instanceId: 'inst-filter',
+        credential: oauthCred('inst-filter'),
+        httpClientFactory: _routedFactory({
+          '/usage': _Route.json({
+            'rate_limit': {
+              'primary_window': {'used_percent': 10},
+            },
+            'rate_limit_reset_credits': {'available_count': 4},
+          }),
+          '/rate-limit-reset-credits': _Route.json({
+            'available_count': 4,
+            'credits': [
+              {
+                'status': 'available',
+                'granted_at': '2026-11-01T10:00:00Z',
+                'expires_at': '2026-11-20T10:00:00Z',
+              },
+              {'status': 'redeemed', 'expires_at': '2026-11-10T10:00:00Z'},
+              {'status': 'expired', 'expires_at': '2026-11-11T10:00:00Z'},
+              {'status': 'available', 'expires_at': 'not-a-date'},
+              {'status': 'available'},
+              'not-an-object',
+            ],
+          }),
+        }, <_RecordedCall>[]),
+      );
+
+      final snap = await adapter.fetch(ctx);
+
+      expect(
+        snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()),
+        ['2026-11-20T10:00:00.000Z'],
+      );
+    });
+
+    test('applicable count is null when the provider omits it', () async {
+      final ctx = context(
+        instanceId: 'inst-no-applicable',
+        credential: oauthCred('inst-no-applicable'),
+        httpClientFactory: _routedFactory({
+          '/usage': _Route.json({
+            'rate_limit': {
+              'primary_window': {'used_percent': 10},
+            },
+            'rate_limit_reset_credits': {'available_count': 0},
+          }),
+        }, <_RecordedCall>[]),
+      );
+
+      final snap = await adapter.fetch(ctx);
+
+      expect(snap.applicableResets, isNull);
+      expect(snap.toMap().containsKey('applicable_resets'), isFalse);
+    });
+
+    test('a zero applicable count survives with the available count', () async {
+      final ctx = context(
+        instanceId: 'inst-blocked',
+        credential: oauthCred('inst-blocked'),
+        httpClientFactory: _routedFactory({
+          '/usage': _Route.json({
+            'rate_limit': {
+              'primary_window': {'used_percent': 10},
+            },
+            'rate_limit_reset_credits': {
+              'available_count': 1,
+              'applicable_available_count': 0,
+            },
+          }),
+          '/rate-limit-reset-credits': _Route.json(
+            _fixture(
+              'test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json',
+            ),
+          ),
+        }, <_RecordedCall>[]),
+      );
+
+      final snap = await adapter.fetch(ctx);
+
+      expect(snap.availableResets, 1);
+      expect(snap.applicableResets, 0);
+      expect(snap.resetCredits, isNotEmpty);
+      expect(snap.toMap()['applicable_resets'], 0);
+    });
 
     test('snapshot JSON never contains token or account id', () async {
       final payload = {
@@ -652,6 +783,73 @@ class _FakeClient implements ProviderUsageHttpClient {
 
 ProviderUsageHttpClient Function() _okFactory(Map<String, dynamic> payload) =>
     () => _FakeClient(jsonPayload: payload);
+
+/// One routed answer for [_RoutedFakeClient].
+class _Route {
+  final int status;
+  final String body;
+  final bool throws;
+
+  _Route.json(Map<String, dynamic> payload)
+    : status = 200,
+      body = jsonEncode(payload),
+      throws = false;
+
+  _Route.raw(this.status, this.body) : throws = false;
+
+  _Route.error(this.status) : body = '{}', throws = false;
+
+  _Route.throwing() : status = 0, body = '', throws = true;
+}
+
+/// Answers each request from the first route whose key is a path suffix, so a
+/// test can drive the usage call and the reset-credit call independently.
+class _RoutedFakeClient implements ProviderUsageHttpClient {
+  final Map<String, _Route> routes;
+  final List<_RecordedCall> calls;
+
+  _RoutedFakeClient(this.routes, this.calls);
+
+  @override
+  Future<ProviderUsageHttpResponse> get(
+    Uri url, {
+    Map<String, String>? headers,
+    Duration? timeout,
+  }) async {
+    calls.add(_RecordedCall(url.toString(), headers));
+    _Route? route;
+    for (final entry in routes.entries) {
+      if (url.path.endsWith(entry.key)) {
+        route = entry.value;
+        break;
+      }
+    }
+    if (route == null) {
+      throw StateError('unrouted request: ${url.path}');
+    }
+    if (route.throws) throw Exception('simulated transport failure');
+    return ProviderUsageHttpResponse(route.status, route.body);
+  }
+
+  @override
+  Future<ProviderUsageHttpResponse> post(
+    Uri url, {
+    Map<String, String>? headers,
+    Object? body,
+    Duration? timeout,
+  }) async {
+    calls.add(_RecordedCall(url.toString(), headers));
+    return const ProviderUsageHttpResponse(200, '{}');
+  }
+
+  @override
+  void close() {}
+}
+
+ProviderUsageHttpClient Function() _routedFactory(
+  Map<String, _Route> routes,
+  List<_RecordedCall> calls,
+) => () => _RoutedFakeClient(routes, calls);
 
 /// Loads a checked-in fixture relative to the package root so the suite does
 /// not depend on the caller's working directory.

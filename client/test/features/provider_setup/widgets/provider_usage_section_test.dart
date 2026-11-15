@@ -912,6 +912,98 @@ void main() {
     },
   );
 
+  testWidgets(
+    'an inapplicable credit keeps the rows and disables Reset limits',
+    (tester) async {
+      final expiresLocal = DateTime(2026, 11, 18, 10, 30);
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: DateTime.now(),
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'openai-codex',
+                source: 'test',
+                fetchedAt: DateTime.now().toUtc(),
+                windows: const [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 40,
+                    remainingPercent: 60,
+                  ),
+                ],
+                availableResets: 1,
+                // The credit exists and must stay visible, but the provider
+                // reports that it cannot be applied right now.
+                applicableResets: 0,
+                resetCredits: [
+                  ProviderUsageResetCreditDto(expiresAt: expiresLocal.toUtc()),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      // The credit row is not hidden by the inapplicable state.
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_0')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('This reset credit cannot be applied right now.'),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_blocked_a')),
+        findsOneWidget,
+      );
+
+      final button = tester.widget<TextButton>(
+        find.widgetWithText(TextButton, 'Reset limits'),
+      );
+      expect(button.onPressed, isNull, reason: 'the action is disabled');
+
+      // A disabled action never reaches the daemon.
+      await tester.tap(find.text('Reset limits'));
+      await tester.pump();
+      expect(client.confirmationTokens, isEmpty);
+      expect(client.resetResults, isEmpty);
+
+      // The same hint is localized.
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+          locale: 'ar',
+        ),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('الاستخدام والحدود'));
+      await tester.pumpAndSettle();
+      expect(
+        find.text('لا يمكن استخدام رصيد إعادة الضبط الآن.'),
+        findsOneWidget,
+      );
+    },
+  );
+
   testWidgets('reset count is conditional and Reset anyway reuses confirmation', (tester) async {
     ProviderUsageEntry entryWithResets(int count) => ProviderUsageEntry(
       phase: ProviderUsagePhase.fresh,

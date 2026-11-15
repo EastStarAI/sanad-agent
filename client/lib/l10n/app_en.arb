@@ -1326,6 +1326,7 @@
     }
   },
   "providerUsageResetAvailableSingle": "1 reset available",
+  "providerUsageResetNotApplicable": "This reset credit cannot be applied right now.",
   "providerUsageResetCreditLabel": "Reset credit",
   "providerUsageResetCreditExpires": "Expires {when}",
   "@providerUsageResetCreditExpires": {

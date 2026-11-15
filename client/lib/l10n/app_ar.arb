@@ -812,6 +812,7 @@
   "providerUsageResetsOnDate": "يُعاد الضبط في {when}",
   "providerUsageResetsAvailable": "{count} عملية إعادة ضبط متاحة",
   "providerUsageResetAvailableSingle": "عملية إعادة ضبط واحدة متاحة",
+  "providerUsageResetNotApplicable": "لا يمكن استخدام رصيد إعادة الضبط الآن.",
   "providerUsageResetCreditLabel": "رصيد إعادة ضبط",
   "providerUsageResetCreditExpires": "ينتهي في {when}",
   "providerUsageResetLimits": "إعادة ضبط الحدود",

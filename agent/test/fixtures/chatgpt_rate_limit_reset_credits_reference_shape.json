@@ -1,0 +1,29 @@
+{
+  "_fixture_note": "reference-derived; live confirmation by the owner pending. Shape taken from the reverse-engineered GET /backend-api/wham/rate-limit-reset-credits document (mesomya/openusage-windows, aaamosh/codex-reset, getagentseal/codeburn, AnandChowdhary/codex-usage, openai/codex#28963). Entries carry provider-only id/title/description/reset_type fields that Sanad must never surface; ids here are synthetic.",
+  "available_count": 2,
+  "credits": [
+    {
+      "id": "RateLimitResetCredit_synthetic_1",
+      "reset_type": "codex_rate_limits",
+      "status": "available",
+      "title": "Full reset (Weekly + Session)",
+      "description": "provider-private description",
+      "granted_at": "2026-11-01T10:00:00Z",
+      "expires_at": "2026-11-20T10:00:00Z"
+    },
+    {
+      "id": "RateLimitResetCredit_synthetic_2",
+      "reset_type": "codex_rate_limits",
+      "status": "available",
+      "granted_at": "2026-11-02T10:00:00Z",
+      "expires_at": "2026-11-16T10:00:00Z"
+    },
+    {
+      "id": "RateLimitResetCredit_synthetic_3",
+      "reset_type": "codex_rate_limits",
+      "status": "redeemed",
+      "granted_at": "2026-10-20T10:00:00Z",
+      "expires_at": "2026-11-10T10:00:00Z"
+    }
+  ]
+}

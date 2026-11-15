@@ -46,15 +46,22 @@ single `N resets available` line. The reset action stays one shared control.
 
 ### G0 — Discovery
 
-- [x] Confirm the daemon currently parses only
-      `rate_limit_reset_credits.available_count`.
-- [ ] Confirm the payload's `credits[]` entries carry `status` and
-      `expires_at`/`granted_at`. **Open:** the shape is assumed from the
-      provider's documented fields and pinned only by
-      `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json`; a live
-      capture must confirm it. A renamed field drops every credit and the
-      Client silently falls back to `N resets available`.
-- [x] Confirm the Client and protocol carry only `available_resets`.
+- [x] Confirm the daemon only read
+      `rate_limit_reset_credits.available_count` and never requested the
+      per-credit document.
+- [x] Confirm the per-credit list is a **separate** ChatGPT document
+      (`GET /backend-api/wham/rate-limit-reset-credits`), not a `credits[]`
+      array inside `/usage`. Reference-derived shapes are pinned by
+      `agent/test/fixtures/chatgpt_usage_reference_shape.json` (count plus
+      `applicable_available_count`, no credit array) and
+      `agent/test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json`
+      (the detail document). Both are reverse-engineered, so a live capture
+      still confirms `status`, `expires_at`, and `granted_at`; a renamed field
+      drops every credit and the Client falls back to `N resets available`.
+- [x] Confirm the Client and protocol carried only `available_resets`.
+- [x] Treat `applicable_available_count` as a real provider field: `0` means
+      credits exist but none can be applied, so the Client disables the reset
+      action and explains why instead of offering a request that must fail.
 
 ### G1 — Agent snapshot and adapter
 

@@ -61,6 +61,10 @@ class ProviderUsageSnapshotDto {
   final String? planName;
   final List<ProviderUsageWindowDto> windows;
   final int availableResets;
+
+  /// How many credits the daemon says it can apply right now, or null when the
+  /// provider never reported it.
+  final int? applicableResets;
   final List<ProviderUsageResetCreditDto> resetCredits;
   final List<String> extraDetails;
   final String? unavailableReason;
@@ -73,12 +77,16 @@ class ProviderUsageSnapshotDto {
     this.planName,
     this.windows = const [],
     this.availableResets = 0,
+    this.applicableResets,
     this.resetCredits = const [],
     this.extraDetails = const [],
     this.unavailableReason,
   });
 
   factory ProviderUsageSnapshotDto.fromJson(Map<String, dynamic> json) {
+    // The provider may omit this count, and a malformed value must degrade to
+    // "unknown" instead of rejecting the whole snapshot.
+    final applicableResets = json['applicable_resets'];
     return ProviderUsageSnapshotDto(
       providerInstanceId: json['provider_instance_id'] as String,
       providerTemplateId: json['provider_template_id'] as String,
@@ -89,6 +97,9 @@ class ProviderUsageSnapshotDto {
           .map((w) => ProviderUsageWindowDto.fromJson(w as Map<String, dynamic>))
           .toList(),
       availableResets: (json['available_resets'] as num?)?.toInt() ?? 0,
+      applicableResets: applicableResets is num
+          ? applicableResets.toInt()
+          : null,
       resetCredits: (json['reset_credits'] as List? ?? [])
           .whereType<Map<String, dynamic>>()
           .map(ProviderUsageResetCreditDto.fromJson)

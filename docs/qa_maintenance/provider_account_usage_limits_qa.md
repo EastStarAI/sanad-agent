@@ -28,6 +28,12 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | No usage adapter exists | `unsupported` is returned and Flutter hides the disclosure. |
 | Credential needs sign-in | `auth_required` is returned with no raw provider error. |
 | Response request or provider instance does not match the pending request | The client ignores it. |
+| ChatGPT reports `rate_limit_reset_credits.available_count` above zero | The adapter also requests `GET /backend-api/wham/rate-limit-reset-credits` with the same headers; the per-credit rows come from that document only. |
+| ChatGPT reports a zero credit count | Exactly one request is made; no detail request is sent. |
+| The reset-credit detail request fails (non-2xx, non-JSON, or transport error) | The snapshot still returns `available` with the authoritative count and no rows. |
+| The detail document lists redeemed, expired, or undated credits | Only `available` entries with a parseable `expires_at` cross the protocol, earliest expiry first. |
+| `/usage` omits `applicable_available_count` | The snapshot omits `applicable_resets`, and the client keeps the reset action enabled. |
+| `/usage` reports `applicable_available_count` of zero | `applicable_resets` is `0`, and the client disables the action while keeping the credit rows. |
 
 ## OpenCode Go adapter
 
@@ -67,6 +73,8 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | A reset timestamp is supplied in UTC | Relative text uses local time and the tooltip exposes the full local timestamp. |
 | Two reset credits have distinct expiries | Two `Reset credit` rows render, each with its local `Expires …` date/time; the combined count is hidden while the row count equals `available_resets`, and reappears above the rows when they disagree. |
 | Only `available_resets` is supplied | The existing combined `N resets available` fallback remains. |
+| Snapshot reports `applicable_resets` of zero | The credit rows still render, `Reset limits` is disabled, and the localized `This reset credit cannot be applied right now.` hint appears under the rows; no confirmation or reset request is possible. |
+| Snapshot omits `applicable_resets` | The action stays enabled exactly as before the field existed. |
 | Snapshot is refreshing | Old window rows remain visible with a non-destructive refreshing indicator. |
 | Typed transient failure | Concise English text and Retry are visible; raw provider response is absent. |
 | Typed authentication failure | English sign-in guidance is visible without changing the provider readiness badge. |
@@ -118,6 +126,30 @@ Acceptance run on 2026-11-13 observed Session `2%` → `3%` used, Weekly `55%`,
 Monthly `55%`, resets of `1 h`, `2 d 22 h`, and `Mon, Nov 23, 17:03`, and no
 reset action at zero credits. The countdown rendered a single `Resets` prefix.
 The API-key recovery path behaved exactly as above.
+
+## Live ChatGPT reset-credit acceptance
+
+Use one configured ChatGPT account with at least one available reset credit. The
+Agent log must show request paths only; never paste the response, the
+`Authorization` header, or any account identifier into a report or screenshot.
+
+1. Confirm the daemon issues **two** requests: `GET
+   /backend-api/wham/usage` and then `GET
+   /backend-api/wham/rate-limit-reset-credits`. The first document carries only
+   `rate_limit_reset_credits.available_count` (and, on some accounts,
+   `applicable_available_count`); the per-credit list must come from the second
+   document. If the rows are missing while the count is above zero, the second
+   request is the first place to inspect.
+2. When `/usage` reports `applicable_available_count: 0`, expect the credit rows
+   to stay visible, `Reset limits` to be disabled, and the hint `This reset
+   credit cannot be applied right now.` to appear. A disabled action must never
+   reach the daemon: no confirmation dialog and no
+   `rate-limit-reset-credits/consume` request.
+3. When the field is absent, the action stays enabled and behaves exactly as
+   before this field existed.
+4. Confirm the snapshot never surfaces provider `id`, `title`, `description`,
+   or `reset_type` values, and that only `available` credits with an expiry are
+   listed.
 
 ## Automated daemon-backed fixture
 

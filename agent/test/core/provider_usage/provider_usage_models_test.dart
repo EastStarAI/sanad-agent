@@ -84,6 +84,7 @@ void main() {
           ),
         ],
         availableResets: 2,
+        applicableResets: 1,
         resetCredits: [
           ProviderUsageResetCredit(
             expiresAt: DateTime.utc(2026, 7, 25, 9),
@@ -97,6 +98,7 @@ void main() {
       );
       expect(decoded.providerInstanceId, s.providerInstanceId);
       expect(decoded.availableResets, 2);
+      expect(decoded.applicableResets, 1);
       expect(
         decoded.resetCredits.single.expiresAt,
         DateTime.utc(2026, 7, 25, 9),
@@ -142,6 +144,18 @@ void main() {
         fetchedAt: DateTime.utc(2026),
       );
       expect(s.availableResets, 0);
+    });
+
+    test('absent applicable count stays absent on the wire', () {
+      final s = ProviderUsageSnapshot(
+        providerInstanceId: 'i',
+        providerTemplateId: 't',
+        source: 's',
+        fetchedAt: DateTime.utc(2026),
+        availableResets: 1,
+      );
+      expect(s.applicableResets, isNull);
+      expect(s.toMap().containsKey('applicable_resets'), isFalse);
     });
   });
 
