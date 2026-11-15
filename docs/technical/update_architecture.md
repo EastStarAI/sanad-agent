@@ -96,6 +96,63 @@ Windows types are not accepted together. Acquiring Authenticode requires a
 separate policy transition that rejects unsigned artifacts for subsequent
 releases.
 
+### Release transport trust
+
+Artifact trust assumes the release metadata and bytes were fetched over a
+verified TLS connection. Verification needs the issuer of the release host's
+chain, and `dart:io`/BoringSSL **never fetches a missing intermediate itself**,
+while every OS-based client does. The Windows Flutter engine embeds no root list
+and imports `CertOpen*`, so it validates against the Windows certificate store;
+the failure recorded in Issue #434 came from a machine whose store lacked
+`Sectigo Public Server Authentication Root E46`, which is exactly the
+intermediate GitHub's chain needs. Whenever a release edge serves that chain
+without the intermediate, the handshake is refused with
+`CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` while
+browsers, `curl`, and the official installer on the same machine succeed. The
+same refusal appears whenever anything inspects TLS (antivirus HTTPS scanning, a
+network proxy) or the store holds partial or stale anchors.
+
+`VerifiedAgentBootstrapInstaller` reports that as
+`AgentBootstrapStatus.tlsTrustFailed`, which the Client maps to
+`AgentLifecycleStatus.tlsTrustFailed` and renders from
+`agentInstallTlsTrustFailed`. The BoringSSL text never becomes the user-facing
+message; it stays in the Client log. Reachability failures keep the separate
+`networkFailed` outcome because retrying cannot repair a trust set.
+
+`SANAD_EXTRA_CA_BUNDLE` names a PEM bundle of roots the machine's owner chooses
+to trust, which is how an inspected environment is unblocked without weakening
+verification:
+
+- The bundle is additive. `createReleaseTrustHttpClient()` keeps
+  `SecurityContext(withTrustedRoots: true)` and adds the bundle on top, so
+  platform roots stay in effect and every existing version, size, SHA-256, and
+  platform-trust requirement still applies.
+- There is no bypass path. No `badCertificateCallback`, no certificate pinning
+  exemption, no plain-HTTP fallback, and no unverified download.
+- An unreadable or malformed bundle is logged and ignored; it never fails an
+  install, because the request still verifies against the platform roots. The
+  path itself is never logged.
+
+The Client also keeps a **hosted copy of the same manifest** as a resilience
+path, because a refused chain is host-specific rather than a general outage:
+
+- `SANAD_RELEASE_MANIFEST_FALLBACK_URL` names it
+  (`https://updates.sanad.eaststarai.com/release-manifest.json`), the byte
+  identical file that `deploy.yml` publishes and rolls back atomically for
+  Stable. An empty value disables the fallback.
+- It is tried **only** after the primary release host refuses its chain. A
+  refused certificate is host-specific and locally repairable; an HTTP error,
+  unparseable manifest, or unreachable network is a real failure and surfaces as
+  such without a second request.
+- Nothing about verification changes: the mirrored manifest must still declare
+  the exact target version, and the downloaded artifact must still pass size,
+  SHA-256, and platform trust against its canonical GitHub identity.
+- A lagging mirror fails closed as `targetMismatch`; it can never install a
+  different Agent than the Client requires.
+- Artifact bytes have no fallback. Only the metadata host is mirrored, so an
+  unverifiable artifact download is still reported as a trust failure.
+
+
 ## Exact Client–Agent pairing
 
 Packaged Desktop releases pair Client and Agent with one exact release version.

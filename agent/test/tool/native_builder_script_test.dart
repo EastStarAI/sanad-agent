@@ -281,35 +281,192 @@ void main() {
       contains(r'Remove-Item -Recurse -Force -LiteralPath $buildDir'),
     );
     final guard = script.indexOf('CMAKE_GENERATOR_PLATFORM');
-    final configure = script.indexOf(r'cmake -B build');
+    // Anchor the ordering to the guard's *decision* line, not to a token that a
+    // later comment could start quoting: the native-value check below shares
+    // this line, and prose above it must not be able to satisfy the assertion.
+    final decision = script.indexOf(r'$cachedPlatform -ne $Arch');
+    final configure = script.indexOf(r'& cmake @configureArguments');
     expect(guard, isNonNegative);
+    expect(decision, isNonNegative);
+    expect(configure, isNonNegative);
     expect(
-      guard,
+      decision,
       lessThan(configure),
       reason: 'the stale-cache guard must run before cmake configures',
     );
   });
 
   test('the Windows x64 build is portable instead of host-tuned', () {
-    // ggml defaults to `GGML_NATIVE=ON`, which lets MSVC pick the host's
-    // instruction set: the same class of defect v1.0.22 shipped on arm64. MSVC
-    // has no portable ggml mode on ARM at all (ggml rejects `GGML_NATIVE=OFF`
-    // there), so only the x64 slice can be — and is — produced portable.
+    // ggml defaults to `GGML_NATIVE=ON`, which lets MSVC probe the host and pick
+    // `/arch:AVX512` when the runner has it: the same class of defect v1.0.22
+    // shipped on arm64, and the one v1.0.23 shipped here. MSVC has no portable
+    // ggml mode on ARM at all (ggml rejects `GGML_NATIVE=OFF` there), so only
+    // the x64 slice can be — and is — produced portable.
     final script = File('tool/build_whispercpp.ps1').readAsStringSync();
     expect(
       script,
       contains(r"$ggmlNative = if ($Arch -eq 'x64') { 'OFF' } else { 'ON' }"),
       reason: 'x64 must configure GGML_NATIVE=OFF',
     );
-    expect(script, contains(r'-DGGML_NATIVE=$ggmlNative'));
+    // The value has to be an interpolated array element. A bare
+    // `-DGGML_NATIVE=$ggmlNative` token is parsed by PowerShell as a parameter
+    // assignment whose right-hand side is **not** expanded, so CMake received
+    // the literal `$ggmlNative` — a non-empty, and therefore truthy, string.
+    // Asserting the bare form is what let that ship; assert the quoted form and
+    // the splat instead.
+    expect(
+      script,
+      contains(r'"-DGGML_NATIVE=$ggmlNative"'),
+      reason: 'the flag must be built as an expandable array element',
+    );
+    expect(
+      script,
+      contains(r'& cmake @configureArguments'),
+      reason: 'the array must be splatted, never re-parsed as `-D` syntax',
+    );
+    // The historical defect passed the variable through unexpanded. Assert the
+    // *shape* that is wrong, on both spellings, so this check cannot silently
+    // stop testing the thing it names: a pattern anchored to a line ending in
+    // `$` never matched `-DGGML_NATIVE=$ggmlNative`, whose line ends in `Native`.
+    expect(
+      hasBareDefineWithVariable(script),
+      isFalse,
+      reason: r'no bare `-DNAME=$var` token may reach cmake',
+    );
+    expect(
+      hasBareDefineWithVariable(r'cmake -DGGML_NATIVE=$ggmlNative'),
+      isTrue,
+      reason: 'the check must reject the exact v1.0.23 form',
+    );
+    expect(
+      hasBareDefineWithVariable(r'cmake "-DGGML_NATIVE=$ggmlNative"'),
+      isFalse,
+      reason: 'the quoted form is the fix and must be accepted',
+    );
+    expect(
+      hasBareDefineWithVariable(r'# cmake -DGGML_NATIVE=$ggmlNative'),
+      isFalse,
+      reason: 'the header comment quotes the defect and must not trip the check',
+    );
     // A restored tree built with the native baseline is discarded like one
     // configured for another platform: the generators compare timestamps only.
-    expect(script, contains('GGML_NATIVE:BOOL'));
+    //
+    // Anchor to the guard's decision, never to the token `GGML_NATIVE:BOOL`:
+    // the script's header comment quotes that token, so a plain `indexOf`
+    // resolves inside the prose and makes this ordering true unconditionally.
+    final guard = script.lastIndexOf(r'$cachedNativeValue -ne $ggmlNative');
     expect(
-      script.indexOf(r'GGML_NATIVE:BOOL'),
-      lessThan(script.indexOf(r'cmake -B build')),
+      guard,
+      isNonNegative,
+      reason: 'the guard must compare the cache against the required value',
+    );
+    expect(
+      guard,
+      lessThan(script.indexOf(r'& cmake @configureArguments')),
       reason: 'the portable-baseline guard must run before cmake configures',
     );
+  });
+
+  test('the Windows builder fails closed on the cache CMake wrote', () {
+    // Passing the flag is not the contract; the cache is. A missing line, the
+    // literal `$ggmlNative`, or any other spelling means ggml never saw the
+    // portable baseline, and the produced libraries are host-tuned.
+    final script = File('tool/build_whispercpp.ps1').readAsStringSync();
+    final configure = script.indexOf(r'& cmake @configureArguments');
+    final guard = script.indexOf(r'if ($recorded -ne $ggmlNative)');
+    expect(guard, isNonNegative, reason: 'the cache must be re-read after configure');
+    expect(configure, lessThan(guard), reason: 'and before anything is built');
+    expect(
+      guard,
+      lessThan(script.indexOf('cmake --build build --config Release')),
+      reason: 'a non-portable configure must not be compiled at all',
+    );
+    expect(script, contains('GGML_NATIVE cache contract violated'));
+  });
+
+  test('the Windows builder reports the value it will configure', () {
+    // Plan mode runs the script's real argument construction and prints the
+    // vector it would splat, so this asserts what cmake would **receive** rather
+    // than grepping the source for a spelling that can silently stop expanding.
+    if (!windows) {
+      markTestSkipped('powershell is required to exercise the Windows builder');
+      return;
+    }
+    final arguments = sttWindowsBuilderArguments(
+      target: SttNativeTarget.windowsX64,
+      whisperSource: Directory.current.path,
+      outputDirectory: 'native/.plan-only',
+    );
+    final result = Process.runSync(
+      'powershell',
+      [...arguments, '-PlanOnly'],
+      environment: {'SANAD_BUILD_PLAN_ONLY': '1'},
+    );
+    expect(result.exitCode, 0, reason: '${result.stderr}');
+    final plan = <String, String>{
+      for (final line in LineSplitter().convert(result.stdout as String))
+        if (line.contains('='))
+          line.substring(0, line.indexOf('=')):
+              line.substring(line.indexOf('=') + 1),
+    };
+    expect(plan['build_plan_ggml_native'], 'OFF');
+    final configure = plan['build_plan_configure']!.split(' ');
+    expect(
+      configure,
+      contains('-DGGML_NATIVE=OFF'),
+      reason: r'the literal $ggmlNative must never reach cmake',
+    );
+    expect(configure.any((a) => a.contains(r'$')), isFalse);
+    expect(plan['build_plan_required_cache'], 'GGML_NATIVE:BOOL=OFF');
+  });
+
+  test('the tool refuses a cache that is not the portable baseline', () {
+    // The staging boundary re-reads the same cache, because publishing is what
+    // makes a host-tuned payload reachable by an installer.
+    expect(
+      sttGgmlNativeCacheProblem(
+        target: SttNativeTarget.windowsX64,
+        cache: 'GGML_NATIVE:BOOL=OFF\nGGML_AVX2:BOOL=ON\n',
+      ),
+      isNull,
+    );
+    expect(
+      sttGgmlNativeCacheProblem(
+        target: SttNativeTarget.windowsX64,
+        cache: r'GGML_NATIVE:BOOL=$ggmlNative',
+      ),
+      contains('literal'),
+    );
+    expect(
+      sttGgmlNativeCacheProblem(
+        target: SttNativeTarget.windowsX64,
+        cache: 'GGML_NATIVE:BOOL=ON',
+      ),
+      contains('requires exactly OFF'),
+    );
+    expect(
+      sttGgmlNativeCacheProblem(target: SttNativeTarget.windowsX64, cache: ''),
+      contains('does not record GGML_NATIVE'),
+    );
+    // The one target with no portable mode keeps the native default, so the
+    // rule cannot be a constant `OFF` for every architecture.
+    expect(
+      sttGgmlNativeCacheProblem(
+        target: SttNativeTarget.windowsArm64,
+        cache: 'GGML_NATIVE:BOOL=ON',
+      ),
+      isNull,
+    );
+    // `--verify` on Windows proves nothing about the instruction set (there is
+    // no objdump), so the cache is the only build-time proof that lane has.
+    for (final target in [
+      SttNativeTarget.linuxX64,
+      SttNativeTarget.linuxArm64,
+      SttNativeTarget.macosX64,
+      SttNativeTarget.macosArm64,
+    ]) {
+      expect(sttRequiredGgmlNative(target), 'OFF', reason: target.tag);
+    }
   });
 
   test('the Windows builder stages exactly the DLLs the loader preloads', () {
@@ -407,4 +564,36 @@ void main() {
       reason: 'the shim must clamp to the loaded model, not a constant',
     );
   });
+}
+
+/// True when [script] passes `-DNAME=$variable` as a **bare** argument.
+///
+/// PowerShell reads a bare token that starts with `-` and contains `=` as a
+/// parameter assignment and does not expand the right-hand side, so this exact
+/// shape reached CMake as the literal string `$ggmlNative` in v1.0.23.
+///
+/// Both of the ways this check could fool itself are removed before matching:
+///
+/// - **Double-quoted spans** are dropped, because `"-DGGML_NATIVE=$ggmlNative"`
+///   is the fix and would otherwise match its own defence.
+/// - **Comments** are dropped, because this script's header documents the defect
+///   by quoting it in backticks. Prose must never satisfy — or trip — a code
+///   assertion, the same reason the ordering assertions anchor to a guard's
+///   decision line rather than to a token the comments mention.
+///
+/// The pattern also has to match a `$` followed by an identifier: anchoring it to
+/// a line ending in `$` is what made the previous version unable to see the
+/// defect at all, since `-DGGML_NATIVE=$ggmlNative` ends with `Native`. The name
+/// side allows underscores too — `[A-Za-z]+` alone never matches
+/// `-DGGML_NATIVE=`, which is the very token being guarded.
+bool hasBareDefineWithVariable(String script) {
+  final code = script
+      .split(RegExp(r'\r?\n'))
+      .map((line) {
+        final withoutQuoted = line.replaceAll(RegExp(r'"[^"]*"'), '');
+        final comment = withoutQuoted.indexOf('#');
+        return comment >= 0 ? withoutQuoted.substring(0, comment) : withoutQuoted;
+      })
+      .join('\n');
+  return RegExp(r'-[A-Za-z]\w*=\$\w+').hasMatch(code);
 }

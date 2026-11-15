@@ -33,13 +33,24 @@ class ProviderUsageSection extends StatelessWidget {
 
   /// The same account re-authentication the instance form's `Reconnect account`
   /// runs. Usage never implements a second reconnect path (issue 339 review 2).
+  /// API-key instances use [onUpdateCredential] instead, because an OAuth
+  /// reconnect cannot repair a static key.
   final VoidCallback onReconnect;
+
+  /// Whether this instance authenticates with a static API key.
+  final bool isApiKeyAuth;
+
+  /// Opens the instance edit form so the user can repair an API key.
+  /// Required for the API-key `auth_required` action.
+  final VoidCallback? onUpdateCredential;
 
   const ProviderUsageSection({
     super.key,
     required this.agent,
     required this.instanceId,
     required this.onReconnect,
+    this.isApiKeyAuth = false,
+    this.onUpdateCredential,
   });
 
   String _updatedLabel(BuildContext context, DateTime at) {
@@ -166,6 +177,8 @@ class ProviderUsageSection extends StatelessWidget {
                     entry: entry,
                     isStaleRefreshing: isStaleRefreshing,
                     onReconnect: onReconnect,
+                    isApiKeyAuth: isApiKeyAuth,
+                    onUpdateCredential: onUpdateCredential,
                   ),
                 ),
               ],
@@ -184,6 +197,8 @@ class _UsageBody extends StatelessWidget {
   final ProviderUsageEntry entry;
   final bool isStaleRefreshing;
   final VoidCallback onReconnect;
+  final bool isApiKeyAuth;
+  final VoidCallback? onUpdateCredential;
 
   const _UsageBody({
     required this.cubit,
@@ -192,6 +207,8 @@ class _UsageBody extends StatelessWidget {
     required this.entry,
     required this.isStaleRefreshing,
     required this.onReconnect,
+    required this.isApiKeyAuth,
+    required this.onUpdateCredential,
   });
 
   @override
@@ -233,6 +250,8 @@ class _UsageBody extends StatelessWidget {
         staleSnapshot: entry.hasVisibleSnapshot ? result.snapshot : null,
         onRetry: () => cubit.refresh(instanceId: instanceId, agent: agent),
         onReconnect: onReconnect,
+        isApiKeyAuth: isApiKeyAuth,
+        onUpdateCredential: onUpdateCredential,
       );
     }
 
@@ -316,6 +335,27 @@ class _UsageBody extends StatelessWidget {
   }
 }
 
+/// Localizes a window label from its typed window type.
+///
+/// The daemon owns the canonical type; the Client owns the user-facing copy.
+/// Unknown types fall back to the daemon label so a future window type never
+/// disappears from the UI before the Client learns about it.
+String _localizedWindowLabel(
+  AppLocalizations l10n,
+  ProviderUsageWindowDto window,
+) {
+  switch (window.type) {
+    case 'session':
+      return l10n.providerUsageWindowSession;
+    case 'weekly':
+      return l10n.providerUsageWindowWeekly;
+    case 'monthly':
+      return l10n.providerUsageWindowMonthly;
+    default:
+      return window.label;
+  }
+}
+
 class _WindowRow extends StatelessWidget {
   final ProviderUsageWindowDto window;
 
@@ -335,7 +375,7 @@ class _WindowRow extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              window.label,
+              _localizedWindowLabel(AppLocalizations.of(context)!, window),
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -390,9 +430,7 @@ class _WindowRow extends StatelessWidget {
             child: Tooltip(
               message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
               child: Text(
-                AppLocalizations.of(
-                  context,
-                )!.providerUsageResetsAt(_formatLocalRelative(context, window.resetAt!)),
+                _formatLocalRelative(context, window.resetAt!),
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -455,7 +493,10 @@ class _WindowRow extends StatelessWidget {
       return l10n.providerUsageResetsInHours(delta.inHours);
     }
     if (delta.inDays <= 6) {
-      return l10n.providerUsageResetsInDays(delta.inDays);
+      final days = delta.inDays;
+      final hours = delta.inHours % 24;
+      if (hours == 0) return l10n.providerUsageResetsInDays(days);
+      return l10n.providerUsageResetsInDaysHours(days, hours);
     }
     return l10n.providerUsageResetsOnDate(
       DateFormat('EEE, MMM d, HH:mm').format(local),
@@ -607,6 +648,8 @@ class _AttentionBody extends StatelessWidget {
   final ProviderUsageSnapshotDto? staleSnapshot;
   final VoidCallback onRetry;
   final VoidCallback onReconnect;
+  final bool isApiKeyAuth;
+  final VoidCallback? onUpdateCredential;
 
   const _AttentionBody({
     required this.instanceId,
@@ -616,6 +659,8 @@ class _AttentionBody extends StatelessWidget {
     required this.staleSnapshot,
     required this.onRetry,
     required this.onReconnect,
+    required this.isApiKeyAuth,
+    required this.onUpdateCredential,
   });
 
   @override
@@ -623,7 +668,23 @@ class _AttentionBody extends StatelessWidget {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final message = _messageFor(l10n, result.status);
-    final needsReconnect = result.status == 'auth_required';
+    final needsAuth = result.status == 'auth_required';
+    final useApiKeyAction =
+        needsAuth && isApiKeyAuth && onUpdateCredential != null;
+    final useReconnect = needsAuth && !isApiKeyAuth;
+    final action = useApiKeyAction
+        ? onUpdateCredential
+        : (useReconnect ? onReconnect : onRetry);
+    final actionKey = useApiKeyAction
+        ? 'provider_usage_update_api_key_$instanceId'
+        : (useReconnect
+              ? 'provider_usage_reconnect_$instanceId'
+              : 'provider_usage_retry_$instanceId');
+    final actionLabel = useApiKeyAction
+        ? l10n.providerUsageUpdateApiKey
+        : (useReconnect
+              ? l10n.providerUsageReconnect
+              : l10n.providerUsageRetry);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -643,9 +704,9 @@ class _AttentionBody extends StatelessWidget {
         Row(
           children: [
             Icon(
-              needsReconnect ? Icons.lock_outline : Icons.error_outline,
+              needsAuth ? Icons.lock_outline : Icons.error_outline,
               size: 16,
-              color: needsReconnect
+              color: needsAuth
                   ? Colors.amber[700]
                   : theme.colorScheme.error,
             ),
@@ -666,26 +727,18 @@ class _AttentionBody extends StatelessWidget {
         Align(
           alignment: Alignment.centerRight,
           child: TextButton.icon(
-            // Sign-in required runs the same account re-authentication the
-            // instance form exposes; anything else is a usage refresh. The key
-            // names the action, not its localized label (issue 339 review 3).
-            key: Key(
-              needsReconnect
-                  ? 'provider_usage_reconnect_$instanceId'
-                  : 'provider_usage_retry_$instanceId',
-            ),
-            onPressed: isStaleRefreshing
-                ? null
-                : (needsReconnect ? onReconnect : onRetry),
+            // API-key repair opens the instance edit form; account sign-in
+            // keeps the shared OAuth reconnect; anything else is a usage
+            // refresh. The key names the action, not its localized label.
+            key: Key(actionKey),
+            onPressed: isStaleRefreshing ? null : action,
             icon: Icon(
-              needsReconnect ? Icons.login : Icons.refresh,
+              useApiKeyAction
+                  ? Icons.key_outlined
+                  : (useReconnect ? Icons.login : Icons.refresh),
               size: 14,
             ),
-            label: Text(
-              needsReconnect
-                  ? l10n.providerUsageReconnect
-                  : l10n.providerUsageRetry,
-            ),
+            label: Text(actionLabel),
           ),
         ),
       ],
@@ -697,7 +750,9 @@ class _AttentionBody extends StatelessWidget {
     // sentence (issue 339 review 2).
     switch (status) {
       case 'auth_required':
-        return l10n.providerUsageAuthRequired;
+        return isApiKeyAuth
+            ? l10n.providerUsageApiKeyRequired
+            : l10n.providerUsageAuthRequired;
       case 'unavailable':
         return l10n.providerUsageUnavailable;
       case 'failed':

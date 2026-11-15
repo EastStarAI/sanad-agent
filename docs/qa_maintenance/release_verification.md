@@ -132,7 +132,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
-| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
+| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload; App Store submission and review evidence when the build is promoted to the public listing |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
 The Agent macOS rows above are proved by two different lanes, and neither one
