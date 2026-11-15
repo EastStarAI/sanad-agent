@@ -7,13 +7,16 @@
 #   android/key.properties   owns the upload keystore path, aliases and passwords
 #   android/app/build.gradle owns the applicationId and the signing config
 #
-# This script is the single owner of the Android binary: the private release
-# workflow and the manual Play pilot workflow both call it so one place decides
-# how an AAB is produced and verified.
+# This script owns the Android binary for the Play upload lane. The release
+# workflow still builds its own APK and AAB inline and has no package or version
+# verification of its own; it migrates to this script next, so today two producers
+# exist and only this one proves the artifact identity.
 #
 # The AAB carries no room for a post-hoc signature check, so the version identity
 # is proven on the universal APK that Gradle builds from the same sources, and
 # Play itself proves the bundle identity when the upload returns its versionCode.
+# A bundle whose identity is wrong but whose APK is right is therefore caught by
+# Google, not here.
 #
 # Usage:
 #   release/android/build_signed_aab.sh --build-name 1.0.23 --build-number 24
@@ -75,7 +78,7 @@ done
 test -n "$build_name" || { echo "--build-name is required" >&2; usage; exit 2; }
 test -n "$build_number" || { echo "--build-number is required" >&2; usage; exit 2; }
 test -f "$env_config" || { echo "Missing environment config: $env_config" >&2; exit 2; }
-if ! [[ "$build_number" =~ ^[0-9]+$ ]]; then
+if ! [[ "$build_number" =~ ^[0-9]+$ ]] || [[ "$build_number" -lt 1 ]]; then
   echo "--build-number must be a positive integer, got '$build_number'" >&2
   exit 2
 fi

@@ -7,6 +7,22 @@ proves the identity of the bundle from the API response before it commits the
 edit, so a mismatch aborts with the edit discarded instead of publishing an
 unexpected build.
 
+Tracks:
+
+  internal, alpha, beta   testing tracks. `--status auto` resolves to
+                          `completed` on internal and `draft` on alpha/beta, so
+                          a closed-testing upload is never published by default.
+  production              explicit store release. The status follows
+                          `--rollout-fraction`: `inProgress` with `userFraction`
+                          below 1, `completed` at exactly 1. `--status` must stay
+                          `auto` because a staged rollout is the only accepted
+                          way to reach production.
+
+Existing releases on the target track are read first. Releases Play can hold
+beside the new one are kept, so an upload never silently drops the previous
+version. Play permits one active (`draft`/`inProgress`) release per track, so an
+active release that cannot be kept is reported and replaced.
+
 Authentication uses a service account JSON key. Provide it either as a path in
 PLAY_SERVICE_ACCOUNT_JSON or base64-encoded in
 PLAY_SERVICE_ACCOUNT_JSON_BASE64. The key is never printed.
@@ -14,7 +30,7 @@ PLAY_SERVICE_ACCOUNT_JSON_BASE64. The key is never printed.
 Usage:
   publish_play_bundle.py --bundle <path> --package com.eaststarai.sanad
     --track internal --expect-version-code 25 [--version-name 1.0.24]
-    [--status completed] [--dry-run]
+    [--status auto] [--rollout-fraction 0.2] [--dry-run]
 """
 
 from __future__ import annotations
@@ -36,9 +52,17 @@ UPLOAD_ROOT = "https://androidpublisher.googleapis.com/upload/androidpublisher/v
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 SCOPE = "https://www.googleapis.com/auth/androidpublisher"
 
+TRACKS = ("internal", "alpha", "beta", "production")
+STATUSES = ("auto", "draft", "completed")
+TESTING_TRACK_STATUS = {"internal": "completed", "alpha": "draft", "beta": "draft"}
+
 
 class PlayError(RuntimeError):
-    pass
+    """A failure that must abort the run and discard the open edit."""
+
+    def __init__(self, message: str, status: int | None = None) -> None:
+        super().__init__(message)
+        self.status = status
 
 
 def load_key() -> dict:
@@ -58,6 +82,25 @@ def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
 
 
+def _sign(signing_input: bytes, private_key: str) -> bytes:
+    # openssl can only read the key from a file. The temporary directory is
+    # owner-only, the PEM is 0600, and both disappear when the call returns; only
+    # a SIGKILL can leave the file behind, on an ephemeral runner that is then
+    # discarded whole.
+    with tempfile.TemporaryDirectory(prefix="play-signing-") as key_dir:
+        os.chmod(key_dir, 0o700)
+        pem_path = os.path.join(key_dir, "service-account.pem")
+        with open(pem_path, "w", encoding="utf-8") as pem:
+            pem.write(private_key)
+        os.chmod(pem_path, 0o600)
+        return subprocess.run(
+            ["openssl", "dgst", "-sha256", "-sign", pem_path],
+            input=signing_input,
+            capture_output=True,
+            check=True,
+        ).stdout
+
+
 def access_token(key: dict) -> str:
     now = int(time.time())
     header = {"alg": "RS256", "typ": "JWT"}
@@ -72,15 +115,7 @@ def access_token(key: dict) -> str:
         f"{_b64url(json.dumps(header).encode())}."
         f"{_b64url(json.dumps(claims).encode())}"
     )
-    with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=True) as pem:
-        pem.write(key["private_key"])
-        pem.flush()
-        signature = subprocess.run(
-            ["openssl", "dgst", "-sha256", "-sign", pem.name],
-            input=signing_input.encode(),
-            capture_output=True,
-            check=True,
-        ).stdout
+    signature = _sign(signing_input.encode(), key["private_key"])
     body = urllib.parse.urlencode(
         {
             "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
@@ -93,7 +128,14 @@ def access_token(key: dict) -> str:
     except urllib.error.HTTPError as error:
         raise PlayError(
             f"Service account token request failed: {error.code} "
-            f"{_short(error.read())}"
+            f"{_short(error.read())}",
+            status=error.code,
+        ) from error
+    except OSError as error:
+        raise PlayError(f"Service account token request failed: {error}") from error
+    except (ValueError, KeyError) as error:
+        raise PlayError(
+            f"Service account token response was unusable: {error}"
         ) from error
 
 
@@ -116,7 +158,17 @@ def _request(token: str, url: str, method: str = "GET", payload=None, raw=None):
             body = response.read().decode("utf-8", "replace")
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as error:
-        raise PlayError(f"{method} {url} failed: {error.code} {_short(error.read())}") from error
+        raise PlayError(
+            f"{method} {url} failed: {error.code} {_short(error.read())}",
+            status=error.code,
+        ) from error
+    except OSError as error:
+        # A refused connection, DNS failure, reset, or timeout carries no status
+        # code, but it must still reach the caller as PlayError: otherwise it
+        # bypasses the discard handler and leaves the edit open.
+        raise PlayError(f"{method} {url} failed: {error}") from error
+    except ValueError as error:
+        raise PlayError(f"{method} {url} returned an unusable body: {error}") from error
 
 
 def edit_id(token: str, package: str) -> str:
@@ -126,7 +178,7 @@ def edit_id(token: str, package: str) -> str:
 def discard(token: str, package: str, edit: str) -> None:
     try:
         _request(token, f"{API_ROOT}/{package}/edits/{edit}", "DELETE")
-    except PlayError as error:
+    except Exception as error:  # noqa: BLE001 - a failed discard must never mask the real error
         print(f"warning: could not discard edit {edit}: {error}", file=sys.stderr)
 
 
@@ -141,20 +193,84 @@ def upload(token: str, package: str, edit: str, bundle: str) -> dict:
     )
 
 
+def resolve_release(
+    track: str, status: str, rollout_fraction: float
+) -> tuple[str, float | None]:
+    """Return the Play release status and, for a staged rollout, its userFraction."""
+    if track == "production":
+        if status != "auto":
+            raise ValueError(
+                "the production status follows --rollout-fraction; leave --status at auto"
+            )
+        if rollout_fraction >= 1:
+            return "completed", None
+        return "inProgress", rollout_fraction
+    if status == "auto":
+        return TESTING_TRACK_STATUS[track], None
+    return status, None
+
+
+def track_releases(token: str, package: str, edit: str, track: str) -> list[dict]:
+    try:
+        payload = _request(token, f"{API_ROOT}/{package}/edits/{edit}/tracks/{track}")
+    except PlayError as error:
+        # A track that has never received a release answers 404; any other failure
+        # must stop the run instead of being read as an empty track.
+        if error.status == 404:
+            return []
+        raise
+    return payload.get("releases") or []
+
+
+def merge_releases(existing: list[dict], release: dict, track: str) -> list[dict]:
+    """Keep the releases Play can hold beside the new one and report what is replaced."""
+    entering = {int(code) for code in release["versionCodes"]}
+    kept: list[dict] = []
+    replaced: list[dict] = []
+    for entry in existing:
+        codes = {int(code) for code in entry.get("versionCodes") or []}
+        if entry.get("status") == "completed" and not codes & entering:
+            kept.append(entry)
+        else:
+            replaced.append(entry)
+    for entry in replaced:
+        codes = ",".join(str(code) for code in entry.get("versionCodes") or [])
+        print(
+            f"Replacing the existing {entry.get('status') or 'unknown'} release for "
+            f"versionCode(s) {codes or 'none'} on track '{track}'.",
+            file=sys.stderr,
+        )
+    return kept + [release]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle", required=True)
     parser.add_argument("--package", required=True)
-    parser.add_argument("--track", required=True)
+    parser.add_argument("--track", required=True, choices=TRACKS)
     parser.add_argument("--expect-version-code", required=True, type=int)
     parser.add_argument("--version-name", default="")
-    parser.add_argument("--status", default="completed")
+    parser.add_argument("--status", default="auto", choices=STATUSES)
+    parser.add_argument("--rollout-fraction", default=0.2, type=float)
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
     if not os.path.isfile(args.bundle):
         print(f"Bundle not found: {args.bundle}", file=sys.stderr)
         return 2
+    if args.expect_version_code <= 0:
+        parser.error("--expect-version-code must be a positive integer")
+    if not 0 < args.rollout_fraction <= 1:
+        parser.error("--rollout-fraction must be greater than 0 and at most 1")
+    try:
+        status, user_fraction = resolve_release(
+            args.track, args.status, args.rollout_fraction
+        )
+    except ValueError as error:
+        parser.error(str(error))
+
+    rollout = "" if user_fraction is None else f" with userFraction {user_fraction}"
+    print(f"Preparing track '{args.track}' as {status}{rollout}")
 
     token = access_token(load_key())
     edit = edit_id(token, args.package)
@@ -171,13 +287,19 @@ def main() -> int:
                 " refusing to publish a different build"
             )
 
-        release = {
+        release: dict = {
             "versionCodes": [str(accepted)],
-            "status": args.status,
+            "status": status,
         }
+        if user_fraction is not None:
+            release["userFraction"] = user_fraction
         if args.version_name:
             release["name"] = f"{args.version_name} ({accepted})"
-        track = {"track": args.track, "releases": [release]}
+        existing = track_releases(token, args.package, edit, args.track)
+        track = {
+            "track": args.track,
+            "releases": merge_releases(existing, release, args.track),
+        }
         _request(
             token,
             f"{API_ROOT}/{args.package}/edits/{edit}/tracks/{args.track}",

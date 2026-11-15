@@ -1144,6 +1144,22 @@ jobs:
           grep -F 'appcast-rc.xml' release/release-contract.json
           jq -e '.artifacts[] | select(.platform == "ios" and .public == false)' \
             release/release-contract.json >/dev/null
+          # The Play lane is callable, so its caller-supplied inputs are proven
+          # inside the workflow: both jobs stay repository-bound, and the publish
+          # step re-validates the track set the called path cannot constrain.
+          test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -eq 2
+          grep -F '^(internal|alpha|beta|production)$' .github/workflows/play-upload.yml
+      - name: Verify the Play upload helper and its unit tests
+        if: needs.classify.outputs.release == 'true'
+        shell: bash
+        run: |
+          python3 -I -m py_compile scripts/release/publish_play_bundle.py
+          python3 -I scripts/release/test_publish_play_bundle.py
+      - name: Verify the signed App Bundle guards
+        if: needs.classify.outputs.release == 'true'
+        working-directory: client
+        shell: bash
+        run: bash release/android/test_build_signed_aab.sh
       - name: Parse PowerShell release helpers
         shell: pwsh
         run: |
