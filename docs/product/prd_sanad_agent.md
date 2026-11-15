@@ -193,7 +193,8 @@ failover is limited to eligible, allowed, ready instances while preserving the
 exact model identity.
 
 ChatGPT Subscription supports authoritative Session and Weekly usage windows.
-Other providers expose usage only when a compatible adapter exists.
+OpenCode Go supports Session (5-hour), Weekly, and Monthly windows. Other
+providers expose usage only when a compatible adapter exists.
 
 ### Extensibility
 
