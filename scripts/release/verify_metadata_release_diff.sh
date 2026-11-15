@@ -98,6 +98,10 @@ validate_changed_lines() {
   fi
 }
 
+# The store copy is prose, like release-notes.md: its first line is the release
+# version and the rest is written text, so line validation would only reject a
+# legitimate copy edit. It is allowlisted above so a release preparation that
+# rewrites it does not need the protected release-reviewed label.
 while IFS= read -r path; do
   case "$path" in
     agent/CHANGELOG.md|release/release-notes.md|release/store-whats-new.ar.txt|release/store-whats-new.en.txt) ;;

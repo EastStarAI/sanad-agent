@@ -27,8 +27,8 @@ write_file docs/operations/release_and_signing.md 'canonical installer sources. 
 write_file release/contract/pubspec.yaml 'version: 1.0.6'
 write_file release/release-contract.json $'{\n  "version": "1.0.6",\n  "build_number": 7,\n  "tag": "v1.0.6",\n  "artifacts": [\n    {\n      "component": "agent",\n      "platform": "linux",\n      "architecture": "x64",\n      "filename": "sanad-agent-1.0.6-linux-x64"\n    },\n    {\n      "component": "agent-runtime",\n      "platform": "macos",\n      "architecture": "arm64",\n      "filename": "sanad-agent-runtime-1.0.6-macos-arm64.tar.gz"\n    }\n  ]\n}'
 write_file release/release-notes.md '# Sanad 1.0.6'
-write_file release/store-whats-new.ar.txt $'# 1.0.6\n\n- تحسينات عامة.'
-write_file release/store-whats-new.en.txt $'# 1.0.6\n\n- General fixes.'
+write_file release/store-whats-new.ar.txt $'1.0.6\n\n- تحسينات عامة.'
+write_file release/store-whats-new.en.txt $'1.0.6\n\n- General fixes.'
 git add .
 git commit -qm baseline
 base="$(git rev-parse HEAD)"

@@ -19,11 +19,10 @@ Provide it base64-encoded in `APPLE_API_KEY_BASE64` or as a path in
 `APPLE_API_KEY_P8`. The key and the derived token are never printed.
 
 Usage:
-  appstore_submit.py --version 1.0.27 --build-number 27 [--dry-run]
-    [--expect-app-id 6794974223] [--bundle-id com.eaststarai.sanad]
+  appstore_submit.py --version 1.0.27 --build-number 27
+    --bundle-id com.eaststarai.sanad --expect-app-id 6794974223 [--dry-run]
     [--contract release/release-contract.json]
-    [--english-whats-new release/store-whats-new.en.txt]
-    [--arabic-whats-new release/store-whats-new.ar.txt]
+    [--store-copy-directory release]
     [--info-plist client/ios/Runner/Info.plist]
     [--processing-timeout-seconds 1800]
 """
@@ -35,7 +34,6 @@ import base64
 import json
 import os
 import plistlib
-import re
 import subprocess
 import sys
 import tempfile
@@ -44,21 +42,34 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import store_whats_new
+
 API_ROOT = "https://api.appstoreconnect.apple.com/v1"
 TOKEN_AUDIENCE = "appstoreconnect-v1"
-# Apple rejects a token whose expiry is more than twenty minutes ahead.
+# Apple rejects a token whose expiry is more than twenty minutes ahead. A run can
+# wait far longer than that for build processing, so the token is re-minted on
+# demand instead of being minted once per run.
 TOKEN_LIFETIME_SECONDS = 900
-DEFAULT_BUNDLE_ID = "com.eaststarai.sanad"
-# The App Store accepts 4000 characters, Google Play 500 per language. The two
-# lanes share one curated file per language, so the stricter limit is enforced.
-WHATS_NEW_LIMIT = 4000
-STORE_WHATS_NEW_LIMIT = 500
+TOKEN_REFRESH_MARGIN_SECONDS = 120
 POLL_INITIAL_SECONDS = 15
 POLL_MAX_SECONDS = 60
+# App Store Connect throttles and returns 5xx under load, and the screenshot copy
+# issues a burst of requests.
+RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+RETRY_ATTEMPTS = 3
+RETRY_INITIAL_SECONDS = 5
+RETRY_MAX_SECONDS = 60
 
 # States in which the version's metadata can still be written and attached.
+# READY_FOR_REVIEW is included because App Store Connect reports it for a version
+# whose metadata is complete and only the submission is missing.
 EDITABLE_VERSION_STATES = frozenset(
-    {"PREPARE_FOR_SUBMISSION", "DEVELOPER_REJECTED", "METADATA_REJECTED"}
+    {
+        "PREPARE_FOR_SUBMISSION",
+        "READY_FOR_REVIEW",
+        "DEVELOPER_REJECTED",
+        "METADATA_REJECTED",
+    }
 )
 # States that prove this version is already on its way to the store.
 SUBMITTED_VERSION_STATES = frozenset({"WAITING_FOR_REVIEW", "IN_REVIEW", "PENDING_APPLE_RELEASE"})
@@ -69,6 +80,9 @@ RELEASED_VERSION_STATES = frozenset({"READY_FOR_SALE", "PROCESSING_FOR_APP_STORE
 IN_FLIGHT_SUBMISSION_STATES = frozenset(
     {"WAITING_FOR_REVIEW", "IN_REVIEW", "UNRESOLVED_ISSUES", "COMPLETING"}
 )
+# A screenshot is usable only after App Store Connect finished processing it.
+SCREENSHOT_COMPLETE_STATE = "COMPLETE"
+SCREENSHOT_FAILED_STATE = "FAILED"
 REVIEW_DETAIL_FIELDS = (
     "contactFirstName",
     "contactLastName",
@@ -230,27 +244,62 @@ def urlopen_download(url: str) -> bytes:
 class Api:
     """Thin App Store Connect JSON:API client.
 
-    The transport is injected so the offline tests can answer requests without a
-    network, and so every recorded request can be asserted on.
+    The transport and the sleeping function are injected so the offline tests can
+    answer requests without a network, and so every recorded request can be
+    asserted on. The bearer token is minted on demand: a run can wait far longer
+    than one token's lifetime for build processing, and Apple rejects a token
+    whose expiry is more than twenty minutes ahead.
     """
 
-    def __init__(self, token: str, transport=urlopen_transport, root: str = API_ROOT):
-        self._token = token
+    def __init__(
+        self,
+        token_factory,
+        transport=urlopen_transport,
+        root: str = API_ROOT,
+        sleep=time.sleep,
+        clock=time.monotonic,
+    ):
+        self._token_factory = token_factory
         self._transport = transport
         self._root = root
+        self._sleep = sleep
+        self._clock = clock
+        self._token: str | None = None
+        self._minted_at = -1e12
+
+    def _bearer(self) -> str:
+        if (
+            self._clock() - self._minted_at
+            >= TOKEN_LIFETIME_SECONDS - TOKEN_REFRESH_MARGIN_SECONDS
+        ):
+            self._token = self._token_factory()
+            self._minted_at = self._clock()
+        return self._token or ""
+
+    def _request(self, method, url, headers, body):
+        """Send one request, retrying throttling and transient server failures."""
+        delay = RETRY_INITIAL_SECONDS
+        for attempt in range(1, RETRY_ATTEMPTS + 1):
+            status, raw = self._transport(method, url, headers, body)
+            if status not in RETRY_STATUSES or attempt == RETRY_ATTEMPTS:
+                return status, raw
+            self._sleep(delay)
+            delay = min(delay * 2, RETRY_MAX_SECONDS)
+        raise SubmitError("unreachable")  # pragma: no cover
 
     def _call(self, method, path, params=None, payload=None, missing_ok=False):
         url = f"{self._root}{path}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         headers = {"Accept": "application/json"}
-        if self._token:
-            headers["Authorization"] = f"Bearer {self._token}"
+        token = self._bearer()
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         body = None
         if payload is not None:
             body = _compact(payload)
             headers["Content-Type"] = "application/json"
-        status, raw = self._transport(method, url, headers, body)
+        status, raw = self._request(method, url, headers, body)
         if status == 404 and missing_ok:
             return {}
         if status >= 400:
@@ -267,75 +316,40 @@ class Api:
         return self._call("PATCH", path, payload=payload)
 
     def send(self, method: str, url: str, body: bytes, headers: dict) -> None:
-        status, raw = self._transport(method, url, headers, body)
+        # The asset URL is pre-signed and carries its own credentials, so no
+        # bearer token is attached and the URL is never logged.
+        status, raw = self._request(method, url, headers, body)
         if status >= 400:
             raise SubmitError(f"asset upload failed: HTTP {status} {_short(raw)}")
 
 
-# --- release copy -----------------------------------------------------------
-
-
-def read_store_whats_new(path: str, version: str, language: str) -> str:
-    """Read one curated store copy file and prove it belongs to this release.
-
-    The store text is curated per release instead of being extracted from
-    `release/release-notes.md`: the notes explain the engineering story to
-    developers, while the store copy is short, user-facing, and shared verbatim
-    by the App Store and Google Play lanes. The first line binds the file to the
-    release, so stale copy cannot reach a store.
-    """
-    if not os.path.isfile(path):
-        raise SubmitError(f"Missing {language} store copy: {path}.")
-    with open(path, encoding="utf-8") as handle:
-        lines = handle.read().splitlines()
-    header_index = next((index for index, line in enumerate(lines) if line.strip()), None)
-    if header_index is None:
-        raise SubmitError(f"{path} is empty; its first line must be '# {version}'.")
-    match = re.fullmatch(r"#\s*(\d+\.\d+\.\d+)", lines[header_index].strip())
-    if not match:
-        raise SubmitError(
-            f"{path} must start with '# {version}' so stale store copy cannot be"
-            " submitted."
-        )
-    if match.group(1) != version:
-        raise SubmitError(
-            f"{path} carries the {match.group(1)} store copy but this release is"
-            f" {version}; rewrite the {language} text for this release."
-        )
-    text = "\n".join(lines[header_index + 1 :]).strip()
-    if not text:
-        raise SubmitError(f"{path} carries no {language} store copy.")
-    if len(text) > STORE_WHATS_NEW_LIMIT:
-        raise SubmitError(
-            f"{path} is {len(text)} characters; the shared store limit is"
-            f" {STORE_WHATS_NEW_LIMIT} per language (App Store allows"
-            f" {WHATS_NEW_LIMIT})."
-        )
-    return text
+# --- store copy -------------------------------------------------------------
 
 
 class StoreCopy:
-    """Curated "What's New" text, loaded per locale on first use."""
+    """App Store "What's New" per localization, read from the shared store text.
 
-    def __init__(self, english_path: str, arabic_path: str, version: str):
-        self.english = read_store_whats_new(english_path, version, "en-US")
-        self._arabic_path = arabic_path
+    `scripts/release/store_whats_new.py` owns the file format, the release
+    binding, and the character limit for both stores. This adapter only maps the
+    App Store localization codes, and it reads lazily so an Arabic listing is
+    required only when the version actually carries an `ar-SA` localization.
+    """
+
+    def __init__(self, directory: str, version: str):
+        self._directory = directory
         self._version = version
-        self._arabic: str | None = None
+        self._text: dict[str, str] = {}
 
     def for_locale(self, locale: str) -> str:
-        if locale == "en-US":
-            return self.english
-        if locale == "ar-SA":
-            if self._arabic is None:
-                self._arabic = read_store_whats_new(
-                    self._arabic_path, self._version, "ar-SA"
+        if locale not in self._text:
+            try:
+                self._text[locale] = store_whats_new.app_store_text(
+                    self._directory, self._version, locale
                 )
-            return self._arabic
-        raise SubmitError(
-            f"Store localization {locale} has no What's New source. This lane owns"
-            " en-US and ar-SA only; extend it before releasing that locale."
-        )
+            except store_whats_new.StoreNotesError as error:
+                raise SubmitError(str(error)) from error
+        return self._text[locale]
+
 
 def require_no_non_exempt_encryption(path: str) -> None:
     """The lane answers export compliance, so the app must declare it."""
@@ -571,7 +585,10 @@ def plan_localizations(
     target_by_locale = {entry["attributes"]["locale"]: entry for entry in target}
     creates: list[dict] = []
     updates: list[tuple[str, str, str]] = []
-    for locale in sorted(source_by_locale or target_by_locale):
+    # The union matters: a locale that exists only on the target version must
+    # still get a What's New body or fail closed, otherwise a localization the
+    # owner added in App Store Connect would submit with empty store text.
+    for locale in sorted(set(source_by_locale) | set(target_by_locale)):
         text = copy.for_locale(locale)
         existing = target_by_locale.get(locale)
         if existing is None:
@@ -677,9 +694,61 @@ def screenshot_sets(api: Api, localization_id: str) -> tuple[list[dict], list[di
             "include": "appScreenshots",
             "limit": "50",
             "fields[appScreenshotSets]": "screenshotDisplayType",
+            "fields[appScreenshots]": "fileName,assetDeliveryState,imageAsset",
         },
     )
     return response.get("data") or [], response.get("included") or []
+
+
+def shots_of(source_set: dict, included: list[dict]) -> list[dict]:
+    return [
+        entry
+        for entry in included
+        if ((entry.get("relationships") or {}).get("appScreenshotSet") or {})
+        .get("data", {})
+        .get("id")
+        == source_set["id"]
+    ]
+
+
+def assert_screenshot_assets_are_downloadable(source_localization_id: str, sets, included) -> None:
+    """Prove every source screenshot can be fetched before anything is written."""
+    for source_set in sets:
+        shots = shots_of(source_set, included)
+        for shot in shots:
+            asset = shot.get("attributes", {}).get("imageAsset") or {}
+            if not asset.get("templateUrl") or not asset.get("width") or not asset.get("height"):
+                raise SubmitError(
+                    "A source screenshot for display type"
+                    f" {source_set['attributes'].get('screenshotDisplayType')} has no"
+                    " downloadable image asset (video previews are not copied);"
+                    " copy the App Store screenshots manually for this display type."
+                )
+    if not sets:
+        return
+
+
+def assert_copy_sources_ready(
+    api: Api, source: dict | None, source_localizations: list[dict]
+) -> None:
+    """Read-only proof that the released version has everything this lane copies.
+
+    A dry run is the only human checkpoint before an unattended submission, so it
+    covers the review detail and the screenshot assets too, not just the plan.
+    """
+    if source is None:
+        return
+    detail = api.get(
+        f"/appStoreVersions/{source['id']}/appStoreReviewDetail", missing_ok=True
+    ).get("data")
+    if not detail:
+        raise SubmitError(
+            f"Version {source['attributes'].get('versionString')} has no App Store"
+            " review detail to copy; fill the review contact and notes first."
+        )
+    for entry in source_localizations:
+        sets, included = screenshot_sets(api, entry["id"])
+        assert_screenshot_assets_are_downloadable(entry["id"], sets, included)
 
 
 def ensure_screenshots(
@@ -698,25 +767,31 @@ def ensure_screenshots(
     performed: list[str] = []
     for source_set in source_sets:
         display_type = source_set["attributes"].get("screenshotDisplayType")
-        if display_type in present:
-            continue
-        shots = [
-            entry
-            for entry in included
-            if ((entry.get("relationships") or {}).get("appScreenshotSet") or {})
-            .get("data", {})
-            .get("id")
-            == source_set["id"]
-        ]
+        shots = shots_of(source_set, included)
         if not shots:
             continue
-        for shot in shots:
-            asset = shot.get("attributes", {}).get("imageAsset") or {}
-            if not asset.get("templateUrl") or not asset.get("width") or not asset.get("height"):
+        if display_type in present:
+            # A display type that already exists is skipped, which would silently
+            # finish a half-copied set. Compare counts instead of guessing.
+            copied = next(
+                (
+                    entry
+                    for entry in target_sets
+                    if entry["attributes"].get("screenshotDisplayType") == display_type
+                ),
+                None,
+            )
+            _, target_included = screenshot_sets(api, localization_id)
+            existing = len(shots_of(copied, target_included)) if copied else 0
+            if existing < len(shots):
                 raise SubmitError(
-                    "A source screenshot has no downloadable image asset; copy the"
-                    " App Store screenshots manually for this display type."
+                    f"Screenshot set {display_type} holds {existing} of the"
+                    f" {len(shots)} screenshots the released version carries;"
+                    " remove that set in App Store Connect and re-run, or copy it"
+                    " manually."
                 )
+            continue
+        assert_screenshot_assets_are_downloadable(source_localization_id, [source_set], included)
         performed.append(f"{display_type} ({len(shots)} screenshot(s))")
         if dry_run:
             continue
@@ -779,6 +854,53 @@ def ensure_screenshots(
                 },
             )
     return performed
+
+
+def wait_for_screenshot_assets(
+    api: Api,
+    localization_id: str,
+    timeout_seconds: int,
+    clock=time.monotonic,
+    sleep=time.sleep,
+    interval: float = POLL_INITIAL_SECONDS,
+    max_interval: float = POLL_MAX_SECONDS,
+) -> str:
+    """Wait until App Store Connect finished processing the copied screenshots.
+
+    Uploading the bytes is not enough: each asset moves through
+    AWAITING_UPLOAD -> UPLOAD_COMPLETE -> COMPLETE, and submitting while one is
+    still processing is rejected as "screenshot uploads in progress".
+    """
+    deadline = clock() + timeout_seconds
+    delay = interval
+    pending = "none"
+    while True:
+        sets, included = screenshot_sets(api, localization_id)
+        if not sets or not included:
+            return "none"
+        states = [screenshot_state(entry) for entry in included]
+        failed = [state for state in states if state == SCREENSHOT_FAILED_STATE]
+        if failed:
+            raise SubmitError(
+                f"App Store Connect failed to process a screenshot in"
+                f" localization {localization_id}; replace it before submitting."
+            )
+        pending = f"{states.count(SCREENSHOT_COMPLETE_STATE)}/{len(states)} complete"
+        if states.count(SCREENSHOT_COMPLETE_STATE) == len(states):
+            return pending
+        if clock() >= deadline:
+            raise SubmitError(
+                "Screenshots were still processing after"
+                f" {timeout_seconds}s ({pending}); submission refused because App"
+                " Store Connect rejects a version whose assets are not ready."
+            )
+        sleep(delay)
+        delay = min(delay * 2, max_interval)
+
+
+def screenshot_state(entry: dict) -> str:
+    delivery = (entry.get("attributes") or {}).get("assetDeliveryState") or {}
+    return str(delivery.get("state") or "unknown")
 
 
 def attached_build_id(api: Api, version_id: str) -> str | None:
@@ -865,6 +987,11 @@ def ensure_submission(
         if version_id not in items_version_ids(submission_items(api, entry["id"])):
             continue
         if state != "READY_FOR_REVIEW":
+            if state == "UNRESOLVED_ISSUES":
+                raise SubmitError(
+                    f"Review submission {entry['id']} has unresolved issues; resolve"
+                    " them or cancel that submission in App Store Connect."
+                )
             # The version is inside a submission App Store Connect already
             # accepted, which is the idempotent outcome of a re-run.
             return entry["id"], "already-submitted"
@@ -1003,14 +1130,19 @@ def run(
             f" {contract.get('build_number')}."
         )
     require_no_non_exempt_encryption(args.info_plist)
-    copy = StoreCopy(args.english_whats_new, args.arabic_whats_new, args.version)
+    copy = StoreCopy(args.store_copy_directory, args.version)
 
     key_id = os.environ.get("APPLE_API_KEY_ID") or ""
     issuer_id = os.environ.get("APPLE_API_ISSUER_ID") or ""
     if not key_id or not issuer_id:
         raise SubmitError("Set APPLE_API_KEY_ID and APPLE_API_ISSUER_ID.")
-    token = access_token(key_id, issuer_id, load_key(args.private_key), signer=signer)
-    api = Api(token, transport=transport)
+    key = load_key(args.private_key)
+    api = Api(
+        lambda: access_token(key_id, issuer_id, key, signer=signer),
+        transport=transport,
+        sleep=sleep,
+        clock=clock,
+    )
 
     app_id = resolve_app(api, args.bundle_id, args.expect_app_id)
     print(f"App {app_id} resolved for {args.bundle_id}.")
@@ -1062,6 +1194,10 @@ def run(
     # write, so a missing or stale store copy cannot leave a half-built version.
     creates, updates = plan_localizations(target_localizations, source_localizations, copy)
 
+    # A dry run is the only human checkpoint before an unattended submission, so
+    # the source metadata and screenshot assets are proven readable here too.
+    assert_copy_sources_ready(api, source, source_localizations)
+
     # Every check above is read-only, so the first write happens only once the
     # whole plan is known to be satisfiable.
     print(f"Export compliance: {ensure_export_compliance(api, build, args.dry_run)}.")
@@ -1085,15 +1221,16 @@ def run(
         {entry["locale"] for entry in creates} | {locale for _, locale, _ in updates}
     )
     print(f"Localizations in this version: {', '.join(planned_locales) or 'none'}.")
-    print(f"What's New: {len(copy.english)} characters (en-US) for {args.version}.")
     print(
-        "What's New changes: "
-        f"{', '.join(ensure_localizations(api, target['id'], creates, updates, args.dry_run)) or 'none'}."
+        f"What's New: {len(copy.for_locale('en-US'))} characters (en-US) for"
+        f" {args.version}."
     )
-    print(
-        "Review detail: "
-        f"{ensure_review_detail(api, target['id'], source['id'] if source else None, args.dry_run)}."
+    changes = ensure_localizations(api, target["id"], creates, updates, args.dry_run)
+    print(f"What's New changes: {', '.join(changes) or 'none'}.")
+    detail_state = ensure_review_detail(
+        api, target["id"], source["id"] if source else None, args.dry_run
     )
+    print(f"Review detail: {detail_state}.")
 
     # Screenshots live on the localization, and a freshly created one has none,
     # so the localization list is re-read after they are written.
@@ -1119,13 +1256,23 @@ def run(
             download=download,
         )
     print(f"Screenshots copied: {', '.join(copied_sets) or 'none'}.")
+    if not args.dry_run:
+        for locale, entry in sorted(target_by_locale.items()):
+            ready = wait_for_screenshot_assets(
+                api,
+                entry["id"],
+                args.processing_timeout_seconds,
+                clock=clock,
+                sleep=sleep,
+            )
+            print(f"Screenshots ready ({locale}): {ready}.")
 
     if not args.dry_run:
         state = api.get(
             f"/appStoreVersions/{target['id']}",
             {"fields[appStoreVersions]": "appStoreState"},
         )["data"]["attributes"]["appStoreState"]
-        if state != "PREPARE_FOR_SUBMISSION":
+        if state not in EDITABLE_VERSION_STATES:
             raise SubmitError(
                 f"Version {args.version} is {state} after the metadata copy;"
                 " App Store Connect refused an editable state."
@@ -1160,11 +1307,10 @@ def parse_args(argv: list[str]):
     parser.add_argument("--version", required=True)
     parser.add_argument("--build-number", required=True)
     parser.add_argument("--contract", default="release/release-contract.json")
-    parser.add_argument("--english-whats-new", default="release/store-whats-new.en.txt")
-    parser.add_argument("--arabic-whats-new", default="release/store-whats-new.ar.txt")
+    parser.add_argument("--store-copy-directory", default="release")
     parser.add_argument("--info-plist", default="client/ios/Runner/Info.plist")
-    parser.add_argument("--bundle-id", default=DEFAULT_BUNDLE_ID)
-    parser.add_argument("--expect-app-id", default="")
+    parser.add_argument("--bundle-id", required=True)
+    parser.add_argument("--expect-app-id", required=True)
     parser.add_argument("--private-key", default=None)
     parser.add_argument("--processing-timeout-seconds", type=int, default=1800)
     parser.add_argument("--dry-run", action="store_true")

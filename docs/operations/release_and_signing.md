@@ -527,10 +527,11 @@ have not reached App Store review yet.
 `.github/workflows/appstore-submit.yml` is the only automated App Store
 submission path. It builds and uploads nothing: the Internal TestFlight lane
 already produced and uploaded the IPA, so this lane owns everything after that
-upload. It runs manually, or through its guarded `workflow_call`, inside the
-`apple-testflight` Environment whose App Manager API key it reuses, so it adds no
-secret and no Environment. `scripts/release/appstore_submit.py` performs the
-steps with the Python standard library and `openssl` only.
+upload. It runs manually, or through its guarded `workflow_call`, from `main` or
+a `v*` release tag, inside the `apple-testflight` Environment whose App Manager
+API key it reuses, so it adds no secret and no Environment.
+`scripts/release/appstore_submit.py` performs the steps with the Python standard
+library and `openssl` only.
 
 - **Steps:** wait for the uploaded build to finish processing, answer export
   compliance from `ITSAppUsesNonExemptEncryption=false` in
@@ -542,13 +543,13 @@ steps with the Python standard library and `openssl` only.
   Apple publishes the version as soon as review passes. There is no
   post-approval hold, so the metadata, screenshots, and build must be final
   before the lane submits.
-- **Store copy:** the App Store and Google Play lanes share
-  `release/store-whats-new.en.txt` and `release/store-whats-new.ar.txt`. Each
-  file starts with `# <version>` and carries three or four short user-facing
-  bullets with no technical detail; the enforced limit is 500 characters per
-  language because Play is stricter than the App Store. A missing file, a stale
-  version line, or an oversized body fails closed. The Arabic file is required
-  only when the listing already carries an `ar-SA` localization.
+- **Store copy:** the lane reads `release/store-whats-new.en.txt` (published as
+  `en-US`) and `release/store-whats-new.ar.txt` (published as `ar-SA`) through
+  `scripts/release/store_whats_new.py`, which owns the file format, the release
+  binding, and the character limit for both stores; `release/README.md` states
+  that contract. The Arabic text is read only when the version carries an
+  `ar-SA` localization, and any other localization fails closed instead of
+  shipping English copy under it.
 - **Fail closed:** a contract version or build-number mismatch, a bundle or app
   id mismatch, an unexpected processing or version state, a version already
   released or in review, a previous version in `PENDING_DEVELOPER_RELEASE`,

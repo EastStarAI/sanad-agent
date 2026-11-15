@@ -5,6 +5,9 @@ Every test runs without a network, an App Store Connect key, or openssl. The
 transport, the downloader, the signer, the clock, and the sleeping function are
 all injected, so the assertions can cover the request order and prove that a
 refused input never wrote anything.
+
+Run from the repository root:
+  python3 -I scripts/release/test_appstore_submit.py
 """
 
 from __future__ import annotations
@@ -15,16 +18,20 @@ import io
 import json
 import os
 import plistlib
+import sys
 import tempfile
 import unittest
 import urllib.parse
 
-import appstore_submit as lane
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+import appstore_submit as lane  # noqa: E402
 
 VERSION = "1.0.27"
 BUILD = "27"
 APP_ID = "6794974223"
 BUNDLE_ID = "com.eaststarai.sanad"
+ARABIC_TEXT = "- إجابات مباشرة."
 
 
 def der_signature(r: int, s: int) -> bytes:
@@ -42,6 +49,18 @@ def der_signature(r: int, s: int) -> bytes:
 def fake_signer(_key: bytes, _signing_input: bytes) -> bytes:
     # An ES256 signature always fits in two 32-byte integers.
     return der_signature(1, 2)
+
+
+def counting_signer():
+    """A signer whose signature changes per mint, so tokens are distinguishable."""
+
+    minted = {"count": 0}
+
+    def sign(_key: bytes, _signing_input: bytes) -> bytes:
+        minted["count"] += 1
+        return der_signature(1, minted["count"] + 2)
+
+    return sign
 
 
 class FakeClock:
@@ -84,6 +103,24 @@ def localization_resource(resource_id, locale, whats_new=""):
     }
 
 
+def screenshot_resource(resource_id, set_id, file_name, with_asset=True):
+    attributes = {"fileName": file_name, "assetDeliveryState": {"state": "COMPLETE"}}
+    if with_asset:
+        attributes["imageAsset"] = {
+            "templateUrl": "https://assets.example/{w}x{h}.png",
+            "width": 1290,
+            "height": 2796,
+        }
+    return {
+        "id": resource_id,
+        "type": "appScreenshots",
+        "attributes": attributes,
+        "relationships": {
+            "appScreenshotSet": {"data": {"id": set_id, "type": "appScreenshotSets"}}
+        },
+    }
+
+
 class FakeAsc:
     """A small in-memory App Store Connect that records every request."""
 
@@ -95,8 +132,13 @@ class FakeAsc:
         review_details=None,
         screenshot_sets=None,
         submissions=None,
+        clock=None,
+        reject_expired_tokens=False,
+        asset_poll_states=None,
+        throttle_requests=0,
     ):
         self.calls = []
+        self.clock = clock or FakeClock()
         self.build_states = list(build_states)
         self.build = {
             "id": "build-27",
@@ -109,12 +151,19 @@ class FakeAsc:
             },
         }
         self.versions = versions if versions is not None else []
-        self.localizations = localizations or {}
-        self.review_details = review_details or {}
-        self.screenshot_sets = screenshot_sets or {}
+        self.localizations = localizations if localizations is not None else {}
+        self.review_details = review_details if review_details is not None else {}
+        self.screenshot_sets = screenshot_sets if screenshot_sets is not None else {}
         self.submissions = submissions or []
         self.build_attached = {}
         self.screenshot_uploads = []
+        self.reject_expired_tokens = reject_expired_tokens
+        self.asset_poll_states = list(asset_poll_states or [])
+        self.throttle_requests = throttle_requests
+        self.tokens = []
+        self.first_seen = {}
+        self.uploaded_shots = set()
+        self._set_locale = {}
         self._next = 0
 
     # -- helpers ---------------------------------------------------------
@@ -138,19 +187,35 @@ class FakeAsc:
             None,
         )
 
+    def _token_expired(self, headers):
+        value = headers.get("Authorization", "")
+        if not value.startswith("Bearer "):
+            return False
+        token = value.split(" ", 1)[1]
+        now = self.clock()
+        first = self.first_seen.setdefault(token, now)
+        if token not in self.tokens:
+            self.tokens.append(token)
+        return now - first > lane.TOKEN_LIFETIME_SECONDS - lane.TOKEN_REFRESH_MARGIN_SECONDS
+
     # -- transport -------------------------------------------------------
     def handle(self, method, url, headers, body):
         parsed = urllib.parse.urlparse(url)
         path = parsed.path
         payload = json.loads(body) if body and method != "PUT" else None
         self.calls.append((method, path, payload))
+        if method == "PUT":
+            self.screenshot_uploads.append(path)
+            return 200, b""
+        if self.throttle_requests > 0 and path.startswith("/v1/"):
+            self.throttle_requests -= 1
+            return 429, b'{"errors":[{"detail":"rate limited"}]}'
+        if self.reject_expired_tokens and self._token_expired(headers):
+            return 401, b'{"errors":[{"detail":"expired token"}]}'
         status, response = self.route(method, path, payload)
         return status, json.dumps(response).encode() if response is not None else b""
 
     def route(self, method, path, payload):
-        if method == "PUT":
-            self.screenshot_uploads.append(path)
-            return 200, None
         if path == "/v1/apps":
             return 200, {
                 "data": [
@@ -196,12 +261,9 @@ class FakeAsc:
             self.localizations.setdefault(version_id, []).append(created)
             return 201, {"data": created}
         if path.startswith("/v1/appStoreVersionLocalizations/"):
-            if path.endswith("/appScreenshotSets"):
-                localization_id = path.split("/")[3]
-                return 200, self.screenshot_sets.get(
-                    localization_id, {"data": [], "included": []}
-                )
             localization_id = path.split("/")[3]
+            if path.endswith("/appScreenshotSets"):
+                return 200, self._screenshot_payload(localization_id)
             for entries in self.localizations.values():
                 for entry in entries:
                     if entry["id"] == localization_id:
@@ -220,11 +282,43 @@ class FakeAsc:
         if path == "/v1/appStoreScreenshotSets":
             return 201, {"data": {"id": self._id("set"), "type": "appScreenshotSets"}}
         if path == "/v1/appScreenshotSets":
-            return 201, {"data": {"id": self._id("set"), "type": "appScreenshotSets"}}
+            localization_id = payload["data"]["relationships"][
+                "appStoreVersionLocalization"
+            ]["data"]["id"]
+            created = {
+                "id": self._id("set"),
+                "type": "appScreenshotSets",
+                "attributes": {
+                    "screenshotDisplayType": payload["data"]["attributes"][
+                        "screenshotDisplayType"
+                    ]
+                },
+                "relationships": {"appScreenshots": {"data": []}},
+            }
+            entry = self.screenshot_sets.setdefault(
+                localization_id, {"data": [], "included": []}
+            )
+            entry["data"].append(created)
+            self._set_locale[created["id"]] = localization_id
+            return 201, {"data": created}
         if path == "/v1/appScreenshots" and method == "POST":
+            set_id = payload["data"]["relationships"]["appScreenshotSet"]["data"]["id"]
+            shot_id = self._id("shot")
+            localization_id = self._set_locale.get(set_id)
+            if localization_id is not None:
+                entry = self.screenshot_sets.setdefault(
+                    localization_id, {"data": [], "included": []}
+                )
+                shot = screenshot_resource(
+                    shot_id,
+                    set_id,
+                    payload["data"]["attributes"].get("fileName") or "shot.png",
+                )
+                shot["attributes"]["assetDeliveryState"] = {"state": "AWAITING_UPLOAD"}
+                entry["included"].append(shot)
             return 201, {
                 "data": {
-                    "id": self._id("shot"),
+                    "id": shot_id,
                     "type": "appScreenshots",
                     "attributes": {
                         "uploadOperations": [
@@ -240,7 +334,9 @@ class FakeAsc:
                 }
             }
         if path.startswith("/v1/appScreenshots/"):
-            return 200, {"data": {"id": path.rsplit("/", 1)[-1], "type": "appScreenshots"}}
+            shot_id = path.rsplit("/", 1)[-1]
+            self.uploaded_shots.add(shot_id)
+            return 200, {"data": {"id": shot_id, "type": "appScreenshots"}}
         if path.endswith("/appStoreReviewDetail"):
             version_id = path.split("/")[3]
             detail = self.review_details.get(version_id)
@@ -258,7 +354,9 @@ class FakeAsc:
         if path.endswith("/reviewSubmissions"):
             return 200, {"data": [entry["resource"] for entry in self.submissions]}
         if path == "/v1/reviewSubmissionItems":
-            submission_id = payload["data"]["relationships"]["reviewSubmission"]["data"]["id"]
+            submission_id = payload["data"]["relationships"]["reviewSubmission"]["data"][
+                "id"
+            ]
             version_id = payload["data"]["relationships"]["appStoreVersion"]["data"]["id"]
             for entry in self.submissions:
                 if entry["resource"]["id"] == submission_id:
@@ -300,7 +398,7 @@ class FakeAsc:
         if "/appStoreVersions/" in path:
             version_id = path.split("/")[3]
             if method == "PATCH":
-                relationships = (payload["data"].get("relationships") or {})
+                relationships = payload["data"].get("relationships") or {}
                 if "build" in relationships:
                     self.build_attached[version_id] = relationships["build"]["data"]["id"]
                 attributes = payload["data"].get("attributes") or {}
@@ -320,77 +418,25 @@ class FakeAsc:
             return 404, {"errors": [{"detail": "unknown version"}]}
         return 404, {"errors": [{"detail": f"unhandled {method} {path}"}]}
 
-
-def released_listing():
-    return {
-        "released": [
-            localization_resource("src-en", "en-US"),
-            localization_resource("src-ar", "ar-SA"),
-        ]
-    }
-
-
-def fake_with_previous_release(**kwargs):
-    localizations = released_listing()
-    previous = version_resource("version-prev", "1.0.26")
-    localizations["version-prev"] = localizations.pop("released")
-    fake = FakeAsc(
-        versions=[previous],
-        localizations=localizations,
-        review_details={
-            "version-prev": {
-                "id": "detail-prev",
-                "type": "appStoreReviewDetails",
-                "attributes": {
-                    "contactFirstName": "Release",
-                    "contactLastName": "Owner",
-                    "contactEmail": "release@example.invalid",
-                    "contactPhone": "+10000000000",
-                    "demoAccountName": "reviewer",
-                    "demoAccountPassword": "super-secret-value",
-                    "demoAccountRequired": True,
-                    "notes": "Pair a local Agent before testing.",
-                },
-            }
-        },
-        screenshot_sets={
-            "src-en": {
-                "data": [
-                    {
-                        "id": "set-en",
-                        "type": "appScreenshotSets",
-                        "attributes": {"screenshotDisplayType": "APP_IPHONE_67"},
-                        "relationships": {
-                            "appScreenshots": {
-                                "data": [{"id": "shot-src", "type": "appScreenshots"}]
-                            }
-                        },
-                    }
-                ],
-                "included": [
-                    {
-                        "id": "shot-src",
-                        "type": "appScreenshots",
-                        "attributes": {
-                            "fileName": "home.png",
-                            "imageAsset": {
-                                "templateUrl": "https://assets.example/{w}x{h}.png",
-                                "width": 1290,
-                                "height": 2796,
-                            },
-                        },
-                        "relationships": {
-                            "appScreenshotSet": {
-                                "data": {"id": "set-en", "type": "appScreenshotSets"}
-                            }
-                        },
-                    }
-                ],
-            }
-        },
-        **kwargs,
-    )
-    return fake
+    def _screenshot_payload(self, localization_id):
+        entry = self.screenshot_sets.setdefault(
+            localization_id, {"data": [], "included": []}
+        )
+        if (
+            self.asset_poll_states
+            and entry["included"]
+            and any(shot["id"] in self.uploaded_shots for shot in entry["included"])
+        ):
+            state = self.asset_poll_states.pop(0)
+            for shot in entry["included"]:
+                shot["attributes"]["assetDeliveryState"] = {"state": state}
+            return entry
+        # Without an explicit queue, a screenshot is COMPLETE only once its bytes
+        # were marked uploaded, which mirrors App Store Connect's processing.
+        for shot in entry["included"]:
+            if shot["id"] in self.uploaded_shots:
+                shot["attributes"]["assetDeliveryState"] = {"state": "COMPLETE"}
+        return entry
 
 
 class LaneTest(unittest.TestCase):
@@ -398,11 +444,18 @@ class LaneTest(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.root = self.directory.name
-        self.write("release/release-contract.json", json.dumps({"version": VERSION, "build_number": 27}))
+        self.clock = FakeClock()
+        self.signer = counting_signer()
+        self.write(
+            "release/release-contract.json",
+            json.dumps({"version": VERSION, "build_number": 27}),
+        )
         with open(self.path("client/ios/Runner/Info.plist"), "wb") as handle:
             plistlib.dump({"ITSAppUsesNonExemptEncryption": False}, handle)
-        self.write("release/store-whats-new.en.txt", f"# {VERSION}\n\n- Live answers.\n")
-        self.write("release/store-whats-new.ar.txt", f"# {VERSION}\n\n- إجابات مباشرة.\n")
+        # The shared store text is owned by scripts/release/store_whats_new.py;
+        # these fixtures only mirror its on-disk format.
+        self.write("release/store-whats-new.en.txt", f"{VERSION}\n\n- Live answers.\n")
+        self.write("release/store-whats-new.ar.txt", f"{VERSION}\n\n{ARABIC_TEXT}\n")
         self.environment = {
             "APPLE_API_KEY_ID": "KEYID12345",
             "APPLE_API_ISSUER_ID": "issuer-uuid",
@@ -424,9 +477,9 @@ class LaneTest(unittest.TestCase):
             "--version", VERSION,
             "--build-number", BUILD,
             "--contract", self.path("release/release-contract.json"),
-            "--english-whats-new", self.path("release/store-whats-new.en.txt"),
-            "--arabic-whats-new", self.path("release/store-whats-new.ar.txt"),
+            "--store-copy-directory", os.path.join(self.root, "release"),
             "--info-plist", self.path("client/ios/Runner/Info.plist"),
+            "--bundle-id", BUNDLE_ID,
             "--expect-app-id", APP_ID,
             *extra,
         ]
@@ -434,8 +487,9 @@ class LaneTest(unittest.TestCase):
             argv.append("--dry-run")
         return lane.parse_args(argv)
 
-    def run_lane(self, fake, args=None, clock=None, download=lambda url: b"PNG!"):
-        clock = clock or FakeClock()
+    def run_lane(self, fake, args=None, clock=None, download=lambda url: b"PNG!", signer=None):
+        clock = clock or self.clock
+        signer = signer or self.signer
         output = io.StringIO()
         saved = dict(os.environ)
         os.environ.update(self.environment)
@@ -445,7 +499,7 @@ class LaneTest(unittest.TestCase):
                     args or self.args(),
                     transport=fake.handle,
                     download=download,
-                    signer=fake_signer,
+                    signer=signer,
                     sleep=clock.sleep,
                     clock=clock,
                 )
@@ -455,12 +509,68 @@ class LaneTest(unittest.TestCase):
         return output.getvalue()
 
     def assert_refused(self, fake=None, args=None, message="", **kwargs):
-        fake = fake or FakeAsc()
+        fake = fake or FakeAsc(clock=self.clock)
         with self.assertRaises(lane.SubmitError) as caught:
             self.run_lane(fake, args=args, **kwargs)
         if message:
             self.assertIn(message, str(caught.exception))
         return fake, caught.exception
+
+    def fake_with_previous_release(self, **kwargs):
+        """A released 1.0.26 listing with localizations, review detail, and shots."""
+        source_shots = [
+            screenshot_resource("shot-a", "set-en", "home.png"),
+            screenshot_resource("shot-b", "set-en", "chat.png"),
+        ]
+        localizations = {
+            "version-prev": [
+                localization_resource("src-en", "en-US"),
+                localization_resource("src-ar", "ar-SA"),
+            ]
+        }
+        defaults = {
+            "versions": [version_resource("version-prev", "1.0.26")],
+            "localizations": localizations,
+            "review_details": {
+                "version-prev": {
+                    "id": "detail-prev",
+                    "type": "appStoreReviewDetails",
+                    "attributes": {
+                        "contactFirstName": "Release",
+                        "contactLastName": "Owner",
+                        "contactEmail": "release@example.invalid",
+                        "contactPhone": "+10000000000",
+                        "demoAccountName": "reviewer",
+                        "demoAccountPassword": "super-secret-value",
+                        "demoAccountRequired": True,
+                        "notes": "Pair a local Agent before testing.",
+                    },
+                }
+            },
+            "screenshot_sets": {
+                "src-en": {
+                    "data": [
+                        {
+                            "id": "set-en",
+                            "type": "appScreenshotSets",
+                            "attributes": {"screenshotDisplayType": "APP_IPHONE_67"},
+                            "relationships": {
+                                "appScreenshots": {
+                                    "data": [
+                                        {"id": shot["id"], "type": "appScreenshots"}
+                                        for shot in source_shots
+                                    ]
+                                }
+                            },
+                        }
+                    ],
+                    "included": source_shots,
+                }
+            },
+        }
+        defaults["clock"] = self.clock
+        defaults.update(kwargs)
+        return FakeAsc(**defaults)
 
 
 class TokenTest(LaneTest):
@@ -488,86 +598,89 @@ class TokenTest(LaneTest):
 
 
 class StoreCopyTest(LaneTest):
-    def test_missing_and_stale_copy_is_refused(self):
-        with self.assertRaises(lane.SubmitError):
-            lane.read_store_whats_new(self.path("release/absent.txt"), VERSION, "en-US")
-        self.write("release/stale.txt", "# 1.0.26\n\n- Old.\n")
-        with self.assertRaises(lane.SubmitError) as caught:
-            lane.read_store_whats_new(self.path("release/stale.txt"), VERSION, "en-US")
-        self.assertIn("1.0.26", str(caught.exception))
+    def test_arabic_is_required_only_when_the_listing_carries_it(self):
+        os.unlink(self.path("release/store-whats-new.ar.txt"))
+        fake = self.fake_with_previous_release()
+        fake.localizations["version-prev"] = [localization_resource("src-en", "en-US")]
+        output = self.run_lane(fake)
+        self.assertIn("WAITING_FOR_REVIEW", output)
 
-    def test_copy_without_version_header_is_refused(self):
-        self.write("release/headerless.txt", "- Bullet only.\n")
-        with self.assertRaises(lane.SubmitError):
-            lane.read_store_whats_new(self.path("release/headerless.txt"), VERSION, "en-US")
+    def test_missing_arabic_refuses_an_arabic_listing(self):
+        os.unlink(self.path("release/store-whats-new.ar.txt"))
+        fake = self.fake_with_previous_release()
+        self.assert_refused(fake, message="store-whats-new.ar.txt")
+        self.assertEqual(fake.mutations(), [])
 
-    def test_copy_over_the_shared_store_limit_is_refused(self):
-        self.write("release/long.txt", f"# {VERSION}\n\n- {'x' * 501}\n")
-        with self.assertRaises(lane.SubmitError) as caught:
-            lane.read_store_whats_new(self.path("release/long.txt"), VERSION, "en-US")
-        self.assertIn("500", str(caught.exception))
-
-    def test_arabic_is_optional_until_the_listing_needs_it(self):
-        english = self.args()
-        copy = lane.StoreCopy(
-            english.english_whats_new, self.path("release/absent.ar.txt"), VERSION
-        )
-        self.assertEqual(copy.for_locale("en-US"), "- Live answers.")
-        with self.assertRaises(lane.SubmitError) as caught:
-            copy.for_locale("ar-SA")
-        self.assertIn("ar-SA", str(caught.exception))
-
-    def test_unknown_locale_is_refused(self):
-        copy = lane.StoreCopy(
-            self.args().english_whats_new, self.args().arabic_whats_new, VERSION
-        )
-        with self.assertRaises(lane.SubmitError) as caught:
-            copy.for_locale("fr-FR")
-        self.assertIn("fr-FR", str(caught.exception))
+    def test_unknown_localization_is_refused(self):
+        fake = self.fake_with_previous_release()
+        fake.localizations["version-prev"].append(localization_resource("src-fr", "fr-FR"))
+        self.assert_refused(fake, message="fr-FR")
+        self.assertEqual(fake.mutations(), [])
 
 
 class BuildTest(LaneTest):
     def test_build_processing_is_polled_until_valid(self):
-        fake = fake_with_previous_release(build_states=("PROCESSING", "PROCESSING", "VALID"))
+        fake = self.fake_with_previous_release(
+            build_states=("PROCESSING", "PROCESSING", "VALID")
+        )
         output = self.run_lane(fake)
         self.assertIn(f"Build {BUILD} is VALID", output)
-        self.assertIn("WAITING_FOR_REVIEW", output)
         polls = [call for call in fake.calls if call[1] == "/v1/builds"]
         self.assertEqual(len(polls), 3)
 
     def test_invalid_build_is_refused(self):
-        fake = fake_with_previous_release(build_states=("INVALID",))
+        fake = self.fake_with_previous_release(build_states=("INVALID",))
         self.assert_refused(fake, message="INVALID")
 
     def test_processing_timeout_is_refused(self):
-        fake = fake_with_previous_release(build_states=("PROCESSING",))
-        clock = FakeClock()
+        fake = self.fake_with_previous_release(build_states=("PROCESSING",))
         self.assert_refused(
             fake,
             args=self.args("--processing-timeout-seconds", "60"),
-            clock=clock,
             message="did not finish processing",
         )
         self.assertEqual(fake.mutations(), [])
 
     def test_app_id_drift_is_refused(self):
-        fake = FakeAsc()
+        fake = self.fake_with_previous_release()
         self.assert_refused(
             fake,
             args=self.args("--expect-app-id", "1111111111"),
             message="app id drift",
         )
 
+    def test_throttled_request_is_retried(self):
+        fake = self.fake_with_previous_release(throttle_requests=1)
+        output = self.run_lane(fake)
+        self.assertIn("WAITING_FOR_REVIEW", output)
+        app_calls = [call for call in fake.calls if call[1] == "/v1/apps"]
+        self.assertEqual(len(app_calls), 2)
+
+
+class TokenRefreshTest(LaneTest):
+    def test_long_wait_never_presents_an_expired_token(self):
+        # ~18.75 minutes of build processing: far past one token's lifetime.
+        fake = self.fake_with_previous_release(
+            build_states=tuple(["PROCESSING"] * 20 + ["VALID"]),
+            reject_expired_tokens=True,
+        )
+        output = self.run_lane(fake)
+        self.assertIn("WAITING_FOR_REVIEW", output)
+        self.assertGreaterEqual(len(fake.tokens), 2)
+
 
 class ContractTest(LaneTest):
     def test_version_mismatch_is_refused_before_any_write(self):
-        fake = FakeAsc()
+        fake = self.fake_with_previous_release()
         wrong = lane.parse_args(
             [
                 "--version", "1.0.28",
                 "--build-number", BUILD,
                 "--contract", self.path("release/release-contract.json"),
+                "--store-copy-directory", os.path.join(self.root, "release"),
                 "--info-plist", self.path("client/ios/Runner/Info.plist"),
+                "--bundle-id", BUNDLE_ID,
+                "--expect-app-id", APP_ID,
             ]
         )
         self.assert_refused(fake, args=wrong, message="release contract declares")
@@ -579,7 +692,10 @@ class ContractTest(LaneTest):
                 "--version", VERSION,
                 "--build-number", "28",
                 "--contract", self.path("release/release-contract.json"),
+                "--store-copy-directory", os.path.join(self.root, "release"),
                 "--info-plist", self.path("client/ios/Runner/Info.plist"),
+                "--bundle-id", BUNDLE_ID,
+                "--expect-app-id", APP_ID,
             ]
         )
         self.assert_refused(args=wrong, message="release contract declares")
@@ -594,19 +710,19 @@ class ContractTest(LaneTest):
 
     def test_store_copy_is_required(self):
         os.unlink(self.path("release/store-whats-new.en.txt"))
-        self.assert_refused(message="Missing en-US store copy")
+        self.assert_refused(self.fake_with_previous_release(), message="Missing store text")
 
 
 class SubmissionTest(LaneTest):
     def test_full_submission_reaches_waiting_for_review(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         output = self.run_lane(fake)
         self.assertIn("WAITING_FOR_REVIEW", output)
         created = fake.version(VERSION)
         self.assertIsNotNone(created)
         self.assertEqual(created["attributes"]["appStoreState"], "WAITING_FOR_REVIEW")
         self.assertEqual(fake.build_attached[created["id"]], "build-27")
-        self.assertEqual(len(fake.screenshot_uploads), 1)
+        self.assertEqual(len(fake.screenshot_uploads), 2)
         locales = {entry["attributes"]["locale"] for entry in fake.localizations[created["id"]]}
         self.assertEqual(locales, {"en-US", "ar-SA"})
         arabic = next(
@@ -614,25 +730,44 @@ class SubmissionTest(LaneTest):
             for entry in fake.localizations[created["id"]]
             if entry["attributes"]["locale"] == "ar-SA"
         )
-        self.assertEqual(arabic["attributes"]["whatsNew"], "- إجابات مباشرة.")
+        self.assertEqual(arabic["attributes"]["whatsNew"], ARABIC_TEXT)
         submitted = [
-            call
-            for call in fake.calls
-            if call[0] == "PATCH" and "reviewSubmissions/" in call[1]
+            call for call in fake.calls if call[0] == "PATCH" and "reviewSubmissions/" in call[1]
         ]
         self.assertEqual(submitted[0][2]["data"]["attributes"]["submitted"], True)
-        # Nothing technical from the release notes may reach the store copy.
-        self.assertNotIn("release-notes", json.dumps([call[2] for call in fake.calls if call[2]]))
+
+    def test_screenshot_processing_is_awaited_before_submitting(self):
+        fake = self.fake_with_previous_release(
+            asset_poll_states=("UPLOAD_COMPLETE", "COMPLETE")
+        )
+        output = self.run_lane(fake)
+        self.assertIn("2/2 complete", output)
+        states = [call for call in fake.calls if call[1].endswith("/appScreenshotSets")]
+        self.assertGreaterEqual(len(states), 2)
+
+    def test_screenshot_processing_timeout_is_refused(self):
+        fake = self.fake_with_previous_release(
+            asset_poll_states=("UPLOAD_COMPLETE", "UPLOAD_COMPLETE", "UPLOAD_COMPLETE")
+        )
+        self.assert_refused(
+            fake,
+            args=self.args("--processing-timeout-seconds", "30"),
+            message="still processing",
+        )
+
+    def test_failed_screenshot_processing_is_refused(self):
+        fake = self.fake_with_previous_release(asset_poll_states=("FAILED",))
+        self.assert_refused(fake, message="failed to process a screenshot")
 
     def test_secrets_never_reach_the_log(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         output = self.run_lane(fake)
         self.assertNotIn("super-secret-value", output)
         self.assertNotIn(self.environment["APPLE_API_KEY_BASE64"], output)
         self.assertNotIn("Bearer", output)
 
     def test_second_run_is_idempotent(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         self.run_lane(fake)
         after_first = len(fake.mutations())
         output = self.run_lane(fake)
@@ -640,15 +775,14 @@ class SubmissionTest(LaneTest):
         self.assertIn("already WAITING_FOR_REVIEW", output)
 
     def test_dry_run_writes_nothing(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         output = self.run_lane(fake, args=self.args(dry_run=True))
         self.assertEqual(fake.mutations(), [])
         self.assertIn("Dry run", output)
 
     def test_dry_run_on_an_existing_version_writes_nothing(self):
-        fake = fake_with_previous_release()
-        target = version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION")
-        fake.versions.append(target)
+        fake = self.fake_with_previous_release()
+        fake.versions.append(version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION"))
         fake.localizations["version-target"] = [
             localization_resource("target-en", "en-US"),
             localization_resource("target-ar", "ar-SA"),
@@ -658,22 +792,39 @@ class SubmissionTest(LaneTest):
         self.assertEqual(fake.submissions, [])
         self.assertIn("Dry run", output)
 
-    def test_pending_developer_release_blocks_the_lane(self):
-        fake = FakeAsc(
-            versions=[version_resource("version-prev", "1.0.26", "PENDING_DEVELOPER_RELEASE")]
-        )
+    def test_dry_run_proves_the_review_detail_is_copyable(self):
+        fake = self.fake_with_previous_release(review_details={})
         self.assert_refused(
-            fake, message="PENDING_DEVELOPER_RELEASE"
+            fake, args=self.args(dry_run=True), message="no App Store review detail"
         )
         self.assertEqual(fake.mutations(), [])
 
+    def test_dry_run_proves_the_screenshots_are_copyable(self):
+        fake = self.fake_with_previous_release()
+        fake.screenshot_sets["src-en"]["included"][0]["attributes"].pop("imageAsset")
+        self.assert_refused(
+            fake, args=self.args(dry_run=True), message="no downloadable image asset"
+        )
+        self.assertEqual(fake.mutations(), [])
+
+    def test_pending_developer_release_blocks_the_lane(self):
+        fake = FakeAsc(
+            clock=self.clock,
+            versions=[version_resource("version-prev", "1.0.26", "PENDING_DEVELOPER_RELEASE")],
+        )
+        self.assert_refused(fake, message="PENDING_DEVELOPER_RELEASE")
+        self.assertEqual(fake.mutations(), [])
+
     def test_previous_version_in_review_blocks_the_lane(self):
-        fake = FakeAsc(versions=[version_resource("version-prev", "1.0.26", "IN_REVIEW")])
+        fake = FakeAsc(
+            clock=self.clock,
+            versions=[version_resource("version-prev", "1.0.26", "IN_REVIEW")],
+        )
         self.assert_refused(fake, message="one submission")
         self.assertEqual(fake.mutations(), [])
 
     def test_another_version_in_review_submission_blocks_the_lane(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         fake.submissions.append(
             {
                 "resource": {
@@ -687,8 +838,27 @@ class SubmissionTest(LaneTest):
         self.assert_refused(fake, message="one submission")
         self.assertEqual([call for call in fake.calls if call[0] != "GET"], [])
 
+    def test_unresolved_issues_submission_is_refused(self):
+        fake = self.fake_with_previous_release()
+        fake.versions.append(version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION"))
+        fake.localizations["version-target"] = [
+            localization_resource("target-en", "en-US"),
+            localization_resource("target-ar", "ar-SA"),
+        ]
+        fake.submissions.append(
+            {
+                "resource": {
+                    "id": "submission-stuck",
+                    "type": "reviewSubmissions",
+                    "attributes": {"state": "UNRESOLVED_ISSUES", "submitted": True},
+                },
+                "items": ["version-target"],
+            }
+        )
+        self.assert_refused(fake, message="unresolved issues")
+
     def test_existing_version_is_reused(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         fake.versions.append(version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION"))
         fake.localizations["version-target"] = [
             localization_resource("target-en", "en-US"),
@@ -698,8 +868,76 @@ class SubmissionTest(LaneTest):
         self.assertEqual(fake.find("POST", "/v1/appStoreVersions"), [])
         self.assertEqual(fake.version(VERSION)["attributes"]["appStoreState"], "WAITING_FOR_REVIEW")
 
+    def test_ready_for_review_version_is_accepted(self):
+        fake = self.fake_with_previous_release()
+        fake.versions.append(version_resource("version-target", VERSION, "READY_FOR_REVIEW"))
+        fake.localizations["version-target"] = [
+            localization_resource("target-en", "en-US"),
+            localization_resource("target-ar", "ar-SA"),
+        ]
+        fake.build_attached["version-target"] = "build-27"
+        fake.screenshot_sets["target-en"] = {
+            "data": [
+                {
+                    "id": "target-set",
+                    "type": "appScreenshotSets",
+                    "attributes": {"screenshotDisplayType": "APP_IPHONE_67"},
+                    "relationships": {
+                        "appScreenshots": {
+                            "data": [
+                                {"id": "target-shot-a", "type": "appScreenshots"},
+                                {"id": "target-shot-b", "type": "appScreenshots"},
+                            ]
+                        }
+                    },
+                }
+            ],
+            "included": [
+                screenshot_resource("target-shot-a", "target-set", "home.png"),
+                screenshot_resource("target-shot-b", "target-set", "chat.png"),
+            ],
+        }
+        output = self.run_lane(fake)
+        self.assertIn("WAITING_FOR_REVIEW", output)
+
+    def test_target_only_arabic_localization_gets_store_text(self):
+        fake = self.fake_with_previous_release()
+        fake.localizations["version-prev"] = [localization_resource("src-en", "en-US")]
+        fake.versions.append(version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION"))
+        fake.localizations["version-target"] = [
+            localization_resource("target-en", "en-US"),
+            localization_resource("target-ar", "ar-SA"),
+        ]
+        self.run_lane(fake)
+        arabic = next(
+            entry
+            for entry in fake.localizations["version-target"]
+            if entry["attributes"]["locale"] == "ar-SA"
+        )
+        self.assertEqual(arabic["attributes"]["whatsNew"], ARABIC_TEXT)
+
+    def test_half_copied_screenshot_set_is_refused(self):
+        fake = self.fake_with_previous_release()
+        fake.versions.append(version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION"))
+        fake.localizations["version-target"] = [
+            localization_resource("target-en", "en-US"),
+            localization_resource("target-ar", "ar-SA"),
+        ]
+        fake.screenshot_sets["target-en"] = {
+            "data": [
+                {
+                    "id": "target-set",
+                    "type": "appScreenshotSets",
+                    "attributes": {"screenshotDisplayType": "APP_IPHONE_67"},
+                    "relationships": {"appScreenshots": {"data": []}},
+                }
+            ],
+            "included": [screenshot_resource("target-shot-a", "target-set", "home.png")],
+        }
+        self.assert_refused(fake, message="holds 1 of the 2 screenshots")
+
     def test_draft_submission_is_reused(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         fake.submissions.append(
             {
                 "resource": {
@@ -715,12 +953,12 @@ class SubmissionTest(LaneTest):
         self.assertIn("submission-draft", output)
 
     def test_missing_store_metadata_source_is_refused(self):
-        fake = FakeAsc()  # no released version and no localizations anywhere
+        fake = FakeAsc(clock=self.clock)  # no released version and no localizations
         self.assert_refused(fake, message="no localizations")
         self.assertEqual(fake.mutations(), [])
 
     def test_release_type_is_moved_to_after_approval(self):
-        fake = fake_with_previous_release()
+        fake = self.fake_with_previous_release()
         target = version_resource("version-target", VERSION, "PREPARE_FOR_SUBMISSION")
         target["attributes"]["releaseType"] = "MANUAL"
         fake.versions.append(target)
@@ -728,6 +966,20 @@ class SubmissionTest(LaneTest):
             localization_resource("target-en", "en-US"),
             localization_resource("target-ar", "ar-SA"),
         ]
+        fake.screenshot_sets["target-en"] = {
+            "data": [
+                {
+                    "id": "target-set",
+                    "type": "appScreenshotSets",
+                    "attributes": {"screenshotDisplayType": "APP_IPHONE_67"},
+                    "relationships": {"appScreenshots": {"data": []}},
+                }
+            ],
+            "included": [
+                screenshot_resource("target-shot-a", "target-set", "home.png"),
+                screenshot_resource("target-shot-b", "target-set", "chat.png"),
+            ],
+        }
         self.run_lane(fake)
         releases = [
             call

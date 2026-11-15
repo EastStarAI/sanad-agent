@@ -32,7 +32,8 @@ on:
         default: '1800'
         type: string
   # Callable so the release workflow can reuse a proven lane without duplicating
-  # the submission contract.
+  # the submission contract. The caller passes the App Store Connect secret set
+  # explicitly (or with `secrets: inherit`); nothing is reached implicitly.
   workflow_call:
     inputs:
       version:
@@ -49,6 +50,13 @@ on:
         required: false
         default: '1800'
         type: string
+    secrets:
+      APPLE_API_KEY_ID:
+        required: true
+      APPLE_API_ISSUER_ID:
+        required: true
+      APPLE_API_PRIVATE_KEY_P8_BASE64:
+        required: true
 
 permissions:
   contents: read
@@ -63,9 +71,13 @@ env:
 
 jobs:
   submit:
-    # The App Store Connect key belongs to this repository's protected
-    # Environment; a fork or any other caller can never reach the lane.
-    if: github.repository == 'EastStarAI/sanad-agent'
+    # Two guards, because this lane holds a key that can now publish: the
+    # repository, and the ref. `workflow_dispatch` runs the workflow file from any
+    # branch that contains it, so only `main` or a release tag may reach the
+    # `apple-testflight` Environment. A fork or another ref can never reach it.
+    if: >-
+      github.repository == 'EastStarAI/sanad-agent' &&
+      (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment: apple-testflight
@@ -100,6 +112,12 @@ jobs:
           fi
           if [[ ! "$PROCESSING_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::processing_timeout_seconds must be a positive integer, got '$PROCESSING_TIMEOUT_SECONDS'."
+            exit 1
+          fi
+          # The job is capped at 45 minutes; a larger wait would be SIGKILLed
+          # mid-run instead of failing with a readable message.
+          if (( PROCESSING_TIMEOUT_SECONDS > 2400 )); then
+            echo "::error::processing_timeout_seconds must not exceed 2400 (the job timeout is 45 minutes)."
             exit 1
           fi
           echo "Requested Sanad $contract_version ($contract_build); submit: $SUBMIT_FOR_REVIEW."

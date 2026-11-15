@@ -84,6 +84,37 @@ class StoreText(unittest.TestCase):
         self.assertEqual(notes[0]["text"], text)
 
 
+class AppStoreText(unittest.TestCase):
+    """The App Store lane reads the shared files through the same validator."""
+
+    def setUp(self) -> None:
+        self.work = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, self.work)
+        for locale, text in (("en", "One fix."), ("ar", "إصلاح أول.")):
+            with open(
+                os.path.join(self.work, f"store-whats-new.{locale}.txt"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                handle.write(f"1.0.27\n\n- {text}\n")
+
+    def test_language_codes_map_to_app_store_localizations(self) -> None:
+        self.assertEqual(
+            store_whats_new.app_store_text(self.work, "1.0.27", "en-US"), "- One fix."
+        )
+        self.assertEqual(
+            store_whats_new.app_store_text(self.work, "1.0.27", "ar-SA"), "- إصلاح أول."
+        )
+
+    def test_uncovered_localization_is_refused(self) -> None:
+        with self.assertRaises(store_whats_new.StoreNotesError):
+            store_whats_new.app_store_text(self.work, "1.0.27", "fr-FR")
+
+    def test_stale_version_is_refused_for_the_app_store(self) -> None:
+        with self.assertRaises(store_whats_new.StoreNotesError):
+            store_whats_new.app_store_text(self.work, "1.0.28", "en-US")
+
+
 class RepositoryStoreText(unittest.TestCase):
     """The text committed for this release satisfies the lane it feeds."""
 

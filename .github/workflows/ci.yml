@@ -1138,7 +1138,6 @@ jobs:
           scripts/release/test_generate_client_download_redirects.sh
           scripts/release/test_deploy_production_asset.sh
           scripts/release/test_verify_metadata_release_diff.sh
-          python3 scripts/release/test_appstore_submit.py
           scripts/release/test_promote_release_candidate.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
@@ -1148,16 +1147,23 @@ jobs:
           # The Play lane is callable, so its caller-supplied inputs are proven
           # inside the workflow: both jobs stay repository-bound, and the publish
           # step re-validates the track set the called path cannot constrain.
-          test "$(grep -Fc "github.repository == 'EastStarAI/sanad-agent'" .github/workflows/play-upload.yml)" -ge 2
+          test "$(grep -Fc \"github.repository == 'EastStarAI/sanad-agent'\" .github/workflows/play-upload.yml)" -ge 2
           grep -F '^(internal|alpha|beta|production)$' .github/workflows/play-upload.yml
-      - name: Verify the Play upload helper and its unit tests
+          # The App Store lane can publish without further approval, so its ref
+          # guard and its callable secret contract are proven here as well.
+          grep -F "github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')" .github/workflows/appstore-submit.yml
+          test "$(grep -Fc 'APPLE_API_KEY_ID:' .github/workflows/appstore-submit.yml)" -eq 2
+          grep -F 'releaseType": "AFTER_APPROVAL"' scripts/release/appstore_submit.py
+      - name: Verify the store lanes and their unit tests
         if: needs.classify.outputs.release == 'true'
         shell: bash
         run: |
           python3 -I -m py_compile scripts/release/publish_play_bundle.py
           python3 -I -m py_compile scripts/release/store_whats_new.py
+          python3 -I -m py_compile scripts/release/appstore_submit.py
           python3 -I scripts/release/test_store_whats_new.py
           python3 -I scripts/release/test_publish_play_bundle.py
+          python3 -I scripts/release/test_appstore_submit.py
       - name: Verify the signed App Bundle guards
         if: needs.classify.outputs.release == 'true'
         working-directory: client

@@ -31,8 +31,13 @@ PLAY_LIMIT = 500
 APP_STORE_LIMIT = 4000
 LIMITS = {"play": PLAY_LIMIT, "app-store": APP_STORE_LIMIT}
 
-# (file locale, store language code)
+# (file locale, store language code) per publishing target. The two stores share
+# one file per language, so only the language codes differ.
 LOCALES = (("en", "en-US"), ("ar", "ar"))
+APP_STORE_LOCALES = (("en", "en-US"), ("ar", "ar-SA"))
+# The files are shared, so the tighter Play limit is the only one both lanes can
+# satisfy; the App Store limit is recorded for the model, not for enforcement.
+SHARED_LIMIT = PLAY_LIMIT
 
 
 class StoreNotesError(RuntimeError):
@@ -75,6 +80,25 @@ def release_notes(directory: str, version: str, limit: int = PLAY_LIMIT) -> list
         {"language": language, "text": read_text(directory, version, locale, limit)}
         for locale, language in LOCALES
     ]
+
+
+def app_store_text(directory: str, version: str, language: str) -> str:
+    """Return the shared store text for one App Store localization.
+
+    The App Store lane reads the same per-language files as the Play lane, so one
+    release cannot publish two different stories. Only the language code differs
+    (`ar` is published as `ar-SA`), and a localization this lane does not cover
+    is refused instead of shipping English copy under another locale.
+    """
+    for locale, store_language in APP_STORE_LOCALES:
+        if store_language == language:
+            return read_text(directory, version, locale, SHARED_LIMIT)
+    raise StoreNotesError(
+        f"The App Store listing uses the '{language}' localization, but the shared"
+        " store text covers"
+        f" {', '.join(code for _, code in APP_STORE_LOCALES)} only; extend"
+        " scripts/release/store_whats_new.py before releasing that locale"
+    )
 
 
 def main() -> int:
