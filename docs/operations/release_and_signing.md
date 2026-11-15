@@ -451,10 +451,11 @@ proving the publisher.
 | `apple-testflight` | Apple Distribution export, optional Internal TestFlight upload, and App Store submission |
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
+| `google-play-publishing` | Google Play Developer API upload to a testing or production track |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
 | `client-downloads-production` | Restricted Production deployment of Stable Client redirects, Web, Appcast, and canonical installer sources |
 
-Signing Environments keep signing secrets isolated and accept deployments only from their exact custom release refs, but they do not require a human reviewer. The one human release decision belongs to `release-publication`, which requires the repository owner after the complete signed candidate, metadata, checksums, SBOM, attestations, and private Draft exist. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; that Environment remains non-interactive and tag-restricted so the already approved Stable release can deploy aliases and Production assets without a second approval. Separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
+Signing Environments keep signing secrets isolated and accept deployments only from their exact custom release refs, but they do not require a human reviewer. The one human release decision belongs to `release-publication`, which requires the repository owner after the complete signed candidate, metadata, checksums, SBOM, attestations, and private Draft exist. The release owner may additionally add required reviewers to any signing Environment outside Git; that remains an optional protection and no workflow depends on it. `release-build` has no signing responsibility. Repository secret scanning and push protection are enabled. Signing secrets were transferred directly from the validated local signing store to their owning Environments without exposing values in Git, logs, or durable temporary files. The restricted SSH deployment credential set belongs only to `client-downloads-production`; that Environment remains non-interactive and tag-restricted so the already approved Stable release can deploy aliases and Production assets without a second approval. Separate per-surface Environment names must not be introduced without provisioning and protecting them first. Fork, pull-request, and Dependabot workflows remain read-only and cannot trigger the tag/manual release workflow or enter protected environments.
 
 ## Secret inventory
 
@@ -469,6 +470,7 @@ unprotected artifacts.
 | `IOS_APP_STORE_PROFILE_BASE64` | `com.eaststarai.sanad` App Store profile | NanoSoft LY LLC; regenerate when certificate, entitlement, or App ID changes |
 | `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` | Future Windows Authenticode signed-only transition | Release owner; not yet available and not required while the temporary unsigned policy is active |
 | `ANDROID_KEYSTORE_BASE64` / passwords / `ANDROID_KEY_ALIAS` | Android APK/AAB signing | Release owner; retain encrypted recovery copy for the lifetime of the package ID |
+| `PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Google Play Developer API uploads of the signed AAB | Release owner; service account `sanad-play-publisher` with testing-track uploads and the Play release-to-production permission used only by the explicit Play upload dispatch; revoke and replace its JSON key on compromise |
 | `SPARKLE_ED25519_PRIVATE_KEY_BASE64` | macOS update signatures | Release owner; rotate only with a documented public-key transition |
 | `WINSPARKLE_DSA_PRIVATE_KEY_BASE64` | Windows update signatures | Release owner; rotate only with a documented public-key transition |
 | `DEPLOY_SSH_PRIVATE_KEY` / host / user / known-hosts | Web, Appcast, and installer deployment | Server operator; dedicated restricted account and pinned host key |
@@ -538,14 +540,90 @@ Client.
   never reused. A rejected or superseded upload still consumes its
   `versionCode`, so the pubspec build number always moves forward.
 - **Promotion:** internal test track first, then closed testing, then the
-  production track with a staged rollout. Each promotion to production requires
-  explicit owner approval; no workflow may promote to production on its own.
+  production track with a staged rollout. Production is reached by a dispatch of
+  the Play upload lane, or by the release pipeline calling that same lane for a
+  specific release; it is never a side effect of a testing upload, and the
+  service account's production release permission is used only by that lane.
 - **Publication scope:** the AAB is a build output and handoff artifact only. It
   is not attached to public releases and is not a user install source.
-- **Automation:** uploading from CI is permitted only as an approval-gated job
-  that enters a protected Environment holding the Play service-account
-  credential. Automatic production publishing is not part of the release
-  contract.
+- **Automation:** uploading from CI is permitted only as a job that enters a
+  protected Environment holding the Play service-account credential. Publication
+  is unattended, and each production upload carries the staged rollout fraction it
+  was dispatched or called with; no workflow publishes to production as an
+  unreviewed side effect of another job.
+
+### Play upload lane
+
+`.github/workflows/play-upload.yml` is the store lane. It is dispatchable
+(`workflow_dispatch`) and callable (`workflow_call`), and both jobs are restricted
+to `EastStarAI/sanad-agent` so a foreign caller cannot enter the signing or Play
+Environments through the reusable entry point. It accepts an explicit
+`build_number`, an optional `build_name`, a `track`, a `status`, and a
+`rollout_fraction`. Every input reaches the shell through `env:` and is
+re-validated in the step that uses it, because a called workflow receives
+free-form strings instead of a choice menu.
+
+`track` is one of `internal`, `alpha`, `beta`, or `production`.
+
+- **Testing tracks:** `status: auto` resolves to `completed` on `internal` and
+  `draft` on `alpha` and `beta`, so a closed-testing upload is never published by
+  default. A different status may be chosen explicitly.
+- **Production:** `rollout_fraction` decides the release. A fraction below `1`
+  stages an `inProgress` release with that `userFraction`; exactly `1` publishes
+  a `completed` release. `status` must stay `auto` on this track, so a production
+  upload always carries the staged rollout the operator chose.
+
+The build job resolves the identity from `release/release-contract.json`. An
+empty `build_name` is accepted only when `build_number` equals the contract build
+number; any other manual build number is refused, because it would record a
+permanent store release such as `1.0.23 (27)` under the contract version without
+that version ever being released. Bump the contract first, or pass `build_name`
+explicitly.
+
+`client/release/android/build_signed_aab.sh` owns the Android binary for this
+lane: it pins `--build-name`/`--build-number` to the contracted identity, refuses
+a missing `android/key.properties` and a non-positive build number, proves the
+`applicationId`, and verifies package, version name, version code, and signature
+on the universal APK built from the same sources. The release workflow still
+builds its own APK and AAB inline without those checks and migrates to this
+script next, so two producers exist until that migration lands.
+
+`scripts/release/publish_play_bundle.py` opens one edit, uploads the bundle,
+refuses to commit when the accepted `versionCode` differs from the contracted
+one, and only then updates the track. Existing releases on the target track are
+read first: completed releases that do not carry the incoming `versionCode` are
+kept, so an upload never drops the previously available version. Play permits one
+active release per track, so an existing `draft` or `inProgress` release that
+cannot be kept is reported on stderr and replaced rather than removed silently.
+After the commit the tool re-reads the tracks and fails unless the target track
+carries the expected `versionCode`. Transport failures, timeouts, HTTP errors,
+unusable bodies, and a failed discard all stay inside the same error path, so
+every failure discards the edit instead of leaving it open. The lane creates no
+tag and no GitHub Release.
+
+Store publication is unattended: the lane runs to completion without a human
+approval step. The release owner may optionally add required reviewers to
+`google-play-publishing` outside Git, which changes no part of this workflow.
+
+Every store release carries the curated `release/store-whats-new.en.txt` and
+`release/store-whats-new.ar.txt` text as its `releaseNotes` for `en-US` and `ar`.
+The files are shared with the App Store listing, must name the built version on
+their first line, and must stay within the Play limit of 500 characters per
+language. A missing file, a stale version line, empty text, or text over the limit
+refuses the run before any credential is loaded, and the build job proves the same
+text before it spends time on Gradle.
+
+`client/release/android/test_build_signed_aab.sh` and
+`scripts/release/test_publish_play_bundle.py` run in the `release-security` CI
+job. They assert the guard messages rather than the exit status alone, so a case
+cannot pass by failing on an unrelated step first, and they run offline with no
+network and no credentials.
+
+The AAB has no post-hoc signature check, so Play itself proves the bundle
+identity from the upload response. A bundle whose identity is wrong while its APK
+is right is therefore caught by Google, not by CI. Because `versionCode` is
+consumed by an upload and never reused, every dispatch must pick a number above
+the highest uploaded one.
 
 ## Atomic publication and rollback
 

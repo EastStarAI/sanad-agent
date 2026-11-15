@@ -31,6 +31,14 @@ For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable do
 
 Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa` until the documented Authenticode transition is completed. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.
 
+## Store What's New
+
+`store-whats-new.en.txt` and `store-whats-new.ar.txt` hold the short, user-facing text the stores publish: the App Store "What's New" and the Google Play release notes for `en-US` and `ar`. One file per language is shared by both stores, so the two listings cannot drift apart.
+
+The first line names the release version, for example `1.0.27`, followed by a blank line and three or four short bullets with no technical detail. The text is written for the release and is never extracted from `release/release-notes.md`, because a store listing is a mobile summary while the release notes are the technical release document.
+
+Both stores enforce a hard limit: Google Play accepts 500 characters per language and the App Store accepts 4000. `scripts/release/store_whats_new.py` owns that check for both lanes, and publication refuses when a file is missing, its first line names another version, the text is empty, or the text is over the limit. Bumping the contract does not rewrite these files, so a release refuses to publish under a version whose text has not been written yet.
+
 ## Agent native dictation runtime
 
 Every Agent platform also declares one `agent-runtime` artifact:
