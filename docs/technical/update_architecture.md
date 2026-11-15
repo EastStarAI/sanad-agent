@@ -40,10 +40,12 @@ manifest is therefore split into two rules that never trade one for the other:
   selected artifact before download and before replacement. A known target with
   a wrong, empty, or missing `signature_type` therefore still fails closed at
   the same diagnostic stage as before.
-- **Publishing stays strict.** `ReleaseManifest.requireKnownTrustTargets()` is
-  called by `generate-manifest` and `verify-manifest`, so a release refuses to
-  publish a target its own build cannot verify; a new component is introduced
-  together with its policy entry in the same change.
+- **Publishing stays strict.** `validate-contract` refuses a declared public
+  target that has no policy entry, and `generate-manifest`/`verify-manifest`
+  call `ReleaseManifest.requireKnownTrustTargets()`, so an assembled manifest
+  that carries one cannot be written or published. A new component or platform
+  is therefore introduced together with its policy entry in the same change, and
+  PR CI rejects the omission at the earliest contract check.
 
 The remaining boundary is deliberate and documented rather than fixed: an
 install **older than a newly introduced target** still cannot parse a manifest

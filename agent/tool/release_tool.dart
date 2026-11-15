@@ -152,6 +152,15 @@ Future<_ReleaseIdentity> _validateContract(
     if (!filename.contains(marketingVersion) || !names.add(filename)) {
       throw FormatException('Invalid or duplicate filename: $filename');
     }
+    // A published target must have a trust policy in this build, so a new
+    // component or platform cannot reach a release without its policy entry.
+    // This is the earliest point PR CI can reject that omission.
+    if (artifact['public'] == true) {
+      ReleaseArtifactTrustPolicy.expectedSignatureType(
+        component: artifact['component']?.toString() ?? '',
+        platform: artifact['platform']?.toString() ?? '',
+      );
+    }
   }
   validateRequiredAgentTargets(declaredAgentTargets(artifacts));
   stdout.writeln(

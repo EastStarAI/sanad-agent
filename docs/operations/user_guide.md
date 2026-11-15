@@ -598,17 +598,20 @@ Locally** and in the device's Settings page.
 If `sanad update` reports that the download failed platform trust verification,
 the current Agent is unchanged. The message names the failed stage, for example
 `stage=publisher_requirement`, without your local paths. Agents v1.0.0 through
-v1.0.5 can report this for a genuine release.
+v1.0.5 can report this for a genuine release; reinstall with the official
+installer that the message prints.
 
-Installs on v1.0.21 and older have a different dead end that no later release can
-repair from inside the product. Those Agents and Clients reject every manifest
-published from v1.0.22 onward while parsing it, because the manifest declares
-`agent-runtime` artifacts their built-in trust list does not know. The check ends
-with `Unsupported release trust target` and `manifest_invalid` before any version
-comparison or download, so neither **Settings → General → Check for Updates** in
-the Client nor `sanad update` can recover such an install. Reinstall with the
-official installer; it verifies the current artifact itself, keeps the existing
-Sanad Home, and restarts the background service without starting a new sign-in:
+Installs on v1.0.21 and older cannot be repaired from inside the product at all.
+Those Agents and Clients reject every manifest published from v1.0.22 onward
+while parsing it, because the manifest declares `agent-runtime` artifacts their
+built-in trust list does not know. The check ends with `Unsupported release
+trust target` and `manifest_invalid` before any version comparison or download,
+so neither **Settings → General → Check for Updates** in the Client nor
+`sanad update` can recover such an install.
+
+For either case the installer verifies the current artifact itself, keeps the
+existing Sanad Home, and restarts the background service without starting a new
+sign-in:
 
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login

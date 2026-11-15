@@ -356,13 +356,17 @@ nothing there, which is why the dedicated browser step exists.
 ## Task 67A Desktop lifecycle regression matrix
 
 Shared automated coverage must prove exact target matching before download,
-rejected downgrade, canonical URL/size/SHA-256, exact signature metadata,
-Windows Agent `unsigned+github-attestation`, retained WinSparkle DSA, rejected
-empty/unknown/signed-under-unsigned-policy metadata, and unchanged macOS
-Developer ID/notarization rejection. Bootstrap preserves an existing executable
-on checksum/trust/replacement failure. Agent update keeps an exclusive lock,
-reports rollback as failure with a restored runtime, and never treats staging as
-final health success.
+rejected downgrade, canonical URL/size/SHA-256, exact signature metadata and
+rejected empty, unknown-value, or signed-under-unsigned-policy metadata **for a
+known `component:platform`**, Windows Agent `unsigned+github-attestation`,
+retained WinSparkle DSA, and unchanged macOS Developer ID/notarization
+rejection. Manifest parsing is forward-compatible instead: an additive target
+this build does not know is ignored by a runtime and refused by the publisher
+gate, as recorded in
+[Forward compatibility and the publisher gate](../technical/update_architecture.md#forward-compatibility-and-the-publisher-gate).
+Bootstrap preserves an existing executable on checksum/trust/replacement
+failure. Agent update keeps an exclusive lock, reports rollback as failure with
+a restored runtime, and never treats staging as final health success.
 
 Client tests prove one packaged macOS/Windows startup check, no packaged check in
 source mode, no Linux background check, canonical newer-artifact browser launch,

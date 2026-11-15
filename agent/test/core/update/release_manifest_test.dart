@@ -294,26 +294,54 @@ void main() {
     });
 
     test('still applies every structural rule to an unknown target', () {
-      final broken = <String, Map<String, dynamic>>{
-        'non-canonical URL': {
-          ...futureTarget(),
-          'url': 'https://example.com/sanad-agent-launcher-1.1.0-macos-x64',
-        },
-        'invalid SHA-256': {...futureTarget(), 'sha256': '1234'},
-        'invalid size': {...futureTarget(), 'size': 0},
-        'duplicate filename': {
-          ...futureTarget(),
-          'filename': 'sanad-agent-1.1.0-linux-x64',
-        },
-      };
+      // Each case must fail for its own structural reason, never for the trust
+      // target, so this test keeps proving that an ignored target is still
+      // structurally checked instead of passing vacuously on a re-hardened
+      // parser.
+      final broken = [
+        (
+          label: 'non-canonical URL',
+          entry: {
+            ...futureTarget(),
+            'url': 'https://example.com/sanad-agent-launcher-1.1.0-macos-x64',
+          },
+          message: 'Artifact URL is not canonical',
+        ),
+        (
+          label: 'invalid SHA-256',
+          entry: {...futureTarget(), 'sha256': '1234'},
+          message: 'Invalid SHA-256',
+        ),
+        (
+          label: 'invalid size',
+          entry: {...futureTarget(), 'size': 0},
+          message: 'Invalid size',
+        ),
+        (
+          label: 'duplicate filename',
+          entry: {
+            ...futureTarget(),
+            'filename': 'sanad-agent-1.1.0-linux-x64',
+          },
+          message: 'Duplicate artifact',
+        ),
+      ];
 
-      broken.forEach((label, entry) {
+      for (final brokenCase in broken) {
         expect(
-          () => ReleaseManifest.fromJson(manifestWith([localAgent(), entry])),
-          throwsA(isA<FormatException>()),
-          reason: label,
+          () => ReleaseManifest.fromJson(
+            manifestWith([localAgent(), brokenCase.entry]),
+          ),
+          throwsA(
+            isA<FormatException>().having(
+              (error) => error.message,
+              'message',
+              contains(brokenCase.message),
+            ),
+          ),
+          reason: brokenCase.label,
         );
-      });
+      }
     });
 
     test('never trusts an unknown target for installation', () async {
