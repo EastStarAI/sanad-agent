@@ -49,7 +49,7 @@ This contract applies strictly to the `sanad-client/lib/infrastructure/` directo
 
 ## Client Update Ownership
 - Packaged client self-update is distinct from `sanad update`, which updates only the standalone agent.
-- macOS and Windows consume the signed Appcast; Linux and Android use user-approved system flows; iOS uses Internal TestFlight for v1; Web uses the deployed version marker.
+- macOS and Windows consume the signed Appcast; Linux and Android use user-approved system flows; iOS updates through the App Store; Web uses the deployed version marker.
 - Source/FVM execution must disable packaged self-update and must never mutate the developer checkout.
 
 ## Local Filesystem Authority (Plan 25)
