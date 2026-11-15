@@ -319,6 +319,7 @@ proving the publisher.
 | `apple-testflight` | Apple Distribution export and optional Internal TestFlight upload |
 | `windows-update-signing` | WinSparkle DSA update signing only; it does not provide Authenticode publisher identity |
 | `android-signing` | Android APK/AAB release signing |
+| `google-play-publishing` | Google Play Developer API upload to a testing track |
 | `release-publication` | Atomic publication of an already reviewed Draft RC or Stable Release |
 | `client-downloads-production` | Restricted Production deployment of Stable Client redirects, Web, Appcast, and canonical installer sources |
 
@@ -337,6 +338,7 @@ unprotected artifacts.
 | `IOS_APP_STORE_PROFILE_BASE64` | `com.eaststarai.sanad` App Store profile | NanoSoft LY LLC; regenerate when certificate, entitlement, or App ID changes |
 | `WINDOWS_SIGNING_PFX_BASE64` / `WINDOWS_SIGNING_PFX_PASSWORD` | Future Windows Authenticode signed-only transition | Release owner; not yet available and not required while the temporary unsigned policy is active |
 | `ANDROID_KEYSTORE_BASE64` / passwords / `ANDROID_KEY_ALIAS` | Android APK/AAB signing | Release owner; retain encrypted recovery copy for the lifetime of the package ID |
+| `PLAY_SERVICE_ACCOUNT_JSON_BASE64` | Google Play Developer API uploads of the signed AAB | Release owner; service account `sanad-play-publisher` scoped to testing tracks only, revoke and replace its JSON key on compromise |
 | `SPARKLE_ED25519_PRIVATE_KEY_BASE64` | macOS update signatures | Release owner; rotate only with a documented public-key transition |
 | `WINSPARKLE_DSA_PRIVATE_KEY_BASE64` | Windows update signatures | Release owner; rotate only with a documented public-key transition |
 | `DEPLOY_SSH_PRIVATE_KEY` / host / user / known-hosts | Web, Appcast, and installer deployment | Server operator; dedicated restricted account and pinned host key |
@@ -410,6 +412,29 @@ Client.
   explicit owner approval; no workflow may promote to production on its own.
 - **Publication scope:** the AAB is a build output and handoff artifact only. It
   is not attached to public releases and is not a user install source.
+
+### Play upload pilot lane
+
+`.github/workflows/play-internal.yml` is the proof lane for automated Play
+publication. It is manual (`workflow_dispatch`), accepts an explicit
+`build_number`, builds one signed bundle through
+`client/release/android/build_signed_aab.sh`, optionally uploads it through
+`scripts/release/publish_play_bundle.py`, and verifies that the target track
+carries the expected `versionCode` afterwards. It creates no tag and no GitHub
+Release, and it targets `internal`, `alpha`, or `beta` only.
+
+`client/release/android/build_signed_aab.sh` owns the Android binary for both
+this lane and the release workflow: it pins `--build-name`/`--build-number` to
+the contracted identity, refuses a missing `android/key.properties`, proves the
+`applicationId`, and verifies package, version name, version code, and signature
+on the universal APK built from the same sources. The AAB has no post-hoc
+signature check, so Play itself proves the bundle identity when the upload
+returns its `versionCode`.
+
+The lane is proven on a dedicated branch before the Stable release workflow
+calls it; `release.yml` stays unchanged until an upload to a testing track has
+succeeded end to end. Because `versionCode` is consumed by an upload and never
+reused, every pilot run must pick a number above the highest uploaded one.
 - **Automation:** uploading from CI is permitted only as an approval-gated job
   that enters a protected Environment holding the Play service-account
   credential. Automatic production publishing is not part of the release
