@@ -166,19 +166,35 @@ class ProviderUsageResetCredit {
   /// UTC instant when this credit was granted, when reported.
   final DateTime? grantedAt;
 
-  const ProviderUsageResetCredit({this.expiresAt, this.grantedAt});
+  /// Opaque provider credit identifier, when reported.
+  ///
+  /// It exists only so the Client can target this exact credit when the user
+  /// presses that row's action; it is never displayed, never rendered in a
+  /// tooltip, and never written to a log. A missing id keeps the legacy
+  /// consume request (no `credit_id`), which spends the provider's default
+  /// credit.
+  final String? creditId;
+
+  const ProviderUsageResetCredit({
+    this.expiresAt,
+    this.grantedAt,
+    this.creditId,
+  });
 
   Map<String, dynamic> toMap() => {
     if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
     if (grantedAt != null) 'granted_at': grantedAt!.toUtc().toIso8601String(),
+    if (creditId != null && creditId!.isNotEmpty) 'credit_id': creditId,
   };
 
   factory ProviderUsageResetCredit.fromMap(Map<String, dynamic> map) =>
       ProviderUsageResetCredit(
         expiresAt: _parseUtcDate(map['expires_at']),
         grantedAt: _parseUtcDate(map['granted_at']),
+        creditId: map['credit_id']?.toString(),
       );
 
+  /// Deliberately omits [creditId]: diagnostics must not carry the identifier.
   @override
   String toString() =>
       'ProviderUsageResetCredit(expires=$expiresAt, granted=$grantedAt)';

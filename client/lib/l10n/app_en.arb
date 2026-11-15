@@ -1328,11 +1328,39 @@
   "providerUsageResetAvailableSingle": "1 reset available",
   "providerUsageResetNotApplicable": "This reset credit cannot be applied right now.",
   "providerUsageResetCreditLabel": "Reset credit",
-  "providerUsageResetCreditExpires": "Expires {when}",
-  "@providerUsageResetCreditExpires": {
+  "providerUsageResetCreditExpiresInMoment": "Expires in a moment",
+  "providerUsageResetCreditExpiresInMinutes": "Expires in {count} min",
+  "@providerUsageResetCreditExpiresInMinutes": {
     "placeholders": {
-      "when": {
-        "type": "String"
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInHours": "Expires in {count} h",
+  "@providerUsageResetCreditExpiresInHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInDays": "Expires in {count} d",
+  "@providerUsageResetCreditExpiresInDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInDaysHours": "Expires in {days} d {hours} h",
+  "@providerUsageResetCreditExpiresInDaysHours": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      },
+      "hours": {
+        "type": "int"
       }
     }
   },

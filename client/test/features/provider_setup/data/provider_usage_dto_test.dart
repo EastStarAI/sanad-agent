@@ -13,6 +13,7 @@ void main() {
         {
           'expires_at': '2026-11-15T10:00:00Z',
           'granted_at': '2026-11-01T10:00:00Z',
+          'credit_id': 'RateLimitResetCredit_abc',
         },
         {'expires_at': '2026-11-20T10:00:00Z'},
         {'expires_at': 'not-a-date'},
@@ -21,6 +22,9 @@ void main() {
 
     expect(snapshot.availableResets, 2);
     expect(snapshot.resetCredits, hasLength(3));
+    // The opaque id is used only to target that row's redemption.
+    expect(snapshot.resetCredits[0].creditId, 'RateLimitResetCredit_abc');
+    expect(snapshot.resetCredits[1].creditId, isNull);
     expect(snapshot.resetCredits[0].expiresAt, DateTime.utc(2026, 11, 15, 10));
     expect(snapshot.resetCredits[0].grantedAt, DateTime.utc(2026, 11, 1, 10));
     expect(snapshot.resetCredits[1].expiresAt, DateTime.utc(2026, 11, 20, 10));

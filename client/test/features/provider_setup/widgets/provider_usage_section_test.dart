@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/intl.dart';
 import 'package:sanad_client/features/devices/domain/models/device_config.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_usage_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/provider_setup_client.dart';
@@ -17,6 +18,9 @@ const _localDeviceId = 'hardware-1';
 class _NoopClient implements ProviderSetupClient {
   final List<ProviderUsageResetResultDto> resetResults = [];
   final List<String?> confirmationTokens = [];
+  /// Credit id carried by each reset request, in call order. A null entry
+  /// proves the count-only fallback kept the legacy request.
+  final List<String?> creditIds = [];
 
   @override
   Future<ProviderUsageResultDto> usageGet({
@@ -39,9 +43,11 @@ class _NoopClient implements ProviderSetupClient {
     required String providerInstanceId,
     required String idempotencyKey,
     String? confirmationToken,
+    String? creditId,
     DeviceConfig? agent,
   }) async {
     confirmationTokens.add(confirmationToken);
+    creditIds.add(creditId);
     return resetResults.removeAt(0);
   }
 
@@ -67,32 +73,6 @@ Widget _wrap(ProviderUsageCubit cubit, Widget child, {String locale = 'en'}) {
       ),
     ),
   );
-}
-
-/// Renders a wall clock as the user-facing `MMM d, y, HH:mm` text.
-///
-/// The expected value is built from the instant's own components, so a
-/// timezone assertion never reuses the widget's formatting expression: the
-/// value passed here is the wall clock the user must read, and a widget that
-/// forgets `toLocal()` prints a different one.
-String _wallClockText(DateTime value) {
-  const months = [
-    'Jan',
-    'Feb',
-    'Mar',
-    'Apr',
-    'May',
-    'Jun',
-    'Jul',
-    'Aug',
-    'Sep',
-    'Oct',
-    'Nov',
-    'Dec',
-  ];
-  final hour = value.hour.toString().padLeft(2, '0');
-  final minute = value.minute.toString().padLeft(2, '0');
-  return '${months[value.month - 1]} ${value.day}, ${value.year}, $hour:$minute';
 }
 
 void main() {
@@ -714,13 +694,16 @@ void main() {
   );
 
   testWidgets(
-    'reset credits render separately with local expiry and replace the combined count',
+    'reset credits stack title over a relative expiry and each row redeems itself',
     (tester) async {
-      // The user-facing instants are authored as local wall clocks and only the
-      // wire copy is UTC, so the assertion proves the local conversion instead
-      // of repeating it.
-      final firstLocal = DateTime(2026, 11, 15, 10, 30);
-      final secondLocal = DateTime(2026, 11, 20, 10, 30);
+      // Relative text is asserted with an authored margin so a slow pump can
+      // never flip `2 d 5 h` into `2 d 4 h`; the exact instant is only in the
+      // tooltip, which is asserted from the same instant the widget receives.
+      final now = DateTime.now();
+      final firstLocal = now.add(const Duration(days: 2, hours: 5, minutes: 30));
+      final secondLocal = now.add(
+        const Duration(days: 10, hours: 3, minutes: 30),
+      );
       cubit.emit(
         cubit.state.upsertEntry(
           _localDeviceId,
@@ -746,14 +729,34 @@ void main() {
                 ],
                 availableResets: 2,
                 resetCredits: [
-                  ProviderUsageResetCreditDto(expiresAt: firstLocal.toUtc()),
-                  ProviderUsageResetCreditDto(expiresAt: secondLocal.toUtc()),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: firstLocal.toUtc(),
+                    creditId: 'credit-first',
+                  ),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: secondLocal.toUtc(),
+                    creditId: 'credit-second',
+                  ),
                 ],
               ),
             ),
           ),
         ),
       );
+      client.resetResults.addAll([
+        const ProviderUsageResetResultDto(
+          status: 'confirmation_required',
+          providerInstanceId: 'a',
+          message: 'Resetting now may waste this credit.',
+          confirmationToken: 'confirm-first',
+        ),
+        const ProviderUsageResetResultDto(
+          status: 'confirmation_required',
+          providerInstanceId: 'a',
+          message: 'Resetting now may waste this credit.',
+          confirmationToken: 'confirm-second',
+        ),
+      ]);
       await tester.pumpWidget(
         _wrap(
           cubit,
@@ -773,28 +776,57 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Reset credit'), findsNWidgets(2));
-      expect(find.text('Expires ${_wallClockText(firstLocal)}'), findsOneWidget);
+      // Relative by default: no absolute date in the normal state.
+      expect(find.text('Expires in 2 d 5 h'), findsOneWidget);
+      expect(find.text('Expires in 10 d 3 h'), findsOneWidget);
       expect(
-        find.text('Expires ${_wallClockText(secondLocal)}'),
-        findsOneWidget,
+        find.text(DateFormat('EEEE, MMMM d, y, HH:mm').format(firstLocal)),
+        findsNothing,
+        reason: 'the absolute instant must stay inside the tooltip',
       );
-      // The wire timestamps are UTC; on a non-UTC host a missing `toLocal()`
-      // would print that wall clock instead and this assertion fails.
-      final firstUtcText = 'Expires ${_wallClockText(firstLocal.toUtc())}';
-      if (firstUtcText != 'Expires ${_wallClockText(firstLocal)}') {
-        expect(find.text(firstUtcText), findsNothing);
-      }
       expect(find.text('2 resets available'), findsNothing);
-      expect(find.text('Reset limits'), findsOneWidget);
+      // Every credit row owns its own action.
       expect(
-        find.byKey(const Key('provider_usage_reset_credit_expiry_a_0')),
+        find.byKey(const Key('provider_usage_reset_action_a_0')),
         findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('provider_usage_reset_action_a_1')),
+        findsOneWidget,
+      );
+
+      // The tooltip carries the exact local instant for that row.
+      expect(
+        find.byTooltip(DateFormat('EEEE, MMMM d, y, HH:mm').format(firstLocal)),
+        findsOneWidget,
+      );
+      expect(
+        find.byTooltip(DateFormat('EEEE, MMMM d, y, HH:mm').format(secondLocal)),
+        findsOneWidget,
+      );
+
+      // Pressing a row spends that row's credit, not the earliest one.
+      await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_1')));
+      await tester.pumpAndSettle();
+      expect(client.creditIds, ['credit-second']);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_0')));
+      await tester.pumpAndSettle();
+      expect(client.creditIds, ['credit-second', 'credit-first']);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
     },
   );
 
-  testWidgets('reset credit copy is localized in Arabic', (tester) async {
-    final expiresLocal = DateTime(2026, 11, 15, 10, 30);
+  testWidgets('reset credit expiry and tooltip are localized in Arabic', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    // 2 days → the Arabic dual form; 5 days → the "few" plural form.
+    final dualLocal = now.add(const Duration(days: 2, minutes: 30));
+    final fewLocal = now.add(const Duration(days: 5, minutes: 30));
     cubit.emit(
       cubit.state.upsertEntry(
         _localDeviceId,
@@ -818,9 +850,16 @@ void main() {
                   remainingPercent: 60,
                 ),
               ],
-              availableResets: 1,
+              availableResets: 2,
               resetCredits: [
-                ProviderUsageResetCreditDto(expiresAt: expiresLocal.toUtc()),
+                ProviderUsageResetCreditDto(
+                  expiresAt: dualLocal.toUtc(),
+                  creditId: 'credit-dual',
+                ),
+                ProviderUsageResetCreditDto(
+                  expiresAt: fewLocal.toUtc(),
+                  creditId: 'credit-few',
+                ),
               ],
             ),
           ),
@@ -838,11 +877,18 @@ void main() {
     await tester.tap(find.text('الاستخدام والحدود'));
     await tester.pumpAndSettle();
 
-    expect(find.text('رصيد إعادة ضبط'), findsOneWidget);
-    expect(
-      find.text('ينتهي في ${_wallClockText(expiresLocal)}'),
-      findsOneWidget,
-    );
+    expect(find.text('رصيد إعادة ضبط'), findsNWidgets(2));
+    expect(find.text('ينتهي بعد يومين'), findsOneWidget);
+    expect(find.text('ينتهي بعد 5 أيام'), findsOneWidget);
+
+    // The tooltip uses the app locale, so it must not fall back to English
+    // month names inside an Arabic card.
+    final arabicTooltip = DateFormat(
+      'EEEE, MMMM d, y, HH:mm',
+      'ar',
+    ).format(dualLocal);
+    expect(find.byTooltip(arabicTooltip), findsOneWidget);
+    expect(arabicTooltip.contains('Nov'), isFalse);
   });
 
   testWidgets(
@@ -908,14 +954,17 @@ void main() {
         find.byKey(const Key('provider_usage_reset_credit_a_1')),
         findsOneWidget,
       );
-      expect(find.text('Reset limits'), findsOneWidget);
+      // Two rows, two actions: the count disagreement never hides a row.
+      expect(find.text('Reset limits'), findsNWidgets(2));
     },
   );
 
   testWidgets(
-    'an inapplicable credit keeps the rows and disables Reset limits',
+    'an inapplicable credit keeps the rows and disables every action',
     (tester) async {
-      final expiresLocal = DateTime(2026, 11, 18, 10, 30);
+      final now = DateTime.now();
+      final firstLocal = now.add(const Duration(days: 3, minutes: 30));
+      final secondLocal = now.add(const Duration(days: 6, minutes: 30));
       cubit.emit(
         cubit.state.upsertEntry(
           _localDeviceId,
@@ -939,12 +988,19 @@ void main() {
                     remainingPercent: 60,
                   ),
                 ],
-                availableResets: 1,
-                // The credit exists and must stay visible, but the provider
-                // reports that it cannot be applied right now.
+                availableResets: 2,
+                // The credits exist and must stay visible, but the provider
+                // reports that none can be applied right now.
                 applicableResets: 0,
                 resetCredits: [
-                  ProviderUsageResetCreditDto(expiresAt: expiresLocal.toUtc()),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: firstLocal.toUtc(),
+                    creditId: 'credit-first',
+                  ),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: secondLocal.toUtc(),
+                    creditId: 'credit-second',
+                  ),
                 ],
               ),
             ),
@@ -961,29 +1017,53 @@ void main() {
       await tester.tap(find.text('Usage & limits'));
       await tester.pumpAndSettle();
 
-      // The credit row is not hidden by the inapplicable state.
+      // Both credit rows survive the inapplicable state.
       expect(
         find.byKey(const Key('provider_usage_reset_credit_a_0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_1')),
         findsOneWidget,
       );
       expect(
         find.text('This reset credit cannot be applied right now.'),
         findsOneWidget,
       );
+      final hint = find.byKey(const Key('provider_usage_reset_blocked_a'));
+      expect(hint, findsOneWidget);
+      // The explanation sits directly under the first row, above the second.
+      final hintTop = tester.getTopLeft(hint).dy;
       expect(
-        find.byKey(const Key('provider_usage_reset_blocked_a')),
-        findsOneWidget,
+        hintTop,
+        greaterThan(
+          tester
+              .getTopLeft(find.byKey(const Key('provider_usage_reset_credit_a_0')))
+              .dy,
+        ),
+      );
+      expect(
+        hintTop,
+        lessThan(
+          tester
+              .getTopLeft(find.byKey(const Key('provider_usage_reset_credit_a_1')))
+              .dy,
+        ),
       );
 
-      final button = tester.widget<TextButton>(
-        find.widgetWithText(TextButton, 'Reset limits'),
-      );
-      expect(button.onPressed, isNull, reason: 'the action is disabled');
+      // Every row's action is disabled, not just the first one.
+      for (final key in ['provider_usage_reset_action_a_0', 'provider_usage_reset_action_a_1']) {
+        final button = tester.widget<TextButton>(find.byKey(Key(key)));
+        expect(button.onPressed, isNull, reason: '$key is disabled');
+      }
 
       // A disabled action never reaches the daemon.
-      await tester.tap(find.text('Reset limits'));
+      await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_0')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_1')));
       await tester.pump();
       expect(client.confirmationTokens, isEmpty);
+      expect(client.creditIds, isEmpty);
       expect(client.resetResults, isEmpty);
 
       // The same hint is localized.

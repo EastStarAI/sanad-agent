@@ -19,8 +19,10 @@
 //     non-zero count triggers one extra request. That request is optional: a
 //     non-2xx, a timeout, or a non-JSON body degrades the card to the count
 //     alone — never a throw, never a body in logs. Entries cross the protocol
-//     as display-safe UTC `expires_at`/`granted_at`; provider titles, ids,
-//     descriptions, and reset types never leave the adapter.
+//     as display-safe UTC `expires_at`/`granted_at` plus an opaque `credit_id`
+//     used only to target that row's redemption; provider titles, descriptions,
+//     and reset types never leave the adapter, and the id is never rendered or
+//     logged.
 //   • Ignores unknown fields for forward compatibility.
 //   • Never logs the URL query, headers, raw response, token, or account id.
 //   • Throws typed exceptions; messages are display-safe and never include the
@@ -151,10 +153,17 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     }
   }
 
+  /// Consumes at most one credit.
+  ///
+  /// ChatGPT accepts a targeted redemption: the body carries the opaque
+  /// `credit_id` of the row the user pressed beside the daemon idempotency key.
+  /// Without a credit id the request keeps its original shape and the provider
+  /// spends its default credit.
   @override
   Future<ProviderUsageResetAdapterResult> reset(
     ProviderUsageContext context, {
     required String idempotencyKey,
+    String? creditId,
   }) async {
     final cred = context.credential;
     final token = cred?.accessToken ?? cred?.apiKey;
@@ -171,7 +180,11 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
           ..._buildHeaders(token, context.accountId),
           'Content-Type': 'application/json',
         },
-        body: jsonEncode({'redeem_request_id': idempotencyKey}),
+        body: jsonEncode({
+          'redeem_request_id': idempotencyKey,
+          if (creditId != null && creditId.trim().isNotEmpty)
+            'credit_id': creditId.trim(),
+        }),
         timeout: fetchTimeout,
       );
       if (response.statusCode == 401 || response.statusCode == 403) {
@@ -398,8 +411,10 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
   ///
   /// The per-credit list is not part of `/usage`: that payload carries only
   /// `available_count` (and sometimes `applicable_available_count`). Each entry
-  /// here carries `status`, `granted_at`, `expires_at` beside provider-only
-  /// `id`, `title`, `description`, and `reset_type` fields this adapter drops.
+  /// here carries `status`, `granted_at`, `expires_at`, and an opaque `id` the
+  /// adapter keeps only for targeted redemption. Provider `title`,
+  /// `description`, and `reset_type` are dropped: they are provider copy, and
+  /// the protocol never carries them.
   ///
   /// Only credits that are available and carry a valid expiry cross the
   /// protocol. The list is sorted by earliest expiry so the Client can render
@@ -418,10 +433,14 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       }
       final expiresAt = parseUsageResetAt(item['expires_at']);
       if (expiresAt == null) continue;
+      final rawId = item['id']?.toString().trim();
       parsed.add(
         ProviderUsageResetCredit(
           expiresAt: expiresAt,
           grantedAt: parseUsageResetAt(item['granted_at']),
+          creditId: rawId == null || rawId.isEmpty || rawId.length > 256
+              ? null
+              : rawId,
         ),
       );
     }

@@ -1008,6 +1008,9 @@ class ProviderCommandHandler {
     final instanceId = event.payload['provider_instance_id'] as String? ?? '';
     final idempotencyKey = event.payload['idempotency_key'] as String? ?? '';
     final confirmationToken = event.payload['confirmation_token'] as String?;
+    // Optional: the row the user pressed, so a targeted redemption spends that
+    // credit. Absent keeps the original consume request.
+    final creditId = event.payload['credit_id'] as String?;
     final result = _usageService == null
         ? ProviderUsageResetResult(
             status: ProviderUsageResetStatus.unsupported,
@@ -1020,6 +1023,7 @@ class ProviderCommandHandler {
             idempotencyKey: idempotencyKey,
             requestId: requestId,
             confirmationToken: confirmationToken,
+            creditId: creditId,
           );
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(

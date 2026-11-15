@@ -89,6 +89,7 @@ void main() {
           ProviderUsageResetCredit(
             expiresAt: DateTime.utc(2026, 7, 25, 9),
             grantedAt: DateTime.utc(2026, 7, 18, 9),
+            creditId: 'RateLimitResetCredit_abc',
           ),
         ],
         extraDetails: const ['Credits balance: \$5.00'],
@@ -99,6 +100,7 @@ void main() {
       expect(decoded.providerInstanceId, s.providerInstanceId);
       expect(decoded.availableResets, 2);
       expect(decoded.applicableResets, 1);
+      expect(decoded.resetCredits.single.creditId, 'RateLimitResetCredit_abc');
       expect(
         decoded.resetCredits.single.expiresAt,
         DateTime.utc(2026, 7, 25, 9),

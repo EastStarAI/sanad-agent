@@ -42,12 +42,22 @@ class ProviderUsageResetCreditDto {
   final DateTime? expiresAt;
   final DateTime? grantedAt;
 
-  const ProviderUsageResetCreditDto({this.expiresAt, this.grantedAt});
+  /// Opaque daemon/provider id used only to target this credit's redemption.
+  /// Never rendered and never logged.
+  final String? creditId;
+
+  const ProviderUsageResetCreditDto({
+    this.expiresAt,
+    this.grantedAt,
+    this.creditId,
+  });
 
   factory ProviderUsageResetCreditDto.fromJson(Map<String, dynamic> json) {
+    final rawId = json['credit_id'];
     return ProviderUsageResetCreditDto(
       expiresAt: json['expires_at'] is String ? DateTime.tryParse(json['expires_at'] as String) : null,
       grantedAt: json['granted_at'] is String ? DateTime.tryParse(json['granted_at'] as String) : null,
+      creditId: rawId is String && rawId.trim().isNotEmpty ? rawId : null,
     );
   }
 }

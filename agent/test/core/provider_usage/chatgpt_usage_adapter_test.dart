@@ -471,7 +471,13 @@ void main() {
         expect(snap.resetCredits.every((c) => c.expiresAt!.isUtc), isTrue);
 
         final mapText = snap.toMap().toString();
-        expect(mapText, isNot(contains('RateLimitResetCredit_synthetic')));
+        // The opaque id crosses so a row can redeem its own credit...
+        expect(
+          snap.resetCredits.map((c) => c.creditId),
+          ['RateLimitResetCredit_synthetic_2', 'RateLimitResetCredit_synthetic_1'],
+          reason: 'ids follow the expiry order and are never rendered',
+        );
+        // ...while provider copy, reset types, and descriptions never do.
         expect(mapText, isNot(contains('codex_rate_limits')));
         expect(mapText, isNot(contains('Full reset')));
         expect(mapText, isNot(contains('provider-private')));
@@ -691,6 +697,39 @@ void main() {
         calls.single.url,
         'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
       );
+      // Backward compatibility: with no credit id the body keeps its original
+      // single-field shape, so an older Client still spends the provider's
+      // default credit.
+      expect(jsonDecode(calls.single.body!), {
+        'redeem_request_id': 'stable-key',
+      });
+    });
+
+    test('targets the credit the user pressed', () async {
+      final calls = <_RecordedCall>[];
+      final adapter = ChatGptUsageAdapter();
+      final ctx = context(
+        instanceId: 'inst-reset',
+        credential: oauthCred('inst-reset'),
+        httpClientFactory: () => _FakeClient(
+          rawBody: jsonEncode({'code': 'reset', 'windows_reset': 1}),
+          calls: calls,
+        ),
+      );
+      await adapter.reset(
+        ctx,
+        idempotencyKey: 'stable-key',
+        creditId: 'RateLimitResetCredit_abc',
+      );
+
+      expect(jsonDecode(calls.single.body!), {
+        'redeem_request_id': 'stable-key',
+        'credit_id': 'RateLimitResetCredit_abc',
+      });
+      expect(
+        calls.single.url,
+        'https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume',
+      );
     });
 
     test(
@@ -744,7 +783,11 @@ void main() {
 class _RecordedCall {
   final String url;
   final Map<String, String>? headers;
-  _RecordedCall(this.url, this.headers);
+
+  /// Request body of a POST, kept verbatim so a test can prove a targeted
+  /// redemption never loses the idempotency key.
+  final String? body;
+  _RecordedCall(this.url, this.headers, [this.body]);
 }
 
 class _FakeClient implements ProviderUsageHttpClient {
@@ -773,7 +816,7 @@ class _FakeClient implements ProviderUsageHttpClient {
     Object? body,
     Duration? timeout,
   }) async {
-    calls?.add(_RecordedCall(url.toString(), headers));
+    calls?.add(_RecordedCall(url.toString(), headers, body?.toString()));
     return ProviderUsageHttpResponse(status, rawBody ?? '{}');
   }
 

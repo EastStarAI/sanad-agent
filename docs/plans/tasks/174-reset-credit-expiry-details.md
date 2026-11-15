@@ -19,26 +19,38 @@ coordinates_with: "Task 55"
 ## Goal
 
 When ChatGPT reports multiple banked reset credits, show each available credit
-as its own row with its local expiration time instead of collapsing them into a
-single `N resets available` line. The reset action stays one shared control.
+as its own row — title, relative expiry, and that row's own reset action —
+instead of collapsing them into a single `N resets available` line.
 
 ## Locked decisions and scope
 
-- Only the ChatGPT/Codex usage payload exposes
-  `rate_limit_reset_credits.credits[]`. OpenCode Go reports no reset credits and
-  keeps its current usage-only card.
+- Only the ChatGPT/Codex account exposes reset credits, and its per-credit list
+  comes from its own document (`GET
+  /backend-api/wham/rate-limit-reset-credits`), not from `credits[]` inside
+  `/usage`. OpenCode Go reports no reset credits and keeps its current
+  usage-only card.
 - Parse only credits whose `status` is `available` or absent, and only when
   `expires_at` is a valid timestamp. Sort by earliest expiry.
-- The snapshot carries display-safe timestamps only (`expires_at`,
-  `granted_at`); provider `title`, `description`, profile ids, account ids, and
-  raw payloads never cross the protocol.
-- The Client renders a localized generic `Reset credit` label with the local
-  expiration date/time. It never echoes the provider's English `title`.
+- The snapshot carries display-safe timestamps (`expires_at`, `granted_at`) and
+  an opaque `credit_id` used only to target a redemption; provider `title`,
+  `description`, `reset_type`, profile ids, account ids, and raw payloads never
+  cross the protocol.
+- The Client renders a localized generic `Reset credit` label with a relative
+  expiry (`Expires in 2 d 5 h`) and shows the exact local date/time only in the
+  expiry tooltip, formatted with the current app locale. It never echoes the
+  provider's English `title`, and it does not map `reset_type` slugs to titles,
+  because the references document only `codex_rate_limits` with no full/partial
+  enumeration.
 - The detailed list replaces the combined count line when present. When the
   list is absent but `available_resets > 0`, keep the existing combined line as
   a backward-compatible fallback.
-- The existing single `Reset limits` button and reset mutation stay unchanged;
-  no per-credit reset button is introduced.
+- Each credit row carries its own `Reset limits` action, and each action redeems
+  that row's credit through its opaque `credit_id`; the row action is not a new
+  mutation, only a target for the existing one. The credit id is never
+  displayed, never in a tooltip, and never logged, and the consume command keeps
+  working without it so an older Client is unaffected. Per-credit applicability
+  is absent from the provider payload, so the shared `applicable_resets` rule
+  disables every row action together.
 - No live UI test is part of this task. Verification is analyzer plus focused
   agent and widget tests.
 
@@ -75,9 +87,10 @@ single `N resets available` line. The reset action stays one shared control.
 ### G2 — Client DTO, controls, and localization
 
 - [x] Add the Client reset-credit DTO and parse `reset_credits`.
-- [x] Render one keyed row per credit with a localized expiry date/time.
-- [x] Keep the combined count only as the no-detail fallback and preserve the
-      shared reset button.
+- [x] Render one keyed row per credit with a relative expiry and the full local
+      date/time in its tooltip.
+- [x] Keep the combined count only as the no-detail fallback, and keep it as a
+      single action with no `credit_id`.
 - [x] Add English and Arabic strings and regenerate localizations.
 
 ### G3 — Documentation and verification
@@ -104,8 +117,10 @@ single `N resets available` line. The reset action stays one shared control.
 - [x] Given a snapshot with reset credits, when it round-trips through the
       protocol map, then `reset_credits` preserves both timestamps in UTC.
 - [x] Given a Client snapshot with two credits, when the disclosure renders,
-      then two separate rows show a localized expiry and no combined
-      `N resets available` line.
+      then two rows stack a relative expiry over a trailing action each and no
+      combined `N resets available` line appears.
+- [x] Given a credit row whose action is pressed, then the reset command carries
+      that row's `credit_id`, and the id never appears in the UI or a log.
 - [x] Given `available_resets > 0` with no detailed credits, when the
       disclosure renders, then the existing combined count fallback remains.
 - [x] Arabic and English copy both resolve through localization; no provider

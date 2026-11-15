@@ -71,10 +71,12 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | Weekly used is 42% | The primary text is `58% remaining`; secondary text is `42% used`. |
 | Monthly is absent | No Monthly label or placeholder appears. |
 | A reset timestamp is supplied in UTC | Relative text uses local time and the tooltip exposes the full local timestamp. |
-| Two reset credits have distinct expiries | Two `Reset credit` rows render, each with its local `Expires …` date/time; the combined count is hidden while the row count equals `available_resets`, and reappears above the rows when they disagree. |
-| Only `available_resets` is supplied | The existing combined `N resets available` fallback remains. |
-| Snapshot reports `applicable_resets` of zero | The credit rows still render, `Reset limits` is disabled, and the localized `This reset credit cannot be applied right now.` hint appears under the rows; no confirmation or reset request is possible. |
-| Snapshot omits `applicable_resets` | The action stays enabled exactly as before the field existed. |
+| Two reset credits have distinct expiries | Two `Reset credit` rows render, each stacking the title over a relative `Expires in 2 d 5 h` line with its own trailing `Reset limits` action; the combined count is hidden while the row count equals `available_resets`, and reappears above the rows when they disagree. |
+| A credit row renders normally | No absolute date/time is visible; hovering the relative expiry reveals the full local instant formatted in the current app language (an Arabic card never shows `Dec`). |
+| Each row has its own action | Pressing row *n* consumes that row's credit: the request carries that credit's `credit_id`, and the id never appears in the UI, a tooltip, or a log. |
+| Only `available_resets` is supplied | The existing combined `N resets available` fallback remains, with a single action and no `credit_id`. |
+| Snapshot reports `applicable_resets` of zero | The credit rows still render, every row action is disabled, and the localized `This reset credit cannot be applied right now.` hint appears directly under the first row; no confirmation or reset request is possible. |
+| Snapshot omits `applicable_resets` | The actions stay enabled exactly as before the field existed. |
 | Snapshot is refreshing | Old window rows remain visible with a non-destructive refreshing indicator. |
 | Typed transient failure | Concise English text and Retry are visible; raw provider response is absent. |
 | Typed authentication failure | English sign-in guidance is visible without changing the provider readiness badge. |
@@ -87,13 +89,14 @@ paths, idempotent duplicate submission, typed reset outcomes, forced
 post-success refresh, and strict credential isolation between instances. The
 focused agent protocol tests exercise concurrent same-key requests and account
 credential scoping; Flutter state/widget tests exercise double-submit,
-confirmation, per-credit expiry rendering, fallback count visibility, and
-authoritative snapshot replacement.
+confirmation, per-row credit targeting, relative expiry rendering, fallback
+count visibility, and authoritative snapshot replacement.
 
 ## Reset matrix
 
 - Verify no reset button at zero credits and correct singular/plural count above zero.
-- With two available credits, verify two separate `Reset credit` rows with localized local expiry and no combined count while the row count equals `available_resets`; verify the combined count reappears above the rows when they disagree, and that a count-only payload still shows `N resets available` as the fallback.
+- With two available credits, verify two `Reset credit` rows stacking the title over a relative `Expires in …` line with a trailing action each; verify no absolute date is visible, the tooltip shows the full local instant in the app language, and no combined count appears while the row count equals `available_resets`; verify the combined count reappears above the rows when they disagree, and that a count-only payload still shows `N resets available` as the fallback.
+- Press the second row's action and verify the consume request targets that credit (`credit_id`) while the first credit stays available; confirm the id never appears in the UI or a log.
 - With an exhausted window, verify the normal confirmation, one POST, disabled double-submit, and replacement by the refreshed snapshot.
 - With no exhausted window, verify the first request performs no POST and returns the warning; cancel consumes nothing; **Reset anyway** uses the short-lived confirmation token.
 - Replay the same idempotency key and verify no second credit is consumed.
@@ -145,11 +148,16 @@ Agent log must show request paths only; never paste the response, the
    credit cannot be applied right now.` to appear. A disabled action must never
    reach the daemon: no confirmation dialog and no
    `rate-limit-reset-credits/consume` request.
-3. When the field is absent, the action stays enabled and behaves exactly as
+3. When the field is absent, the actions stay enabled and behave exactly as
    before this field existed.
-4. Confirm the snapshot never surfaces provider `id`, `title`, `description`,
-   or `reset_type` values, and that only `available` credits with an expiry are
-   listed.
+4. Confirm the snapshot never surfaces provider `title`, `description`, or
+   `reset_type` values, that only `available` credits with an expiry are listed,
+   and that the opaque credit id appears only in the `/consume` request body,
+   never in the UI or a log.
+5. Press one credit row and confirm the `POST
+   /backend-api/wham/rate-limit-reset-credits/consume` body carries that row's
+   `credit_id` with the idempotency key, and that the response reports
+   `windows_reset` (a single consumed credit does not restore every window).
 
 ## Automated daemon-backed fixture
 
