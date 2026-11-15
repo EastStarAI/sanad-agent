@@ -118,9 +118,16 @@ abstract class ProviderUsageAdapter {
 /// Optional mutation capability implemented only by adapters that support
 /// provider-owned reset credits.
 abstract class ProviderUsageResetAdapter implements ProviderUsageAdapter {
+  /// Consumes at most one credit.
+  ///
+  /// [creditId] targets one specific credit when the provider supports it and
+  /// the Client supplied one; a null id keeps the legacy behaviour where the
+  /// provider chooses the credit. The id is an opaque provider value: it is
+  /// never displayed and never logged.
   Future<ProviderUsageResetAdapterResult> reset(
     ProviderUsageContext context, {
     required String idempotencyKey,
+    String? creditId,
   });
 }
 

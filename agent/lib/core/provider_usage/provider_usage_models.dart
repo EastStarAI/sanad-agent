@@ -14,6 +14,10 @@ library;
 //  • NaN / Infinity / non-numeric values never cross the protocol.
 //  • `reset_at` is an explicit UTC timestamp; `fetched_at` is required.
 //  • `available_resets` is a non-negative int; 0 hides the Reset button.
+//  • `reset_credits` is an optional display-safe list of available credits
+//    with UTC `expires_at`/`granted_at`; no provider titles or ids.
+//  • `applicable_resets` is optional: absent means unknown, `0` with a positive
+//    `available_resets` means the credit cannot be spent yet.
 //  • `extra_details` carries display-safe text only — never raw payload.
 //  • `unavailable_reason` is a typed safe reason; it never changes instance
 //    readiness.
@@ -151,6 +155,51 @@ class ProviderUsageWindow {
       'remaining=${remainingPercent ?? "?"}%, reset=$resetAt)';
 }
 
+/// One display-safe banked reset credit (Task 174).
+///
+/// Only timestamps cross the protocol. Provider titles, descriptions, profile
+/// ids, and account identifiers stay in the adapter.
+class ProviderUsageResetCredit {
+  /// UTC instant when this credit expires, when the provider reports it.
+  final DateTime? expiresAt;
+
+  /// UTC instant when this credit was granted, when reported.
+  final DateTime? grantedAt;
+
+  /// Opaque provider credit identifier, when reported.
+  ///
+  /// It exists only so the Client can target this exact credit when the user
+  /// presses that row's action; it is never displayed, never rendered in a
+  /// tooltip, and never written to a log. A missing id keeps the legacy
+  /// consume request (no `credit_id`), which spends the provider's default
+  /// credit.
+  final String? creditId;
+
+  const ProviderUsageResetCredit({
+    this.expiresAt,
+    this.grantedAt,
+    this.creditId,
+  });
+
+  Map<String, dynamic> toMap() => {
+    if (expiresAt != null) 'expires_at': expiresAt!.toUtc().toIso8601String(),
+    if (grantedAt != null) 'granted_at': grantedAt!.toUtc().toIso8601String(),
+    if (creditId != null && creditId!.isNotEmpty) 'credit_id': creditId,
+  };
+
+  factory ProviderUsageResetCredit.fromMap(Map<String, dynamic> map) =>
+      ProviderUsageResetCredit(
+        expiresAt: _parseUtcDate(map['expires_at']),
+        grantedAt: _parseUtcDate(map['granted_at']),
+        creditId: map['credit_id']?.toString(),
+      );
+
+  /// Deliberately omits [creditId]: diagnostics must not carry the identifier.
+  @override
+  String toString() =>
+      'ProviderUsageResetCredit(expires=$expiresAt, granted=$grantedAt)';
+}
+
 /// A unified usage snapshot for a single [ProviderInstance] (Task 55 §3.2).
 class ProviderUsageSnapshot {
   /// Owning instance UUID.
@@ -174,6 +223,18 @@ class ProviderUsageSnapshot {
   /// Non-negative reset credit count. `0` hides the Reset button.
   final int availableResets;
 
+  /// How many of [availableResets] the provider says it can apply right now.
+  ///
+  /// `null` means the provider did not report it, and the Client keeps its
+  /// existing behaviour. `0` with a positive [availableResets] means the credit
+  /// exists but cannot be spent yet: the rows still render, the Reset action is
+  /// disabled, and no consume request is made.
+  final int? applicableResets;
+
+  /// Available reset credits with display-safe expiry timestamps. Empty when
+  /// the provider does not expose per-credit detail.
+  final List<ProviderUsageResetCredit> resetCredits;
+
   /// Display-safe extra detail lines.
   final List<String> extraDetails;
 
@@ -188,6 +249,8 @@ class ProviderUsageSnapshot {
     this.planName,
     this.windows = const [],
     this.availableResets = 0,
+    this.applicableResets,
+    this.resetCredits = const [],
     this.extraDetails = const [],
     this.unavailableReason,
   });
@@ -200,6 +263,8 @@ class ProviderUsageSnapshot {
     if (planName != null) 'plan_name': planName,
     'windows': windows.map((w) => w.toMap()).toList(),
     'available_resets': availableResets,
+    if (applicableResets != null) 'applicable_resets': applicableResets,
+    'reset_credits': resetCredits.map((c) => c.toMap()).toList(),
     'extra_details': extraDetails,
     if (unavailableReason != null) 'unavailable_reason': unavailableReason,
   };
@@ -215,6 +280,11 @@ class ProviderUsageSnapshot {
           .map((w) => ProviderUsageWindow.fromMap(w as Map<String, dynamic>))
           .toList(),
       availableResets: (map['available_resets'] as num?)?.toInt() ?? 0,
+      applicableResets: (map['applicable_resets'] as num?)?.toInt(),
+      resetCredits: (map['reset_credits'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .map(ProviderUsageResetCredit.fromMap)
+          .toList(),
       extraDetails: (map['extra_details'] as List<dynamic>? ?? [])
           .map((d) => d.toString())
           .toList(),
@@ -222,16 +292,21 @@ class ProviderUsageSnapshot {
     );
   }
 
-  /// Whether at least one window or detail is present and no reason blocks it.
+  /// Whether at least one window, reset credit, or detail is present and no
+  /// reason blocks it.
   bool get hasContent =>
-      (windows.isNotEmpty || extraDetails.isNotEmpty) &&
+      (windows.isNotEmpty ||
+          resetCredits.isNotEmpty ||
+          extraDetails.isNotEmpty) &&
       unavailableReason == null;
 
   @override
   String toString() =>
       'ProviderUsageSnapshot(instance=$providerInstanceId, '
       'template=$providerTemplateId, source=$source, '
-      'windows=${windows.length}, resets=$availableResets)';
+      'windows=${windows.length}, resets=$availableResets, '
+      'applicable=${applicableResets ?? "?"}, '
+      'resetCredits=${resetCredits.length})';
 }
 
 /// Typed result of a `provider.usage.get` request (Task 55 §3.4).

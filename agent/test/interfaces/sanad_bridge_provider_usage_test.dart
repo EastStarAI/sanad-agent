@@ -427,6 +427,38 @@ void main() {
       expect(adapter.resetCredentials, ['token-a']);
       expect(adapter.seenInstanceIds, everyElement(instanceA));
       expect(adapter.fetchCredentials, isNot(contains('token-b')));
+      // A command without `credit_id` keeps the provider default behaviour.
+      expect(adapter.requestedCreditIds, [null]);
+    });
+
+    test('reset forwards an optional credit id to the adapter', () async {
+      final instance = createInstance('openai-codex', 'ChatGPT A');
+      await getIt<ProviderCredentialService>().writeOAuthBundle(
+        instance,
+        SecretRecord(
+          instanceId: instance,
+          accessToken: 'token-a',
+          authMethod: ProviderAuthMethod.deviceCode,
+        ),
+      );
+      final adapter = _ResetAdapter();
+      final bridge = bridgeWith(
+        registry: ProviderUsageRegistry()..register(adapter),
+        httpClientFactory: () => _NullClient(),
+      );
+
+      await sendCommand(
+        bridge,
+        'provider.usage.reset',
+        payload: {
+          'request_id': 'targeted',
+          'provider_instance_id': instance,
+          'idempotency_key': 'targeted-key',
+          'credit_id': 'RateLimitResetCredit_abc',
+        },
+      );
+
+      expect(adapter.requestedCreditIds, ['RateLimitResetCredit_abc']);
     });
   });
 
@@ -515,6 +547,7 @@ class _ResetAdapter implements ProviderUsageResetAdapter {
   final List<String?> fetchCredentials = [];
   final List<String?> resetCredentials = [];
   final List<String> seenInstanceIds = [];
+  final List<String?> requestedCreditIds = [];
 
   @override
   String get templateId => 'openai-codex';
@@ -551,8 +584,10 @@ class _ResetAdapter implements ProviderUsageResetAdapter {
   Future<ProviderUsageResetAdapterResult> reset(
     ProviderUsageContext context, {
     required String idempotencyKey,
+    String? creditId,
   }) async {
     resetCalls++;
+    requestedCreditIds.add(creditId);
     resetCredentials.add(context.credential?.accessToken);
     seenInstanceIds.add(context.instanceId);
     await Future<void>.delayed(const Duration(milliseconds: 10));
