@@ -152,7 +152,16 @@ Agents v1.0.0 through v1.0.5 verified macOS update candidates against the
 genuine release. v1.0.6 (#105) replaced it with the exact Apple-anchored
 Developer ID requirement used today. Those Agents cannot gain new update logic
 in place; the supported recovery is the official installer, which verifies the
-artifact itself with the current requirement:
+artifact itself with the current requirement.
+
+A second, permanent case has the same recovery. An install on v1.0.21 or older
+predates the `agent-runtime` component, so it rejects every manifest published
+from v1.0.22 onward while parsing it and reports `manifest_invalid`. Neither the
+Client update action nor `sanad update` can recover it, because the rejecting
+parser is inside the installed binary ([Forward compatibility and the publisher
+gate](#forward-compatibility-and-the-publisher-gate)). The user guide owns the
+user-facing paragraph in
+[Update Sanad](user_guide.md#reinstalling-an-agent-that-cannot-update-itself).
 
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login
