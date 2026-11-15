@@ -69,7 +69,10 @@ platform :ios do
       app_version: version,
       build_version: build,
       poll_interval: 30,
-      timeout_duration: Integer(ENV.fetch("APPSTORE_PROCESSING_TIMEOUT_SECONDS"))
+      timeout_duration: Integer(ENV.fetch("APPSTORE_PROCESSING_TIMEOUT_SECONDS")),
+      # The default converts the result to a legacy TestFlight object, which needs an
+      # Apple ID session; this lane authenticates only with the API key.
+      return_spaceship_testflight_build: false
     )
 
     deliver(
