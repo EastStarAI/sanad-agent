@@ -814,6 +814,7 @@
   "providerUsageResetAvailableSingle": "عملية إعادة ضبط واحدة متاحة",
   "providerUsageResetNotApplicable": "لا يمكن استخدام رصيد إعادة الضبط الآن.",
   "providerUsageResetCreditLabel": "رصيد إعادة ضبط",
+  "providerUsageResetCreditExpired": "منتهٍ",
   "providerUsageResetCreditExpiresInMoment": "ينتهي خلال لحظات",
   "providerUsageResetCreditExpiresInMinutes": "ينتهي بعد {count, plural, one{دقيقة واحدة} two{دقيقتين} few{{count} دقائق} other{{count} دقيقة}}",
   "providerUsageResetCreditExpiresInHours": "ينتهي بعد {count, plural, one{ساعة واحدة} two{ساعتين} few{{count} ساعات} other{{count} ساعة}}",

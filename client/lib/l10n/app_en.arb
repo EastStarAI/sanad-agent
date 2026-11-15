@@ -1328,6 +1328,7 @@
   "providerUsageResetAvailableSingle": "1 reset available",
   "providerUsageResetNotApplicable": "This reset credit cannot be applied right now.",
   "providerUsageResetCreditLabel": "Reset credit",
+  "providerUsageResetCreditExpired": "Expired",
   "providerUsageResetCreditExpiresInMoment": "Expires in a moment",
   "providerUsageResetCreditExpiresInMinutes": "Expires in {count} min",
   "@providerUsageResetCreditExpiresInMinutes": {

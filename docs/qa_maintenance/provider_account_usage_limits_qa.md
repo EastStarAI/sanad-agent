@@ -31,7 +31,7 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | ChatGPT reports `rate_limit_reset_credits.available_count` above zero | The adapter also requests `GET /backend-api/wham/rate-limit-reset-credits` with the same headers; the per-credit rows come from that document only. |
 | ChatGPT reports a zero credit count | Exactly one request is made; no detail request is sent. |
 | The reset-credit detail request fails (non-2xx, non-JSON, or transport error) | The snapshot still returns `available` with the authoritative count and no rows. |
-| The detail document lists redeemed, expired, or undated credits | Only `available` entries with a parseable `expires_at` cross the protocol, earliest expiry first. |
+| The detail document lists redeemed, expired, or undated credits | Only `available` entries with a parseable, still-future `expires_at` cross the protocol, earliest expiry first; an `available` credit whose timestamp has passed is dropped too. |
 | `/usage` omits `applicable_available_count` | The snapshot omits `applicable_resets`, and the client keeps the reset action enabled. |
 | `/usage` reports `applicable_available_count` of zero | `applicable_resets` is `0`, and the client disables the action while keeping the credit rows. |
 
@@ -74,6 +74,8 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | Two reset credits have distinct expiries | Two `Reset credit` rows render, each stacking the title over a relative `Expires in 2 d 5 h` line with its own trailing `Reset limits` action; the combined count is hidden while the row count equals `available_resets`, and reappears above the rows when they disagree. |
 | A credit row renders normally | No absolute date/time is visible; hovering the relative expiry reveals the full local instant formatted in the current app language (an Arabic card never shows `Dec`). |
 | Each row has its own action | Pressing row *n* consumes that row's credit: the request carries that credit's `credit_id`, and the id never appears in the UI, a tooltip, or a log. |
+| The rows arrive without `credit_id` (an older daemon) | The rows still render, but only the first row carries the single action; pressing it sends the original untargeted request instead of promising a per-row target. |
+| A row's `expires_at` is already past | The expiry reads `Expired` (localized) rather than an imminent countdown, and that row's action is disabled. |
 | Only `available_resets` is supplied | The existing combined `N resets available` fallback remains, with a single action and no `credit_id`. |
 | Snapshot reports `applicable_resets` of zero | The credit rows still render, every row action is disabled, and the localized `This reset credit cannot be applied right now.` hint appears directly under the first row; no confirmation or reset request is possible. |
 | Snapshot omits `applicable_resets` | The actions stay enabled exactly as before the field existed. |

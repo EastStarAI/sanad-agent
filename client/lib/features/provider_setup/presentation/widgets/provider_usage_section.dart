@@ -533,6 +533,11 @@ class _ResetControls extends StatelessWidget {
     // (null) keeps the previous behaviour.
     final applicable = snapshot.applicableResets;
     final canReset = applicable == null || applicable > 0;
+    // An older daemon sends the rows without their opaque ids. Every row would
+    // then advertise a target it cannot honour (the press would spend the
+    // provider's default credit), so the layout falls back to the single action
+    // on the first row instead of guessing.
+    final canTargetPerRow = credits.every((credit) => credit.creditId != null);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -570,13 +575,18 @@ class _ResetControls extends StatelessWidget {
               expiresAt: credits[i].expiresAt!,
               // Every row owns its action so a press spends that credit; the
               // shared applicability rule still disables all of them together.
-              trailing: _resetButton(
-                context,
-                l10n,
-                canReset: canReset,
-                rowIndex: i,
-                creditId: credits[i].creditId,
-              ),
+              // Without ids only the first row keeps the single action.
+              trailing: canTargetPerRow || i == 0
+                  ? _resetButton(
+                      context,
+                      l10n,
+                      canReset:
+                          canReset &&
+                          _isSpendable(credits[i].expiresAt!),
+                      rowIndex: i,
+                      creditId: credits[i].creditId,
+                    )
+                  : null,
             ),
             // The blocked explanation belongs to the first row's action.
             if (i == 0 && !canReset) _resetBlockedHint(context, l10n),
@@ -630,6 +640,11 @@ class _ResetControls extends StatelessWidget {
       ),
     );
   }
+
+  /// A credit whose expiry has already passed cannot be redeemed, even if the
+  /// daemon still listed it.
+  bool _isSpendable(DateTime expiresAt) =>
+      expiresAt.toLocal().isAfter(DateTime.now());
 
   /// Explains why the credit actions are unavailable. Indented to the row text
   /// so it reads as part of the first row.
@@ -804,7 +819,10 @@ class _ResetCreditRow extends StatelessWidget {
   /// purpose: the exact instant lives in the tooltip.
   String _relativeExpiry(AppLocalizations l10n, DateTime local) {
     final delta = local.difference(DateTime.now());
-    if (delta.isNegative || delta.inMinutes < 1) {
+    // A past expiry is not imminent: saying so would invite a press that must
+    // fail. The row keeps the plain fact instead.
+    if (delta.isNegative) return l10n.providerUsageResetCreditExpired;
+    if (delta.inMinutes < 1) {
       return l10n.providerUsageResetCreditExpiresInMoment;
     }
     if (delta.inHours < 1) {

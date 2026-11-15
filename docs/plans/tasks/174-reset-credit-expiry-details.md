@@ -50,7 +50,12 @@ instead of collapsing them into a single `N resets available` line.
   displayed, never in a tooltip, and never logged, and the consume command keeps
   working without it so an older Client is unaffected. Per-credit applicability
   is absent from the provider payload, so the shared `applicable_resets` rule
-  disables every row action together.
+  disables every row action together. When a snapshot's rows arrive without any
+  `credit_id` (an older daemon), the disclosure falls back to the single action
+  on the first row instead of advertising a target it cannot honour.
+- A credit past its `expires_at` is dropped by the adapter, and the Client still
+  defends against a stale row by reading `Expired` and disabling that action
+  rather than showing an imminent countdown.
 - No live UI test is part of this task. Verification is analyzer plus focused
   agent and widget tests.
 

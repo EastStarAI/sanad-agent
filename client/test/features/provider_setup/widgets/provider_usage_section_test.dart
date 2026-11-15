@@ -894,8 +894,9 @@ void main() {
   testWidgets(
     'the combined count stays visible when the credit rows disagree with it',
     (tester) async {
-      final firstLocal = DateTime(2026, 11, 15, 10, 30);
-      final secondLocal = DateTime(2026, 11, 20, 10, 30);
+      final now = DateTime.now();
+      final firstLocal = now.add(const Duration(days: 2, minutes: 30));
+      final secondLocal = now.add(const Duration(days: 5, minutes: 30));
       cubit.emit(
         cubit.state.upsertEntry(
           _localDeviceId,
@@ -923,8 +924,14 @@ void main() {
                 // the authoritative count disagree.
                 availableResets: 3,
                 resetCredits: [
-                  ProviderUsageResetCreditDto(expiresAt: firstLocal.toUtc()),
-                  ProviderUsageResetCreditDto(expiresAt: secondLocal.toUtc()),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: firstLocal.toUtc(),
+                    creditId: 'credit-first',
+                  ),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: secondLocal.toUtc(),
+                    creditId: 'credit-second',
+                  ),
                 ],
               ),
             ),
@@ -1084,6 +1091,169 @@ void main() {
     },
   );
 
+  testWidgets(
+    'credits without an id fall back to the single action on the first row',
+    (tester) async {
+      // A previous-generation daemon sends the rows without their opaque ids.
+      // Advertising a per-row action would promise a target it cannot honour,
+      // so the disclosure keeps the original single action.
+      final now = DateTime.now();
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: DateTime.now(),
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'openai-codex',
+                source: 'test',
+                fetchedAt: DateTime.now().toUtc(),
+                windows: const [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 40,
+                    remainingPercent: 60,
+                  ),
+                ],
+                availableResets: 2,
+                resetCredits: [
+                  ProviderUsageResetCreditDto(
+                    expiresAt: now.add(const Duration(days: 2)).toUtc(),
+                  ),
+                  ProviderUsageResetCreditDto(
+                    expiresAt: now.add(const Duration(days: 5)).toUtc(),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      client.resetResults.add(
+        const ProviderUsageResetResultDto(
+          status: 'confirmation_required',
+          providerInstanceId: 'a',
+          message: 'Resetting now may waste this credit.',
+          confirmationToken: 'confirm-a',
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      // Both rows still render, but only the first one carries the action.
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_1')),
+        findsOneWidget,
+      );
+      expect(find.text('Reset limits'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_reset_action_a_0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_action_a_1')),
+        findsNothing,
+      );
+
+      // The single action keeps the original untargeted request.
+      await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_0')));
+      await tester.pumpAndSettle();
+      expect(client.creditIds, [null]);
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+    },
+  );
+
+  testWidgets('an expired credit reads Expired and cannot be redeemed', (
+    tester,
+  ) async {
+    final now = DateTime.now();
+    cubit.emit(
+      cubit.state.upsertEntry(
+        _localDeviceId,
+        'a',
+        ProviderUsageEntry(
+          phase: ProviderUsagePhase.fresh,
+          fetchedAt: DateTime.now(),
+          result: ProviderUsageResultDto(
+            status: 'available',
+            providerInstanceId: 'a',
+            snapshot: ProviderUsageSnapshotDto(
+              providerInstanceId: 'a',
+              providerTemplateId: 'openai-codex',
+              source: 'test',
+              fetchedAt: DateTime.now().toUtc(),
+              windows: const [
+                ProviderUsageWindowDto(
+                  type: 'weekly',
+                  label: 'Weekly',
+                  usedPercent: 40,
+                  remainingPercent: 60,
+                ),
+              ],
+              availableResets: 1,
+              // The adapter drops these; an older daemon may still send one.
+              resetCredits: [
+                ProviderUsageResetCreditDto(
+                  expiresAt: now
+                      .subtract(const Duration(hours: 1))
+                      .toUtc(),
+                  creditId: 'credit-stale',
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+      ),
+    );
+    await tester.pump();
+    await tester.tap(find.text('Usage & limits'));
+    await tester.pumpAndSettle();
+
+    // Past expiry must never read as imminent.
+    expect(find.text('Expired'), findsOneWidget);
+    expect(find.text('Expires in a moment'), findsNothing);
+
+    final button = tester.widget<TextButton>(
+      find.byKey(const Key('provider_usage_reset_action_a_0')),
+    );
+    expect(button.onPressed, isNull, reason: 'an expired credit is unspendable');
+    await tester.tap(find.byKey(const Key('provider_usage_reset_action_a_0')));
+    await tester.pump();
+    expect(client.creditIds, isEmpty);
+
+    // The same fact is localized.
+    await tester.pumpWidget(
+      _wrap(
+        cubit,
+        ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        locale: 'ar',
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('الاستخدام والحدود'));
+    await tester.pumpAndSettle();
+    expect(find.text('منتهٍ'), findsOneWidget);
+  });
   testWidgets('reset count is conditional and Reset anyway reuses confirmation', (tester) async {
     ProviderUsageEntry entryWithResets(int count) => ProviderUsageEntry(
       phase: ProviderUsagePhase.fresh,

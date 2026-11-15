@@ -317,7 +317,12 @@ per-credit list is a **separate** document, `GET
 only when the count is above zero. That second request is non-fatal: a non-2xx
 response, a non-JSON body, or a transport error yields the count-only snapshot
 with no rows. `applicable_resets` is omitted when the provider does not report
-it, and `0` means credits exist but cannot be applied right now.
+it, and `0` means credits exist but cannot be applied right now. A credit whose
+`expires_at` has already passed is dropped by the adapter even when its `status`
+still reads `available`, because it can no longer be spent; the authoritative
+count is unaffected, so the Client falls back to the count line. A `reset_credits`
+entry without `credit_id` still crosses (an older daemon), and the Client then
+keeps the single action instead of offering per-row targets it cannot honour.
 
 Both documents are pinned by reference-derived fixtures,
 `agent/test/fixtures/chatgpt_usage_reference_shape.json` and
@@ -949,7 +954,7 @@ A bounded retry on the current provider follows the same durable ownership bound
 
 `provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`, and accepts an optional `credit_id` that targets one credit from the snapshot. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`. Without `credit_id` the daemon keeps the original consume request and the provider spends its default credit, so an older client stays compatible; the daemon's idempotency cache is keyed by the instance, the key, and the targeted credit so a retry for one row can never replay another row's outcome.
 
-The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key` and the same `credit_id`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials, the credit identifier in logs, and raw provider responses never cross the protocol.
+The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key` and the same `credit_id`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol, and the credit identifier never enters a log.
 
 ## Exact-Route Model Capabilities & Thinking Controls (Plan 77 / Task 77i5)
 

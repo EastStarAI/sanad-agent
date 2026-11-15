@@ -416,14 +416,16 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
   /// `description`, and `reset_type` are dropped: they are provider copy, and
   /// the protocol never carries them.
   ///
-  /// Only credits that are available and carry a valid expiry cross the
-  /// protocol. The list is sorted by earliest expiry so the Client can render
-  /// the most urgent credit first.
+  /// Only credits that are available and carry a valid, not-yet-passed expiry
+  /// cross the protocol: an expired credit cannot be spent, so carrying it would
+  /// offer an action that must fail. The list is sorted by earliest expiry so the
+  /// Client can render the most urgent credit first.
   List<ProviderUsageResetCredit> _parseResetCredits(Object? raw) {
     if (raw is! Map<String, dynamic>) return const [];
     final credits = raw['credits'];
     if (credits is! List) return const [];
 
+    final now = DateTime.now().toUtc();
     final parsed = <ProviderUsageResetCredit>[];
     for (final item in credits) {
       if (item is! Map<String, dynamic>) continue;
@@ -433,6 +435,9 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       }
       final expiresAt = parseUsageResetAt(item['expires_at']);
       if (expiresAt == null) continue;
+      // `status` can still read `available` for a credit the account has
+      // already let expire, so the timestamp is the authority.
+      if (!expiresAt.isAfter(now)) continue;
       final rawId = item['id']?.toString().trim();
       parsed.add(
         ProviderUsageResetCredit(

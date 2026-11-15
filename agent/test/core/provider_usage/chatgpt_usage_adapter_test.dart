@@ -542,6 +542,12 @@ void main() {
     });
 
     test('status and expiry filtering drops unusable entries', () async {
+      // Relative instants keep this test from rotting: the only surviving credit
+      // must be in the future, and an `available` credit whose timestamp has
+      // passed must still be dropped.
+      final now = DateTime.now().toUtc();
+      final future = now.add(const Duration(days: 10));
+      final past = now.subtract(const Duration(hours: 2));
       final ctx = context(
         instanceId: 'inst-filter',
         credential: oauthCred('inst-filter'),
@@ -557,11 +563,12 @@ void main() {
             'credits': [
               {
                 'status': 'available',
-                'granted_at': '2026-11-01T10:00:00Z',
-                'expires_at': '2026-11-20T10:00:00Z',
+                'granted_at': past.toIso8601String(),
+                'expires_at': future.toIso8601String(),
               },
-              {'status': 'redeemed', 'expires_at': '2026-11-10T10:00:00Z'},
-              {'status': 'expired', 'expires_at': '2026-11-11T10:00:00Z'},
+              {'status': 'redeemed', 'expires_at': future.toIso8601String()},
+              {'status': 'expired', 'expires_at': future.toIso8601String()},
+              {'status': 'available', 'expires_at': past.toIso8601String()},
               {'status': 'available', 'expires_at': 'not-a-date'},
               {'status': 'available'},
               'not-an-object',
@@ -572,10 +579,47 @@ void main() {
 
       final snap = await adapter.fetch(ctx);
 
+      expect(snap.resetCredits, hasLength(1));
+      expect(snap.resetCredits.single.expiresAt!.isAtSameMomentAs(future), isTrue);
       expect(
-        snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()),
-        ['2026-11-20T10:00:00.000Z'],
+        snap.resetCredits.single.grantedAt!.isAtSameMomentAs(past),
+        isTrue,
       );
+    });
+
+    test('a past expiry is dropped even when the status says available', () async {
+      final now = DateTime.now().toUtc();
+      final ctx = context(
+        instanceId: 'inst-expired',
+        credential: oauthCred('inst-expired'),
+        httpClientFactory: _routedFactory({
+          '/usage': _Route.json({
+            'rate_limit': {
+              'primary_window': {'used_percent': 10},
+            },
+            'rate_limit_reset_credits': {'available_count': 1},
+          }),
+          '/rate-limit-reset-credits': _Route.json({
+            'available_count': 1,
+            'credits': [
+              {
+                'id': 'RateLimitResetCredit_stale',
+                'status': 'available',
+                'expires_at': now
+                    .subtract(const Duration(minutes: 1))
+                    .toIso8601String(),
+              },
+            ],
+          }),
+        }, <_RecordedCall>[]),
+      );
+
+      final snap = await adapter.fetch(ctx);
+
+      // The count stays authoritative; only the unusable row disappears, so the
+      // Client shows the count line instead of a dead action.
+      expect(snap.availableResets, 1);
+      expect(snap.resetCredits, isEmpty);
     });
 
     test('applicable count is null when the provider omits it', () async {
