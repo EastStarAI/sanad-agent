@@ -608,6 +608,7 @@
   "workspacePolicyChangedRetry": "تغيّرت أذونات مساحة العمل هذه من مكان آخر وتم تحديثها. حاول مرة أخرى.",
   "workspacePermissionModeChangeFailed": "تعذّر تغيير وضع الأذونات. حاول مرة أخرى.",
   "newerAgentInUseNotice": "الوكيل المثبَّت {agentVersion} أحدث من هذا العميل {clientVersion}. أُبقي عليه وهو قيد الاستخدام؛ حدِّث العميل عندما يناسبك.",
+  "agentInstallTlsTrustFailed": "تعذّر التحقق من الاتصال الآمن بخادم الإصدارات على هذا الجهاز. اسمح لتطبيق Sanad في برنامج الحماية أو وكيل الشبكة، أو تأكد من صحة ساعة النظام، أو اجعل SANAD_EXTRA_CA_BUNDLE يشير إلى الشهادة الجذرية لشبكتك، ثم أعد المحاولة.",
   "secretRequestTitle": "طلب بيانات سرية",
   "secretRequestVaultNotice": "تُحفظ في الخزينة الآمنة للوكيل. لا يرى الذكاء الاصطناعي سوى الاسم، ولا يرى القيمة أبدًا.",
   "secretRequestReplacesNotice": "تستبدل القيمة المحفوظة",

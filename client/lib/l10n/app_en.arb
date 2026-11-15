@@ -780,6 +780,10 @@
       }
     }
   },
+  "agentInstallTlsTrustFailed": "The secure connection to the release server could not be verified on this computer. Allow Sanad in your antivirus or network proxy, check that the system clock is correct, or point SANAD_EXTRA_CA_BUNDLE at your network's root certificate, then try again.",
+  "@agentInstallTlsTrustFailed": {
+    "description": "Install failure shown when the release host's TLS chain is refused locally (for example by antivirus HTTPS scanning, a proxy, a partial root store, or a skewed clock). Names the three remedies; the environment variable is a literal identifier and is not translated."
+  },
   "secretRequestTitle": "Secret requested",
   "@secretRequestTitle": {
     "description": "Header of the composer card that collects a secret the agent asked for"
