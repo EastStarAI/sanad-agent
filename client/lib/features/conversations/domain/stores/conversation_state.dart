@@ -356,6 +356,18 @@ class ConversationState {
       case EventKind.thinking:
       case EventKind.reasoning:
         if (incoming.status == EventStatus.running) {
+          if (incoming.isSnapshot) {
+            // A snapshot is a whole-text projection: it replaces the visible
+            // text instead of extending it, so adopting one can never double
+            // the prefix the consumer already saw.
+            return existing.copyWith(
+              text: incoming.text,
+              status: EventStatus.running,
+              timestamp: incoming.timestamp,
+              runId: incoming.runId ?? existing.runId,
+              modelStepId: incoming.modelStepId ?? existing.modelStepId,
+            );
+          }
           return existing.copyWith(
             text: _mergeThinkingText(existing.text, incoming.text),
             status: EventStatus.running,

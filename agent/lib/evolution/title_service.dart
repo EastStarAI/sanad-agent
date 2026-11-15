@@ -106,7 +106,8 @@ class TitleService {
       final title = _cleanTitle(rawContent);
 
       if (title.isNotEmpty) {
-        _logger.info("🏷️ Generated session title: '$title'");
+        // Never log the title text: it is derived from the conversation.
+        _logger.info('🏷️ Generated session title (${title.length} chars)');
         return title;
       }
     } catch (e) {
@@ -115,8 +116,10 @@ class TitleService {
 
     // Fallback logic: Use the first part of the user message
     final fallbackTitle = _generateFallbackTitle(userMessage);
+    // The fallback title is a slice of the user message: log its size only.
     _logger.info(
-      "🏷️ Falling back to user message for title: '$fallbackTitle'",
+      '🏷️ Falling back to user message for title '
+      '(${fallbackTitle.length} chars)',
     );
     return fallbackTitle;
   }

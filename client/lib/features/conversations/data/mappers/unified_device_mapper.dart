@@ -200,6 +200,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
     final contextTokens = event['context_tokens'] is num ? (event['context_tokens'] as num).toInt() : null;
     final thinkingMode = event['thinking_mode']?.toString();
     final reasoningLevel = event['reasoning_level']?.toString();
+    final streamSeq = _intOrNull(event['stream_seq']);
+    final isSnapshot = event['snapshot'] == true;
 
     switch (type) {
       case 'user_message':
@@ -253,10 +255,18 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           thinkingMode: thinkingMode,
           reasoningLevel: reasoningLevel,
           metadata: metadata,
+          streamSeq: streamSeq,
+          isSnapshot: isSnapshot,
         );
 
       case 'reasoning_stream':
-        if (text.trim().isEmpty) return null;
+        // A numbered whitespace-only reasoning chunk is a real step of its
+        // stream: the producer already allocated its ordinal, so dropping it
+        // would turn a contiguous stream into a permanent gap. An unnumbered
+        // one keeps the previous behavior and never creates a bubble.
+        if (text.isEmpty || (streamSeq == null && text.trim().isEmpty)) {
+          return null;
+        }
         return CanonicalEvent(
           id: _reasoningId(modelStepId, runId, eventId, timestamp),
           kind: EventKind.reasoning,
@@ -277,6 +287,8 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
           thinkingMode: thinkingMode,
           reasoningLevel: reasoningLevel,
           metadata: metadata,
+          streamSeq: streamSeq,
+          isSnapshot: isSnapshot,
         );
 
       case 'thought':
@@ -757,5 +769,13 @@ class UnifiedDeviceMapper implements DeviceEventMapper {
       }
     }
     return null;
+  }
+
+  /// Reads an optional integer ordinal from either a JSON number or its string
+  /// form, so a transport that serializes numbers as strings stays valid.
+  int? _intOrNull(dynamic value) {
+    if (value is int) return value;
+    if (value is num && value.toInt() == value) return value.toInt();
+    return int.tryParse(value?.toString() ?? '');
   }
 }
