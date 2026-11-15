@@ -132,7 +132,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
-| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
+| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload; App Store submission and review evidence when the build is promoted to the public listing |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
 The Agent macOS rows above are proved by two different lanes, and neither one
@@ -190,6 +190,20 @@ and exact custom release-ref policies but have no required reviewers.
 `release-publication` retains the repository owner as required reviewer and is
 reachable only after all builds, signing, notarization, tests, metadata,
 checksums, SBOM, attestations, and private Draft creation succeed.
+
+A tag run that promotes a validated candidate replaces "all builds" with the
+proof that they already succeeded on this exact commit: the `candidate` job
+re-verifies the dispatch run's jobs, its artifact, the manifest identity, the
+release contract, `SHA256SUMS`, the complete regular-file set and every
+attestation, and only then does the Draft exist. File-set negatives cover missing
+SBOM/private outputs, hidden or extra entries, undeclared sidecars, native-tree
+drift, symlinks and special files. Candidate-job failure must select the rebuild
+path, whose assembler names every producing job as a required success; only a
+successful candidate job may pair promotion with a skipped assembler. The
+approval is therefore still reached after the same evidence; the build steps it
+used to wait for are the ones the dispatch run already ran.
+The approval decision itself, its Environment and its single-owner reviewer are
+unchanged, and a promotion that cannot be proved rebuilds instead.
 `client-downloads-production` remains non-interactive and tag-restricted so an
 approved Stable publication can deploy aliases and Production assets without a
 second human decision. Any missing signing ref restriction, reviewer on a
@@ -319,7 +333,7 @@ self-removal. That wait is deadline-based and generous for slow runners (up to
 60 seconds) while still exiting as soon as both observations hold, so the gate
 never depends on how fast a hosted runner starts PowerShell.
 
-Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
+Hosted validation begins with a `validation_only` full-matrix run from protected `main`. It requires no tag and must leave zero Drafts and Releases while retaining private Agent/Client artifacts, the signed IPA, manifest, checksums, SBOM, Appcast, and attestations. That retained `stable-release-candidate` or `rc-release-candidate` artifact is exactly what a later tag run may promote, and it stays promotable for the artifact retention window: 14 days. A tag cut later than that falls back to a full rebuild. Promotion itself is controlled by the repository variable `RELEASE_CANDIDATE_PROMOTION` (`enabled`, `shadow`, or unset); the tag run's `candidate` job summarises its verdict and reason, and in `shadow` it must report `would-promote` while the run still publishes only its own build. Later lifecycle validation additionally exercises interrupted downloads, wrong architecture, corrupted size and checksum, replacement failure, service restart, retained Sanad Home, repeated update requests, and rollback to the prior signed version.
 
 Flutter Web acceptance is runtime evidence, not compilation or HTTP evidence.
 The release build must start in a clean browser, create a non-empty Flutter

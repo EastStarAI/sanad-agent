@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
-  "version": "1.0.23",
-  "build_number": 24,
-  "tag": "v1.0.23",
+  "version": "1.0.24",
+  "build_number": 25,
+  "tag": "v1.0.24",
   "channel": "stable",
   "channels": {
     "stable_manifest": "release-manifest.json",
@@ -17,7 +17,7 @@
       "platform": "macos",
       "architecture": "arm64",
       "format": "executable",
-      "filename": "sanad-agent-1.0.23-macos-arm64",
+      "filename": "sanad-agent-1.0.24-macos-arm64",
       "public": true,
       "signature_type": "developer-id+notarization+github-attestation"
     },
@@ -26,7 +26,7 @@
       "platform": "macos",
       "architecture": "x64",
       "format": "executable",
-      "filename": "sanad-agent-1.0.23-macos-x64",
+      "filename": "sanad-agent-1.0.24-macos-x64",
       "public": true,
       "signature_type": "developer-id+notarization+github-attestation"
     },
@@ -35,7 +35,7 @@
       "platform": "linux",
       "architecture": "x64",
       "format": "executable",
-      "filename": "sanad-agent-1.0.23-linux-x64",
+      "filename": "sanad-agent-1.0.24-linux-x64",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -44,7 +44,7 @@
       "platform": "linux",
       "architecture": "arm64",
       "format": "executable",
-      "filename": "sanad-agent-1.0.23-linux-arm64",
+      "filename": "sanad-agent-1.0.24-linux-arm64",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -53,7 +53,7 @@
       "platform": "windows",
       "architecture": "x64",
       "format": "executable",
-      "filename": "sanad-agent-1.0.23-windows-x64.exe",
+      "filename": "sanad-agent-1.0.24-windows-x64.exe",
       "public": true,
       "signature_type": "unsigned+github-attestation"
     },
@@ -62,7 +62,7 @@
       "platform": "macos",
       "architecture": "arm64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.23-macos-arm64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.24-macos-arm64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -71,7 +71,7 @@
       "platform": "macos",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.23-macos-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.24-macos-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -80,7 +80,7 @@
       "platform": "linux",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.23-linux-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.24-linux-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -89,7 +89,7 @@
       "platform": "linux",
       "architecture": "arm64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.23-linux-arm64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.24-linux-arm64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -98,7 +98,7 @@
       "platform": "windows",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-agent-runtime-1.0.23-windows-x64.tar.gz",
+      "filename": "sanad-agent-runtime-1.0.24-windows-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -107,7 +107,7 @@
       "platform": "macos",
       "architecture": "universal",
       "format": "dmg",
-      "filename": "sanad-client-1.0.23-macos-universal.dmg",
+      "filename": "sanad-client-1.0.24-macos-universal.dmg",
       "public": true,
       "signature_type": "developer-id+notarization+sparkle-ed25519"
     },
@@ -116,7 +116,7 @@
       "platform": "windows",
       "architecture": "x64",
       "format": "exe",
-      "filename": "sanad-client-1.0.23-windows-x64.exe",
+      "filename": "sanad-client-1.0.24-windows-x64.exe",
       "public": true,
       "signature_type": "unsigned+winsparkle-dsa"
     },
@@ -125,7 +125,7 @@
       "platform": "linux",
       "architecture": "x64",
       "format": "deb",
-      "filename": "sanad-client-1.0.23-linux-x64.deb",
+      "filename": "sanad-client-1.0.24-linux-x64.deb",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -134,7 +134,7 @@
       "platform": "linux",
       "architecture": "x64",
       "format": "tar.gz",
-      "filename": "sanad-client-1.0.23-linux-x64.tar.gz",
+      "filename": "sanad-client-1.0.24-linux-x64.tar.gz",
       "public": true,
       "signature_type": "github-attestation"
     },
@@ -143,7 +143,7 @@
       "platform": "android",
       "architecture": "universal",
       "format": "apk",
-      "filename": "sanad-client-1.0.23-android-universal.apk",
+      "filename": "sanad-client-1.0.24-android-universal.apk",
       "public": true,
       "signature_type": "android-apksigner"
     },
@@ -152,7 +152,7 @@
       "platform": "android",
       "architecture": "universal",
       "format": "aab",
-      "filename": "sanad-client-1.0.23-android-universal.aab",
+      "filename": "sanad-client-1.0.24-android-universal.aab",
       "public": false,
       "signature_type": "android-apksigner"
     },
@@ -161,7 +161,7 @@
       "platform": "ios",
       "architecture": "universal",
       "format": "ipa",
-      "filename": "sanad-client-1.0.23-ios-universal.ipa",
+      "filename": "sanad-client-1.0.24-ios-universal.ipa",
       "public": false,
       "signature_type": "apple-distribution"
     },
@@ -170,7 +170,7 @@
       "platform": "web",
       "architecture": "universal",
       "format": "tar.gz",
-      "filename": "sanad-client-1.0.23-web-universal.tar.gz",
+      "filename": "sanad-client-1.0.24-web-universal.tar.gz",
       "public": false,
       "signature_type": "github-attestation"
     }

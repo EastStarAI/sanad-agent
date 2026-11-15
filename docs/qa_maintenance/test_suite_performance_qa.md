@@ -69,6 +69,57 @@ relying on the default 30-second test timeout:
 - A larger budget changes no assertion: exceeding a deadline still fails the
   case on its original expectations.
 
+### Native dictation lane additions
+
+`Native dictation` also runs `test/stt/stt_digest_test.dart` and
+`test/stt/stt_download_pipeline_test.dart`, because those two files own the
+operating-system half of the download path: the digest selects a per-OS SHA-256
+(CommonCrypto on macOS, OpenSSL EVP on Linux, BCrypt on Windows) and the write
+pipeline opens a second file handle for writeback. Running them on one Linux
+shard proves neither.
+
+Measured on macOS arm64 (M-series), warm, `SANAD_STT_REQUIRE_NATIVE=1`, one file
+per `dart test` process and then the two together with `--concurrency 1`:
+
+| Invocation | Wall time | Reported case time |
+| --- | --- | --- |
+| `test/stt/stt_digest_test.dart` | 1.0 s | < 1 s |
+| `test/stt/stt_download_pipeline_test.dart` | 2.5–2.6 s | ~1 s |
+| both, `--concurrency 1` | 3.6–3.9 s | ~1 s |
+| `test/stt/stt_digest_cost_test.dart` | 6.4 s | 3.0 s |
+| `test/stt/stt_pipeline_cost_test.dart` | 1.3 s | ~0.3 s |
+
+The digest file lost 0.8–0.9 s when its ratio case moved out: that case hashed
+64 MiB three times inside the suite, and the cost gate below does the same work
+once, alone.
+
+The wall time is `dart test` bootstrap plus compilation; the correctness cases\nthemselves are about a second. Estimated per lane for the two correctness files,\nusing the measured 2.4–3.0× per-unit factor of `macos-15-intel` against arm64 and\nallowing for JIT/process overhead on Windows:
+
+| Lane | Estimated added wall |
+| --- | --- |
+| `ubuntu-24.04`, `ubuntu-24.04-arm` | 4–5 s |
+| `macos-26` | 4 s (measured) |
+| `macos-15-intel` | 9–11 s |
+| `windows-2025` | 6–8 s |
+
+About 27–32 seconds of runner time across the five lanes, in exchange for proving
+the shipped OS crypto backend and the real write pipeline on every operating
+system the Agent is published for.
+
+**Each ratio owns a process.** Two cost gates run beside those suites, and neither
+may share a process with anything else: `test/stt/stt_digest_cost_test.dart`
+(native SHA-256 against pure Dart, median at 2.5×) and
+`test/stt/stt_pipeline_cost_test.dart` (the isolate hop against the same sink
+in-process, median at 0.5, so the isolate may cost up to twice the in-process
+sink). Both warm both arms, run five alternating paired trials, assert the same
+output on every trial, and judge the median. Run beside another suite — or always
+in the same order — one arm is charged for the other's contention: the pipeline
+ratio measured 2.18× and failed once in four attempts on an idle machine, and the
+digest ratio measured 2.14 on `macos-15-intel` while the native backend was
+selected and correct. The correctness pair still passes `--concurrency 1`, which
+no longer protects an assertion there. A failure in either gate is a real cost
+regression, and neither bound is lowered, skipped, or retried to meet a lane.
+
 ## Performance regression gates
 
 For a changed hotspot, compare like-for-like warm runs. It passes when median

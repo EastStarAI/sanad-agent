@@ -91,9 +91,15 @@ narrow exception.
 
 Poll with a fixed deadline until a prerequisite fails or all Agent/Client builds,
 signing, notarization, tests, manifest, checksums, Appcast, SBOM, attestations,
-and private Draft creation succeed. Before asking the user, require exactly one
-Draft for the tag, matching source/channel/assets, exactly one pending deployment
-named `release-publication`, and no started Production deployment.
+and private Draft creation succeed. On a tag the run's `candidate` job may have
+promoted the dispatch run's proved bytes instead; read its job summary and
+report the mode (`promote` or `rebuild`), the verdict (`promote`, `would-promote`,
+`would-rebuild`, `skipped`), the candidate run id and the reason, and treat a
+missing or failed `candidate` job on a tag as a rebuild. Do not attempt to
+influence `RELEASE_CANDIDATE_PROMOTION`: it is the owner's rollout switch, not a
+release step. Before asking the user, require exactly one Draft for the tag,
+matching source/channel/assets, exactly one pending deployment named
+`release-publication`, and no started Production deployment.
 
 Any failure, cancellation, missing or duplicate Draft, stale source, ambiguous
 pending deployment, or timeout blocks approval. Present a compact summary of

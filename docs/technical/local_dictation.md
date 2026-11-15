@@ -366,6 +366,37 @@ origin:
   (`agent/lib/infrastructure/stt/stt_write_bounds.dart`), shared by the isolate
   pipeline and the in-process seam so the rule has a single owner and neither
   file outgrows the 1000-line ratchet.
+- **Every handle is closed by the isolate that opened it, and `close()` waits for
+  both.** A dictation install deletes or renames the `.partial` in the statement
+  after `close()` returns, and Windows refuses either while any handle is open —
+  including one this same process holds. Neither ending an isolate nor dropping
+  the last reference releases its descriptor (measured: `Isolate.kill` leaves the
+  file open after the isolate's own `exit` event), so the writer closes its own
+  handle on every path it can take, the flusher does the same on `exit` and after
+  a refused flush, and `close()` asks the flusher directly over a parent-facing
+  channel — it reports `gone` only after its `closeSync()` — then awaits both
+  isolate exits. `gone` and the exit are **different events and different
+  completers**: `gone` proves the descriptor was closed by the isolate whose
+  handle it was, while the isolate keeps running until its own `onExit` fires, and
+  only that event (or a spawn that never produced an isolate) may count as an
+  exit. Conflating them made `close()` report an exit it never observed. Three
+  details carry the guarantee:
+  - **The flusher handoff is a state, not a value.** The channel arrives
+    asynchronously after the spawn, so `close()` first waits for the handoff to
+    settle — channel received, or no handle, or isolate exited — and only then
+    decides whether there is a handle to ask. Sampling the channel once and
+    reading "not here yet" as "no handle" stranded one append descriptor per
+    immediate cancel (17/200 measured by review; 63/200 on another host).
+  - **One teardown, shared.** Every concurrent `close()` awaits the same
+    completion, so a second caller cannot return while the flusher is still inside
+    `closeSync`; a caller that arrives after the teardown settled gets a no-op,
+    and the typed failure is rethrown once — by the close that ran it.
+
+  `close()` never short-circuits: a pipeline whose writer or flusher already ended
+  still tears down and still rethrows its typed failure, because the alternative
+  is a `.partial` that can never be repaired, activated, or removed until the
+  daemon exits. Killing an isolate remains only as the net for a flusher that
+  never took a command channel.
 
 The two changes together, measured on an Apple M4 against a loopback origin
 serving one 1 GiB artifact, median of three runs after a warm-up: **142.9 MB/s

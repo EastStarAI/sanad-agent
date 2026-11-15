@@ -1,0 +1,82 @@
+# Lane input sets for the Public CI classifier.
+#
+# Consumed by the `classify` job in .github/workflows/ci.yml and checked by
+# agent/test/tool/ci_lane_inputs_test.dart. docs/operations/continuous_integration.md
+# owns the model and the safety argument.
+#
+# Format, one declaration per line:
+#
+#   glob <lane> <shell glob>   A changed path matching any of a lane's globs runs
+#                              that lane. Patterns use bash `case` semantics, so
+#                              `*` also matches `/` and `agent/native/*` covers
+#                              every file below that directory.
+#
+#   entry <lane> <path>        A file the lane executes. The guard walks the Dart
+#                              import closure of every entry and fails when a file
+#                              in that closure matches none of the lane's globs,
+#                              so a new dependency cannot silently stop being
+#                              tested. `entry` never affects classification.
+#
+# The lane name `all` is special: a path matching an `all` glob runs every lane,
+# because such a path can change the meaning of any of them.
+#
+# Do not add a lane here without adding its output and its job gate in ci.yml.
+
+# ---- Run every lane ---------------------------------------------------------
+# Toolchain, workflow graph, dependency resolution, native sources, and the
+# shared runtime packages are consumed across component boundaries. Anything that
+# can change the meaning of a lane turns them all on.
+glob all .github/workflows/*
+glob all .github/actions/*
+glob all scripts/ci/*
+glob all .fvmrc
+glob all pubspec.yaml
+glob all pubspec.lock
+glob all */pubspec.yaml
+glob all */pubspec.lock
+glob all agent/native/*
+glob all shared/*
+
+# ---- Native dictation -------------------------------------------------------
+# The lane builds, verifies, loads, and stages the whisper and sherpa runtimes on
+# five runners, so its real inputs are the smoke suites that load them, the
+# OS digest and download-pipeline suites, the two cost gates that own their own
+# processes, the builder tool, and everything those import. The guard test keeps
+# this list honest: every Dart file the job runs must be an entry below, and the
+# import closure of the entries must be covered by the globs.
+entry native-stt agent/test/stt/native_runtime_smoke_test.dart
+entry native-stt agent/test/stt/sherpa_runtime_smoke_test.dart
+entry native-stt agent/tool/ensure_native_stt.dart
+entry native-stt agent/test/stt/stt_digest_test.dart
+entry native-stt agent/test/stt/stt_digest_cost_test.dart
+entry native-stt agent/test/stt/stt_download_pipeline_test.dart
+entry native-stt agent/test/stt/stt_pipeline_cost_test.dart
+glob native-stt agent/lib/infrastructure/stt/*
+glob native-stt agent/packages/stt_sherpa/*
+glob native-stt agent/packages/stt_sherpa_stub/*
+glob native-stt agent/test/stt/*
+glob native-stt agent/tool/ensure_native_stt.dart
+glob native-stt agent/tool/stt_native_archive.dart
+glob native-stt agent/tool/stt_native_runtime.dart
+glob native-stt agent/tool/pubspec_overrides.no_sherpa.yaml
+
+# ---- sanad-dev bootstrap ----------------------------------------------------
+# The lane runs the `sanad_dev` package's bootstrap, journal, terminal, option,
+# and cloud-endpoint suites on three operating systems, and parses the Windows
+# installer scripts. Its inputs are that package, the `scripts/sanad-dev`
+# bootstrap wrappers the suites copy and execute, the Client configs the
+# cloud-endpoint suite parses, the two Windows script locations the job reads,
+# and the shared packages the package depends on by
+# path (`shared/auth_lock`, `shared/windows_path`,
+# `shared/public_service_endpoints` - all covered by the `all` trigger above).
+entry sanad-dev scripts/sanad_dev/test/cli/sanad_dev_bootstrap_test.dart
+entry sanad-dev scripts/sanad_dev/test/developer/sanad_dev_component_journal_test.dart
+entry sanad-dev scripts/sanad_dev/test/infrastructure/sanad_dev_terminal_launcher_test.dart
+entry sanad-dev scripts/sanad_dev/test/cli/sanad_dev_command_options_test.dart
+entry sanad-dev scripts/sanad_dev/test/infrastructure/sanad_dev_cloud_endpoints_test.dart
+glob sanad-dev scripts/sanad_dev/*
+glob sanad-dev scripts/sanad-dev
+glob sanad-dev scripts/sanad-dev.ps1
+glob sanad-dev client/config/*
+glob sanad-dev scripts/install.ps1
+glob sanad-dev client/release/windows/*

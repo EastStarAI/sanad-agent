@@ -80,6 +80,8 @@
   <a href="https://downloads.sanad.eaststarai.com/client/macos"><img src="https://img.shields.io/badge/Download-macOS-2563EB?style=for-the-badge&logo=apple&logoColor=white" alt="تنزيل واجهة Sanad Client لنظام macOS"></a>
   <a href="https://downloads.sanad.eaststarai.com/client/windows"><img src="https://img.shields.io/badge/Download-Windows-2563EB?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCA4OCA4OCIgZmlsbD0id2hpdGUiPjxwYXRoIGQ9Ik0wIDBoNDB2NDBIMHptNDggMGg0MHY0MEg0OHpNMCA0OGg0MHY0MEgwem00OCAwaDQwdjQwSDQ4eiIvPjwvc3ZnPg==" alt="تنزيل واجهة Sanad Client لنظام Windows"></a>
   <a href="https://downloads.sanad.eaststarai.com/client/linux"><img src="https://img.shields.io/badge/Download-Linux-2563EB?style=for-the-badge&logo=linux&logoColor=white" alt="تنزيل واجهة Sanad Client لنظام Linux"></a>
+  <a href="https://play.google.com/store/apps/details?id=com.eaststarai.sanad"><img src="https://img.shields.io/badge/Get_it_on-Google_Play-2563EB?style=for-the-badge&logo=googleplay&logoColor=white" alt="احصل على Sanad Client من Google Play"></a>
+  <a href="https://apps.apple.com/app/sanad-remote/id6794974223"><img src="https://img.shields.io/badge/Download_on-the_App_Store-000000?style=for-the-badge&logo=apple&logoColor=white" alt="نزّل Sanad Client من App Store"></a>
 </p>
 
 1. نزّل Sanad Client لمنصة سطح المكتب وافتحه.
@@ -87,9 +89,11 @@
    وتثبتها وتشغلها تلقائيًا؛ لا تحتاج إلى تنزيل Agent منفصلًا.
 3. أضف مزود نماذج محليًا أو مستضافًا، واختر مساحة عمل، وابدأ العمل.
 
-لا يلزم حساب Sanad أو pairing token لهذا المسار المحلي. على الهاتف، استخدم
-[Web Client](https://app.sanad.eaststarai.com) حتى تتوفر إصدارات Android وiOS
-المستقرة للعامة.
+لا يلزم حساب Sanad أو pairing token لهذا المسار المحلي. على Android، ثبّت Sanad
+Client من [Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad)،
+وعلى iPhone وiPad من
+[App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (يظهر التطبيق في
+المتجرين باسم `Sanad Remote`).
 
 > **بناء Windows غير موقّع:** إصدار Windows الحالي غير موقّع. نزّله فقط من
 > الزر الرسمي أعلاه واتبع إرشادات التحقق في
@@ -259,7 +263,7 @@ Subscription عرض نافذتي الاستهلاك Session وWeekly المعت�
 | المكوّن | المنصات |
 |---|---|
 | Sanad Agent | macOS وLinux وWindows، بما في ذلك التشغيل headless |
-| Sanad Client | macOS وWindows وLinux وAndroid وiOS عبر Internal TestFlight في الإصدار الأول، والويب |
+| Sanad Client | macOS وWindows وLinux وAndroid (Google Play) وiOS/iPadOS (App Store) والويب |
 
 ## حالة المميزات والقيود
 

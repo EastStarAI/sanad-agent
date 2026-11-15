@@ -1,0 +1,72 @@
+name: Install apt packages within a bounded budget
+description: Installs Ubuntu packages through apt with bounded mirror timeouts and a bounded retry/backoff, so a stalled package mirror fails fast instead of consuming the whole job budget.
+inputs:
+  packages:
+    description: Space-separated apt package names.
+    required: true
+  options:
+    description: Extra `apt-get install` options; pass an empty string to drop the default.
+    required: false
+    default: --no-install-recommends
+  skip-if-command:
+    description: Skip the install entirely when this command already resolves on PATH.
+    required: false
+    default: ''
+runs:
+  using: composite
+  steps:
+    # A stalled Ubuntu mirror is the one infrastructure fault these steps can
+    # prevent themselves: on 2026-11-10 the `update` half of one install hung for
+    # 19m49s and consumed a whole 20-minute job budget before the job timed out,
+    # and the same step was slow or stalled 11 times in 2.5 days. `apt-get` has
+    # no timeout of its own, so a mirror that accepts the connection and then
+    # stops answering waits forever. Bounded acquire timeouts turn that hang into
+    # a fast failure, and the retry loop absorbs the transient case (one late or
+    # truncated index) that a single attempt would turn into a red lane.
+    - shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+        INSTALL_OPTIONS: ${{ inputs.options }}
+        SKIP_IF_COMMAND: ${{ inputs.skip-if-command }}
+      run: |
+        set -euo pipefail
+        if [[ -n "$SKIP_IF_COMMAND" ]] && command -v "$SKIP_IF_COMMAND" >/dev/null 2>&1; then
+          echo "$SKIP_IF_COMMAND is already installed; skipping the package install."
+          exit 0
+        fi
+        read -r -a packages <<< "$PACKAGES"
+        if (( ${#packages[@]} == 0 )); then
+          echo "::error::No packages were requested."
+          exit 1
+        fi
+        install_options=()
+        if [[ -n "$INSTALL_OPTIONS" ]]; then
+          read -r -a install_options <<< "$INSTALL_OPTIONS"
+        fi
+        acquire_options=(
+          -o Acquire::Retries=3
+          -o Acquire::http::Timeout=20
+          -o Acquire::https::Timeout=20
+          -o Acquire::ftp::Timeout=20
+          -o Acquire::ForceIPv4=true
+        )
+        attempts=3
+        for attempt in $(seq 1 "$attempts"); do
+          # `sudo` does not forward the environment, so the non-interactive
+          # frontend is restated on each command instead of exported.
+          if sudo DEBIAN_FRONTEND=noninteractive \
+              apt-get "${acquire_options[@]}" update -qq &&
+            sudo DEBIAN_FRONTEND=noninteractive \
+              apt-get "${acquire_options[@]}" install -y -qq \
+              "${install_options[@]}" "${packages[@]}"; then
+            echo "Installed ${packages[*]} on attempt $attempt/$attempts."
+            exit 0
+          fi
+          if (( attempt == attempts )); then
+            echo "::error::apt failed after $attempts attempts; the package mirror did not answer within the bounded budget."
+            exit 1
+          fi
+          backoff=$(( attempt * 10 ))
+          echo "::warning::apt attempt $attempt/$attempts failed; retrying in ${backoff}s."
+          sleep "$backoff"
+        done

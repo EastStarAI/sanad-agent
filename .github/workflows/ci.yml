@@ -7,8 +7,9 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches: [main]
-  # The merge queue re-runs this workflow on the queued merge commit, so the
-  # aggregate check below gates the queue exactly as it gates a pull request.
+  # The merge queue is disabled in favour of "require branches to be up to date".
+  # This trigger and the merge-group paths below are kept dormant so a rollback to
+  # the queue needs no workflow change (see docs/operations/continuous_integration.md).
   merge_group:
   workflow_dispatch:
 
@@ -26,12 +27,33 @@ jobs:
   classify:
     name: Classify changed paths
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # The post-merge complement run reads a proof run for the exact tree `main`
+      # received: the merge-queue run if the queue is enabled, otherwise the
+      # merged pull request's own run.
+      actions: read
+      pull-requests: read
+    # One output per lane, not one per component: the post-merge complement run
+    # has to skip exactly the lanes a proof run already proved, and two
+    # lanes that share a component cannot express that.
     outputs:
       agent: ${{ steps.paths.outputs.agent }}
       client: ${{ steps.paths.outputs.client }}
       docs: ${{ steps.paths.outputs.docs }}
       release: ${{ steps.paths.outputs.release }}
       security: ${{ steps.paths.outputs.security }}
+      agent_checks: ${{ steps.paths.outputs.agent_checks }}
+      agent_tests: ${{ steps.paths.outputs.agent_tests }}
+      supervisor_skill: ${{ steps.paths.outputs.supervisor_skill }}
+      cli_automation: ${{ steps.paths.outputs.cli_automation }}
+      native_stt: ${{ steps.paths.outputs.native_stt }}
+      client_analyze: ${{ steps.paths.outputs.client_analyze }}
+      client_tests: ${{ steps.paths.outputs.client_tests }}
+      client_web: ${{ steps.paths.outputs.client_web }}
+      sanad_dev: ${{ steps.paths.outputs.sanad_dev }}
+      docs_governance: ${{ steps.paths.outputs.docs_governance }}
+      release_security: ${{ steps.paths.outputs.release_security }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,6 +64,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           classification_failed=false
@@ -63,6 +86,61 @@ jobs:
           esac
           cat "$RUNNER_TEMP/changed"
           agent=false; client=false; docs=false; release=false; security=false
+          # ---- Declared lane input sets --------------------------------------
+          # `Native dictation` and `sanad-dev bootstrap` do not depend on a whole
+          # component, so their triggers live in `scripts/ci/lane_inputs.txt`
+          # instead of a component case. The file also owns the "run everything"
+          # triggers: a path that matches an `all` pattern can change the meaning
+          # of any lane (the workflow graph, the toolchain, dependency
+          # resolution, the native sources, the shared runtime packages), so it
+          # enables every lane rather than the lanes its component names.
+          #
+          # The same file is checked by agent/test/tool/ci_lane_inputs_test.dart,
+          # which walks the Dart import closure of every declared entry and fails
+          # when a file the lane executes escapes its declared globs - so a new
+          # dependency cannot silently stop being tested.
+          lane_inputs=scripts/ci/lane_inputs.txt
+          all_patterns=(); native_patterns=(); sanad_dev_patterns=()
+          match_any() {
+            local path="$1"
+            shift
+            (( $# > 0 )) || return 1
+            local pattern
+            for pattern in "$@"; do
+              # shellcheck disable=SC2254  # the pattern is the point
+              case "$path" in $pattern) return 0 ;; esac
+            done
+            return 1
+          }
+          if [[ ! -f "$lane_inputs" ]]; then
+            echo "::error::$lane_inputs is missing; running every lane."
+            classification_failed=true
+          else
+            while read -r kind lane pattern; do
+              [[ -z "${kind:-}" || "$kind" == '#'* ]] && continue
+              case "$kind" in
+                glob)
+                  case "$lane" in
+                    all) all_patterns+=("$pattern") ;;
+                    native-stt) native_patterns+=("$pattern") ;;
+                    sanad-dev) sanad_dev_patterns+=("$pattern") ;;
+                    *)
+                      echo "::error::$lane_inputs declares an unknown lane '$lane'."
+                      classification_failed=true
+                      ;;
+                  esac
+                  ;;
+                entry) ;;
+                *)
+                  echo "::error::$lane_inputs declares an unknown kind '$kind'."
+                  classification_failed=true
+                  ;;
+              esac
+            done < "$lane_inputs"
+          fi
+          every_lane=false
+          native_inputs=false
+          sanad_dev_inputs=false
           # `agent/test/fixtures/cli_relay_grammar.json` is Agent-owned but the
           # Client reads it as a cross-component contract, so a change to it
           # must run the Client lanes too. Add every Agent-to-Client contract
@@ -73,19 +151,244 @@ jobs:
             case "$path" in *.md|docs/*|.vscode/*|.agents/*|.github/ISSUE_TEMPLATE/*|.github/DISCUSSION_TEMPLATE/*|.github/labels.yml|.github/CODEOWNERS|.github/PULL_REQUEST_TEMPLATE.md|scripts/community/*) docs=true ;; esac
             case "$path" in .github/workflows/*|release/*|client/release/*|agent/tool/release_*.dart|scripts/release/*|scripts/install.sh|scripts/install.ps1) release=true ;; esac
             case "$path" in SECURITY.md|docs/operations/code_signing_policy.md|shared/auth_lock/*|shared/auth_lock/**/*|agent/lib/core/auth/*|agent/lib/core/auth/**/*|agent/lib/capabilities/permissions/*|agent/lib/capabilities/permissions/**/*) security=true ;; esac
+            if match_any "$path" "${all_patterns[@]+"${all_patterns[@]}"}"; then every_lane=true; fi
+            if match_any "$path" "${native_patterns[@]+"${native_patterns[@]}"}"; then native_inputs=true; fi
+            if match_any "$path" "${sanad_dev_patterns[@]+"${sanad_dev_patterns[@]}"}"; then sanad_dev_inputs=true; fi
           done < "$RUNNER_TEMP/changed"
+          # A broken classifier must never skip validation, so every path that
+          # matches nothing at all, every non-pull-request event, and every
+          # classification failure still runs everything. A path that matched a
+          # declared lane input is classified, not unmatched, which is what lets
+          # a `scripts/sanad_dev` change stay inside its own lane.
           if [[ "$EVENT_NAME" != "pull_request" && "$EVENT_NAME" != "merge_group" ]] ||
             [[ "$classification_failed" == true ]] ||
-            [[ "$agent$client$docs$release$security" == falsefalsefalsefalsefalse ]]; then
+            [[ "$agent$client$docs$release$security$native_inputs$sanad_dev_inputs" == falsefalsefalsefalsefalsefalsefalse ]]; then
             echo "Classifier fallback: running every validation lane."
-            agent=true; client=true; docs=true; release=true; security=true
+            every_lane=true
           fi
+          if [[ "$every_lane" == true ]]; then
+            echo "A path that can change any lane matched (or the classifier could not decide): running every validation lane."
+            agent=true; client=true; docs=true; release=true; security=true
+            native_inputs=true; sanad_dev_inputs=true
+          fi
+
+          # ---- Post-merge complement run -------------------------------------
+          # The tree `main` just received may already have been proved. Between
+          # 2026-11-08 and 2026-11-10, while merges went through the queue, that
+          # was true for 46 of 46 pushes: the queue fast-forwarded `main` to the
+          # commit a `merge_group` run had just built and passed. Repeating every
+          # lane on the same tree bought no coverage and cost ~60 runner-minutes
+          # per merge, including four macOS jobs against a five-job account cap.
+          #
+          # Two proof sources are accepted, in order, and only on `push`:
+          #
+          # A. `merge_group` run - the queue built this exact commit. This is the
+          #    rollback path; no such run exists while merges are up-to-date merges.
+          # B. the merged pull request's own `pull_request` run - accepted only
+          #    when all of these hold: the commit resolves to exactly one merged
+          #    pull request, that pull request's head tree is byte-identical to
+          #    this commit's tree, and the head contains this commit's parent so
+          #    the run was made against the same base as well as the same content.
+          #    Source B is what the live model relies on: `main` requires the head
+          #    to contain the current `main` tip, so the pull request's own run is
+          #    the proof that this tree passed, and a squash merge lands that tree.
+          #
+          # A lane counts as proven only when a job for it actually executed and
+          # succeeded; a job the run skipped proves nothing. Anything else - no
+          # matching run, a run that is not successful, a different tree, a
+          # commit with several pull requests, an unreadable API - keeps the full
+          # lane set, so the common failure mode of this step is "run every lane".
+          #
+          # Jobs that are genuinely post-merge work are not part of the reduction:
+          # `Verify branch history`, `Verify protected review labels`, and
+          # `Validate release and security boundaries` (whose credential scan
+          # covers the pushed range, not the pull-request range) always run.
+          complement=false
+          proven=" "
+          # Appends the lanes a successful run executed to $proven.
+          collect_proven_lanes() {
+            local run_id="$1" jobs job_name job_conclusion
+            if ! jobs="$(gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?filter=all&per_page=100" \
+              --jq '.jobs[] | "\(.name)|\(.conclusion)"' 2>"$RUNNER_TEMP/jobs.err")"; then
+              echo "::warning::Could not read the jobs of run $run_id." >&2
+              cat "$RUNNER_TEMP/jobs.err" >&2 || true
+              return 1
+            fi
+            while IFS='|' read -r job_name job_conclusion; do
+              [[ "$job_conclusion" == success ]] || continue
+              # Matrix job names carry a "(<label>)" suffix; the lane is the
+              # stable prefix. A successful run guarantees every shard of a
+              # proven lane passed, because the run only succeeds when all of
+              # its jobs do.
+              case "${job_name%% (*}" in
+                "Agent contract checks and analyze") proven+="agent-checks " ;;
+                "Test agent") proven+="agent-tests " ;;
+                "Supervisor skill tests") proven+="supervisor-skill " ;;
+                "CLI automation") proven+="cli-automation " ;;
+                "Native dictation") proven+="native-stt " ;;
+                "Analyze client") proven+="client-analyze " ;;
+                "Test client") proven+="client-tests " ;;
+                "Web startup composition") proven+="client-web " ;;
+                "sanad-dev bootstrap") proven+="sanad-dev " ;;
+                "Validate docs and governance") proven+="docs-governance " ;;
+              esac
+            done <<< "$jobs"
+            return 0
+          }
+          # A. Proof from the merge queue (dormant; kept for rollback).
+          prove_from_merge_queue() {
+            local runs_json run_id
+            if ! runs_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=merge_group&head_sha=$GITHUB_SHA&per_page=100" \
+              2>"$RUNNER_TEMP/runs.err")"; then
+              echo "::warning::Could not read merge-queue runs for $GITHUB_SHA." >&2
+              cat "$RUNNER_TEMP/runs.err" >&2 || true
+              return 1
+            fi
+            run_id="$(jq -r --arg sha "$GITHUB_SHA" '
+              [.workflow_runs[] | select(.head_sha == $sha and .conclusion == "success")]
+              | sort_by(.run_started_at) | reverse | (.[0].id // empty)' <<< "$runs_json")"
+            if [[ -z "$run_id" ]]; then
+              echo "No successful merge-queue run for $GITHUB_SHA." >&2
+              return 1
+            fi
+            collect_proven_lanes "$run_id" || return 1
+            proof="merge-queue run $run_id"
+            return 0
+          }
+          # B. Proof from the merged pull request's own run.
+          prove_from_merged_pull_request() {
+            local pr_json count head_sha pr_number head_ref head_prs head_tree tree parent status runs_json run_id
+            if ! pr_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" \
+              2>"$RUNNER_TEMP/pr.err")"; then
+              echo "::warning::Could not read the pull requests for $GITHUB_SHA." >&2
+              cat "$RUNNER_TEMP/pr.err" >&2 || true
+              return 1
+            fi
+            count="$(jq 'length' <<< "$pr_json")"
+            if [[ "$count" != 1 ]]; then
+              echo "$GITHUB_SHA resolves to $count pull requests; not reusing a pull-request proof." >&2
+              return 1
+            fi
+            head_sha="$(jq -r '(.[0].head.sha // empty)' <<< "$pr_json")"
+            pr_number="$(jq -r '(.[0].number // empty)' <<< "$pr_json")"
+            head_ref="$(jq -r '(.[0].head.ref // empty)' <<< "$pr_json")"
+            if [[ -z "$head_sha" || -z "$pr_number" || -z "$head_ref" ]] ||
+              [[ "$(jq -r '(.[0].merged_at // empty)' <<< "$pr_json")" == "" ]] ||
+              [[ "$(jq -r '(.[0].base.ref // empty)' <<< "$pr_json")" != main ]]; then
+              echo "$GITHUB_SHA was not produced by a pull request merged into main." >&2
+              return 1
+            fi
+            # A `pull_request` run is keyed by head SHA only, so it is attributable
+            # to this pull request only when no other pull request (open, closed,
+            # or merged, to any base) has the same head: a second one targeting
+            # another base would have a run that tested a different merge.
+            if ! head_prs="$(gh api \
+              "repos/$GITHUB_REPOSITORY/commits/$head_sha/pulls" \
+              --jq "[.[] | select(.head.sha == \"$head_sha\")] | map(\"\(.number) \(.base.ref)\") | join(\",\")" \
+              2>"$RUNNER_TEMP/head-prs.err")"; then
+              cat "$RUNNER_TEMP/head-prs.err" >&2 || true
+              return 1
+            fi
+            if [[ "$head_prs" != "$pr_number main" ]]; then
+              echo "Head $head_sha belongs to pull requests [${head_prs}], not only #$pr_number into main; not reusing a pull-request proof." >&2
+              return 1
+            fi
+            # Same tree is the proof: a squash merge lands the head's content.
+            if ! tree="$(git rev-parse "$GITHUB_SHA^{tree}")" ||
+              ! parent="$(git rev-parse "$GITHUB_SHA^")"; then
+              echo "Could not resolve the tree or parent of $GITHUB_SHA." >&2
+              return 1
+            fi
+            if ! head_tree="$(gh api \
+              "repos/$GITHUB_REPOSITORY/git/commits/$head_sha" --jq '.tree.sha' \
+              2>"$RUNNER_TEMP/tree.err")"; then
+              cat "$RUNNER_TEMP/tree.err" >&2 || true
+              return 1
+            fi
+            if [[ "$head_tree" != "$tree" ]]; then
+              echo "Pull request head $head_sha has tree $head_tree, not $tree." >&2
+              return 1
+            fi
+            # The head must also contain the base this push replaced, so the
+            # pull-request run proved the merge with the same `main`.
+            status="$(gh api \
+              "repos/$GITHUB_REPOSITORY/compare/$parent...$head_sha" --jq '.status' \
+              2>"$RUNNER_TEMP/compare.err" || true)"
+            case "$status" in
+              ahead|identical) ;;
+              *)
+                cat "$RUNNER_TEMP/compare.err" >&2 || true
+                echo "Pull request head $head_sha does not contain $parent (status: ${status:-unknown})." >&2
+                return 1
+                ;;
+            esac
+            if ! runs_json="$(gh api \
+              "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$head_sha&per_page=100" \
+              2>"$RUNNER_TEMP/pr-runs.err")"; then
+              cat "$RUNNER_TEMP/pr-runs.err" >&2 || true
+              return 1
+            fi
+            run_id="$(jq -r --arg sha "$head_sha" --arg ref "$head_ref" '
+              [.workflow_runs[] | select(.head_sha == $sha and .head_branch == $ref
+                and .event == "pull_request" and .conclusion == "success")]
+              | sort_by(.run_started_at) | reverse | (.[0].id // empty)' <<< "$runs_json")"
+            if [[ -z "$run_id" ]]; then
+              echo "No successful pull-request run for $head_sha." >&2
+              return 1
+            fi
+            collect_proven_lanes "$run_id" || return 1
+            proof="pull-request run $run_id for pull request head $head_sha"
+            return 0
+          }
+          if [[ "$EVENT_NAME" == push ]]; then
+            proof=""
+            if prove_from_merge_queue; then
+              complement=true
+            elif prove_from_merged_pull_request; then
+              complement=true
+            else
+              echo "No reusable proof for $GITHUB_SHA; running every lane."
+              proven=" "
+            fi
+            if [[ "$complement" == true ]]; then
+              proven=" $(tr ' ' '\n' <<< "$proven" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+              echo "Proven by ${proof}:${proven}"
+            fi
+          fi
+          # A lane the queue proved is skipped; every other lane keeps whatever
+          # its component classification decided.
+          keep_proven() {
+            local lane="$1" value="$2"
+            if [[ "$complement" == true && "$proven" == *" $lane "* ]]; then
+              echo false
+            else
+              echo "$value"
+            fi
+          }
+          # The credential scan is bounded to the pushed range, which no
+          # merge-group run covers, so this lane is never reduced.
+          release_security=false
+          if [[ "$release" == true || "$security" == true ]]; then release_security=true; fi
           {
             echo "agent=$agent"
             echo "client=$client"
             echo "docs=$docs"
             echo "release=$release"
             echo "security=$security"
+            echo "agent_checks=$(keep_proven agent-checks "$agent")"
+            echo "agent_tests=$(keep_proven agent-tests "$agent")"
+            echo "supervisor_skill=$(keep_proven supervisor-skill "$agent")"
+            echo "cli_automation=$(keep_proven cli-automation "$agent")"
+            echo "native_stt=$(keep_proven native-stt "$native_inputs")"
+            echo "client_analyze=$(keep_proven client-analyze "$client")"
+            echo "client_tests=$(keep_proven client-tests "$client")"
+            echo "client_web=$(keep_proven client-web "$client")"
+            echo "sanad_dev=$(keep_proven sanad-dev "$sanad_dev_inputs")"
+            echo "docs_governance=$(keep_proven docs-governance "$docs")"
+            echo "release_security=$release_security"
           } >> "$GITHUB_OUTPUT"
 
   history:
@@ -104,7 +407,7 @@ jobs:
   agent-checks:
     name: Agent contract checks and analyze
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.agent_checks == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -200,7 +503,7 @@ jobs:
   agent-tests:
     name: Test agent (${{ matrix.shard }}/4)
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.agent_tests == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -238,7 +541,7 @@ jobs:
   supervisor-skill:
     name: Supervisor skill tests
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.supervisor_skill == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -254,7 +557,7 @@ jobs:
   cli-automation:
     name: CLI automation (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.cli_automation == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -323,7 +626,7 @@ jobs:
   native-stt:
     name: Native dictation (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.agent == 'true'
+    if: needs.classify.outputs.native_stt == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -420,14 +723,15 @@ jobs:
       # red lane whose cause is packaging).
       - name: Install the disassembler the instruction-set guard needs
         if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! command -v objdump >/dev/null 2>&1; then
-            sudo apt-get update -qq
-            sudo apt-get install -y -qq binutils
-          fi
-          objdump --version | head -1
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: binutils
+          options: ''
+          skip-if-command: objdump
+      - name: Report the disassembler
+        if: runner.os == 'Linux'
+        run: objdump --version | head -1
       - name: Verify the installed runtime and its manifest entry
         if: runner.os != 'Windows'
         working-directory: agent
@@ -506,11 +810,81 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $PSNativeCommandUseErrorActionPreference = $true
           fvm dart test test/stt/sherpa_runtime_smoke_test.dart
+      # The two suites that own the operating-system half of the download path:
+      # the digest selects a per-OS SHA-256 (CommonCrypto, OpenSSL EVP, or
+      # BCrypt) and the write pipeline opens a second file handle for writeback.
+      # Both fall back to a pure-Dart answer silently when a binding cannot load,
+      # so they belong on the lanes that actually build the runtime for each
+      # shipped operating system instead of on one Linux shard. They skip - not
+      # fail - where the host genuinely has no OS implementation.
+      #
+      # `--concurrency 1` runs the two files one after the other. Neither file
+      # compares two timings any more - both cost ratios own their own step and
+      # process below - so this flag is not load-bearing for an assertion; it is
+      # kept so a flake-fix change does not also reshape the step.
+      - name: Verify the OS digest and the download write pipeline
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: |-
+          ${{ env.DART }} test --concurrency 1 \
+            test/stt/stt_digest_test.dart \
+            test/stt/stt_download_pipeline_test.dart
+      - name: Verify the OS digest and the download write pipeline
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |-
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test --concurrency 1 test/stt/stt_digest_test.dart test/stt/stt_download_pipeline_test.dart
+      # The digest's speed gate owns this file so it owns a process. What it
+      # asserts is a ratio - the native SHA-256 against the pure-Dart one - and
+      # the same rule as the pipeline gate below applies: measured beside another
+      # suite, or always in the same order, it charges the shorter arm for its
+      # neighbours' contention. `macos-15-intel` measured 2.14 that way on a run
+      # where the native backend was working (#170). The file warms both arms,
+      # runs five alternating pairs, asserts both arms return the reference
+      # digest on every trial, and judges the median against the unchanged 2.5x,
+      # dumping every trial into the lane log.
+      - name: Verify the OS digest cost gate
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: ${{ env.DART }} test test/stt/stt_digest_cost_test.dart
+      - name: Verify the OS digest cost gate
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/stt_digest_cost_test.dart
+      # The write pipeline's cost gate owns this file so it owns a process. What
+      # it asserts is a ratio — the isolate hop against the same sink in-process —
+      # and a ratio measured beside another suite, or always in the same order,
+      # charges one arm for the other's contention: `windows-2025` charged the
+      # isolate 2.78x that way on a run where the pipeline had not regressed. The
+      # file warms both arms, runs five alternating pairs, and judges the median;
+      # it dumps every trial so the lane log carries the evidence, not just red.
+      - name: Verify the download pipeline cost gate
+        if: runner.os != 'Windows'
+        working-directory: agent
+        shell: bash
+        run: ${{ env.DART }} test test/stt/stt_pipeline_cost_test.dart
+      - name: Verify the download pipeline cost gate
+        if: runner.os == 'Windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          fvm dart test test/stt/stt_pipeline_cost_test.dart
 
   client-analyze:
     name: Analyze client
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_analyze == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -525,7 +899,7 @@ jobs:
   client-tests:
     name: Test client (${{ matrix.shard }}/4)
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_tests == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
@@ -538,12 +912,15 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
+      # The nativeapi build hook needs the GTK 3, X11, and Xi development
+      # packages; the image only ships their runtime libraries. The bounded
+      # action and step timeout exist because this install's `update` half once
+      # hung for 19m49s and consumed the whole job budget.
       - name: Install native-asset build dependencies
-        run: |
-          # The nativeapi build hook needs the GTK 3, X11, and Xi development
-          # packages; the image only ships their runtime libraries.
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgtk-3-dev libasound2-dev
       - name: Test client shard ${{ matrix.shard }}/4
         working-directory: client
         run: |
@@ -563,16 +940,17 @@ jobs:
   client-web:
     name: Web startup composition
     needs: classify
-    if: needs.classify.outputs.client == 'true'
+    if: needs.classify.outputs.client_web == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/setup-fvm
       - name: Install native-asset build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libgtk-3-dev libasound2-dev
+        timeout-minutes: 8
+        uses: ./.github/actions/apt-install
+        with:
+          packages: libgtk-3-dev libasound2-dev
       - name: Web startup composition
         working-directory: client
         run: |
@@ -583,7 +961,7 @@ jobs:
   sanad-dev-platforms:
     name: sanad-dev bootstrap (${{ matrix.os }})
     needs: classify
-    if: needs.classify.outputs.client == 'true' || needs.classify.outputs.docs == 'true'
+    if: needs.classify.outputs.sanad_dev == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -621,7 +999,7 @@ jobs:
   docs-governance:
     name: Validate docs and governance
     needs: classify
-    if: needs.classify.outputs.docs == 'true'
+    if: needs.classify.outputs.docs_governance == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -641,7 +1019,7 @@ jobs:
   release-security:
     name: Validate release and security boundaries
     needs: classify
-    if: needs.classify.outputs.release == 'true' || needs.classify.outputs.security == 'true'
+    if: needs.classify.outputs.release_security == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
@@ -661,7 +1039,34 @@ jobs:
             .github/workflows/release.yml scripts/install.ps1 client/release/windows/release.ps1
           grep -F 'environment: release-publication' .github/workflows/release.yml
           grep -F 'validation_only:' .github/workflows/release.yml
-          grep -F "if: needs.validate.outputs.validation_only != 'true'" .github/workflows/release.yml
+          # Candidate promotion (task 170). The tag run may publish the dispatch
+          # run's proved bytes only through the guarded path, and the draft job
+          # must require both halves of that pairing: promotion with a skipped
+          # assembler, or a rebuild with a successful one.
+          grep -F 'name: Select and verify validated candidate' .github/workflows/release.yml
+          grep -F 'name: Publish the verified candidate into this run' .github/workflows/release.yml
+          grep -F 'vars.RELEASE_CANDIDATE_PROMOTION' .github/workflows/release.yml
+          grep -F "(needs.candidate.outputs.mode == 'promote' && needs.candidate.result == 'success' && needs.assemble.result == 'skipped')" .github/workflows/release.yml
+          grep -F "needs.candidate.outputs.mode != 'promote' && needs.assemble.result == 'success'" .github/workflows/release.yml
+          grep -F "needs.agent.result == 'success'" .github/workflows/release.yml
+          grep -F 'case "$mode" in' .github/workflows/release.yml
+          # Only the exact word promotes, and every failure of the selector
+          # rebuilds. The verifier's provenance pins must stay exactly these.
+          grep -F 'mode=rebuild' scripts/release/promote_release_candidate.sh
+          grep -F -- '--signer-workflow "$REPO/$WORKFLOW_PATH"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--source-ref "$SIGNER_REF"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--source-digest "$SHA"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--deny-self-hosted-runners' scripts/release/promote_release_candidate.sh
+          grep -F "readonly SIGNER_REF='refs/heads/main'" scripts/release/promote_release_candidate.sh
+          bash -n scripts/release/promote_release_candidate.sh
+          # The candidate identity comes from the tag alone. `generate-manifest`
+          # writes 1.0.24-rc.1 for v1.0.24-rc.1, so comparing against the
+          # contract's marketing version made every RC candidate unprovable.
+          grep -F 'local tag_version="${TAG#v}"' scripts/release/promote_release_candidate.sh
+          grep -F 'local tag_marketing="${tag_version%%-*}"' scripts/release/promote_release_candidate.sh
+          grep -F -- '--artifact-version "$ARTIFACT_VERSION"' .github/workflows/release.yml
+          ! grep -Fq -- '--version' scripts/release/promote_release_candidate.sh
+          ! grep -Fq -- '--version "$VERSION"' .github/workflows/release.yml
           grep -F 'name: Create immutable Draft candidate' .github/workflows/release.yml
           grep -F 'name: Build and verify signed private IPA' .github/workflows/release.yml
           grep -F 'fvm flutter test test/tool/app_web_startup_contract_test.dart' .github/workflows/release.yml
@@ -733,6 +1138,7 @@ jobs:
           scripts/release/test_generate_client_download_redirects.sh
           scripts/release/test_deploy_production_asset.sh
           scripts/release/test_verify_metadata_release_diff.sh
+          scripts/release/test_promote_release_candidate.sh
           grep -F -- '--draft' .github/workflows/release.yml
           grep -F 'release-manifest-rc.json' release/release-contract.json
           grep -F 'appcast-rc.xml' release/release-contract.json
@@ -887,13 +1293,27 @@ jobs:
           DOCS: ${{ needs.docs-governance.result }}
           RELEASE_SECURITY: ${{ needs.release-security.result }}
           SENSITIVE_REVIEW: ${{ needs.sensitive-review.result }}
+          # What the classifier required, lane for lane, in the same order as the
+          # results below: a lane it required must have succeeded, not skipped.
+          REQUIRED: >-
+            ${{ needs.classify.outputs.agent_checks }} ${{ needs.classify.outputs.agent_tests }}
+            ${{ needs.classify.outputs.supervisor_skill }} ${{ needs.classify.outputs.cli_automation }}
+            ${{ needs.classify.outputs.native_stt }} ${{ needs.classify.outputs.client_analyze }}
+            ${{ needs.classify.outputs.client_tests }} ${{ needs.classify.outputs.client_web }}
+            ${{ needs.classify.outputs.sanad_dev }} ${{ needs.classify.outputs.docs_governance }}
+            ${{ needs.classify.outputs.release_security }}
         run: |
           set -euo pipefail
           test "$CLASSIFY" = success
           test "$HISTORY" = success
-          for result in "$AGENT_CHECKS" "$AGENT_TESTS" "$SUPERVISOR_SKILL" "$CLI_AUTOMATION" "$NATIVE_STT" \
-            "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" \
-            "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY"; do
-            [[ "$result" == success || "$result" == skipped ]]
+          results=("$AGENT_CHECKS" "$AGENT_TESTS" "$SUPERVISOR_SKILL" "$CLI_AUTOMATION" "$NATIVE_STT"
+            "$CLIENT_ANALYZE" "$CLIENT_TESTS" "$CLIENT_WEB" "$SANAD_DEV_PLATFORMS" "$DOCS" "$RELEASE_SECURITY")
+          read -r -a required <<< "$REQUIRED"
+          test "${#required[@]}" -eq "${#results[@]}"
+          for i in "${!results[@]}"; do
+            case "${required[$i]}:${results[$i]}" in
+              true:success|false:success|false:skipped) ;;
+              *) echo "::error::Lane $((i + 1)) was required=${required[$i]} but ended ${results[$i]}."; exit 1 ;;
+            esac
           done
           test "$SENSITIVE_REVIEW" = success
