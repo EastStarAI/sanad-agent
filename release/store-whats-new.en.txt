@@ -1,0 +1,5 @@
+1.0.27
+
+- Live answers now appear in order, with no repeated or jumbled text.
+- Provider settings show usage limits (OpenCode Go) and each ChatGPT reset credit with its expiry and its own reset button.
+- General reliability fixes.

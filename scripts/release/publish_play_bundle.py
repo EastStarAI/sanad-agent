@@ -23,14 +23,20 @@ beside the new one are kept, so an upload never silently drops the previous
 version. Play permits one active (`draft`/`inProgress`) release per track, so an
 active release that cannot be kept is reported and replaced.
 
+Every release carries the curated store text from `release/store-whats-new.*.txt`
+for `en-US` and `ar`. The text is validated before any credential is loaded, so a
+missing file, a text written for another version, or a text over the store limit
+refuses the run instead of publishing a partial listing.
+
 Authentication uses a service account JSON key. Provide it either as a path in
 PLAY_SERVICE_ACCOUNT_JSON or base64-encoded in
 PLAY_SERVICE_ACCOUNT_JSON_BASE64. The key is never printed.
 
 Usage:
   publish_play_bundle.py --bundle <path> --package com.eaststarai.sanad
-    --track internal --expect-version-code 25 [--version-name 1.0.24]
-    [--status auto] [--rollout-fraction 0.2] [--dry-run]
+    --track internal --expect-version-code 25 --version-name 1.0.24
+    [--status auto] [--rollout-fraction 0.2] [--store-notes-dir release]
+    [--dry-run]
 """
 
 from __future__ import annotations
@@ -46,6 +52,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+import store_whats_new
 
 API_ROOT = "https://androidpublisher.googleapis.com/androidpublisher/v3/applications"
 UPLOAD_ROOT = "https://androidpublisher.googleapis.com/upload/androidpublisher/v3/applications"
@@ -249,9 +257,10 @@ def main() -> int:
     parser.add_argument("--package", required=True)
     parser.add_argument("--track", required=True, choices=TRACKS)
     parser.add_argument("--expect-version-code", required=True, type=int)
-    parser.add_argument("--version-name", default="")
+    parser.add_argument("--version-name", required=True)
     parser.add_argument("--status", default="auto", choices=STATUSES)
     parser.add_argument("--rollout-fraction", default=0.2, type=float)
+    parser.add_argument("--store-notes-dir", default="release")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
 
@@ -272,6 +281,10 @@ def main() -> int:
     rollout = "" if user_fraction is None else f" with userFraction {user_fraction}"
     print(f"Preparing track '{args.track}' as {status}{rollout}")
 
+    # The store text is proven before the service account is even read, so a
+    # listing problem never costs an upload or leaves an edit behind.
+    notes = store_whats_new.release_notes(args.store_notes_dir, args.version_name)
+
     token = access_token(load_key())
     edit = edit_id(token, args.package)
     print(f"Play edit {edit} opened for {args.package}")
@@ -290,11 +303,11 @@ def main() -> int:
         release: dict = {
             "versionCodes": [str(accepted)],
             "status": status,
+            "name": f"{args.version_name} ({accepted})",
+            "releaseNotes": notes,
         }
         if user_fraction is not None:
             release["userFraction"] = user_fraction
-        if args.version_name:
-            release["name"] = f"{args.version_name} ({accepted})"
         existing = track_releases(token, args.package, edit, args.track)
         track = {
             "track": args.track,
@@ -348,6 +361,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except PlayError as error:
+    except (PlayError, store_whats_new.StoreNotesError) as error:
         print(f"error: {error}", file=sys.stderr)
         sys.exit(1)

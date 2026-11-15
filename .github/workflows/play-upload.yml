@@ -140,6 +140,14 @@ jobs:
             echo "build_name=$build_name"
             echo "build_number=$build_number"
           } >> "$GITHUB_OUTPUT"
+      - name: Validate the store What's New text
+        env:
+          BUILD_NAME: ${{ steps.identity.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          # Fail before the build when the curated text belongs to another release,
+          # so a listing problem never costs a full Gradle run.
+          python3 scripts/release/store_whats_new.py --version "$BUILD_NAME"
       - name: Restore Android signing material
         working-directory: client
         env:
@@ -229,5 +237,6 @@ jobs:
             --track "$TRACK" \
             --expect-version-code "$BUILD_NUMBER" \
             --version-name "$BUILD_NAME" \
+            --store-notes-dir release \
             --status "$RELEASE_STATUS" \
             --rollout-fraction "$ROLLOUT_FRACTION"

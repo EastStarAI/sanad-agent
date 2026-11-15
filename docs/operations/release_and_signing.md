@@ -605,6 +605,14 @@ tag and no GitHub Release.
 dispatched. That protection lives in the Environment settings and cannot be
 verified by the workflow, so the release owner maintains it outside Git.
 
+Every store release carries the curated `release/store-whats-new.en.txt` and
+`release/store-whats-new.ar.txt` text as its `releaseNotes` for `en-US` and `ar`.
+The files are shared with the App Store listing, must name the built version on
+their first line, and must stay within the Play limit of 500 characters per
+language. A missing file, a stale version line, empty text, or text over the limit
+refuses the run before any credential is loaded, and the build job proves the same
+text before it spends time on Gradle.
+
 `client/release/android/test_build_signed_aab.sh` and
 `scripts/release/test_publish_play_bundle.py` run in the `release-security` CI
 job. They assert the guard messages rather than the exit status alone, so a case
