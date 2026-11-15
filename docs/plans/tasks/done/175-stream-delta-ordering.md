@@ -1,8 +1,8 @@
 ---
 id: 175
 title: Stream delta ordering (G2a/G2b/G2c)
-status: G2a and G2b closed and reviewed; G2c, CI, and live acceptance open
-gate: G2c — parity and acceptance
+status: complete — G2a, G2b, G2c, CI, and live acceptance closed; merged as bccc652b
+gate: closed
 created: 2026-11-13
 parent_task: none
 depends_on: []
@@ -188,10 +188,13 @@ exists. Pinned by
 
 ### G2c — Parity, documentation, and acceptance
 
-- [ ] Live plus history parity coverage across both transports.
-- [ ] Documented remaining gaps: suspended-resume in-flight projection and any
+- [x] Live plus history parity coverage across both transports. Live acceptance
+      on 2026-11-15 passed S1–S3 and S6 live, S5 live after the D1 fix, and S4
+      by code and tests; the cloud path's repair is covered by deterministic
+      tests instead of a live run. Merged as `bccc652b` (#443).
+- [x] Documented remaining gaps: suspended-resume in-flight projection and any
       measured repair cost.
-- [ ] Documentation and graph maintenance for the whole feature.
+- [x] Documentation and graph maintenance for the whole feature.
 
 ## Acceptance Criteria
 
@@ -238,26 +241,21 @@ exists. Pinned by
       event parity QA matrix).
 - [x] No non-generated source file exceeds the size ratchet in either package.
 - [x] Graph maintenance run after the code change.
-- [ ] No commit, push, or PR without explicit user authorization (none were made).
+- [x] Commit, push, and PR only under explicit user authorization; pull
+      request #443 merged as `bccc652b`.
 
 ## Current status
 
-G2a and G2b are closed, tested, and reviewed. The Agent stamps every assistant
-delta on one run-owned counter, publishes a whole-text projection with a
-watermark, advertises `stream_sequence_v1`, and answers `session.stream_state`;
-the Client orders each stream key, drops duplicates, holds a bounded window,
-repairs through that query once per cooldown, replaces text on a snapshot, and
-seals a step on its terminal event. Both packages have deterministic coverage,
-the touched compatibility suites pass, and the review notes of both gates are
-recorded above as closed.
+Complete, and moved to `docs/plans/tasks/done/`. G2a and G2b were closed,
+tested, and reviewed before merge; G2c and live acceptance closed with it. The
+Agent stamps every assistant delta on one run-owned counter, publishes a
+whole-text projection with a watermark, advertises `stream_sequence_v1`, and
+answers `session.stream_state`; the Client orders each stream key, drops
+duplicates, holds a bounded window, repairs through that query once per
+cooldown, replaces text on a snapshot, and seals a step on its terminal event.
 
-Remaining work is G2c and delivery evidence, not implementation:
-
-- live plus history parity across both transports;
-- the documented suspended-resume in-flight projection gap;
-- measured repair cost under a real stream;
-- whole-feature documentation and graph maintenance;
-- CI green on the pull request and the protected review decision.
-
-The task plan stays in `docs/plans/tasks/` until that evidence exists; it is not
-complete and must not be moved to `docs/plans/tasks/done/` yet.
+Final evidence: live acceptance on 2026-11-15 passed S1–S3 and S6 live, S5 live
+after the D1 fix, and S4 by code and tests, with the cloud-path repair covered
+by deterministic tests. The whole feature merged as `bccc652b` (#443), with both
+analyzers clean, the focused suites green, and the protected review decision
+recorded on the pull request.
