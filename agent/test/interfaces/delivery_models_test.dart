@@ -146,6 +146,35 @@ void main() {
       expect(copy.eventId, 'evt_fixed');
       expect(copy.delivery.scope, DeliveryScope.origin);
     });
+
+    test('preserves the stream ordinal and event identity across copies', () {
+      final r = GatewayResponse(
+        sessionId: 's1',
+        message: Message(role: MessageRole.assistant, reasoning: 'why'),
+        isComplete: false,
+        runId: 'r1',
+        modelStepId: 'model_step_1',
+        eventId: 'evt_seq',
+        streamSeq: 7,
+      );
+
+      // Routing copies a response for each delivery decision; the ordinal was
+      // allocated once for the delta, so no copy may renumber or drop it.
+      final rescoped = r.copyWithDelivery(
+        delivery: const DeliveryPolicy.platformFamily(
+          PlatformFamily.sanadClient,
+        ),
+      );
+      final unchanged = r.copyWithDelivery();
+
+      for (final copy in [rescoped, unchanged]) {
+        expect(copy.streamSeq, 7);
+        expect(copy.eventId, 'evt_seq');
+        expect(copy.runId, 'r1');
+        expect(copy.modelStepId, 'model_step_1');
+        expect(copy.message.reasoning, 'why');
+      }
+    });
   });
 
   group('CanonicalEvent round-trip', () {

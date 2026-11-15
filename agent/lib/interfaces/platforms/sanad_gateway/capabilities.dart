@@ -195,6 +195,20 @@ class AgentCapabilities {
   final List<SlashCommandOption> slashCommands;
   final Map<String, dynamic>? appearance;
 
+  /// Additive capability: this Agent stamps assistant stream deltas with the
+  /// run-owned `stream_seq` and can answer `session.stream_state`.
+  ///
+  /// A consumer that never reads it keeps arrival order, so the advertisement
+  /// only enables ordering awareness; it is not a negotiation the Agent waits
+  /// for. The declared shape names the wire field and the repair query so a
+  /// consumer never guesses either from a version number.
+  static const Map<String, dynamic> streamSequenceCapability = {
+    'version': 1,
+    'counter': 'stream_seq',
+    'scope': 'stream',
+    'snapshot_command': 'session.stream_state',
+  };
+
   /// The Gateway's only accepted shape for a refusal code.
   static final _machineReason = RegExp(r'^[a-z][a-z0-9_]{0,63}$');
 
@@ -266,6 +280,7 @@ class AgentCapabilities {
       if (dictationRelay != null) 'dictation_relay_v1': dictationRelay,
       'voice_origin_v1': voiceOrigin,
       'delivery_presence_v1': true,
+      'stream_sequence_v1': streamSequenceCapability,
       'supports_attachments': true,
       'attachment_media_v1': {
         'version': 1,

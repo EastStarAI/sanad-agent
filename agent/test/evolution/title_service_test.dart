@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:logging/logging.dart';
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
@@ -647,6 +650,67 @@ void main() {
       expect(runtime.resolvedSignatures, isEmpty);
       expect(runtime.defaultAdapterCalls, 0);
       expect(sessions.getSession('already-titled')?.title, 'Daemon Restart Study');
+    });
+  });
+
+  group('title logging stays free of conversation content', () {
+    late List<LogRecord> records;
+    late StreamSubscription<LogRecord> subscription;
+
+    setUp(() {
+      records = [];
+      hierarchicalLoggingEnabled = true;
+      Logger.root.level = Level.ALL;
+      subscription = Logger.root.onRecord.listen(records.add);
+    });
+
+    tearDown(() async {
+      await subscription.cancel();
+      Logger.root.level = Level.INFO;
+    });
+
+    test('a generated title is logged by size, never by text', () async {
+      const marker = 'TITLEMARKER7f3a91';
+      final adapter = FakeLLMAdapter()
+        ..responseToReturn = AgentResponse(
+          message: Message(
+            role: MessageRole.assistant,
+            content: '$marker title',
+          ),
+        );
+      final service = TitleService(adapter: adapter);
+
+      final title = await service.generateTitle(
+        sessionId: 'log-session',
+        userMessage: 'What is the status of the build?',
+        assistantResponse: 'The build is green.',
+      );
+
+      expect(title, '$marker title');
+      expect(records, isNotEmpty);
+      for (final record in records) {
+        expect(record.message, isNot(contains(marker)));
+      }
+    });
+
+    test('the fallback title is logged by size, never by text', () async {
+      const marker = 'FALLBACKMARKER7f3a91';
+      final adapter = FakeLLMAdapter()
+        ..errorToThrow = Exception('provider unavailable');
+      final service = TitleService(adapter: adapter);
+
+      final title = await service.generateTitle(
+        sessionId: 'log-fallback-session',
+        userMessage: '$marker explain this failure',
+        assistantResponse: 'It failed.',
+      );
+
+      expect(title, isNotNull);
+      expect(title, contains(marker));
+      expect(records, isNotEmpty);
+      for (final record in records) {
+        expect(record.message, isNot(contains(marker)));
+      }
     });
   });
 }

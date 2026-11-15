@@ -378,6 +378,7 @@ requires transport-derived device-owner authority, and a Client-created schedule
   - Queries target device specs.
 - **Event: `capabilities` (Backend → Client)**
   - Returns device capabilities (e.g. supported plugins, tools, file browsing).
+  - `stream_sequence_v1` advertises that assistant deltas carry `stream_seq` and that the daemon answers `session.stream_state`. It is additive: a consumer that never reads it keeps arrival order, and an older Agent simply omits the key.
   - Must remain safe on first run with zero configured providers or zero legacy data. This event is not allowed to depend on default-provider resolution or live LLM adapter creation.
   - Provider model catalogs are not part of `capabilities`; they are queried through provider-runtime commands such as `model.snapshot` and `model.refresh`.
   - **Note:** Capabilities are tied to `device_id` (not `device_type`) in Redis and envelopes.
@@ -394,10 +395,42 @@ requires transport-derived device-owner authority, and a Client-created schedule
       "event": "thought_stream",
       "payload": {
         "session_id": "uuid",
-        "content": "Continuing to search..."
+        "content": "Continuing to search...",
+        "run_id": "run-1",
+        "model_step_id": "model_step_1",
+        "stream_seq": 7
       }
     }
     ```
+  - **Stream ordinals (Task 175, additive).** `thought_stream` and
+    `reasoning_stream` payloads carry `stream_seq`: an integer that starts at `1`
+    for each stream key, increases by exactly `1`, and never wraps. The stream
+    key is the stream kind (`thought_stream` or `reasoning_stream`) plus
+    `model_step_id`, falling back to `run_id` when a producer has no step
+    identity; one run owns the counters, so a new run starts every key at `1`
+    again. The Agent allocates the value once at the stream source, before the
+    in-flight projection and before fan-out, so the local and cloud copies of one
+    delta carry the identical number. Terminal events and history rows never
+    carry it, and a producer that omits it stays valid: a consumer that sees no
+    ordinal keeps arrival order for that stream.
+  - **Restart boundary (Task 175).** Ordinal continuity is claimed only for one
+    live run and one model step. A suspended-resume continuation begins a fresh
+    model step before it streams, so its keys start at `1` under a new step
+    identity instead of reusing the checkpoint's key; no durable sequence state
+    exists, so a daemon restart never promises the same key continues its
+    numbering.
+  - **Client ingestion (Task 175).** A consumer that reads `stream_seq` orders
+    each stream key, drops a duplicate or stale ordinal, and holds a delta that
+    arrives ahead of its predecessor in a bounded window (500 ms, 32 deltas,
+    64 KiB, at most 8 concurrent keys per session). When the window cannot
+    close, it asks `session.stream_state` at most once per 2 s per session with
+    one request in flight, adopts the returned snapshot as whole text, and
+    continues from its watermark. A delta without an ordinal keeps plain
+    arrival order for the life of that stream, and an `absent` answer keeps the
+    last good text instead of reloading history. `stream_sequence_v1` only
+    enables that repair request; the ordinal on the delta decides ordering. A
+    repair answer that returns after a session switch, a turn terminal, or a
+    disposal is discarded: it can never inject text into another conversation.
   - Supported sub-event names (`payload.event` or `event` type):
     - `user_message`: Acknowledges incoming message.
     - `step_start`: Begins processing a turn.
@@ -433,6 +466,12 @@ an explicit policy:
   `user_app_{user_id}`.
 - A correlated event with an expired or missing origin is dropped rather than
   broadcast, preventing a private response from leaking to another interface.
+- Platform-family delivery is ordered per session: every event of one session is
+  handed to each platform in the order the runtime emitted it, while two
+  sessions are delivered independently. Session-less inventory and capability
+  events share one device-wide order. Inside each delivery the local copy is
+  still awaited before the cloud copy, so ordering never trades away the
+  local-first rule (Task 175).
 
 Private snapshot responses still use `request_id` and return only to their
 requesting socket. Receiving live events for another session must update that
@@ -521,6 +560,45 @@ Errors are request-correlated under `payload.error`: `invalid_request`,
 bind session id, row boundary, history revision, and a redacted boundary
 fingerprint. A cross-session, deleted, or rewritten boundary fails closed.
 Local and cloud transports dispatch this same handler and envelope.
+
+### In-flight stream projection (Task 175, additive)
+
+`session_history` also returns `in_flight` when a turn is still streaming: one
+whole-text projection of the single running assistant stream, never a delta and
+never a history row. It carries the stream identity (`type`, `status`,
+`run_id`, `turn_id`, `model_step_id`), the accumulated `content`, and two
+ordering facts:
+
+- `snapshot: true` marks the text as authoritative and complete through the
+  sequence it reports, so a consumer replaces its text instead of appending it;
+- `stream_seq` is the sequence of the last delta already contained in
+  `content`, using the same counter a live delta carries. A consumer that adopts
+  the projection from sequence `N` drops any later delta of that stream key at
+  or below `N`.
+
+A projection written by a producer that does not stamp sequences omits
+`stream_seq`; the snapshot flag still applies. Neither field is persisted: the
+projection is in-memory, no history row and no durable column carries stream
+sequence metadata, and a daemon restart simply starts with no projection.
+
+### `session.stream_state` (Task 175)
+
+A narrow repair query for one running stream. The request accepts exactly
+`session_id` (and the usual `request_id` correlation) and the response event is
+`session.stream_state_result`:
+
+```json
+{ "state": "streaming", "stream": { "snapshot": true, "stream_seq": 4, "content": "…" } }
+{ "state": "absent", "reason": "idle" | "unknown_session" }
+{ "error": { "code": "invalid_request", "message": "session_id is required" } }
+```
+
+It answers from the in-memory in-flight projection alone — no pagination, no
+row projection, no cursor, no timeline rebuild — so a consumer repairs one
+stream instead of reloading a conversation. A missing or blank `session_id`
+fails typed; a session this daemon does not own answers `absent` rather than
+leaking another session's state. Both transports dispatch this same handler and
+envelope, and the capability block advertises it as `stream_sequence_v1`.
 
 ### Live context usage projection
 

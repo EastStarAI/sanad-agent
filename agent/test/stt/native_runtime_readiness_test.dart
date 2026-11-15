@@ -37,7 +37,19 @@ void main() {
   tearDown(() {
     Directory.current = previous;
     for (final dir in [home, workdir]) {
-      if (dir.existsSync()) dir.deleteSync(recursive: true);
+      if (!dir.existsSync()) continue;
+      // `Directory.current` is process-wide, so a concurrently running suite can
+      // briefly hold this working directory (any child process inherits it).
+      // Retry instead of failing the whole file on a timing window we do not own.
+      for (var attempt = 0; attempt < 5; attempt++) {
+        try {
+          dir.deleteSync(recursive: true);
+          break;
+        } on FileSystemException {
+          if (attempt == 4) rethrow;
+          sleep(const Duration(milliseconds: 100));
+        }
+      }
     }
   });
 

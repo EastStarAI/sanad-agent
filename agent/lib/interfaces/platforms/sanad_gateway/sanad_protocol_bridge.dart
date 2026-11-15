@@ -434,6 +434,11 @@ class SanadProtocolBridge {
       case CanonicalEventTypes.getSessionHistory:
         await emitEnvelope(_sessionQueryHandler.buildHistoryEnvelope(event));
         return;
+      case CanonicalEventTypes.sessionStreamState:
+        await emitEnvelope(
+          _sessionQueryHandler.buildStreamStateEnvelope(event),
+        );
+        return;
       case CanonicalEventTypes.sessionPendingSteerCancel:
       case CanonicalEventTypes.sessionQueuedMessageDelete:
       case CanonicalEventTypes.sessionStopRecoveryAck:

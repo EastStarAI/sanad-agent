@@ -152,9 +152,12 @@ class AgentToCanonical {
       // Distinguish reasoning content from intermediate thought text.
       // When the adapter populated [Message.reasoning], the stream carries
       // provider chain-of-thought tokens that must be rendered separately
-      // from the final answer in the UI.
-      final isReasoning =
-          response.message.reasoning?.trim().isNotEmpty ?? false;
+      // from the final answer in the UI. The field's presence decides the
+      // surface, never its visible weight: a whitespace-only reasoning chunk
+      // (a newline inside a reasoning chain) was already numbered on the
+      // reasoning key, so classifying it as ordinary text would both drop the
+      // chunk and desynchronize the key from the event it belongs to.
+      final isReasoning = response.message.reasoning != null;
       type = isReasoning
           ? CanonicalEventTypes.reasoningStream
           : CanonicalEventTypes.thoughtStream;
@@ -163,6 +166,10 @@ class AgentToCanonical {
             ? response.message.reasoning
             : response.message.thought ?? response.message.content,
         'status': 'running',
+        // Run-owned ordinal of this delta within its stream key. Additive and
+        // optional: a consumer that does not know it keeps arrival order, and a
+        // producer that does not send it stays a valid legacy producer.
+        'stream_seq': ?response.streamSeq,
         if (response.runId != null) 'run_id': response.runId,
         if (response.turnId != null) 'turn_id': response.turnId,
         if (response.modelStepId != null) 'model_step_id': response.modelStepId,
