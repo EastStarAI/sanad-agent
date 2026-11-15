@@ -358,6 +358,192 @@ void main() {
     expect(File(target).readAsBytesSync(), bytes);
   });
 
+  test('a refused release chain is reported as a trust failure', () async {
+    // The reported Windows failure: the transport reaches the release host and
+    // the certificate is refused, so nothing may be downloaded and the raw
+    // BoringSSL text must never become the user-facing message.
+    final target = '${temporaryDirectory.path}/bin/sanad';
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target,
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient(
+        (request) async => throw const HandshakeException(
+          'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+        ),
+      ),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.tlsTrustFailed);
+    expect(result.message, isNull);
+    expect(File(target).existsSync(), isFalse);
+  });
+
+  test('a refused artifact chain keeps the verified executable in place', () async {
+    final previous = utf8.encode('previous-agent');
+    final target = File('${temporaryDirectory.path}/bin/sanad')..createSync(recursive: true);
+    await target.writeAsBytes(previous);
+    final bytes = utf8.encode('verified-agent');
+    final manifest = _manifest(
+      size: bytes.length,
+      digest: _sha256OfBytes(bytes),
+    );
+    final installer = VerifiedAgentBootstrapInstaller(
+      targetPath: target.path,
+      operatingSystem: 'linux',
+      architecture: 'x64',
+      client: MockClient(
+        (request) async => request.url.path.endsWith('release-manifest.json')
+            ? http.Response(jsonEncode(manifest), 200)
+            : throw const HandshakeException(
+                'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+              ),
+      ),
+    );
+
+    final result = await installer.install(targetVersion: '1.1.0');
+
+    expect(result.status, AgentBootstrapStatus.tlsTrustFailed);
+    expect(await target.readAsBytes(), previous);
+  });
+
+  group('hosted manifest fallback', () {
+    // Dart on Windows and Linux does not complete a chain whose issuer is absent
+    // locally, while the OS store does. A release edge that omits the Sectigo
+    // intermediate therefore refuses in the Client only. The fallback keeps the
+    // install working without relaxing anything: it swaps the metadata host, and
+    // version, size, SHA-256, and platform trust still decide.
+    final mirror = Uri.parse('https://updates.example.test/release-manifest.json');
+
+    test('a refused primary chain falls back to the published copy', () async {
+      final bytes = utf8.encode('verified-agent');
+      final manifest = _manifest(
+        size: bytes.length,
+        digest: _sha256OfBytes(bytes),
+      );
+      final contacted = <String>[];
+      final installer = VerifiedAgentBootstrapInstaller(
+        targetPath: '${temporaryDirectory.path}/bin/sanad',
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        fallbackManifestUri: mirror,
+        client: MockClient((request) async {
+          contacted.add(request.url.host);
+          if (request.url.host == 'github.com' &&
+              request.url.path.endsWith('release-manifest.json')) {
+            throw const HandshakeException(
+              'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+            );
+          }
+          return request.url.path.endsWith('release-manifest.json')
+              ? http.Response(jsonEncode(manifest), 200)
+              : http.Response.bytes(bytes, 200);
+        }),
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.status, AgentBootstrapStatus.installed);
+      expect(contacted.first, 'github.com');
+      expect(contacted, contains('updates.example.test'));
+    });
+
+    test('a healthy primary never contacts the fallback host', () async {
+      final bytes = utf8.encode('verified-agent');
+      final manifest = _manifest(
+        size: bytes.length,
+        digest: _sha256OfBytes(bytes),
+      );
+      var fallbackContacts = 0;
+      final installer = VerifiedAgentBootstrapInstaller(
+        targetPath: '${temporaryDirectory.path}/bin/sanad',
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        fallbackManifestUri: mirror,
+        client: MockClient((request) async {
+          if (request.url.host == 'updates.example.test') fallbackContacts++;
+          return request.url.path.endsWith('release-manifest.json')
+              ? http.Response(jsonEncode(manifest), 200)
+              : http.Response.bytes(bytes, 200);
+        }),
+      );
+
+      expect((await installer.install(targetVersion: '1.1.0')).isSuccess, isTrue);
+      expect(fallbackContacts, 0);
+    });
+
+    test('the fallback is never used for an HTTP or network failure', () async {
+      // Only a refused certificate is host-specific. A 5xx or an unreachable
+      // primary is a real outage and must surface, not be retried elsewhere.
+      var fallbackContacts = 0;
+      final installer = VerifiedAgentBootstrapInstaller(
+        targetPath: '${temporaryDirectory.path}/bin/sanad',
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        fallbackManifestUri: mirror,
+        client: MockClient((request) async {
+          if (request.url.host == 'updates.example.test') fallbackContacts++;
+          return http.Response('upstream unavailable', 503);
+        }),
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.status, AgentBootstrapStatus.networkFailed);
+      expect(fallbackContacts, 0);
+    });
+
+    test('a fallback that is also refused stays a trust failure', () async {
+      final installer = VerifiedAgentBootstrapInstaller(
+        targetPath: '${temporaryDirectory.path}/bin/sanad',
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        fallbackManifestUri: mirror,
+        client: MockClient(
+          (request) async => throw const HandshakeException(
+            'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+          ),
+        ),
+      );
+
+      final result = await installer.install(targetVersion: '1.1.0');
+
+      expect(result.status, AgentBootstrapStatus.tlsTrustFailed);
+    });
+
+    test('a mirror manifest that lags the target still fails closed', () async {
+      // Publication is transactional but not instantaneous, so a lagging mirror
+      // must never install a different Agent than the Client asked for.
+      final bytes = utf8.encode('verified-agent');
+      final manifest = _manifest(
+        size: bytes.length,
+        digest: _sha256OfBytes(bytes),
+      );
+      final installer = VerifiedAgentBootstrapInstaller(
+        targetPath: '${temporaryDirectory.path}/bin/sanad',
+        operatingSystem: 'linux',
+        architecture: 'x64',
+        fallbackManifestUri: mirror,
+        client: MockClient((request) async {
+          if (request.url.host == 'github.com' &&
+              request.url.path.endsWith('release-manifest.json')) {
+            throw const HandshakeException(
+              'CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate',
+            );
+          }
+          return http.Response(jsonEncode(manifest), 200);
+        }),
+      );
+
+      final result = await installer.install(targetVersion: '1.2.0');
+
+      expect(result.status, AgentBootstrapStatus.targetMismatch);
+      expect(File('${temporaryDirectory.path}/bin/sanad').existsSync(), isFalse);
+    });
+  });
+
   test('isolated artifact mirror keeps canonical manifest trust metadata', () async {
     final bytes = utf8.encode('mirrored-agent');
     final artifactFile = File('${temporaryDirectory.path}/artifact')..writeAsBytesSync(bytes);

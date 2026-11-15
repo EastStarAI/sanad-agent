@@ -28,7 +28,7 @@ from the mixed Client, Agent, checksum, and update files on GitHub Releases.
 | Windows | [Download Sanad Client for Windows](https://downloads.sanad.eaststarai.com/client/windows) |
 | Linux | [Download Sanad Client for Linux](https://downloads.sanad.eaststarai.com/client/linux) |
 | Android | [Get Sanad Client on Google Play](https://play.google.com/store/apps/details?id=com.eaststarai.sanad) (listed as `Sanad Remote`) |
-| iOS | No stable public app yet; use the Web Client |
+| iOS/iPadOS | [Download Sanad Client on the App Store](https://apps.apple.com/app/sanad-remote/id6794974223) (listed as `Sanad Remote`); the App Store version can lag behind the current Stable release. |
 | Web | [app.sanad.eaststarai.com](https://app.sanad.eaststarai.com) |
 
 These aliases exist only on the unprefixed Production downloads host. Their
@@ -332,7 +332,9 @@ Open Provider Settings on the selected device to:
 - view **Usage & limits** for supported instances.
 
 ChatGPT Subscription currently exposes Session and Weekly usage windows.
-Unsupported providers do not display invented usage values.
+OpenCode Go exposes its 5-hour (Session), Weekly, and Monthly windows. Usage is
+read-only for OpenCode Go: it has no reset credits. Unsupported providers do
+not display invented usage values.
 
 ## Work with an active session
 
@@ -551,8 +553,8 @@ Packaged macOS and Windows Clients check the Stable signed Appcast after startup
 and ask before installing a Client update. Windows releases remain temporarily
 unsigned under the documented release policy, while WinSparkle DSA, canonical
 release metadata, size, SHA-256, SBOM, and protected provenance remain required.
-iOS uses Internal TestFlight, Android updates through Google Play, and Web
-loads the newer deployment on a later browser refresh.
+iOS and Android update through the App Store and Google Play respectively, and
+Web loads the newer deployment on a later browser refresh.
 
 On packaged Windows and macOS clients, consent-based automatic checks run in the
 background and show a native update dialog only when a newer release exists.

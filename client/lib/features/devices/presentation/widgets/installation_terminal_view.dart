@@ -84,9 +84,10 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
       },
     );
     if (!result.isSuccess) {
-      _addLog(result.actionableMessage, isError: true);
+      final message = _failureMessage(result);
+      _addLog(message, isError: true);
       setState(() => _currentStep = 'failed');
-      widget.onFailure(result.actionableMessage);
+      widget.onFailure(message);
       return;
     }
     final newerAgentVersion = result.status == AgentLifecycleStatus.newerAgentInUse ? result.agentVersion : null;
@@ -121,6 +122,18 @@ class _InstallationTerminalViewState extends State<InstallationTerminalView> {
     );
     setState(() => _currentStep = 'success');
     widget.onComplete();
+  }
+
+  /// The user-facing install failure text.
+  ///
+  /// A refused release certificate is the one outcome whose remedy depends on
+  /// this machine's own trust configuration, so it is localized here instead of
+  /// surfacing the transport exception the data layer records.
+  String _failureMessage(AgentLifecycleResult result) {
+    if (result.status != AgentLifecycleStatus.tlsTrustFailed || !mounted) {
+      return result.actionableMessage;
+    }
+    return AppLocalizations.of(context)!.agentInstallTlsTrustFailed;
   }
 
   @override

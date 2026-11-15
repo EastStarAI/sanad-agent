@@ -117,6 +117,109 @@ Two consequences are recorded rather than hidden:
   clang toolchain first; until then an arm64 Windows runtime must not be
   described as portable.
 
+### The Windows configure contract
+
+Both Windows architectures are built by the same PowerShell script, so the
+argument rule below applies to `windows-x64` (which configures
+`-DGGML_NATIVE=OFF`) and to the unpublished `windows-arm64` row (which keeps
+`ON`) alike; the POSIX script is a shell script, where `-DGGML_NATIVE="$value"`
+always reaches the compiler driver. PowerShell instead parses a **bare**
+argument beginning with `-` and containing `=` as a parameter assignment whose
+right-hand side is **not** expanded:
+
+```powershell
+cmake -DGGML_NATIVE=$ggmlNative   # cmake receives the literal `$ggmlNative`
+cmake "-DGGML_NATIVE=$ggmlNative" # cmake receives `OFF`
+```
+
+CMake then records `GGML_NATIVE:BOOL=$ggmlNative` in `CMakeCache.txt`, and a
+non-empty string is **truthy** in CMake, so `if (GGML_NATIVE)` takes the native
+branch: ggml's `ggml/CMakeLists.txt` sets `INS_ENB` off, and for MSVC it
+`include`s `ggml-cpu/cmake/FindSIMD.cmake`. That probe is a **run**, not a
+compile test — `check_c_source_runs` compiles each candidate flag set and then
+executes the resulting program — so it appends `/arch:AVX512` only when the
+**build runner can actually execute** AVX-512. That distinction is what makes
+this defect host-dependent rather than uniform: a runner that merely *supports*
+the `/arch:AVX512` switch but cannot execute the probe still gets `/arch:AVX2`,
+which is why the same broken script produced zmm on the v1.0.23 runner and only
+`ymm` on an AVX2-only host. The portable `-DGGML_NATIVE=OFF` path never includes
+`FindSIMD` at all and takes ggml's non-native default, which is `/arch:AVX2` with
+`GGML_AVX2`/`FMA`/`F16C`/`BMI2` — the declared floor. `GGML_AVX512` being `OFF`
+*in the cache* is not a defence: `FindSIMD` sets the CMake variable, not the
+cached option.
+
+v1.0.23 shipped exactly that. Audited `sanad-agent-runtime-1.0.23-windows-x64.tar.gz`
+(manifest SHA-256 `61f9a286…7d1ae10`, matching both the published
+`SHA256SUMS`/asset digest and the bytes), whose
+`native/windows-x64/ggml-cpu.dll` uses AVX-512 registers in **6 497 disassembly
+lines** (11 926 `zmm<register>` operands; counting every `zmm` substring instead
+adds the 2 711 `zmmword` memory-size spellings, for 14 637) and contains
+AVX-512-only mnemonics (`vpternlogq` ×36, `vscalefps` ×3, `vrndscaleps` ×8) —
+and whose `whisper_print_system_info()` banner reports `AVX512 = 1`, i.e.
+`GGML_AVX512` compiled in. A runtime built the same day with the fixed builder
+reports `AVX2 = 1 … BMI2 = 1` with **no** `AVX512`, and its `ggml-cpu.dll`
+contains zero `zmm` operands. The archive carries one `ggml-cpu.dll` and no
+per-variant siblings (`GGML_CPU_ALL_VARIANTS` stays off), so there is no runtime
+dispatch that could select a lower variant: the AVX-512 kernels are the only
+kernels.
+
+That payload is not merely mis-declared; it faults. On a host sitting exactly on
+the documented x64 floor (AVX2, no AVX-512), loading a model through the v1.0.23
+release runtime raised `STATUS_ILLEGAL_INSTRUCTION` (`0xC000001D`) at
+`ggml-cpu.dll+0x84249` on an unconditional EVEX `vmovups zmm0` — not inside a
+dispatch-guarded kernel — while the AVX2 control decoded the same model and audio
+without a native fault. The full A/B, artifact hashes, fault-site disassembly and
+excluded owners are recorded in
+[the crash reproduction record](../qa_maintenance/windows_stt_production_crash_reproduction.md).
+That evidence is bound to that host and that artifact: it does **not** claim the
+reporting user's machine hit the same address, and it does not establish which
+configure produced the AVX-512 payload.
+
+Two rules follow, and both are enforced twice because a published runtime is
+unrecoverable:
+
+- **The flag is built as an array element and splatted.** `tool/build_whispercpp.ps1`
+  builds one `$configureArguments` array whose `"-DGGML_NATIVE=$ggmlNative"`
+  element is already expanded, and invokes `& cmake @configureArguments`. A
+  splatted element is never re-read as `-D` syntax.
+- **The cache is read back and compared.** Immediately after configure — before
+  anything is compiled — the builder requires a `GGML_NATIVE:BOOL=` line whose
+  value is exactly the one it asked for, and refuses to continue when the line is
+  missing, literal, or any other spelling. `ensure_native_stt` re-reads the same
+  file at the staging boundary (`sttGgmlNativeCacheProblem`), so a build whose
+  configure was not portable can never be swapped into `native/<tag>/` or
+  archived.
+
+This matters because the Windows lane has no instruction-set gate. That is a
+**host gate**, not a tool limitation: `--verify`'s disassembler is
+`_objdumpDisassembly`, which throws `SttDisassemblyUnavailable('host')` on any
+non-Linux host by design, and the Windows runner installs no `binutils`. GNU
+`objdump` does ship PE/COFF targets and could read these images, so the absence
+is a wiring decision that has not been taken, not a capability the tool lacks.
+`checkInstructionSets` returns `skipped` for any non-Linux target *before* it
+consults `requireDisassembler`, so the proof-lane switch cannot reach Windows
+either: `--verify` prints `native_stt_isa=skipped` and exits `0` on a Windows
+payload it never inspected. The cache contract above is therefore the whole
+build-time proof that lane has.
+
+A cache guard already existed in v1.0.23 — the defect was **not** a missing
+check. `e3f83e62` added a pre-configure discard of any restored tree whose
+recorded `GGML_NATIVE` disagreed with the requested value. Because it ran before
+configure and nothing read the cache the configure then wrote, it could only see
+the *previous* tree: the broken argument rewrote the literal value every time,
+and the guard's discard made that look like routine stale-cache maintenance. The
+contract here adds the missing half — a read-back of the produced cache — rather
+than restating a comment.
+
+That leaves one stated limitation: the cache is a **proxy for the configure, not
+a proof of the binary**. A toolchain-level flag — `CL=/arch:AVX512` in the MSVC
+environment, for instance — leaves `GGML_NATIVE:BOOL=OFF` in the cache and still
+produces an AVX-512 `ggml-cpu.dll`, and no Windows step disassembles the result.
+Closing that needs a PE instruction-set gate (`dumpbin /disasm` is on every
+runner that has MSVC) added to the Windows lane and to `--verify`'s rule set for
+Intel syntax; it is a separate change to this contract, tracked as Task 439 S2,
+and deliberately not attempted here.
+
 The Linux arm64 floor is pinned explicitly instead of inheriting the compiler's
 default. A non-native build appends no `-march` when `GGML_CPU_ARM_ARCH` is
 empty, so "portable" would then mean "whatever this `gcc` defaults to" — not a
@@ -261,9 +364,23 @@ pass on a `-march=native` build, which is why v1.0.22 printed
 `native_stt_ldd_*=ok` for five libraries that could not execute a single
 instruction on the target host.
 
+The Windows counterpart of that failure is now observed rather than inferred:
+v1.0.23's x64 payload contains the same class of out-of-contract instruction
+(AVX-512), and it faulted with `0xC000001D` at model load on a host that meets
+the declared AVX2 floor but not the payload's real requirement. Nothing in this
+repository refused it. See
+[the crash reproduction record](../qa_maintenance/windows_stt_production_crash_reproduction.md).
+
 Where the check cannot apply it says so rather than passing quietly: a non-Linux
-host prints `native_stt_isa=skipped`, and its payload is pinned by the builder
-contract plus the real load smoke. A lane that declares itself the proof lane
+host prints `native_stt_isa=skipped`. **Windows is the one producing lane with no
+instruction-set gate at all**, because this guard is gated on the host OS
+(`SttDisassemblyUnavailable('host')`) rather than on the file format — GNU
+`objdump` can read a PE image, so the blocker is that the lane never calls it —
+and its payload is pinned by the
+[Windows configure contract](#the-windows-configure-contract) plus the real load
+smoke, which is why that contract is now enforced by code and not by a comment.
+Its remaining bypass (`CL=/arch:AVX512`) is stated there rather than hidden. A
+lane that declares itself the proof lane
 (`SANAD_STT_REQUIRE_NATIVE=1`, set by every `native-stt` CI job and by the
 release Agent job) turns a missing disassembler into `isa_guard_unavailable:objdump`
 instead, so the guard cannot skip silently in CI; the lanes install `binutils`
@@ -651,7 +768,7 @@ live acceptance run on Intel hardware.
 | `agent/test/stt/native_runtime_smoke_test.dart` | real load of the built runtime (skips without one, fails when `SANAD_STT_REQUIRE_NATIVE=1`) |
 | `agent/test/tool/stt_native_runtime_test.dart` | verification rules, pin states, Linux `$ORIGIN` relocatability, the loader gate, the instruction-set guard (SVE/I8MM/BF16 and AVX-512 listings rejected, dotprod and AVX2 accepted, mangled names ignored, missing disassembler stated), staging allowlist, stage record, strict pin failures, builder argument vectors, download request resolution |
 | `agent/test/tool/stt_native_archive_test.dart` | reproducible tar.gz bytes, header fields, checksums, entry order |
-| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection, the Linux install-rpath and stale-cache contract, the portable `GGML_NATIVE=OFF` baseline and the arm64 floor resolved through a fake `uname`, the v4 build-cache key, and the Windows `-DGGML_NATIVE` contract |
+| `agent/test/tool/native_builder_script_test.dart` | the tool→builder argument contract against the real script (plan mode), architecture mismatch refusal, CMake-spelling rejection, the Linux install-rpath and stale-cache contract, the portable `GGML_NATIVE=OFF` baseline and the arm64 floor resolved through a fake `uname`, the v4 build-cache key, and the Windows contract: `hasBareDefineWithVariable` rejecting the historical bare `-DGGML_NATIVE=$ggmlNative` while accepting the quoted fix, plan mode printing the vector `cmake` would receive on a real Windows host, the fail-closed cache read before any compile, and `sttGgmlNativeCacheProblem` rejecting a missing, literal, or wrong value while accepting the `windows-arm64` native default. Ordering assertions anchor to each guard's decision line, never to a token the script's own comments quote |
 | `agent/test/tool/native_runtime_package_contract_test.dart` | release contract ↔ archive layout ↔ installers ↔ workflow agreement, including the 35-minute budget, the pwsh-twin rule, and a scan that fails on any `bash` step in a Windows-capable job |
 | `agent/test/guards/installer_runtime_rollback_test.dart` | real `scripts/install.sh` in a sandbox: a later service failure restores the runtime this run replaced, a failed restore keeps the backup and never reports a clean rollback, symlink and hidden members are refused, a release without a runtime keeps the installed one |
 
