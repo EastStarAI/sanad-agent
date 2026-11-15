@@ -67,6 +67,12 @@ running ABI (`defaultSttUseGpuFor`, so the carve-out is testable from any host).
 An absent `use_gpu` — whether the whole `config.yaml` is missing or only the key
 is — resolves through it; a literal constructor default must never decide it.
 
+The implicit thread count follows the same shape and for the same reason:
+`defaultSttThreads`/`defaultSttThreadsFor` cap Windows x64 at four threads and
+keep the six-thread wide-machine policy on every other ABI; the evidence and the
+per-ABI table live where the decode cost is recorded
+([Local Dictation](local_dictation.md#the-default-thread-count)).
+
 ## Portable instruction-set baseline
 
 Every shipped runtime is built for the **declared floor of its target**, never

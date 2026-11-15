@@ -23,24 +23,36 @@ bool defaultSttUseGpu() => defaultSttUseGpuFor(Abi.current());
 /// host instead of only on the machine it protects.
 bool defaultSttUseGpuFor(Abi abi) => abi != Abi.macosX64;
 
-/// Thread count when the config does not name one.
+/// Thread count when the config does not name one, for this host.
 ///
-/// Measured on an Apple silicon laptop (4 performance + 6 efficiency cores,
-/// `egy-whisper-turbo-ggml-q8`, same 6 s sample) — decode time by thread count:
+/// The policy is ABI-aware because its evidence is. Apple silicon Metal decodes
+/// plateau at five threads — measured on a 4 performance + 6 efficiency core
+/// laptop, `egy-whisper-turbo-ggml-q8`, same 6 s sample:
 ///
 /// | threads | 4 | 5 | 6 | 8 |
 /// |---|---|---|---|---|
 /// | Metal  | 1607 ms | 1060 ms | 1069 ms | 1049 ms |
 ///
-/// The curve plateaus at five, so wide machines get 6 and small ones keep the
-/// whisper.cpp baseline (`min(4, cores)`) instead of oversubscribing.
-int sttThreadsFor(int cores) {
+/// so wide non-Windows machines get 6 and small ones keep the whisper.cpp
+/// baseline (`min(4, cores)`) instead of oversubscribing. Windows x64 runs CPU
+/// inference and does not inherit that curve: the accepted Windows benchmark
+/// (`docs/plans/tasks/windows-stt-cpu-thermal-benchmark.md`) measured four
+/// threads clearing its interactive targets on median RTF and median
+/// CPU-seconds, while six saved about 1.27 s of median wall time in that
+/// certified set for materially more CPU, so the Windows x64 default stays at
+/// `min(4, cores)`.
+int get defaultSttThreads =>
+    defaultSttThreadsFor(Abi.current(), Platform.numberOfProcessors);
+
+/// [defaultSttThreads] for an explicit ABI and core count, so the policy is
+/// testable from any host instead of only on the machine it protects.
+int defaultSttThreadsFor(Abi abi, int cores) {
+  // An unknown or unreadable width is not a machine to oversubscribe.
   if (cores <= 0) return 4;
+  if (abi == Abi.windowsX64) return math.min(4, cores);
   if (cores >= 8) return 6;
   return math.min(4, cores);
 }
-
-int get defaultSttThreads => sttThreadsFor(Platform.numberOfProcessors);
 
 /// File the daemon owns for the dictation toggle exposed in Device settings.
 ///
@@ -159,19 +171,23 @@ class SttSettings {
   /// Wrong types fail loudly with the offending key, because silently running
   /// with the wrong language or thread count is worse than refusing to start.
   ///
-  /// [abi] names the host whose default an absent `use_gpu` follows. Production
-  /// omits it and reads the running ABI; tests name it so the Intel macOS
-  /// carve-out is provable from any machine.
+  /// [abi] names the host whose absent `use_gpu` and `threads` follow. The
+  /// production daemon omits it and reads the running ABI; tests name it so the
+  /// Intel macOS and Windows x64 carve-outs are provable from any machine.
   static SttSettings load({required String sanadHome, Abi? abi}) {
     final preferences = SttRuntimePreferences.read(sanadHome: sanadHome);
-    // The host default is a resolver, not a literal: an absent `use_gpu` must
-    // follow `defaultSttUseGpu()` on every path that returns before the section
-    // is parsed, or the Intel macOS carve-out silently stops applying.
+    // The host defaults are resolvers, not literals: an absent `use_gpu` or
+    // `threads` must follow the ABI-aware defaults on every path that returns
+    // before the section is parsed, or the Intel macOS and Windows x64
+    // carve-outs silently stop applying.
+    final host = abi ?? Abi.current();
     final base = SttSettings(
-      useGpu: abi == null ? defaultSttUseGpu() : defaultSttUseGpuFor(abi),
+      threads: defaultSttThreadsFor(host, Platform.numberOfProcessors),
+      useGpu: defaultSttUseGpuFor(host),
     );
     SttSettings defaults() => SttSettings(
       enabled: preferences.enabled ?? base.enabled,
+      threads: base.threads,
       useGpu: base.useGpu,
     );
     final file = File('$sanadHome/config.yaml');
@@ -224,7 +240,7 @@ class SttSettings {
             '(${kSttCatalog.map((e) => e.id).join(', ')})',
       );
     }
-    final threads = readInt('threads', defaultSttThreads);
+    final threads = readInt('threads', base.threads);
     if (threads < 1 || threads > 16) {
       throw const SttException('config_invalid', 'stt.threads must be 1..16');
     }
