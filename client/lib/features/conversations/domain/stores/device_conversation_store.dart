@@ -18,6 +18,7 @@ import 'package:sanad_client/features/devices/domain/models/capability.dart';
 import 'package:sanad_client/features/conversations/domain/models/canonical_event.dart';
 import 'package:sanad_client/features/conversations/domain/stores/conversation_state.dart';
 import 'package:sanad_client/features/conversations/domain/stores/canonical_timeline_reconciler.dart';
+import 'package:sanad_client/features/conversations/domain/stores/stream_delta_order_gate.dart';
 
 class _RetainedSessionHistory {
   final List<CanonicalEvent> messages;
@@ -79,6 +80,7 @@ class DeviceConversationStore {
   static const int _maxRetainedSessionHistories = 2;
 
   final ConversationState _conversation;
+  final StreamDeltaOrderGate _streamGate;
   final StreamController<List<CanonicalEvent>> _messagesController = StreamController<List<CanonicalEvent>>.broadcast();
   final StreamController<List<CanonicalEvent>> _queuedMessagesController =
       StreamController<List<CanonicalEvent>>.broadcast();
@@ -126,9 +128,11 @@ class DeviceConversationStore {
   DeviceConversationStore({
     ThinkingStreamMode thinkingStreamMode = ThinkingStreamMode.auto,
     DeviceConversationStoreSnapshot? initialSnapshot,
+    StreamDeltaOrderGate? streamDeltaGate,
   }) : _conversation = ConversationState(
          thinkingStreamMode: thinkingStreamMode,
-       ) {
+       ),
+       _streamGate = streamDeltaGate ?? StreamDeltaOrderGate() {
     if (initialSnapshot != null) {
       _conversation.setHistory(initialSnapshot.messages);
       _currentSessionId = initialSnapshot.currentSessionId;
@@ -253,6 +257,7 @@ class DeviceConversationStore {
 
   bool activateSession(String sessionId) {
     if (_currentSessionId == sessionId) return false;
+    _streamGate.resetSession(_currentSessionId);
     _retainCurrentSessionHistory();
     _currentSessionId = sessionId;
     _isDraftSession = false;
@@ -298,6 +303,7 @@ class DeviceConversationStore {
   }
 
   void beginNewSession() {
+    _streamGate.resetSession(_currentSessionId);
     _retainCurrentSessionHistory();
     _currentSessionId = null;
     _isDraftSession = true;
@@ -378,6 +384,68 @@ class DeviceConversationStore {
   }
 
   void apply(CanonicalEvent event) {
+    for (final admitted in _streamGate.admit(event)) {
+      _applyCanonical(admitted);
+      _sealClosedStep(admitted);
+    }
+  }
+
+  /// Wires the owner's repair query and the peer's declared support.
+  ///
+  /// The gate is the single owner of stream ordering; the transport only says
+  /// how to ask one question. Passing `supported: false` disables repair
+  /// requests without changing how arrivals are ordered.
+  void attachStreamRepair({
+    StreamRepairRequest? request,
+    bool? supported,
+  }) {
+    _streamGate.configure(repair: request, applyAdopted: _applyAdoptedStream);
+    if (supported != null) _streamGate.setRepairEnabled(supported);
+  }
+
+  /// Closes a step whose terminal event the transport recognised without a
+  /// canonical row (for example a stop).
+  void noteStreamTerminal({
+    String? sessionId,
+    String? modelStepId,
+    String? runId,
+    bool turnTerminal = false,
+  }) {
+    _streamGate.noteTerminal(
+      sessionId: sessionId,
+      modelStepId: modelStepId,
+      runId: runId,
+      turnTerminal: turnTerminal,
+    );
+  }
+
+  void _applyAdoptedStream(List<CanonicalEvent> events) {
+    for (final event in events) {
+      _applyCanonical(event);
+      _sealClosedStep(event);
+    }
+  }
+
+  /// A terminal row of one step closes its stream keys, so a late delta of that
+  /// step is dropped instead of appending after the final answer.
+  void _sealClosedStep(CanonicalEvent event) {
+    final isStreamTerminal =
+        (event.kind == EventKind.thinking || event.kind == EventKind.reasoning) &&
+        event.status != EventStatus.running;
+    final isTurnTerminal =
+        (event.kind == EventKind.finalAnswer && event.status == EventStatus.done) ||
+        event.kind == EventKind.error;
+    final isToolStep = event.kind == EventKind.toolCall;
+    if (!isStreamTerminal && !isTurnTerminal && !isToolStep) return;
+    _streamGate.noteTerminal(
+      sessionId: event.sessionId,
+      modelStepId: event.modelStepId,
+      runId: event.runId,
+      turnTerminal: isTurnTerminal,
+    );
+  }
+
+  void _applyCanonical(CanonicalEvent event) {
     final isQueued = event.metadata?['queued'] == true;
     if (isQueued) {
       final reqId = event.metadata?['request_id'];
@@ -490,6 +558,7 @@ class DeviceConversationStore {
     _conversation.setHistory(
       _withRetainedRefusal(events, _currentSessionId),
     );
+    _streamGate.adoptBaseline(sessionId: _currentSessionId, events: events);
     _pendingSteerProjection.reconcileCurrentPendingSteerProjections();
     _historyHasMore = hasMore && nextCursor != null;
     _historyNextCursor = _historyHasMore ? nextCursor : null;
@@ -841,6 +910,7 @@ class DeviceConversationStore {
   }
 
   void dispose() {
+    _streamGate.dispose();
     unawaited(_messagesController.close());
     unawaited(_queuedMessagesController.close());
     unawaited(_processingController.close());

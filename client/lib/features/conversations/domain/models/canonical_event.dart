@@ -46,6 +46,19 @@ class CanonicalEvent {
   final String? reasoningLevel;
   final Map<String, dynamic>? metadata;
 
+  /// Run-owned ordinal of this assistant delta inside its stream key.
+  ///
+  /// Additive and optional: an older Agent sends nothing and the stream keeps
+  /// arrival order. Present means the producer numbered this delta, so it is
+  /// the evidence the order gate uses — never a declared version.
+  final int? streamSeq;
+
+  /// Whether [text] is a whole-text projection instead of a delta.
+  ///
+  /// A snapshot replaces the running stream's text exactly and states, through
+  /// [streamSeq], how much of the stream it already contains.
+  final bool isSnapshot;
+
   String? get requestId {
     final value = metadata?['request_id']?.toString().trim();
     return value == null || value.isEmpty ? null : value;
@@ -119,6 +132,8 @@ class CanonicalEvent {
     this.thinkingMode,
     this.reasoningLevel,
     this.metadata,
+    this.streamSeq,
+    this.isSnapshot = false,
   });
 
   /// The name of the tool if this is a tool_call event
@@ -164,6 +179,8 @@ class CanonicalEvent {
     String? thinkingMode,
     String? reasoningLevel,
     Map<String, dynamic>? metadata,
+    int? streamSeq,
+    bool? isSnapshot,
   }) {
     return CanonicalEvent(
       id: id ?? this.id,
@@ -188,6 +205,8 @@ class CanonicalEvent {
       thinkingMode: thinkingMode ?? this.thinkingMode,
       reasoningLevel: reasoningLevel ?? this.reasoningLevel,
       metadata: metadata ?? this.metadata,
+      streamSeq: streamSeq ?? this.streamSeq,
+      isSnapshot: isSnapshot ?? this.isSnapshot,
     );
   }
 
@@ -216,6 +235,8 @@ class CanonicalEvent {
       toolCallId: other.toolCallId ?? toolCallId,
       eventId: other.eventId ?? eventId,
       metadata: other.metadata != null ? {...?metadata, ...other.metadata!} : metadata,
+      streamSeq: other.streamSeq ?? streamSeq,
+      isSnapshot: other.isSnapshot || isSnapshot,
     );
   }
 

@@ -27,8 +27,13 @@ class ConversationCommands {
 
   final ConversationCommandGateway _gateway;
   final DeviceConversationStore _conversationStore;
+  final DeviceEventMapper _mapper;
   final WorkspaceCommands _workspace;
   final ConversationHistoryCommands _history;
+
+  /// Bounded wait for one stream repair answer; a repair is advisory, so it
+  /// never inherits the long command window.
+  static const defaultStreamStateTimeout = Duration(seconds: 5);
 
   /// Acknowledgement window for `session.compact`; equal to the gateway's
   /// default request window and intentionally not raised.
@@ -49,6 +54,7 @@ class ConversationCommands {
     Duration compactSettlementWindow = defaultCompactSettlementWindow,
   }) : _gateway = gateway,
        _conversationStore = conversationStore,
+       _mapper = mapper,
        _workspace = WorkspaceCommands(gateway: gateway),
        _history = ConversationHistoryCommands(
          gateway: gateway,
@@ -692,6 +698,45 @@ class ConversationCommands {
 
   Future<List<CanonicalEvent>> loadNewerSessionHistory(String sessionId) =>
       _history.loadNewerSessionHistory(sessionId);
+
+  /// Repairs one running assistant stream through the narrow
+  /// `session.stream_state` query.
+  ///
+  /// Returns the authoritative in-flight snapshot as one canonical event, or
+  /// `null` when the Agent answers `absent`, rejects the query, or is
+  /// unreachable. `null` is not a failure: the ordering owner keeps its last
+  /// good text and waits for the terminal event instead of rebuilding history.
+  Future<CanonicalEvent?> readStreamState(String sessionId) async {
+    if (!_gateway.isConnected) return null;
+    final requestId = generateConversationRequestId();
+    final Map<String, dynamic>? result;
+    try {
+      result = await _gateway.request(
+        command: 'session.stream_state',
+        payload: {'session_id': sessionId, 'request_id': requestId},
+        requestId: requestId,
+        timeout: defaultStreamStateTimeout,
+      );
+    } catch (_) {
+      return null;
+    }
+    if (result == null) return null;
+    final payload = Map<String, dynamic>.from(
+      result['payload'] as Map? ?? const <String, dynamic>{},
+    );
+    if (payload['error'] != null || payload['state'] != 'streaming') return null;
+    final stream = payload['stream'];
+    if (stream is! Map) return null;
+    return _mapper.mapLiveEvent({
+      'event': stream['type']?.toString() ?? 'thought_stream',
+      'payload': {
+        ...Map<String, dynamic>.from(stream),
+        if (payload['session_id'] != null) 'session_id': payload['session_id'],
+        'snapshot': true,
+        'status': 'running',
+      },
+    });
+  }
 
   Future<void> updateSessionTitle(String sessionId, String title) async {
     final requestId = generateConversationRequestId();

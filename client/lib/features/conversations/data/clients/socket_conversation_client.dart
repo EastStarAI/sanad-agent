@@ -39,6 +39,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
   DeviceConfig _config;
   final DeviceEventMapper _mapper;
   final DeviceConversationStore _store;
+  final DeviceCapabilitiesStore _capabilitiesStore;
   final _sessionsController = StreamController<List<Session>>.broadcast();
   final _sessionCreatedController = StreamController<Session>.broadcast();
   ConversationCommandGateway? _gateway;
@@ -65,6 +66,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
     DeviceConversationStoreSnapshot? initialStoreSnapshot,
   }) : _config = config,
        _mapper = UnifiedDeviceMapper(),
+       _capabilitiesStore = capabilitiesStore,
        _store = DeviceConversationStore(
          thinkingStreamMode: capabilitiesStore.getForAgent(config.id).thinkingStreamMode,
          initialSnapshot: initialStoreSnapshot,
@@ -73,6 +75,7 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
     unawaited(
       capabilitiesStore.ensureFreshForAgent(_config).then((caps) {
         _store.setThinkingStreamMode(caps.thinkingStreamMode);
+        _store.attachStreamRepair(supported: caps.supportsStreamSequence);
       }),
     );
   }
@@ -778,6 +781,12 @@ class SocketConversationClient implements ConversationClient, AttachmentSendClie
       onReplayTailHydrationRequired: (sessionId) async {
         await _commands?.loadSessionHistory(sessionId);
       },
+    );
+    // The store owns ordering; the transport only supplies the one narrow
+    // repair query and the peer's declared support for it.
+    _store.attachStreamRepair(
+      request: _commands!.readStreamState,
+      supported: _capabilitiesStore.getForAgent(_config.id).supportsStreamSequence,
     );
     _sessionEventsSubscription = gateway.events.listen(_forwardSessionEvent);
     _socketLifecycleSubscription = socketService.lifecycleStateStream.listen((

@@ -59,6 +59,15 @@ class Capability {
 
   /// This Agent produces origin-correlated voice output (`voice_origin_v1`).
   final bool supportsVoiceOrigin;
+
+  /// This Agent stamps assistant stream deltas with a run-owned `stream_seq`
+  /// and answers `session.stream_state` (`stream_sequence_v1`).
+  ///
+  /// It is advisory only: a delta that carries an ordinal is ordered whether or
+  /// not the capability was advertised, and its absence never drops an event.
+  /// The declaration is what lets the Client ask for a repair snapshot instead
+  /// of guessing that the peer supports the query.
+  final bool supportsStreamSequence;
   final bool supportsStop;
   final bool supportsWorkplace;
   final bool supportsAttachments;
@@ -103,6 +112,7 @@ class Capability {
     this.dictationRelayMaxSessionSeconds =
         dictationRelayContractMaxSessionSeconds,
     this.supportsVoiceOrigin = false,
+    this.supportsStreamSequence = false,
     this.supportsStop = false,
     this.supportsWorkplace = false,
     this.supportsAttachments = false,
@@ -180,6 +190,7 @@ class Capability {
         caps['dictation_relay_v1'],
       ),
       supportsVoiceOrigin: caps['voice_origin_v1'] == true,
+      supportsStreamSequence: _parseStreamSequence(caps['stream_sequence_v1']),
       supportsStop: caps['supports_stop'] ?? false,
       supportsWorkplace: caps['supports_workplace'] ?? false,
       supportsAttachments: supportsAttachmentMedia,
@@ -238,6 +249,7 @@ class Capability {
         other.dictationRelayMaxSessionSeconds ==
             dictationRelayMaxSessionSeconds &&
         other.supportsVoiceOrigin == supportsVoiceOrigin &&
+        other.supportsStreamSequence == supportsStreamSequence &&
         other.supportsStop == supportsStop &&
         other.supportsWorkplace == supportsWorkplace &&
         other.supportsAttachments == supportsAttachments &&
@@ -281,6 +293,7 @@ class Capability {
     dictationRelayMaxSessionBytes,
     dictationRelayMaxSessionSeconds,
     supportsVoiceOrigin,
+    supportsStreamSequence,
     supportsStop,
     supportsWorkplace,
     supportsAttachments,
@@ -440,5 +453,19 @@ class Capability {
       default:
         return LocalToolRuntimeScope.none;
     }
+  }
+
+  /// Reads the `stream_sequence_v1` declaration.
+  ///
+  /// Only the presence of an orderly contract is consumed; the declared
+  /// counter name and repair command are documentation for a human reader. An
+  /// unknown future version is still a declaration, because ordering decisions
+  /// follow the ordinals actually present on deltas rather than this flag.
+  static bool _parseStreamSequence(dynamic raw) {
+    if (raw == true) return true;
+    if (raw is! Map) return false;
+    final version = raw['version'];
+    if (version is num) return version.toInt() >= 1;
+    return true;
   }
 }
