@@ -11,14 +11,49 @@ description: "The shared release manifest and the update ownership of the Sanad 
 canonical artifact names, supported platform/architecture pairs, and exact
 signature metadata. `release/contract/` parses both that contract and generated
 manifests. A manifest is accepted only when its schema, repository, tag,
-channel, version, commit, canonical URL, positive size, SHA-256, and exact
-component/platform signature type are valid.
+channel, version, commit, canonical URL, positive size, and SHA-256 are valid
+for every artifact, and when every artifact whose `component:platform` this
+build knows carries its exact signature metadata.
 
 `ReleaseArtifactTrustPolicy` is the shared metadata authority used by manifest
 validation, Client bootstrap, and Agent update. Unknown or empty signature
 metadata fails closed. Runtime checksum verification is distinct from protected
 release-pipeline provenance verification: a runtime never claims to validate a
 GitHub attestation locally.
+
+### Forward compatibility and the publisher gate
+
+A release may add a component or platform after an Agent or Client was
+compiled, and an installed binary cannot self-update past a parse failure. The
+manifest is therefore split into two rules that never trade one for the other:
+
+- **Parsing is forward-compatible.** `ReleaseManifest.validate()` resolves trust
+  metadata only for a target `ReleaseArtifactTrustPolicy.isKnownTarget`
+  recognizes. An additive target is ignored, never trusted: it stays listed in
+  `ReleaseManifest.unrecognizedTrustTargets`, and every structural rule
+  (repository, tag/version/channel, commit shape, duplicate filename, SHA-256
+  shape, positive size, HTTPS, marketing version, canonical URL) still applies
+  to it.
+- **Verification of what is installed is unchanged and mandatory.** A runtime
+  selects only the components it knows (`agent`, then `agent-runtime`), and
+  `validateMetadata` plus `verifyReleaseArtifactTrustDetailed` still run on the
+  selected artifact before download and before replacement. A known target with
+  a wrong, empty, or missing `signature_type` therefore still fails closed at
+  the same diagnostic stage as before.
+- **Publishing stays strict.** `validate-contract` refuses a declared public
+  target that has no policy entry, and `generate-manifest`/`verify-manifest`
+  call `ReleaseManifest.requireKnownTrustTargets()`, so an assembled manifest
+  that carries one cannot be written or published. A new component or platform
+  is therefore introduced together with its policy entry in the same change, and
+  PR CI rejects the omission at the earliest contract check.
+
+The remaining boundary is deliberate and documented rather than fixed: an
+install **older than a newly introduced target** still cannot parse a manifest
+that carries it, so it needs out-of-band recovery (see
+[Legacy Agent recovery](#legacy-agent-recovery)). The same applies to changing
+an existing target's trust metadata — for example the documented Windows
+Authenticode transition — which a pre-change binary correctly rejects and which
+needs its own bridge or recovery path.
 
 ## Trust by platform
 
@@ -60,6 +95,63 @@ signed-only migration changes this centralized policy. Signed and unsigned
 Windows types are not accepted together. Acquiring Authenticode requires a
 separate policy transition that rejects unsigned artifacts for subsequent
 releases.
+
+### Release transport trust
+
+Artifact trust assumes the release metadata and bytes were fetched over a
+verified TLS connection. Verification needs the issuer of the release host's
+chain, and `dart:io`/BoringSSL **never fetches a missing intermediate itself**,
+while every OS-based client does. The Windows Flutter engine embeds no root list
+and imports `CertOpen*`, so it validates against the Windows certificate store;
+the failure recorded in Issue #434 came from a machine whose store lacked
+`Sectigo Public Server Authentication Root E46`, which is exactly the
+intermediate GitHub's chain needs. Whenever a release edge serves that chain
+without the intermediate, the handshake is refused with
+`CERTIFICATE_VERIFY_FAILED: unable to get local issuer certificate` while
+browsers, `curl`, and the official installer on the same machine succeed. The
+same refusal appears whenever anything inspects TLS (antivirus HTTPS scanning, a
+network proxy) or the store holds partial or stale anchors.
+
+`VerifiedAgentBootstrapInstaller` reports that as
+`AgentBootstrapStatus.tlsTrustFailed`, which the Client maps to
+`AgentLifecycleStatus.tlsTrustFailed` and renders from
+`agentInstallTlsTrustFailed`. The BoringSSL text never becomes the user-facing
+message; it stays in the Client log. Reachability failures keep the separate
+`networkFailed` outcome because retrying cannot repair a trust set.
+
+`SANAD_EXTRA_CA_BUNDLE` names a PEM bundle of roots the machine's owner chooses
+to trust, which is how an inspected environment is unblocked without weakening
+verification:
+
+- The bundle is additive. `createReleaseTrustHttpClient()` keeps
+  `SecurityContext(withTrustedRoots: true)` and adds the bundle on top, so
+  platform roots stay in effect and every existing version, size, SHA-256, and
+  platform-trust requirement still applies.
+- There is no bypass path. No `badCertificateCallback`, no certificate pinning
+  exemption, no plain-HTTP fallback, and no unverified download.
+- An unreadable or malformed bundle is logged and ignored; it never fails an
+  install, because the request still verifies against the platform roots. The
+  path itself is never logged.
+
+The Client also keeps a **hosted copy of the same manifest** as a resilience
+path, because a refused chain is host-specific rather than a general outage:
+
+- `SANAD_RELEASE_MANIFEST_FALLBACK_URL` names it
+  (`https://updates.sanad.eaststarai.com/release-manifest.json`), the byte
+  identical file that `deploy.yml` publishes and rolls back atomically for
+  Stable. An empty value disables the fallback.
+- It is tried **only** after the primary release host refuses its chain. A
+  refused certificate is host-specific and locally repairable; an HTTP error,
+  unparseable manifest, or unreachable network is a real failure and surfaces as
+  such without a second request.
+- Nothing about verification changes: the mirrored manifest must still declare
+  the exact target version, and the downloaded artifact must still pass size,
+  SHA-256, and platform trust against its canonical GitHub identity.
+- A lagging mirror fails closed as `targetMismatch`; it can never install a
+  different Agent than the Client requires.
+- Artifact bytes have no fallback. Only the metadata host is mirrored, so an
+  unverifiable artifact download is still reported as a trust failure.
+
 
 ## Exact Client–Agent pairing
 
@@ -119,7 +211,16 @@ Agents v1.0.0 through v1.0.5 verified macOS update candidates against the
 genuine release. v1.0.6 (#105) replaced it with the exact Apple-anchored
 Developer ID requirement used today. Those Agents cannot gain new update logic
 in place; the supported recovery is the official installer, which verifies the
-artifact itself with the current requirement:
+artifact itself with the current requirement.
+
+A second, permanent case has the same recovery. An install on v1.0.21 or older
+predates the `agent-runtime` component, so it rejects every manifest published
+from v1.0.22 onward while parsing it and reports `manifest_invalid`. Neither the
+Client update action nor `sanad update` can recover it, because the rejecting
+parser is inside the installed binary ([Forward compatibility and the publisher
+gate](#forward-compatibility-and-the-publisher-gate)). The user guide owns the
+user-facing paragraph in
+[Update Sanad](user_guide.md#reinstalling-an-agent-that-cannot-update-itself).
 
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login

@@ -960,6 +960,53 @@ List<String> sttWindowsBuilderArguments({
   ];
 }
 
+/// The `GGML_NATIVE` value a target's CMake cache must record.
+///
+/// Both builders configure `-DGGML_NATIVE=OFF` because MSVC has no portable
+/// ggml mode on ARM at all: ggml aborts that configure with "use clang for
+/// `GGML_CPU_ARM_ARCH`". `windows-arm64` is therefore the single target that
+/// keeps ggml's native default, and no lane produces it.
+String sttRequiredGgmlNative(SttNativeTarget target) =>
+    target.os == SttNativeOs.windows && target.cpu == SttNativeCpu.arm64
+    ? 'ON'
+    : 'OFF';
+
+/// Why [cache] does not record the portable `GGML_NATIVE` baseline, or null
+/// when it does.
+///
+/// The builder passes `-DGGML_NATIVE=...` to CMake, so the value CMake writes
+/// back is the only proof that the flag reached ggml's configure. A
+/// PowerShell argument-parsing defect shipped v1.0.23 with the **literal**
+/// `GGML_NATIVE:BOOL=$ggmlNative` recorded in `CMakeCache.txt`: CMake read the
+/// non-empty string as truthy, ggml re-entered its native path, and the
+/// published `ggml-cpu.dll` required AVX-512 on a target whose declared floor is
+/// AVX2. The same check therefore rejects a missing line, a literal value, and
+/// any spelling other than the required one, before anything is staged or
+/// published.
+///
+/// Pure over the cache text so the rule is testable on a host that cannot build
+/// the target at all; the builder script enforces the same contract immediately
+/// so a direct invocation fails there too.
+String? sttGgmlNativeCacheProblem({
+  required SttNativeTarget target,
+  required String cache,
+}) {
+  final required = sttRequiredGgmlNative(target);
+  final pattern = RegExp(r'^GGML_NATIVE:BOOL=(.*)$', multiLine: true);
+  final match = pattern.firstMatch(cache);
+  if (match == null) {
+    return 'CMakeCache.txt does not record GGML_NATIVE at all';
+  }
+  final recorded = match.group(1)!.trim();
+  if (recorded == required) return null;
+  if (recorded == r'$ggmlNative') {
+    return 'CMakeCache.txt records the literal \$ggmlNative instead of $required: '
+        'the flag never reached ggml';
+  }
+  return 'CMakeCache.txt records GGML_NATIVE=$recorded, but ${target.tag} '
+      'requires exactly $required';
+}
+
 /// One archive download request for the binary-only fallback.
 class SttArchiveRequest {
   const SttArchiveRequest({

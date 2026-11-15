@@ -673,7 +673,7 @@
   "dictationNotHosted": "Not hosted yet",
   "dictationUnavailableTitle": "Dictation is not available on this device",
   "dictationRuntimePreparing": "Preparing the dictation engine (download or build in progress)…",
-  "dictationRuntimeMissing": "The dictation engine is not installed yet. Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.",
+  "dictationRuntimeMissing": "The dictation engine is not installed yet. The Sanad launcher prepares it automatically; use Set up now to retry.",
   "dictationRuntimeInstallFailed": "The dictation engine could not be installed with this Agent. The Agent itself is installed and running; use Set up now to retry the download.",
   "dictationUnsupportedPlatform": "This platform is not supported yet.",
   "dictationNotReadyTooltip": "Dictation is not ready · press for details",
@@ -779,6 +779,10 @@
         "type": "String"
       }
     }
+  },
+  "agentInstallTlsTrustFailed": "The secure connection to the release server could not be verified on this computer. Allow Sanad in your antivirus or network proxy, check that the system clock is correct, or point SANAD_EXTRA_CA_BUNDLE at your network's root certificate, then try again.",
+  "@agentInstallTlsTrustFailed": {
+    "description": "Install failure shown when the release host's TLS chain is refused locally (for example by antivirus HTTPS scanning, a proxy, a partial root store, or a skewed clock). Names the three remedies; the environment variable is a literal identifier and is not translated."
   },
   "secretRequestTitle": "Secret requested",
   "@secretRequestTitle": {

@@ -340,6 +340,7 @@ Use the review skill.''',
         modelStepId: anyNamed('modelStepId'),
         type: anyNamed('type'),
         delta: anyNamed('delta'),
+        seq: anyNamed('seq'),
       ),
     ).thenAnswer((invocation) {
       final named = invocation.namedArguments;
@@ -364,6 +365,8 @@ Use the review skill.''',
         'content': sameStream ? '${existing['content']}$delta' : delta,
         'timestamp': timestamp,
         'updated_at': timestamp,
+        'snapshot': true,
+        if (named[#seq] != null) 'stream_seq': named[#seq],
       };
       inFlightSnapshots[sessionId] = snapshot;
       appendedInFlightSnapshots.add(snapshot);

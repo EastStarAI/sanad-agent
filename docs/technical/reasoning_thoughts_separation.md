@@ -30,14 +30,32 @@ keeping labels, identities, and final-only actions distinct.
 | `thought` | Persisted non-terminal `Message.content` | Done |
 | `final_answer` | Terminal `Message.content` | Done |
 
-`AgentToCanonical` classifies reasoning only from a non-empty
-`Message.reasoning`. Missing or empty ordinary content never implies reasoning.
+`AgentToCanonical` classifies reasoning from a present
+`Message.reasoning` field, never from its visible weight: a chunk that is only
+whitespace stays on the reasoning stream because its ordinal was already
+allocated on that key. Missing or empty ordinary content never implies reasoning.
 `SessionTurnExecutor` routes reasoning callbacks to `TurnEventPublisher`, which
 publishes them through that field while answer chunks remain in
 `Message.content`. OpenAI-compatible, Anthropic Messages,
 Ollama Chat, and Codex Responses adapters all normalize visible reasoning to
 this same contract; provider-specific structured fields, codecs, and SSE
 accumulators never reach the interface layer.
+
+Every streaming row above carries the optional `stream_seq` of its delta. The
+counter is owned by the active run and keyed by stream kind plus
+`model_step_id` (falling back to `run_id`), so reasoning and ordinary assistant
+text in one model step never consume each other's ordinals. A terminal row
+(`thought`, `final_answer`, `reasoning`) and every hydrated history row carry no
+ordinal. A suspended-resume continuation publishes the same two streaming
+surfaces as a live turn: provider reasoning resumes as `reasoning_stream`, never
+as ordinary text.
+
+Ordinal continuity is claimed only inside one live run and one model step. A
+resumed continuation begins a fresh model step before it streams anything, so
+its keys start at `1` under a new step identity; the Client is never handed a
+reused key whose numbering restarted. Sequence counters are in-memory only: no
+durable state, column, or migration carries them, and nothing claims continuity
+for the same key across a daemon restart.
 
 When one persisted assistant message contains both reasoning and content,
 history replay emits distinct rows. A tool-bound message emits reasoning and
@@ -88,6 +106,15 @@ append a chunk again. Chunks append only when canonical event type, run id, and
 model-step id match. A transition from reasoning to ordinary answer text
 replaces the snapshot instead of combining the two surfaces. Durable history
 restores both after commit.
+
+The projection is also the ordering anchor. Each delta is appended with the same
+`stream_seq` the response carries, and the snapshot reports the last one it
+includes (`stream_seq`) together with `snapshot: true`. A consumer that adopts
+the snapshot therefore knows exactly which deltas its text already contains and
+can drop a late or duplicated copy of any of them, without guessing from the text
+itself. A producer that stamps no ordinal leaves the field absent; the snapshot
+flag still marks the text as whole. Nothing about this is durable — no history
+row and no table column carries stream sequence metadata.
 
 ### Late-steer completion
 

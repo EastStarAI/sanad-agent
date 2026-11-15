@@ -41,6 +41,10 @@ This contract applies to `client/lib/features/conversations/data/`.
 - Merge compaction lifecycle rows at the durable retained-tail boundary, before the first later canonical message; never derive their history position by comparing real lifecycle time with synthetic message timestamps.
 - Apply live compaction lifecycle rows only when their explicit `session_id` matches the active conversation; background-session compaction must never mutate the visible timeline.
 - Treat a completed compaction as a context-usage checkpoint for the composer: replace input usage with confirmed-after or estimated-after, discard stale cached-input usage, and retain the latest same-model provider window/model identity when it is more authoritative than legacy compaction metadata.
+- The mapper is the only owner that turns `stream_seq` and `snapshot` into the canonical ordering fields. A payload without them maps to "no ordinal, not a snapshot" and keeps arrival order.
+- A live `session.stream_state_result` is the ordering owner's repair reply, not a timeline row; an in-flight history snapshot maps like a live snapshot and replaces the store's arrival-order watermark instead of extending it.
+- `stream_sequence_v1` is advisory: it enables the repair query only. The ordinal on a delta decides ordering, so an undeclared peer never loses an event.
+- The transport never reorders events itself and no second ordering layer may exist above the store's gate.
 
 ## Thin-Client Dispatch
 - Treat workspace UUID as identity; path, display name, and availability are authoritative mutable daemon projections.

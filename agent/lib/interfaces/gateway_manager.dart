@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:logging/logging.dart';
+import 'package:meta/meta.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/core/di.dart';
 import 'package:sanad_agent/core/provider_runtime/runtime_recovery_service.dart';
@@ -18,6 +19,18 @@ class GatewayManager {
   final _logger = Logger('GatewayManager');
   final List<BasePlatform> _platforms = [];
   final Map<String, StreamSubscription> _subscriptions = {};
+
+  /// Ordering key of the session-less family events.
+  static const String _sessionlessDeliveryKey = '__device__';
+
+  /// Tail of each session's in-flight family delivery chain, removed as soon as
+  /// that chain drains.
+  final Map<String, Future<void>> _familyDeliveryTails = {};
+
+  /// Number of session chains still holding a tail; `0` means every delivered
+  /// family event has drained its ordering entry.
+  @visibleForTesting
+  int get pendingFamilyDeliveryTails => _familyDeliveryTails.length;
   StreamSubscription<GatewayResponse>? _orchestratorSubscription;
   StreamSubscription<SessionExecutionSnapshot>? _executionStateSubscription;
   StreamSubscription<SessionRouteMutationResult>? _routeStateSubscription;
@@ -253,12 +266,47 @@ class GatewayManager {
   /// `platform_family` — fan out to every platform instance of the declared
   /// family. `sanad_client` local + cloud synchronize this way. External
   /// families are isolated because they never share this family with Sanad.
+  ///
+  /// One session's family deliveries are chained so they reach every platform
+  /// in the order the runtime emitted them; two sessions keep independent
+  /// chains and never wait on each other. The chain exists because a delta
+  /// stream is only replayable in order: a transport that happens to reorder
+  /// two chunks would corrupt text that no later event can repair.
   void _deliverPlatformFamily(
     GatewayResponse response,
     BasePlatform? originPlatform,
   ) {
-    unawaited(_deliverPlatformFamilySequentially(response));
+    final key = _familyDeliveryKey(response);
+    final previous = _familyDeliveryTails[key] ?? Future<void>.value();
+    // A failed delivery must never break the chain: `_sendAwaited` already
+    // contains per-platform failures, and this guard contains anything that
+    // escapes it, so the next event of the same session still ships.
+    final tail = previous
+        .then((_) => _deliverPlatformFamilySequentially(response))
+        .catchError((Object error, StackTrace stack) {
+          _logger.warning(
+            'Family delivery failed for ${_shortEventId(response)}: $error',
+            error,
+            stack,
+          );
+        });
+    _familyDeliveryTails[key] = tail;
+    unawaited(
+      tail.whenComplete(() {
+        // Only the current tail may retire the key: a newer event may already
+        // have replaced it, and dropping that one would start a second chain.
+        if (identical(_familyDeliveryTails[key], tail)) {
+          _familyDeliveryTails.remove(key);
+        }
+      }),
+    );
   }
+
+  /// Ordering key for family delivery: the session, or one device-wide key for
+  /// the session-less inventory and capability events, which still must not
+  /// overtake each other.
+  String _familyDeliveryKey(GatewayResponse response) =>
+      response.sessionId.isEmpty ? _sessionlessDeliveryKey : response.sessionId;
 
   Future<void> _deliverPlatformFamilySequentially(
     GatewayResponse response,
@@ -454,6 +502,7 @@ class GatewayManager {
     _executionStateSubscription = null;
     await _routeStateSubscription?.cancel();
     _routeStateSubscription = null;
+    _familyDeliveryTails.clear();
     for (final subscription in _subscriptions.values) {
       await subscription.cancel();
     }

@@ -569,6 +569,7 @@ class StandaloneDaemonController implements LocalDaemonController {
     AgentBootstrapResult result,
   ) => AgentLifecycleResult(switch (result.status) {
     AgentBootstrapStatus.networkFailed || AgentBootstrapStatus.downloadFailed => AgentLifecycleStatus.networkFailed,
+    AgentBootstrapStatus.tlsTrustFailed => AgentLifecycleStatus.tlsTrustFailed,
     AgentBootstrapStatus.manifestInvalid => AgentLifecycleStatus.manifestInvalid,
     AgentBootstrapStatus.targetMismatch => AgentLifecycleStatus.targetMismatch,
     AgentBootstrapStatus.unsupportedTarget => AgentLifecycleStatus.unsupportedTarget,

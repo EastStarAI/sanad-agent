@@ -4,6 +4,8 @@
 
 The shared Dart models and validators live beside the data contract in `release/contract/`; there is no separate top-level shared release island.
 
+Manifest parsing is forward-compatible and publication is not. A runtime validates trust metadata only for artifacts whose `component:platform` its build knows, so adding a component or platform never invalidates a manifest for an install that predates it; that install still verifies the artifact it actually downloads, and an artifact with an unknown target is never installed or trusted. Because the runtime tolerance cannot help an install older than the addition, `validate-contract` refuses a declared public target without a policy entry and `generate-manifest`/`verify-manifest` call `requireKnownTrustTargets()`, so a release refuses to publish a target its own build cannot verify. Installs older than a newly introduced target recover through the official installer; see [Release and Update Architecture](../docs/technical/update_architecture.md#forward-compatibility-and-the-publisher-gate).
+
 ## Channels
 
 The accepted tags are exactly the stable tag `v<marketing-version>` or an RC tag `v<marketing-version>-rc.<positive-number>`. Stable uses `release-manifest.json` and `appcast.xml`. RC uses the separate `release-manifest-rc.json` and `appcast-rc.xml`; stable clients never consume the RC feed.

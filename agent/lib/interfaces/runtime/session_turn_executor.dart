@@ -20,9 +20,9 @@ import 'package:sanad_agent/evolution/db/session_history_revision_repository.dar
 import 'package:sanad_agent/evolution/db/runtime/session_execution_state_coordinator.dart';
 import 'package:sanad_agent/interfaces/models/agent_turn_request.dart';
 import 'package:sanad_agent/interfaces/runtime/session_title_refresher.dart';
+import 'package:sanad_agent/interfaces/runtime/stream_delta_sequencer.dart';
 import 'package:sanad_agent/interfaces/runtime/turn_event_publisher.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
-import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/engine/runtime/run_cancellation_scope.dart';
 import 'package:sanad_agent/engine/runtime/steer_coordinator.dart';
 import 'package:sanad_agent/interfaces/runtime/local_runtime_orchestrator.dart';
@@ -36,6 +36,14 @@ class ActiveRun {
   String? _turnId;
   final AgentRunner agentRunner;
   final RunCancellationScope cancellationScope;
+
+  /// Allocates this run's `stream_seq` values.
+  ///
+  /// One instance per run, shared by every assistant delta source (thought,
+  /// reasoning, streamed content, and the suspended-resume continuation), so a
+  /// stream keeps exactly one counter and a resumed run cannot restart it for
+  /// an already sequenced stream key.
+  final StreamDeltaSequencer streamDeltaSequencer;
   StreamSubscription<String>? _subscription;
   RunCancellationResourceHandle? _subscriptionHandle;
   bool stopRequested = false;
@@ -50,6 +58,7 @@ class ActiveRun {
     required this.agentRunner,
     String? turnId,
   }) : _turnId = turnId,
+       streamDeltaSequencer = StreamDeltaSequencer(runId: runId),
        cancellationScope = RunCancellationScope(
          sessionId: sessionId,
          runId: runId,
@@ -471,30 +480,17 @@ class SessionTurnExecutor {
             return;
           }
           fullContent.write(chunk);
-          _events.appendInFlightSnapshot(
-            sessionId: event.sessionId,
-            runId: owner.runId,
-            turnId: owner.turnId,
-            modelStepId: agentRunner.currentModelStepId,
-            type: CanonicalEventTypes.thoughtStream,
-            delta: chunk,
-          );
           if (getIt.isRegistered<RuntimeRecoveryService>()) {
             getIt<RuntimeRecoveryService>().clearResumingOnProgress(
               event.sessionId,
               runId: owner.runId,
             );
           }
-          emitResponse(
-            GatewayResponse(
-              sessionId: event.sessionId,
-              platformId: event.platformId,
-              message: Message(role: MessageRole.assistant, content: chunk),
-              isComplete: false,
-              runId: owner.runId,
-              turnId: owner.turnId,
-              modelStepId: agentRunner.currentModelStepId,
-            ),
+          _events.emitContentDelta(
+            owner: owner,
+            event: event,
+            agentRunner: agentRunner,
+            content: chunk,
           );
         },
         onDone: () {

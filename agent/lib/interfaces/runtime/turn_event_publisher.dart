@@ -6,6 +6,7 @@ import 'package:sanad_agent/evolution/session_manager.dart';
 import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'package:sanad_agent/interfaces/platforms/sanad_gateway/protocol/canonical_events.dart';
 import 'package:sanad_agent/interfaces/runtime/session_turn_executor.dart';
+import 'package:sanad_agent/interfaces/runtime/stream_delta_sequencer.dart';
 
 /// Run-ownership predicate supplied by the executor that owns the active-run
 /// maps: only the current, non-invalidated owner of a run may publish.
@@ -128,13 +129,19 @@ class TurnEventPublisher {
         !owner.cancellationScope.isPublicationOpen) {
       return;
     }
+    final modelStepId = agentRunner.currentModelStepId;
+    final streamSeq = owner.streamDeltaSequencer.next(
+      kind: StreamDeltaSequencer.thoughtKind,
+      modelStepId: modelStepId,
+    );
     appendInFlightSnapshot(
       sessionId: event.sessionId,
       runId: owner.runId,
       turnId: owner.turnId,
-      modelStepId: agentRunner.currentModelStepId,
+      modelStepId: modelStepId,
       type: CanonicalEventTypes.thoughtStream,
       delta: thought,
+      seq: streamSeq,
     );
     emitResponse(
       GatewayResponse(
@@ -144,7 +151,8 @@ class TurnEventPublisher {
         isComplete: false,
         runId: owner.runId,
         turnId: owner.turnId,
-        modelStepId: agentRunner.currentModelStepId,
+        modelStepId: modelStepId,
+        streamSeq: streamSeq,
       ),
     );
   }
@@ -161,13 +169,19 @@ class TurnEventPublisher {
         !owner.cancellationScope.isPublicationOpen) {
       return;
     }
+    final modelStepId = agentRunner.currentModelStepId;
+    final streamSeq = owner.streamDeltaSequencer.next(
+      kind: StreamDeltaSequencer.reasoningKind,
+      modelStepId: modelStepId,
+    );
     appendInFlightSnapshot(
       sessionId: event.sessionId,
       runId: owner.runId,
       turnId: owner.turnId,
-      modelStepId: agentRunner.currentModelStepId,
+      modelStepId: modelStepId,
       type: CanonicalEventTypes.reasoningStream,
       delta: reasoning,
+      seq: streamSeq,
     );
     emitResponse(
       GatewayResponse(
@@ -177,7 +191,53 @@ class TurnEventPublisher {
         isComplete: false,
         runId: owner.runId,
         turnId: owner.turnId,
-        modelStepId: agentRunner.currentModelStepId,
+        modelStepId: modelStepId,
+        streamSeq: streamSeq,
+      ),
+    );
+  }
+
+  /// Publishes one streamed assistant-content delta.
+  ///
+  /// Ordinary streamed text is the surface the user reads as the answer while
+  /// it is still being generated; it shares the run-owned ordinal allocator
+  /// with [emitThoughtDelta] and [emitReasoningDelta] so one run never keeps two
+  /// counters for the same stream.
+  void emitContentDelta({
+    required ActiveRun owner,
+    required GatewayEvent event,
+    required AgentRunner agentRunner,
+    required String content,
+  }) {
+    if (content.isEmpty ||
+        !ownsRun(owner) ||
+        !owner.cancellationScope.isPublicationOpen) {
+      return;
+    }
+    final modelStepId = agentRunner.currentModelStepId;
+    final streamSeq = owner.streamDeltaSequencer.next(
+      kind: StreamDeltaSequencer.thoughtKind,
+      modelStepId: modelStepId,
+    );
+    appendInFlightSnapshot(
+      sessionId: event.sessionId,
+      runId: owner.runId,
+      turnId: owner.turnId,
+      modelStepId: modelStepId,
+      type: CanonicalEventTypes.thoughtStream,
+      delta: content,
+      seq: streamSeq,
+    );
+    emitResponse(
+      GatewayResponse(
+        sessionId: event.sessionId,
+        platformId: event.platformId,
+        message: Message(role: MessageRole.assistant, content: content),
+        isComplete: false,
+        runId: owner.runId,
+        turnId: owner.turnId,
+        modelStepId: modelStepId,
+        streamSeq: streamSeq,
       ),
     );
   }
@@ -194,6 +254,7 @@ class TurnEventPublisher {
     required String? modelStepId,
     required String type,
     required String delta,
+    int? seq,
   }) {
     if (delta.isEmpty) return;
     getIt<SessionManager>().appendInFlightDelta(
@@ -203,6 +264,7 @@ class TurnEventPublisher {
       modelStepId: modelStepId,
       type: type,
       delta: delta,
+      seq: seq,
     );
   }
 
