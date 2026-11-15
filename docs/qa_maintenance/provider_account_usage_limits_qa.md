@@ -65,7 +65,7 @@ description: "Regression coverage for provider-instance usage parsing, protocol 
 | Weekly used is 42% | The primary text is `58% remaining`; secondary text is `42% used`. |
 | Monthly is absent | No Monthly label or placeholder appears. |
 | A reset timestamp is supplied in UTC | Relative text uses local time and the tooltip exposes the full local timestamp. |
-| Two reset credits have distinct expiries | Two `Reset credit` rows render, each with its local `Expires …` date/time; the combined count is hidden. |
+| Two reset credits have distinct expiries | Two `Reset credit` rows render, each with its local `Expires …` date/time; the combined count is hidden while the row count equals `available_resets`, and reappears above the rows when they disagree. |
 | Only `available_resets` is supplied | The existing combined `N resets available` fallback remains. |
 | Snapshot is refreshing | Old window rows remain visible with a non-destructive refreshing indicator. |
 | Typed transient failure | Concise English text and Retry are visible; raw provider response is absent. |
@@ -85,7 +85,7 @@ authoritative snapshot replacement.
 ## Reset matrix
 
 - Verify no reset button at zero credits and correct singular/plural count above zero.
-- With two available credits, verify two separate `Reset credit` rows with localized local expiry and no combined count; verify a count-only payload still shows `N resets available` as the fallback.
+- With two available credits, verify two separate `Reset credit` rows with localized local expiry and no combined count while the row count equals `available_resets`; verify the combined count reappears above the rows when they disagree, and that a count-only payload still shows `N resets available` as the fallback.
 - With an exhausted window, verify the normal confirmation, one POST, disabled double-submit, and replacement by the refreshed snapshot.
 - With no exhausted window, verify the first request performs no POST and returns the warning; cancel consumes nothing; **Reset anyway** uses the short-lived confirmation token.
 - Replay the same idempotency key and verify no second credit is consumed.
