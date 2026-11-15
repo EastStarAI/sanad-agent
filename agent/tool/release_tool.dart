@@ -152,6 +152,15 @@ Future<_ReleaseIdentity> _validateContract(
     if (!filename.contains(marketingVersion) || !names.add(filename)) {
       throw FormatException('Invalid or duplicate filename: $filename');
     }
+    // A published target must have a trust policy in this build, so a new
+    // component or platform cannot reach a release without its policy entry.
+    // This is the earliest point PR CI can reject that omission.
+    if (artifact['public'] == true) {
+      ReleaseArtifactTrustPolicy.expectedSignatureType(
+        component: artifact['component']?.toString() ?? '',
+        platform: artifact['platform']?.toString() ?? '',
+      );
+    }
   }
   validateRequiredAgentTargets(declaredAgentTargets(artifacts));
   stdout.writeln(
@@ -218,6 +227,9 @@ Future<void> _generateManifest(
     'repository': repository,
     'artifacts': generated,
   });
+  // A release may not publish a target its own build cannot verify, so a new
+  // component is introduced together with its trust-policy entry.
+  manifest.requireKnownTrustTargets();
   final outputFile = File(output);
   await outputFile.parent.create(recursive: true);
   await outputFile.writeAsString(
@@ -234,6 +246,7 @@ Future<void> _verifyManifest(
   final manifest = ReleaseManifest.fromJsonString(
     await manifestFile.readAsString(),
   );
+  manifest.requireKnownTrustTargets();
   if (artifactsDirectory != null) {
     final directory = Directory(artifactsDirectory).absolute;
     for (final artifact in manifest.artifacts) {

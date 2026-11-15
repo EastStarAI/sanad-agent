@@ -595,11 +595,25 @@ registered and started. A newer Agent is never downgraded; if it can run, the
 Client keeps using it and shows an informational notice during **Run Sanad
 Locally** and in the device's Settings page.
 
+### Reinstalling an Agent that cannot update itself
+
 If `sanad update` reports that the download failed platform trust verification,
 the current Agent is unchanged. The message names the failed stage, for example
 `stage=publisher_requirement`, without your local paths. Agents v1.0.0 through
 v1.0.5 can report this for a genuine release; reinstall with the official
-installer that the message prints:
+installer that the message prints.
+
+Installs on v1.0.21 and older cannot be repaired from inside the product at all.
+Those Agents and Clients reject every manifest published from v1.0.22 onward
+while parsing it, because the manifest declares `agent-runtime` artifacts their
+built-in trust list does not know. The check ends with `Unsupported release
+trust target` and `manifest_invalid` before any version comparison or download,
+so neither **Settings → General → Check for Updates** in the Client nor
+`sanad update` can recover such an install.
+
+For either case the installer verifies the current artifact itself, keeps the
+existing Sanad Home, and restarts the background service without starting a new
+sign-in:
 
 ```bash
 curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install.sh --no-login
@@ -608,8 +622,6 @@ curl -fsSL https://sanad.eaststarai.com/install.sh -o install.sh && bash install
 ```powershell
 & ([scriptblock]::Create((irm https://sanad.eaststarai.com/install.ps1))) -NoLogin
 ```
-
-The installer briefly restarts the background service and keeps your sign-in.
 
 ## Remove Sanad
 
@@ -630,5 +642,8 @@ data.
   content in an issue.
 - Report vulnerabilities using [SECURITY.md](../../SECURITY.md).
 - See [Sanad Agent Features](../product/features.md) for supported behavior.
+- An Agent that reports `manifest_invalid` or `Unsupported release trust target`
+  cannot update itself; reinstall it as described under
+  [Reinstalling an Agent that cannot update itself](#reinstalling-an-agent-that-cannot-update-itself).
 - Developers building from source should use the
   [Developer Guide](developer_guide.md).

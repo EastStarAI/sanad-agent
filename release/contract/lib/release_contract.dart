@@ -67,6 +67,19 @@ class ReleaseArtifactTrustPolicy {
     return expected;
   }
 
+  /// Whether this build declares trust metadata for [component] and [platform].
+  ///
+  /// A release may add a component or platform after this build was compiled,
+  /// so a manifest is parsed forward-compatibly: an unknown target is skipped
+  /// instead of failing the whole document. Skipping never trusts it, because
+  /// an artifact is installed only after [validateMetadata] and
+  /// [verifyReleaseArtifactTrustDetailed] accept it, and a runtime selects only
+  /// the components it knows.
+  static bool isKnownTarget({
+    required String component,
+    required String platform,
+  }) => _signatureTypes.containsKey('$component:$platform');
+
   static void validateMetadata(ReleaseArtifact artifact) {
     final expected = expectedSignatureType(
       component: artifact.component,
@@ -357,6 +370,21 @@ class ReleaseManifest {
   final String repository;
   final List<ReleaseArtifact> artifacts;
 
+  /// Trust targets this manifest declares that this build cannot verify.
+  ///
+  /// Sorted and deduplicated `component:platform` labels. A runtime accepts a
+  /// non-empty answer; a publisher must not ship one, which
+  /// [requireKnownTrustTargets] enforces.
+  List<String> get unrecognizedTrustTargets =>
+      (<String>{
+        for (final artifact in artifacts)
+          if (!ReleaseArtifactTrustPolicy.isKnownTarget(
+            component: artifact.component,
+            platform: artifact.platform,
+          ))
+            '${artifact.component}:${artifact.platform}',
+      }.toList())..sort();
+
   void validate() {
     if (schemaVersion != 1) {
       throw FormatException('Unsupported manifest schema: $schemaVersion');
@@ -386,7 +414,15 @@ class ReleaseManifest {
     }
     final filenames = <String>{};
     for (final artifact in artifacts) {
-      ReleaseArtifactTrustPolicy.validateMetadata(artifact);
+      // Every artifact keeps its structural checks; only the exact trust
+      // metadata of a target this build knows is required here, so an additive
+      // target from a newer release cannot invalidate this document.
+      if (ReleaseArtifactTrustPolicy.isKnownTarget(
+        component: artifact.component,
+        platform: artifact.platform,
+      )) {
+        ReleaseArtifactTrustPolicy.validateMetadata(artifact);
+      }
       if (!filenames.add(artifact.filename)) {
         throw FormatException('Duplicate artifact: ${artifact.filename}');
       }
@@ -413,6 +449,19 @@ class ReleaseManifest {
         );
       }
     }
+  }
+
+  /// Rejects a manifest that declares a trust target this build cannot verify.
+  ///
+  /// Publisher-side gate: release tooling calls it so a component or platform
+  /// is introduced together with its policy entry, while runtime parsing stays
+  /// forward-compatible.
+  void requireKnownTrustTargets() {
+    final unknown = unrecognizedTrustTargets;
+    if (unknown.isEmpty) return;
+    throw FormatException(
+      'Unsupported release trust target(s): ${unknown.join(', ')}.',
+    );
   }
 
   ReleaseArtifact? findArtifact({
