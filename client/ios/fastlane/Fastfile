@@ -35,6 +35,34 @@ def store_release_notes(version)
   notes
 end
 
+# `deliver` enables every locale the notes map names, and for a locale the version
+# does not carry it creates an EMPTY `appStoreVersionLocalization`. App Review
+# refuses a version whose localizations have no description, so the lane writes
+# notes only for the locales the listing already publishes.
+def listing_locales(app)
+  live = app.get_live_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  if live.nil?
+    UI.important("App has no live App Store version; reading the editable version instead")
+    live = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  end
+  UI.user_error!("App Store Connect has no version for #{app.bundle_id}") if live.nil?
+  live.get_app_store_version_localizations.map(&:locale).uniq
+end
+
+# An empty localization comes from an earlier run of this lane, never from a
+# human, so the lane removes the ones the live listing does not publish before it
+# writes metadata. A localized version that carries any description is kept.
+def remove_empty_localizations(app, version, listed_locales)
+  edit = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  return if edit.nil? || edit.version_string != version
+  edit.get_app_store_version_localizations.each do |localization|
+    next if listed_locales.include?(localization.locale)
+    next unless localization.description.to_s.strip.empty?
+    localization.delete!
+    UI.message("Removed the empty #{localization.locale} localization from #{version}")
+  end
+end
+
 platform :ios do
   desc "Prepare an uploaded iOS build for App Store review, then submit it when asked"
   lane :submit_review do
@@ -75,6 +103,18 @@ platform :ios do
       return_spaceship_testflight_build: false
     )
 
+    # The notes map decides which version localizations `deliver` writes, so the
+    # curated copy is filtered down to the locales of the live listing. A locale
+    # this repository has no full listing for is never created here.
+    listed_locales = listing_locales(app)
+    notes = store_release_notes(version).select { |locale, _| listed_locales.include?(locale) }
+    if notes.empty?
+      UI.user_error!("No curated store copy locale matches the live App Store listing " \
+                     "(#{listed_locales.join(', ')}); fill that listing in App Store Connect first")
+    end
+
+    remove_empty_localizations(app, version, listed_locales)
+
     deliver(
       api_key: api_key,
       app_identifier: app_identifier,
@@ -84,9 +124,10 @@ platform :ios do
       # The version keeps whatever media the App Store Connect record already
       # carries: this skips the upload, the deletion, and the processing wait.
       skip_screenshots: true,
-      # The only metadata this lane writes. A locale present only in this hash is
-      # created on the version, so `ar-SA` is listed even when only `en-US` is.
-      release_notes: store_release_notes(version),
+      # The only metadata this lane writes, and only for the locales the live
+      # listing already has: a locale named here alone is enabled on the version
+      # as an empty localization, which App Review refuses.
+      release_notes: notes,
       automatic_release: true,
       # Info.plist declares ITSAppUsesNonExemptEncryption = false, which is the
       # build's export-compliance answer. App Review reads the IDFA answer from the
