@@ -256,13 +256,12 @@ count above reflects that pass.
   - `Usage information is temporarily unavailable.`
   - `Usage information is temporarily unavailable. Please retry.`
 
-- `lib/features/provider_setup/presentation/widgets/provider_instances_list_view.dart` (19 strings)
+- `lib/features/provider_setup/presentation/widgets/provider_instances_list_view.dart` (18 strings)
   - `API Key`
   - `Account: ${instance.credential!.accountLabel}`
   - `Add Provider`
   - `Cancel`
   - `Configured Providers`
-  - `Default`
   - `Delete`
   - `Delete "${instance.displayName}" and its stored credentials?`
   - `Delete Provider Instance?`

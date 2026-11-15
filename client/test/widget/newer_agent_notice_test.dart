@@ -47,6 +47,35 @@ class _NewerAgentController implements LocalDaemonController {
   }) async => const AgentLifecycleResult(AgentLifecycleStatus.newerAgentInUse, agentVersion: '1.0.18');
 }
 
+/// A controller whose release chain is refused on this machine.
+class _TlsTrustFailedController implements LocalDaemonController {
+  @override
+  bool get ownsStoppedAgentLifecycle => true;
+  @override
+  bool get shouldAutoStart => false;
+  @override
+  bool isServiceInstalled() => false;
+  @override
+  Future<bool> isDaemonRunning() async => false;
+  @override
+  Future<Map<String, dynamic>?> getDaemonHealth() async => null;
+  @override
+  Future<String?> getDaemonVersion() async => null;
+  @override
+  Future<bool> install() async => false;
+  @override
+  Future<bool> restartDaemon() async => false;
+  @override
+  Future<bool> startDaemon() async => false;
+  @override
+  Future<bool> stopDaemon() async => false;
+  @override
+  Future<AgentLifecycleResult> updateDaemon({
+    required String targetVersion,
+    void Function(double progress)? onProgress,
+  }) async => const AgentLifecycleResult(AgentLifecycleStatus.tlsTrustFailed);
+}
+
 Widget _app(Widget child, Locale locale) => MaterialApp(
   locale: locale,
   localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -111,4 +140,55 @@ void main() {
       expect(find.text(l10n.newerAgentInUseNotice('1.0.18', '1.0.17')), findsOneWidget);
     });
   }
+
+  group('refused release certificate', () {
+    final tlsController = _TlsTrustFailedController();
+
+    setUp(() async {
+      // The outer scope registers its own controller; this group owns a
+      // controller whose release chain is refused instead.
+      await GetIt.instance.reset();
+      coordinator = DeviceConnectionCoordinator(
+        cloudSocketService: FakeSanadSocketService(hardwareId: 'device-1'),
+        localSocketService: _ReadySocket(),
+        currentDeviceId: 'device-1',
+        daemonController: tlsController,
+        expectedVersion: '1.0.23',
+      );
+      GetIt.instance
+        ..registerSingleton<LocalDaemonController>(tlsController)
+        ..registerSingleton<DeviceConnectionCoordinator>(coordinator);
+    });
+
+    tearDown(() async {
+      await GetIt.instance.reset();
+      coordinator.dispose();
+    });
+
+    for (final locale in const [Locale('en'), Locale('ar')]) {
+      testWidgets('Run Sanad Locally names the cause and the remedies ($locale)', (tester) async {
+        // The reported regression: a refused certificate surfaced as raw
+        // BoringSSL text with no cause or remedy. The outcome stays a failure,
+        // and the message is now localized and actionable.
+        String? failure;
+        await tester.pumpWidget(
+          _app(
+            InstallationTerminalView(
+              versionTag: 'v1.0.23',
+              onComplete: () {},
+              onFailure: (error) => failure = error,
+            ),
+            locale,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final l10n = await AppLocalizations.delegate.load(locale);
+        expect(failure, l10n.agentInstallTlsTrustFailed);
+        expect(find.textContaining(l10n.agentInstallTlsTrustFailed), findsOneWidget);
+        expect(find.textContaining('HandshakeException'), findsNothing);
+        expect(find.textContaining('CERTIFICATE_VERIFY_FAILED'), findsNothing);
+      });
+    }
+  });
 }

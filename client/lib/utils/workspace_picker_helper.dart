@@ -44,7 +44,14 @@ class WorkspacePickerHelper {
       if (debugOverride != null) {
         return debugOverride();
       }
-      return getDirectoryPath(confirmButtonText: confirmButtonText);
+      // The AppKit header documents a `YES` default for both directory panels,
+      // but this panel offered folder creation only when the value was sent
+      // explicitly (a runtime observation), and `file_selector_macos` forwards
+      // only non-null values; send the flag rather than rely on that default.
+      return getDirectoryPath(
+        confirmButtonText: confirmButtonText,
+        canCreateDirectories: true,
+      );
     }
 
     final browser = remoteBrowser;
