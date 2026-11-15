@@ -233,11 +233,14 @@ def track_releases(token: str, package: str, edit: str, track: str) -> list[dict
 def merge_releases(existing: list[dict], release: dict, track: str) -> list[dict]:
     """Keep the releases Play can hold beside the new one and report what is replaced."""
     entering = {int(code) for code in release["versionCodes"]}
+    # Play holds at most one completed release per track, so a new completed
+    # release supersedes the previous one instead of standing beside it.
+    keep_completed = release.get("status") != "completed"
     kept: list[dict] = []
     replaced: list[dict] = []
     for entry in existing:
         codes = {int(code) for code in entry.get("versionCodes") or []}
-        if entry.get("status") == "completed" and not codes & entering:
+        if keep_completed and entry.get("status") == "completed" and not codes & entering:
             kept.append(entry)
         else:
             replaced.append(entry)

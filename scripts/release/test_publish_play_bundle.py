@@ -141,6 +141,18 @@ class ReleaseRetention(unittest.TestCase):
         merged = play.merge_releases(existing, self.release("draft", 27), "production")
         self.assertEqual([entry["versionCodes"] for entry in merged], [["17"], ["27"]])
 
+    def test_a_completed_release_supersedes_the_previous_completed_one(self) -> None:
+        existing = [self.release("completed", 21)]
+        with mock.patch.object(sys, "stderr", new=io.StringIO()) as stderr:
+            merged = play.merge_releases(existing, self.release("completed", 27), "production")
+        self.assertEqual([entry["versionCodes"] for entry in merged], [["27"]])
+        self.assertIn("Replacing the existing completed release", stderr.getvalue())
+
+    def test_a_staged_rollout_keeps_the_completed_release_serving(self) -> None:
+        existing = [self.release("completed", 21)]
+        merged = play.merge_releases(existing, self.release("inProgress", 27), "production")
+        self.assertEqual([entry["versionCodes"] for entry in merged], [["21"], ["27"]])
+
     def test_active_release_is_reported_not_dropped_silently(self) -> None:
         existing = [self.release("inProgress", 21)]
         with mock.patch.object(sys, "stderr", new=io.StringIO()) as stderr:
