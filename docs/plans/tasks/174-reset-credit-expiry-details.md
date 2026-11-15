@@ -48,8 +48,12 @@ single `N resets available` line. The reset action stays one shared control.
 
 - [x] Confirm the daemon currently parses only
       `rate_limit_reset_credits.available_count`.
-- [x] Confirm the payload's `credits[]` entries carry `status` and
-      `expires_at`/`granted_at`.
+- [ ] Confirm the payload's `credits[]` entries carry `status` and
+      `expires_at`/`granted_at`. **Open:** the shape is assumed from the
+      provider's documented fields and pinned only by
+      `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json`; a live
+      capture must confirm it. A renamed field drops every credit and the
+      Client silently falls back to `N resets available`.
 - [x] Confirm the Client and protocol carry only `available_resets`.
 
 ### G1 — Agent snapshot and adapter

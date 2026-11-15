@@ -305,6 +305,11 @@ Each reset-credit entry carries display-safe UTC `expires_at` and optional
 `granted_at`; the provider's title, description, profile id, and account id
 never cross the protocol. `available_resets` remains authoritative for the
 reset action, while `reset_credits` supplies the per-credit display detail.
+The ChatGPT `credits[]` field names are an assumed provider shape, not a
+captured contract: `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json`
+pins what the adapter reads, and a live capture must confirm `status`,
+`expires_at`, and `granted_at`; a rename silently degrades to the count-only
+fallback.
 Version 1 window types are `session`, `weekly`, and `monthly`. Percentages are
 normalized to `[0, 100]`, and one side is derived when only used or remaining is
 supplied. Missing windows never create placeholders.

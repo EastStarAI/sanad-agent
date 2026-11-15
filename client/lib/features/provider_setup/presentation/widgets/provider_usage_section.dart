@@ -523,37 +523,51 @@ class _ResetControls extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     final count = snapshot.availableResets;
+    final countLabel = count == 1
+        ? l10n.providerUsageResetAvailableSingle
+        : l10n.providerUsageResetsAvailable(count);
     final credits = snapshot.resetCredits.where((credit) => credit.expiresAt != null).toList()
       ..sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        if (credits.isNotEmpty) ...[
+        if (credits.isEmpty)
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  countLabel,
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+              ),
+              _resetButton(context, l10n),
+            ],
+          )
+        else ...[
+          // The daemon's `available_resets` stays authoritative: when the
+          // detail rows disagree with it, the combined count remains visible
+          // instead of disappearing with the count-only fallback.
+          if (credits.length != count) ...[
+            Text(
+              countLabel,
+              key: Key('provider_usage_reset_count_$instanceId'),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+            ),
+            const SizedBox(height: 4),
+          ],
           for (var i = 0; i < credits.length; i++)
             _ResetCreditRow(
               instanceId: instanceId,
               index: i,
               expiresAt: credits[i].expiresAt!,
             ),
+          // Directional end so the action mirrors with the locale instead of
+          // jumping sides depending on the payload shape.
           Align(
-            alignment: Alignment.centerRight,
+            alignment: AlignmentDirectional.centerEnd,
             child: _resetButton(context, l10n),
           ),
-        ] else
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  count == 1 ? l10n.providerUsageResetAvailableSingle : l10n.providerUsageResetsAvailable(count),
-                  style: const TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-              _resetButton(context, l10n),
-            ],
-          ),
+        ],
         if (entry.resetResult != null && entry.resetResult!.status != 'confirmation_required')
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -563,9 +577,7 @@ class _ResetControls extends StatelessWidget {
                 fontSize: 11,
                 color: entry.resetResult!.status == 'reset'
                     ? Colors.green[700]
-                    : Theme.of(
-                        context,
-                      ).colorScheme.onSurface.withValues(alpha: 0.65),
+                    : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.65),
               ),
             ),
           ),

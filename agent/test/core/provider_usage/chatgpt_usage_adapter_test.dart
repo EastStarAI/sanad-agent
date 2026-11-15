@@ -12,6 +12,8 @@
 //   • Auth/network failures map to typed exceptions with safe messages.
 
 import 'dart:convert';
+import 'dart:io';
+import 'dart:isolate';
 import 'package:test/test.dart';
 import 'package:sanad_agent/core/provider_usage/chatgpt_usage_adapter.dart';
 import 'package:sanad_agent/core/provider_usage/provider_usage_adapter.dart';
@@ -448,6 +450,46 @@ void main() {
       },
     );
 
+    test(
+      'the assumed reset-credit fixture parses with the field names under test',
+      () async {
+        // ASSUMED SHAPE - CONFIRM IN THE LIVE TEST.
+        //
+        // `agent/test/fixtures/chatgpt_reset_credits_assumed_shape.json` is not
+        // a captured live response: it pins the field names this adapter reads
+        // (`rate_limit_reset_credits.credits[].status`, `.expires_at`,
+        // `.granted_at`). A rename in the real payload drops every credit and
+        // the Client silently falls back to `N resets available`, so the live
+        // test must confirm the shape before this contract is trusted.
+        final payload = _fixture(
+          'test/fixtures/chatgpt_reset_credits_assumed_shape.json',
+        );
+        final ctx = context(
+          instanceId: 'inst-assumed',
+          credential: oauthCred('inst-assumed'),
+          httpClientFactory: _okFactory(payload),
+        );
+
+        final snap = await adapter.fetch(ctx);
+
+        expect(snap.availableResets, 3);
+        expect(
+          snap.resetCredits.map((c) => c.expiresAt!.toIso8601String()),
+          ['2026-11-16T10:00:00.000Z', '2026-11-20T10:00:00.000Z'],
+          reason: 'only available credits cross, earliest expiry first',
+        );
+        expect(
+          snap.resetCredits.map((c) => c.grantedAt?.toIso8601String()),
+          ['2026-11-02T10:00:00.000Z', '2026-11-01T10:00:00.000Z'],
+        );
+
+        final mapText = snap.toMap().toString();
+        expect(mapText, isNot(contains('profile-assumed-leak')));
+        expect(mapText, isNot(contains('Full reset')));
+        expect(mapText, isNot(contains('provider-private')));
+      },
+    );
+
     test('snapshot JSON never contains token or account id', () async {
       final payload = {
         'rate_limit': {
@@ -609,6 +651,18 @@ class _FakeClient implements ProviderUsageHttpClient {
 
 ProviderUsageHttpClient Function() _okFactory(Map<String, dynamic> payload) =>
     () => _FakeClient(jsonPayload: payload);
+
+/// Loads a checked-in fixture relative to the package root so the suite does
+/// not depend on the caller's working directory.
+Map<String, dynamic> _fixture(String relativePath) {
+  final agentRoot = Isolate.resolvePackageUriSync(
+    Uri.parse('package:sanad_agent/'),
+  )!.resolve('../');
+  return jsonDecode(
+        File.fromUri(agentRoot.resolve(relativePath)).readAsStringSync(),
+      )
+      as Map<String, dynamic>;
+}
 
 ProviderUsageHttpClient Function() _rawFactory(int status, String body) =>
     () => _FakeClient(rawBody: body, status: status);

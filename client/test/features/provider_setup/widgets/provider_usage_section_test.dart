@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:sanad_client/l10n/app_localizations.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -68,6 +67,32 @@ Widget _wrap(ProviderUsageCubit cubit, Widget child, {String locale = 'en'}) {
       ),
     ),
   );
+}
+
+/// Renders a wall clock as the user-facing `MMM d, y, HH:mm` text.
+///
+/// The expected value is built from the instant's own components, so a
+/// timezone assertion never reuses the widget's formatting expression: the
+/// value passed here is the wall clock the user must read, and a widget that
+/// forgets `toLocal()` prints a different one.
+String _wallClockText(DateTime value) {
+  const months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+  final hour = value.hour.toString().padLeft(2, '0');
+  final minute = value.minute.toString().padLeft(2, '0');
+  return '${months[value.month - 1]} ${value.day}, ${value.year}, $hour:$minute';
 }
 
 void main() {
@@ -691,8 +716,11 @@ void main() {
   testWidgets(
     'reset credits render separately with local expiry and replace the combined count',
     (tester) async {
-      final first = DateTime.utc(2026, 11, 15, 10);
-      final second = DateTime.utc(2026, 11, 20, 10);
+      // The user-facing instants are authored as local wall clocks and only the
+      // wire copy is UTC, so the assertion proves the local conversion instead
+      // of repeating it.
+      final firstLocal = DateTime(2026, 11, 15, 10, 30);
+      final secondLocal = DateTime(2026, 11, 20, 10, 30);
       cubit.emit(
         cubit.state.upsertEntry(
           _localDeviceId,
@@ -718,8 +746,8 @@ void main() {
                 ],
                 availableResets: 2,
                 resetCredits: [
-                  ProviderUsageResetCreditDto(expiresAt: first),
-                  ProviderUsageResetCreditDto(expiresAt: second),
+                  ProviderUsageResetCreditDto(expiresAt: firstLocal.toUtc()),
+                  ProviderUsageResetCreditDto(expiresAt: secondLocal.toUtc()),
                 ],
               ),
             ),
@@ -745,18 +773,17 @@ void main() {
         findsOneWidget,
       );
       expect(find.text('Reset credit'), findsNWidgets(2));
+      expect(find.text('Expires ${_wallClockText(firstLocal)}'), findsOneWidget);
       expect(
-        find.text(
-          'Expires ${DateFormat('MMM d, y, HH:mm').format(first.toLocal())}',
-        ),
+        find.text('Expires ${_wallClockText(secondLocal)}'),
         findsOneWidget,
       );
-      expect(
-        find.text(
-          'Expires ${DateFormat('MMM d, y, HH:mm').format(second.toLocal())}',
-        ),
-        findsOneWidget,
-      );
+      // The wire timestamps are UTC; on a non-UTC host a missing `toLocal()`
+      // would print that wall clock instead and this assertion fails.
+      final firstUtcText = 'Expires ${_wallClockText(firstLocal.toUtc())}';
+      if (firstUtcText != 'Expires ${_wallClockText(firstLocal)}') {
+        expect(find.text(firstUtcText), findsNothing);
+      }
       expect(find.text('2 resets available'), findsNothing);
       expect(find.text('Reset limits'), findsOneWidget);
       expect(
@@ -767,7 +794,7 @@ void main() {
   );
 
   testWidgets('reset credit copy is localized in Arabic', (tester) async {
-    final expires = DateTime.utc(2026, 11, 15, 10);
+    final expiresLocal = DateTime(2026, 11, 15, 10, 30);
     cubit.emit(
       cubit.state.upsertEntry(
         _localDeviceId,
@@ -793,7 +820,7 @@ void main() {
               ],
               availableResets: 1,
               resetCredits: [
-                ProviderUsageResetCreditDto(expiresAt: expires),
+                ProviderUsageResetCreditDto(expiresAt: expiresLocal.toUtc()),
               ],
             ),
           ),
@@ -813,12 +840,77 @@ void main() {
 
     expect(find.text('رصيد إعادة ضبط'), findsOneWidget);
     expect(
-      find.text(
-        'ينتهي في ${DateFormat('MMM d, y, HH:mm').format(expires.toLocal())}',
-      ),
+      find.text('ينتهي في ${_wallClockText(expiresLocal)}'),
       findsOneWidget,
     );
   });
+
+  testWidgets(
+    'the combined count stays visible when the credit rows disagree with it',
+    (tester) async {
+      final firstLocal = DateTime(2026, 11, 15, 10, 30);
+      final secondLocal = DateTime(2026, 11, 20, 10, 30);
+      cubit.emit(
+        cubit.state.upsertEntry(
+          _localDeviceId,
+          'a',
+          ProviderUsageEntry(
+            phase: ProviderUsagePhase.fresh,
+            fetchedAt: DateTime.now(),
+            result: ProviderUsageResultDto(
+              status: 'available',
+              providerInstanceId: 'a',
+              snapshot: ProviderUsageSnapshotDto(
+                providerInstanceId: 'a',
+                providerTemplateId: 'openai-codex',
+                source: 'test',
+                fetchedAt: DateTime.now().toUtc(),
+                windows: const [
+                  ProviderUsageWindowDto(
+                    type: 'weekly',
+                    label: 'Weekly',
+                    usedPercent: 40,
+                    remainingPercent: 60,
+                  ),
+                ],
+                // One credit is dropped while parsing, so the detail rows and
+                // the authoritative count disagree.
+                availableResets: 3,
+                resetCredits: [
+                  ProviderUsageResetCreditDto(expiresAt: firstLocal.toUtc()),
+                  ProviderUsageResetCreditDto(expiresAt: secondLocal.toUtc()),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpWidget(
+        _wrap(
+          cubit,
+          ProviderUsageSection(agent: null, instanceId: 'a', onReconnect: () {}),
+        ),
+      );
+      await tester.pump();
+      await tester.tap(find.text('Usage & limits'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('3 resets available'), findsOneWidget);
+      expect(
+        find.byKey(const Key('provider_usage_reset_count_a')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_0')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('provider_usage_reset_credit_a_1')),
+        findsOneWidget,
+      );
+      expect(find.text('Reset limits'), findsOneWidget);
+    },
+  );
 
   testWidgets('reset count is conditional and Reset anyway reuses confirmation', (tester) async {
     ProviderUsageEntry entryWithResets(int count) => ProviderUsageEntry(
