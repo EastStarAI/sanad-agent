@@ -146,6 +146,7 @@ void main(List<String> args) async {
     await handleRuntimeSwitch(
       runtimeSelector: parsed.runtimeSelector,
       portOverride: parsed.portOverride,
+      sanadHomePath: sanadHomePath,
     );
     return;
   }
