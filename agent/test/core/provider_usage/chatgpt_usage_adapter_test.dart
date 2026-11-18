@@ -48,6 +48,14 @@ void main() {
         authMethod: ProviderAuthMethod.deviceCode,
       );
 
+  // The reference fixtures carry absolute instants, so an adapter reading the
+  // real wall clock would eventually filter them out and rot the assertions.
+  // Pinning "now" keeps the fixtures reference-faithful and the expectations
+  // exact, whatever day CI runs on.
+  final pinnedNow = DateTime.utc(2026, 11, 15, 12);
+  ChatGptUsageAdapter pinnedClockAdapter() =>
+      ChatGptUsageAdapter(now: () => pinnedNow);
+
   group('ChatGptUsageAdapter.canFetch', () {
     final adapter = ChatGptUsageAdapter();
 
@@ -84,7 +92,7 @@ void main() {
   });
 
   group('ChatGptUsageAdapter.fetch', () {
-    final adapter = ChatGptUsageAdapter();
+    final adapter = pinnedClockAdapter();
 
     test(
       'maps primary+secondary to Session+Weekly and treats percent as used',
@@ -542,10 +550,10 @@ void main() {
     });
 
     test('status and expiry filtering drops unusable entries', () async {
-      // Relative instants keep this test from rotting: the only surviving credit
-      // must be in the future, and an `available` credit whose timestamp has
-      // passed must still be dropped.
-      final now = DateTime.now().toUtc();
+      // Instants are derived from the pinned clock so this test cannot rot: the
+      // only surviving credit must be in the future, and an `available` credit
+      // whose timestamp has passed must still be dropped.
+      final now = pinnedNow;
       final future = now.add(const Duration(days: 10));
       final past = now.subtract(const Duration(hours: 2));
       final ctx = context(
@@ -588,7 +596,7 @@ void main() {
     });
 
     test('a past expiry is dropped even when the status says available', () async {
-      final now = DateTime.now().toUtc();
+      final now = pinnedNow;
       final ctx = context(
         instanceId: 'inst-expired',
         credential: oauthCred('inst-expired'),
@@ -691,7 +699,7 @@ void main() {
     });
 
     test('different instances do not share state', () async {
-      final adapterInstance = ChatGptUsageAdapter();
+      final adapterInstance = pinnedClockAdapter();
       final payload1 = {
         'rate_limit': {
           'primary_window': {'used_percent': 1},

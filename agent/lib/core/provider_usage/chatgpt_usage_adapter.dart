@@ -81,6 +81,18 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
   /// a single constant here to avoid scattered magic values (Task 55 §4).
   static const fetchTimeout = Duration(seconds: 15);
 
+  /// Clock seam for expiry filtering and `fetched_at`.
+  ///
+  /// Production reads the wall clock in UTC. Tests pin it so reference fixtures
+  /// that carry absolute instants keep asserting real parsing and ordering
+  /// instead of silently rotting once those instants pass.
+  final DateTime Function() _now;
+
+  ChatGptUsageAdapter({DateTime Function()? now})
+    : _now = now ?? _systemUtcNow;
+
+  static DateTime _systemUtcNow() => DateTime.now().toUtc();
+
   @override
   bool canFetch(ProviderUsageContext context) {
     // ChatGPT usage requires an OAuth bearer token (access token). API-key-only
@@ -341,7 +353,7 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
       providerInstanceId: context.instanceId,
       providerTemplateId: context.templateId,
       source: sourceLabel,
-      fetchedAt: DateTime.now().toUtc(),
+      fetchedAt: _now().toUtc(),
       planName: planName,
       windows: windows,
       availableResets: availableResets,
@@ -425,7 +437,7 @@ class ChatGptUsageAdapter implements ProviderUsageResetAdapter {
     final credits = raw['credits'];
     if (credits is! List) return const [];
 
-    final now = DateTime.now().toUtc();
+    final now = _now().toUtc();
     final parsed = <ProviderUsageResetCredit>[];
     for (final item in credits) {
       if (item is! Map<String, dynamic>) continue;
