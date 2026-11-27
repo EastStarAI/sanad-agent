@@ -20,6 +20,8 @@ class LLMRequestOptions {
   final NativeThinkingDirective? thinkingDirective;
   final Duration? timeout;
   final int? maxOutputTokens;
+  /// A prompt-only connection check: optional output bounds are best effort.
+  final bool connectionProbe;
   final RunCancellationScope? cancellationScope;
   final ProviderWatchdogConfig watchdogs;
   final ModelCapabilityOverride? routeCapabilitySnapshot;
@@ -35,6 +37,7 @@ class LLMRequestOptions {
     this.thinkingDirective,
     this.timeout,
     this.maxOutputTokens,
+    this.connectionProbe = false,
     this.cancellationScope,
     this.watchdogs = ProviderWatchdogConfig.defaults,
     this.routeCapabilitySnapshot,
@@ -69,6 +72,7 @@ class LLMRequestOptions {
       thinkingDirective: thinkingDirective ?? this.thinkingDirective,
       timeout: timeout ?? this.timeout,
       maxOutputTokens: maxOutputTokens ?? this.maxOutputTokens,
+      connectionProbe: connectionProbe,
       cancellationScope: cancellationScope ?? this.cancellationScope,
       watchdogs: watchdogs ?? this.watchdogs,
       routeCapabilitySnapshot:

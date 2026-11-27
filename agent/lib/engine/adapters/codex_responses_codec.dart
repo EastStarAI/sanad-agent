@@ -163,7 +163,9 @@ class CodexResponsesCodec {
       'reasoning': reasoning,
       if (stream) 'stream': true,
     };
-    if (options.maxOutputTokens != null) {
+    // The optional bound is not portable across Responses endpoints. A
+    // connection probe uses its short prompt and request deadline instead.
+    if (!options.connectionProbe && options.maxOutputTokens != null) {
       body['max_output_tokens'] = options.maxOutputTokens;
     }
 

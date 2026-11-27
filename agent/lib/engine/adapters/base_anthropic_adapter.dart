@@ -306,6 +306,7 @@ class BaseAnthropicAdapter
       throw LlmHttpException.fromResponse(
         response,
         operation: 'generateResponse',
+        requestUri: url,
       );
     }
 
