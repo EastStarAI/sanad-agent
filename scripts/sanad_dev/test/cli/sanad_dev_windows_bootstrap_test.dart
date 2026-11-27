@@ -65,6 +65,23 @@ if not "%FAIL_STAGE%"=="" (
   if not errorlevel 1 exit /b 42
 )
 echo %CD%^|%*>>"${calls.path}"
+if "%1"=="dart" if "%2"=="run" if "%3"=="tool/ensure_native_stt.dart" (
+  if "%FAIL_DICTATION%"=="busy" (
+    echo native_stt_result=busy
+    echo native_stt_stage=inspect
+    exit /b 0
+  )
+  if not "%FAIL_DICTATION%"=="" (
+    echo cmake is not installed
+    echo native_stt_stage=build
+    echo native_stt_result=failed
+    echo native_stt_failure=prerequisite_missing
+    exit /b 2
+  )
+  echo native_stt_stage=ready
+  echo native_stt_result=ready
+  exit /b 0
+)
 if "%1"=="install" type nul > .fake-fvm-installed
 if "%1"=="dart" if "%2"=="pub" (
   mkdir .dart_tool 2>nul
@@ -96,6 +113,13 @@ param([string] $Algorithm, [string] $Path)
     tearDown(() async {
       if (await fixture.exists()) await fixture.delete(recursive: true);
     });
+
+    /// The durable preparation log of the fixture checkout.
+    File preparationLog() => File(
+      '${fixture.path}${Platform.pathSeparator}agent'
+      '${Platform.pathSeparator}native'
+      '${Platform.pathSeparator}.stt-prepare.log',
+    );
 
     Future<ProcessResult> runBootstrap(
       List<String> arguments, {
@@ -213,6 +237,102 @@ param([string] $Algorithm, [string] $Path)
       },
     );
 
+    test('fresh setup prepares native dictation through the acquisition tool',
+        () async {
+      final result = await runBootstrap(const ['setup']);
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\\n${result.stderr}');
+      final invocations = await calls.readAsLines();
+      expect(
+        invocations.last,
+        contains(
+          'agent|dart run tool/ensure_native_stt.dart',
+        ),
+      );
+      expect(result.stdout, contains('Preparing native dictation'));
+      // `setup` reads the tool's own machine keys, so a stage that prepared
+      // nothing can never be reported as ready.
+      expect(result.stdout, contains('ready ('));
+      expect(
+        await preparationLog().readAsString(),
+        contains('native_stt_result=ready'),
+      );
+    });
+
+    test('a busy preparation is reported as already running, not ready',
+        () async {
+      // Another attempt holds the claim: `setup` did not prepare anything, so
+      // reporting ready would send the user back to a missing runtime.
+      final result = await runBootstrap(
+        const ['setup'],
+        environment: const {'FAIL_DICTATION': 'busy'},
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\\n${result.stderr}');
+      expect(result.stdout, contains('already running'));
+      expect(
+        result.stdout,
+        isNot(contains('Dictation is unavailable')),
+        reason: 'a concurrent attempt is not a failure of this checkout',
+      );
+    });
+
+    test('a failed dictation preparation never fails setup', () async {
+      // Dictation is optional: the Agent must keep installing and starting even
+      // when the native runtime cannot be acquired. On Windows that means the
+      // failed stage is reported with its durable log, never discarded to NUL.
+      final result = await runBootstrap(
+        const ['setup'],
+        environment: const {'FAIL_DICTATION': '1'},
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\\n${result.stderr}');
+      expect(result.stdout, contains('Preparing native dictation'));
+      expect(
+        result.stdout,
+        contains('Dictation is unavailable; the Agent runs without it.'),
+      );
+      expect(result.stdout, contains('agent/native/.stt-prepare.log'));
+      expect(result.stdout, contains('retry: sanad-dev setup'));
+      // The log is the durable evidence, so the test reads what is in it rather
+      // than only checking that the file was created.
+      final log = await preparationLog().readAsString();
+      expect(log, contains('cmake is not installed'));
+      expect(log, contains('native_stt_stage=build'));
+      expect(log, contains('native_stt_result=failed'));
+      expect(log, contains('native_stt_failure=prerequisite_missing'));
+      // The failing lines are echoed on the terminal, not buried in the log.
+      expect(result.stdout, contains('cmake is not installed'));
+    });
+
+    test('a failed dictation preparation never fails setup', () async {
+      // Dictation is optional: the Agent must keep installing and starting even
+      // when the native runtime cannot be acquired. On Windows that means the
+      // failed stage is reported with its durable log, never discarded to NUL.
+      final result = await runBootstrap(
+        const ['setup'],
+        environment: const {'FAIL_DICTATION': '1'},
+      );
+
+      expect(result.exitCode, 0, reason: '${result.stdout}\n${result.stderr}');
+      expect(result.stdout, contains('Preparing native dictation'));
+      expect(
+        result.stdout,
+        contains('Dictation is unavailable; the Agent runs without it.'),
+      );
+      expect(result.stdout, contains('agent/native/.stt-prepare.log'));
+      expect(result.stdout, contains('retry: sanad-dev setup'));
+      expect(
+        File(
+          '${fixture.path}${Platform.pathSeparator}agent'
+          '${Platform.pathSeparator}native'
+          '${Platform.pathSeparator}.stt-prepare.log',
+        ).existsSync(),
+        isTrue,
+        reason: 'the preparation log is written, never redirected to NUL',
+      );
+    });
+
     test('incremental setup skips ready tools and packages', () async {
       final first = await runBootstrap(const ['setup']);
       expect(first.exitCode, 0, reason: '${first.stdout}\n${first.stderr}');
@@ -233,7 +353,14 @@ param([string] $Algorithm, [string] $Path)
       await calls.writeAsString('');
       final second = await runBootstrap(const ['setup']);
       expect(second.exitCode, 0, reason: '${second.stdout}\n${second.stderr}');
-      expect(await calls.readAsString(), isEmpty);
+      // Only the dictation stage runs again: install, dependency resolution,
+      // and the runtime compile are idempotent and silent when current.
+      final secondInvocations = await calls.readAsLines();
+      expect(secondInvocations, hasLength(1));
+      expect(
+        secondInvocations.single,
+        contains('tool/ensure_native_stt.dart'),
+      );
     });
 
     test('foreign wrapper preserves existing checkout shim', () async {

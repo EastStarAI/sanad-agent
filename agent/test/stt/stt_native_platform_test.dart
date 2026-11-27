@@ -245,6 +245,131 @@ void main() {
     });
   });
 
+  group('preparing attempt evidence', () {
+    late Directory nativeRoot;
+
+    setUp(() async {
+      nativeRoot = await Directory.systemTemp.createTemp('sanad-stt-marker-');
+    });
+
+    tearDown(() async {
+      if (nativeRoot.existsSync()) nativeRoot.deleteSync(recursive: true);
+    });
+
+    test('a fresh marker means one attempt is still running', () {
+      File('${nativeRoot.path}/$sttPreparingMarkerName')
+          .writeAsStringSync(DateTime.now().toUtc().toIso8601String());
+
+      // The launcher and the tool both refuse a second attempt on this
+      // evidence, which is the same window readiness reports as preparing.
+      expect(sttPreparationInFlight(nativeRoot), isTrue);
+      expect(
+        sttPreparationInFlight(
+          nativeRoot,
+          now: DateTime.now().add(
+            sttPreparingMarkerMaxAge - const Duration(minutes: 1),
+          ),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a stale marker expires and an absent one is not evidence', () {
+      expect(sttPreparationInFlight(nativeRoot), isFalse);
+
+      File('${nativeRoot.path}/$sttPreparingMarkerName')
+          .writeAsStringSync('killed build');
+
+      expect(
+        sttPreparationInFlight(
+          nativeRoot,
+          now: DateTime.now().add(sttPreparingMarkerMaxAge),
+        ),
+        isFalse,
+        reason: 'a killed attempt must never block the next one forever',
+      );
+    });
+
+    test('a future timestamp counts as fresh instead of racing a live attempt',
+        () {
+      File('${nativeRoot.path}/$sttPreparingMarkerName')
+          .writeAsStringSync('clock moved backwards');
+
+      expect(
+        sttPreparationInFlight(
+          nativeRoot,
+          now: DateTime.now().subtract(const Duration(minutes: 5)),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a marker whose owner is gone expires immediately', () {
+      // The marker body is the owner's pid. A killed attempt leaves one behind;
+      // waiting out the full window would block every retry for half an hour.
+      File('${nativeRoot.path}/$sttPreparingMarkerName')
+          .writeAsStringSync('${_deadProcessId()}');
+
+      expect(sttPreparationInFlight(nativeRoot), isFalse);
+      expect(
+        sttClaimPreparation(nativeRoot, pid: pid),
+        isTrue,
+        reason: 'a dead claim is taken over, not waited out',
+      );
+      expect(
+        File('${nativeRoot.path}/$sttPreparingMarkerName').readAsStringSync(),
+        '$pid',
+      );
+    });
+
+    test('a marker without a readable pid is never cleared', () {
+      // An older marker (or one truncated by a crash) names no process, so
+      // nobody can prove it is dead: it stays until it ages out.
+      File(
+        '${nativeRoot.path}/$sttPreparingMarkerName',
+      ).writeAsStringSync(DateTime.now().toUtc().toIso8601String());
+
+      expect(sttPreparationInFlight(nativeRoot), isTrue);
+      expect(sttClaimPreparation(nativeRoot, pid: pid), isFalse);
+    });
+
+    test('the claim is exclusive, so two attempts never both proceed', () {
+      // One atomic create decides the winner: the loser reports busy instead of
+      // staging the same runtime directory.
+      expect(sttClaimPreparation(nativeRoot, pid: pid), isTrue);
+      expect(sttClaimPreparation(nativeRoot, pid: pid), isFalse);
+
+      sttClearPreparationMarker(nativeRoot);
+      expect(
+        File('${nativeRoot.path}/$sttPreparingMarkerName').existsSync(),
+        isFalse,
+      );
+      expect(sttClaimPreparation(nativeRoot, pid: pid), isTrue);
+    });
+
+    test('a deliberate force replaces a live claim', () {
+      expect(sttClaimPreparation(nativeRoot, pid: pid), isTrue);
+      expect(sttClaimPreparation(nativeRoot, pid: pid + 1, force: true), isTrue);
+      expect(
+        File('${nativeRoot.path}/$sttPreparingMarkerName').readAsStringSync(),
+        '${pid + 1}',
+      );
+    });
+
+    test('the durable log is bounded to one header line', () {
+      final log = File('${nativeRoot.path}/$sttPreparationLogFileName');
+      log.writeAsStringSync('compiler noise\n' * 120000);
+      expect(log.lengthSync(), greaterThan(sttPreparationLogLimitBytes));
+
+      resetBoundedSttPreparationLog(nativeRoot);
+
+      final content = log.readAsStringSync();
+      expect(content, startsWith(sttPreparationLogResetHeader));
+      expect(content, isNot(contains('compiler noise')));
+      expect(log.lengthSync(), lessThan(sttPreparationLogLimitBytes));
+    });
+  });
+
   group('binary inspection', () {
     test('reads both Mach-O architectures and the deployment target', () {
       final x64 = inspectNativeBinary(
@@ -379,3 +504,6 @@ void main() {
     });
   });
 }
+
+/// A process id outside every platform's live range, for dead-claim tests.
+int _deadProcessId() => 2147483647;

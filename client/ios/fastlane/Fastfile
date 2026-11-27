@@ -1,0 +1,209 @@
+# Submits a build that is already uploaded and processed in App Store Connect and
+# releases it automatically once Apple approves. This lane never builds, signs, or
+# uploads a binary: `.github/workflows/testflight.yml` owns the upload. Every App
+# Store Connect behaviour it relies on is fastlane's own; the mechanism table and
+# the screenshot/state limits live in `docs/operations/release_and_signing.md`.
+
+require "json"
+require "fastlane_core/build_watcher"
+require "spaceship"
+require_relative "store_state"
+
+# CI logs stay quiet and no lane ever reports usage for this repository.
+opt_out_usage
+
+default_platform(:ios)
+
+ROOT = File.expand_path("../../..", __dir__)
+RELEASE_CONTRACT = File.join(ROOT, "release", "release-contract.json")
+STORE_COPY = File.join(ROOT, "scripts", "release", "store_whats_new.py")
+STORE_COPY_DIRECTORY = File.join(ROOT, "release")
+
+def contract_identity
+  contract = JSON.parse(File.read(RELEASE_CONTRACT))
+  [contract.fetch("version").to_s, contract.fetch("build_number").to_s]
+end
+
+# `store_whats_new.py` is the single owner of the curated store copy, so the lane
+# asks it for the published text instead of reading or validating it again.
+def store_release_notes(version)
+  output = sh("python3", STORE_COPY, "--version", version,
+              "--directory", STORE_COPY_DIRECTORY, "--limit", "app-store", "--json",
+              log: false)
+  notes = JSON.parse(output)
+  missing = ["en-US", "ar-SA"] - notes.keys
+  UI.user_error!("Store copy is not published for #{missing.join(' and ')}") unless missing.empty?
+  notes
+end
+
+# `deliver` enables every locale the notes map names, and for a locale the version
+# does not carry it creates an EMPTY `appStoreVersionLocalization`. App Review
+# refuses a version whose localizations have no description, so the lane writes
+# notes only for the locales the listing already publishes.
+def listing_locales(app)
+  live = app.get_live_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  if live.nil?
+    UI.important("App has no live App Store version; reading the editable version instead")
+    live = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  end
+  UI.user_error!("App Store Connect has no version for #{app.bundle_id}") if live.nil?
+  live.get_app_store_version_localizations.map(&:locale).uniq
+end
+
+# An empty localization comes from an earlier run of this lane, never from a
+# human, so the lane removes the ones the live listing does not publish before it
+# writes metadata. A localized version that carries any description is kept.
+def remove_empty_localizations(app, version, listed_locales)
+  edit = app.get_edit_app_store_version(platform: Spaceship::ConnectAPI::Platform::IOS)
+  return if edit.nil? || edit.version_string != version
+  edit.get_app_store_version_localizations.each do |localization|
+    next if listed_locales.include?(localization.locale)
+    next unless localization.description.to_s.strip.empty?
+    localization.delete!
+    UI.message("Removed the empty #{localization.locale} localization from #{version}")
+  end
+end
+
+# The version record this lane would act on: the live version when the marketing
+# version already shipped, otherwise the editable one. Returns nil when App Store
+# Connect holds neither, which is what a first submission looks like.
+def current_version(app, version)
+  platform = Spaceship::ConnectAPI::Platform::IOS
+  candidates = [app.get_live_app_store_version(platform: platform),
+                app.get_edit_app_store_version(platform: platform)]
+  candidates.compact.find { |candidate| candidate.version_string == version }
+end
+
+platform :ios do
+  desc "Prepare an uploaded iOS build for App Store review, then submit it when asked"
+  lane :submit_review do
+    contract_version, contract_build = contract_identity
+    version = ENV.fetch("APPSTORE_VERSION", contract_version)
+    build = ENV.fetch("APPSTORE_BUILD_NUMBER", contract_build)
+    unless version == contract_version && build == contract_build
+      UI.user_error!("App Store identity mismatch: release/release-contract.json declares " \
+                     "#{contract_version} (#{contract_build}) but this run asked for " \
+                     "#{version} (#{build}); prepare the release contract before submitting")
+    end
+
+    app_identifier = ENV.fetch("APPSTORE_APP_IDENTIFIER")
+    submit = ENV.fetch("APPSTORE_SUBMIT", "false") == "true"
+
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APPLE_API_KEY_ID"),
+      issuer_id: ENV.fetch("APPLE_API_ISSUER_ID"),
+      key_filepath: ENV.fetch("APPLE_API_KEY_PATH"),
+      in_house: false
+    )
+
+    app = Spaceship::ConnectAPI::App.find(app_identifier)
+    UI.user_error!("No App Store Connect record for #{app_identifier}") unless app
+
+    # The store workflow is re-runnable for one tag, and a version that already
+    # left the editable state is a completed submission rather than a failure.
+    # Checking the state first also skips the build-processing wait below.
+    state = current_version(app, version)&.app_version_state
+    if SanadStoreState.already_submitted?(state)
+      UI.success("#{version} (#{build}) is already #{state} in App Store Connect; nothing to submit")
+      next
+    end
+
+    # Prove the build is processed before any version write, and fail closed on a
+    # build that never appears. `deliver` then selects exactly this build number,
+    # which is also what stops it from falling back to "latest".
+    FastlaneCore::BuildWatcher.wait_for_build_processing_to_be_complete(
+      app_id: app.id,
+      platform: "ios",
+      app_version: version,
+      build_version: build,
+      poll_interval: 30,
+      timeout_duration: Integer(ENV.fetch("APPSTORE_PROCESSING_TIMEOUT_SECONDS")),
+      # The default converts the result to a legacy TestFlight object, which needs an
+      # Apple ID session; this lane authenticates only with the API key.
+      return_spaceship_testflight_build: false
+    )
+
+    # The notes map decides which version localizations `deliver` writes, so the
+    # curated copy is filtered down to the locales of the live listing. A locale
+    # this repository has no full listing for is never created here.
+    listed_locales = listing_locales(app)
+    notes = store_release_notes(version).select { |locale, _| listed_locales.include?(locale) }
+    if notes.empty?
+      UI.user_error!("No curated store copy locale matches the live App Store listing " \
+                     "(#{listed_locales.join(', ')}); fill that listing in App Store Connect first")
+    end
+
+    remove_empty_localizations(app, version, listed_locales)
+
+    deliver(
+      api_key: api_key,
+      app_identifier: app_identifier,
+      app_version: version,
+      build_number: build,
+      skip_binary_upload: true,
+      # The version keeps whatever media the App Store Connect record already
+      # carries: this skips the upload, the deletion, and the processing wait.
+      skip_screenshots: true,
+      # The only metadata this lane writes, and only for the locales the live
+      # listing already has: a locale named here alone is enabled on the version
+      # as an empty localization, which App Review refuses.
+      release_notes: notes,
+      automatic_release: true,
+      # Info.plist declares ITSAppUsesNonExemptEncryption = false, which is the
+      # build's export-compliance answer. App Review reads the IDFA answer from the
+      # App Store Connect App Privacy record: the API has no IDFA field, and this
+      # binary links no advertising or tracking API.
+      submission_information: { export_compliance_uses_encryption: false },
+      submit_for_review: submit,
+      # Precheck cannot check in-app purchases with an API key and audits metadata
+      # this lane deliberately does not change.
+      run_precheck_before_submit: false,
+      # Skip the local HTML metadata preview, which needs a browser.
+      force: true
+    )
+
+    UI.success(
+      if submit
+        "#{version} (#{build}) is submitted for review and releases automatically after approval"
+      else
+        "#{version} (#{build}) is prepared in App Store Connect; dispatch again with submit enabled"
+      end
+    )
+  end
+
+  desc "Report whether a build number already exists in App Store Connect"
+  lane :build_upload_state do
+    app_identifier = ENV.fetch("APPSTORE_APP_IDENTIFIER")
+    version = ENV.fetch("APPSTORE_VERSION")
+    build = ENV.fetch("APPSTORE_BUILD_NUMBER")
+
+    # `latest_testflight_build_number` is fastlane's own TestFlight query, so the
+    # repository keeps no hand-written App Store Connect client. A missing build
+    # reports 0 instead of raising, which is what makes a first run work.
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("APPLE_API_KEY_ID"),
+      issuer_id: ENV.fetch("APPLE_API_ISSUER_ID"),
+      key_filepath: ENV.fetch("APPLE_API_KEY_PATH"),
+      in_house: false
+    )
+    latest = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: app_identifier,
+      version: version,
+      platform: "ios",
+      initial_build_number: 0
+    ).to_i
+    present = SanadStoreState.build_present?(latest: latest, wanted: build)
+    UI.message("Latest TestFlight build for #{version} is #{latest}; build #{build} is #{present ? 'already uploaded' : 'not uploaded'}")
+
+    output = ENV["GITHUB_OUTPUT"].to_s
+    if output.empty?
+      UI.message("present=#{present} latest_build=#{latest}")
+    else
+      File.open(output, "a") do |handle|
+        handle.puts("present=#{present}")
+        handle.puts("latest_build=#{latest}")
+      end
+    end
+  end
+end

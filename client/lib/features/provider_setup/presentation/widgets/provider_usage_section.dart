@@ -33,13 +33,24 @@ class ProviderUsageSection extends StatelessWidget {
 
   /// The same account re-authentication the instance form's `Reconnect account`
   /// runs. Usage never implements a second reconnect path (issue 339 review 2).
+  /// API-key instances use [onUpdateCredential] instead, because an OAuth
+  /// reconnect cannot repair a static key.
   final VoidCallback onReconnect;
+
+  /// Whether this instance authenticates with a static API key.
+  final bool isApiKeyAuth;
+
+  /// Opens the instance edit form so the user can repair an API key.
+  /// Required for the API-key `auth_required` action.
+  final VoidCallback? onUpdateCredential;
 
   const ProviderUsageSection({
     super.key,
     required this.agent,
     required this.instanceId,
     required this.onReconnect,
+    this.isApiKeyAuth = false,
+    this.onUpdateCredential,
   });
 
   String _updatedLabel(BuildContext context, DateTime at) {
@@ -166,6 +177,8 @@ class ProviderUsageSection extends StatelessWidget {
                     entry: entry,
                     isStaleRefreshing: isStaleRefreshing,
                     onReconnect: onReconnect,
+                    isApiKeyAuth: isApiKeyAuth,
+                    onUpdateCredential: onUpdateCredential,
                   ),
                 ),
               ],
@@ -184,6 +197,8 @@ class _UsageBody extends StatelessWidget {
   final ProviderUsageEntry entry;
   final bool isStaleRefreshing;
   final VoidCallback onReconnect;
+  final bool isApiKeyAuth;
+  final VoidCallback? onUpdateCredential;
 
   const _UsageBody({
     required this.cubit,
@@ -192,6 +207,8 @@ class _UsageBody extends StatelessWidget {
     required this.entry,
     required this.isStaleRefreshing,
     required this.onReconnect,
+    required this.isApiKeyAuth,
+    required this.onUpdateCredential,
   });
 
   @override
@@ -233,6 +250,8 @@ class _UsageBody extends StatelessWidget {
         staleSnapshot: entry.hasVisibleSnapshot ? result.snapshot : null,
         onRetry: () => cubit.refresh(instanceId: instanceId, agent: agent),
         onReconnect: onReconnect,
+        isApiKeyAuth: isApiKeyAuth,
+        onUpdateCredential: onUpdateCredential,
       );
     }
 
@@ -316,6 +335,27 @@ class _UsageBody extends StatelessWidget {
   }
 }
 
+/// Localizes a window label from its typed window type.
+///
+/// The daemon owns the canonical type; the Client owns the user-facing copy.
+/// Unknown types fall back to the daemon label so a future window type never
+/// disappears from the UI before the Client learns about it.
+String _localizedWindowLabel(
+  AppLocalizations l10n,
+  ProviderUsageWindowDto window,
+) {
+  switch (window.type) {
+    case 'session':
+      return l10n.providerUsageWindowSession;
+    case 'weekly':
+      return l10n.providerUsageWindowWeekly;
+    case 'monthly':
+      return l10n.providerUsageWindowMonthly;
+    default:
+      return window.label;
+  }
+}
+
 class _WindowRow extends StatelessWidget {
   final ProviderUsageWindowDto window;
 
@@ -335,7 +375,7 @@ class _WindowRow extends StatelessWidget {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Text(
-              window.label,
+              _localizedWindowLabel(AppLocalizations.of(context)!, window),
               style: const TextStyle(
                 fontSize: 12,
                 fontWeight: FontWeight.w600,
@@ -390,9 +430,7 @@ class _WindowRow extends StatelessWidget {
             child: Tooltip(
               message: DateFormat('EEEE, MMMM d, y, HH:mm:ss').format(window.resetAt!.toLocal()),
               child: Text(
-                AppLocalizations.of(
-                  context,
-                )!.providerUsageResetsAt(_formatLocalRelative(context, window.resetAt!)),
+                _formatLocalRelative(context, window.resetAt!),
                 style: TextStyle(
                   fontSize: 11,
                   color: theme.colorScheme.onSurface.withValues(alpha: 0.5),
@@ -455,7 +493,10 @@ class _WindowRow extends StatelessWidget {
       return l10n.providerUsageResetsInHours(delta.inHours);
     }
     if (delta.inDays <= 6) {
-      return l10n.providerUsageResetsInDays(delta.inDays);
+      final days = delta.inDays;
+      final hours = delta.inHours % 24;
+      if (hours == 0) return l10n.providerUsageResetsInDays(days);
+      return l10n.providerUsageResetsInDaysHours(days, hours);
     }
     return l10n.providerUsageResetsOnDate(
       DateFormat('EEE, MMM d, HH:mm').format(local),
@@ -480,39 +521,77 @@ class _ResetControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final count = snapshot.availableResets;
+    final countLabel = count == 1
+        ? l10n.providerUsageResetAvailableSingle
+        : l10n.providerUsageResetsAvailable(count);
+    final credits = snapshot.resetCredits.where((credit) => credit.expiresAt != null).toList()
+      ..sort((a, b) => a.expiresAt!.compareTo(b.expiresAt!));
+    // A credit the provider will not let us spend yet still exists: keep its row
+    // and its dates, disable that row's action, and say why. An unknown value
+    // (null) keeps the previous behaviour.
+    final applicable = snapshot.applicableResets;
+    final canReset = applicable == null || applicable > 0;
+    // An older daemon sends the rows without their opaque ids. Every row would
+    // then advertise a target it cannot honour (the press would spend the
+    // provider's default credit), so the layout falls back to the single action
+    // on the first row instead of guessing.
+    final canTargetPerRow = credits.every((credit) => credit.creditId != null);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
-          children: [
-            Expanded(
-              child: Text(
-                count == 1
-                    ? AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetAvailableSingle
-                    : AppLocalizations.of(
-                        context,
-                      )!.providerUsageResetsAvailable(count),
-                style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+        if (credits.isEmpty) ...[
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  countLabel,
+                  style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                ),
               ),
+              // The count-only fallback has no credit to target, so it keeps the
+              // original consume request.
+              _resetButton(context, l10n, canReset: canReset),
+            ],
+          ),
+          if (!canReset) _resetBlockedHint(context, l10n),
+        ] else ...[
+          // The daemon's `available_resets` stays authoritative: when the
+          // detail rows disagree with it, the combined count remains visible
+          // instead of disappearing with the count-only fallback.
+          if (credits.length != count) ...[
+            Text(
+              countLabel,
+              key: Key('provider_usage_reset_count_$instanceId'),
+              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
             ),
-            TextButton.icon(
-              onPressed: entry.resetInProgress ? null : () => _start(context),
-              icon: entry.resetInProgress
-                  ? const SizedBox(width: 14, height: 14, child: AppProgressIndicator(strokeWidth: 2))
-                  : const Icon(Icons.restart_alt, size: 14),
-              label: Text(
-                AppLocalizations.of(context)!.providerUsageResetLimits,
-              ),
-              style: TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-              ),
-            ),
+            const SizedBox(height: 4),
           ],
-        ),
+          for (var i = 0; i < credits.length; i++) ...[
+            _ResetCreditRow(
+              instanceId: instanceId,
+              index: i,
+              expiresAt: credits[i].expiresAt!,
+              // Every row owns its action so a press spends that credit; the
+              // shared applicability rule still disables all of them together.
+              // Without ids only the first row keeps the single action.
+              trailing: canTargetPerRow || i == 0
+                  ? _resetButton(
+                      context,
+                      l10n,
+                      canReset:
+                          canReset &&
+                          _isSpendable(credits[i].expiresAt!),
+                      rowIndex: i,
+                      creditId: credits[i].creditId,
+                    )
+                  : null,
+            ),
+            // The blocked explanation belongs to the first row's action.
+            if (i == 0 && !canReset) _resetBlockedHint(context, l10n),
+          ],
+        ],
         if (entry.resetResult != null && entry.resetResult!.status != 'confirmation_required')
           Padding(
             padding: const EdgeInsets.only(top: 4),
@@ -530,7 +609,62 @@ class _ResetControls extends StatelessWidget {
     );
   }
 
-  Future<void> _start(BuildContext context) async {
+  Widget _resetButton(
+    BuildContext context,
+    AppLocalizations l10n, {
+    required bool canReset,
+    int? rowIndex,
+    String? creditId,
+  }) {
+    return TextButton.icon(
+      // One key per action: the count-only fallback keeps the shared name, a
+      // credit row adds its index so a test can press exactly that row.
+      key: Key(
+        'provider_usage_reset_action_$instanceId'
+        '${rowIndex == null ? '' : '_$rowIndex'}',
+      ),
+      onPressed: entry.resetInProgress || !canReset
+          ? null
+          : () => _start(context, creditId),
+      icon: entry.resetInProgress
+          ? const SizedBox(
+              width: 14,
+              height: 14,
+              child: AppProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.restart_alt, size: 14),
+      label: Text(l10n.providerUsageResetLimits),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+      ),
+    );
+  }
+
+  /// A credit whose expiry has already passed cannot be redeemed, even if the
+  /// daemon still listed it.
+  bool _isSpendable(DateTime expiresAt) =>
+      expiresAt.toLocal().isAfter(DateTime.now());
+
+  /// Explains why the credit actions are unavailable. Indented to the row text
+  /// so it reads as part of the first row.
+  Widget _resetBlockedHint(BuildContext context, AppLocalizations l10n) {
+    return Padding(
+      key: Key('provider_usage_reset_blocked_$instanceId'),
+      padding: const EdgeInsets.only(top: 2, bottom: 4),
+      child: Text(
+        l10n.providerUsageResetNotApplicable,
+        style: TextStyle(
+          fontSize: 11,
+          color: Theme.of(
+            context,
+          ).colorScheme.onSurface.withValues(alpha: 0.6),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _start(BuildContext context, String? creditId) async {
     final exhausted = snapshot.windows.any((window) => window.isExhausted);
     if (exhausted) {
       final approved = await showDialog<bool>(
@@ -560,7 +694,11 @@ class _ResetControls extends StatelessWidget {
       );
       if (approved != true || !context.mounted) return;
     }
-    final result = await cubit.reset(instanceId: instanceId, agent: agent);
+    final result = await cubit.reset(
+      instanceId: instanceId,
+      agent: agent,
+      creditId: creditId,
+    );
     if (!context.mounted || result.status != 'confirmation_required') return;
     final token = result.confirmationToken;
     if (token == null) return;
@@ -594,8 +732,109 @@ class _ResetControls extends StatelessWidget {
         instanceId: instanceId,
         agent: agent,
         confirmationToken: token,
+        creditId: creditId,
       );
     }
+  }
+}
+
+/// One banked reset credit with its local expiration time (Task 174).
+/// One banked reset credit (Task 174).
+///
+/// The leading side stacks the generic title over the relative expiry; the
+/// trailing side carries that row's own action. The exact instant is only in the
+/// tooltip, formatted with the app locale.
+class _ResetCreditRow extends StatelessWidget {
+  final String instanceId;
+  final int index;
+  final DateTime expiresAt;
+
+  /// This row's own reset action: it redeems this credit, never another one.
+  final Widget? trailing;
+
+  const _ResetCreditRow({
+    required this.instanceId,
+    required this.index,
+    required this.expiresAt,
+    required this.trailing,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
+    final theme = Theme.of(context);
+    final local = expiresAt.toLocal();
+    // The tooltip is the only place the exact instant is shown, so it must use
+    // the app locale: a default-locale DateFormat would print `Dec` inside an
+    // otherwise Arabic card.
+    final locale = Localizations.localeOf(context).toString();
+    final absolute = DateFormat('EEEE, MMMM d, y, HH:mm', locale).format(local);
+    return Padding(
+      key: Key('provider_usage_reset_credit_${instanceId}_$index'),
+      padding: const EdgeInsets.only(bottom: 4),
+      child: Row(
+        children: [
+          // CrossAxisAlignment.start is direction-aware, so the two lines hug
+          // the leading edge in both LTR and RTL.
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  l10n.providerUsageResetCreditLabel,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Tooltip(
+                  key: Key(
+                    'provider_usage_reset_credit_expiry_${instanceId}_$index',
+                  ),
+                  message: absolute,
+                  child: Text(
+                    _relativeExpiry(l10n, local),
+                    key: Key(
+                      'provider_usage_reset_expiry_${instanceId}_$index',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (trailing != null) trailing!,
+        ],
+      ),
+    );
+  }
+
+  /// Mirrors the window countdown wording ("Resets in 2 d 5 h") for a credit
+  /// that must be spent before it expires. Long horizons stay relative on
+  /// purpose: the exact instant lives in the tooltip.
+  String _relativeExpiry(AppLocalizations l10n, DateTime local) {
+    final delta = local.difference(DateTime.now());
+    // A past expiry is not imminent: saying so would invite a press that must
+    // fail. The row keeps the plain fact instead.
+    if (delta.isNegative) return l10n.providerUsageResetCreditExpired;
+    if (delta.inMinutes < 1) {
+      return l10n.providerUsageResetCreditExpiresInMoment;
+    }
+    if (delta.inHours < 1) {
+      return l10n.providerUsageResetCreditExpiresInMinutes(delta.inMinutes);
+    }
+    if (delta.inHours < 24) {
+      return l10n.providerUsageResetCreditExpiresInHours(delta.inHours);
+    }
+    final days = delta.inDays;
+    final hours = delta.inHours % 24;
+    if (hours == 0) return l10n.providerUsageResetCreditExpiresInDays(days);
+    return l10n.providerUsageResetCreditExpiresInDaysHours(days, hours);
   }
 }
 
@@ -607,6 +846,8 @@ class _AttentionBody extends StatelessWidget {
   final ProviderUsageSnapshotDto? staleSnapshot;
   final VoidCallback onRetry;
   final VoidCallback onReconnect;
+  final bool isApiKeyAuth;
+  final VoidCallback? onUpdateCredential;
 
   const _AttentionBody({
     required this.instanceId,
@@ -616,6 +857,8 @@ class _AttentionBody extends StatelessWidget {
     required this.staleSnapshot,
     required this.onRetry,
     required this.onReconnect,
+    required this.isApiKeyAuth,
+    required this.onUpdateCredential,
   });
 
   @override
@@ -623,7 +866,23 @@ class _AttentionBody extends StatelessWidget {
     final theme = Theme.of(context);
     final l10n = AppLocalizations.of(context)!;
     final message = _messageFor(l10n, result.status);
-    final needsReconnect = result.status == 'auth_required';
+    final needsAuth = result.status == 'auth_required';
+    final useApiKeyAction =
+        needsAuth && isApiKeyAuth && onUpdateCredential != null;
+    final useReconnect = needsAuth && !isApiKeyAuth;
+    final action = useApiKeyAction
+        ? onUpdateCredential
+        : (useReconnect ? onReconnect : onRetry);
+    final actionKey = useApiKeyAction
+        ? 'provider_usage_update_api_key_$instanceId'
+        : (useReconnect
+              ? 'provider_usage_reconnect_$instanceId'
+              : 'provider_usage_retry_$instanceId');
+    final actionLabel = useApiKeyAction
+        ? l10n.providerUsageUpdateApiKey
+        : (useReconnect
+              ? l10n.providerUsageReconnect
+              : l10n.providerUsageRetry);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -643,9 +902,9 @@ class _AttentionBody extends StatelessWidget {
         Row(
           children: [
             Icon(
-              needsReconnect ? Icons.lock_outline : Icons.error_outline,
+              needsAuth ? Icons.lock_outline : Icons.error_outline,
               size: 16,
-              color: needsReconnect
+              color: needsAuth
                   ? Colors.amber[700]
                   : theme.colorScheme.error,
             ),
@@ -666,26 +925,18 @@ class _AttentionBody extends StatelessWidget {
         Align(
           alignment: Alignment.centerRight,
           child: TextButton.icon(
-            // Sign-in required runs the same account re-authentication the
-            // instance form exposes; anything else is a usage refresh. The key
-            // names the action, not its localized label (issue 339 review 3).
-            key: Key(
-              needsReconnect
-                  ? 'provider_usage_reconnect_$instanceId'
-                  : 'provider_usage_retry_$instanceId',
-            ),
-            onPressed: isStaleRefreshing
-                ? null
-                : (needsReconnect ? onReconnect : onRetry),
+            // API-key repair opens the instance edit form; account sign-in
+            // keeps the shared OAuth reconnect; anything else is a usage
+            // refresh. The key names the action, not its localized label.
+            key: Key(actionKey),
+            onPressed: isStaleRefreshing ? null : action,
             icon: Icon(
-              needsReconnect ? Icons.login : Icons.refresh,
+              useApiKeyAction
+                  ? Icons.key_outlined
+                  : (useReconnect ? Icons.login : Icons.refresh),
               size: 14,
             ),
-            label: Text(
-              needsReconnect
-                  ? l10n.providerUsageReconnect
-                  : l10n.providerUsageRetry,
-            ),
+            label: Text(actionLabel),
           ),
         ),
       ],
@@ -697,7 +948,9 @@ class _AttentionBody extends StatelessWidget {
     // sentence (issue 339 review 2).
     switch (status) {
       case 'auth_required':
-        return l10n.providerUsageAuthRequired;
+        return isApiKeyAuth
+            ? l10n.providerUsageApiKeyRequired
+            : l10n.providerUsageAuthRequired;
       case 'unavailable':
         return l10n.providerUsageUnavailable;
       case 'failed':

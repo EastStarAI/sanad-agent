@@ -425,9 +425,12 @@ Future<void> handleRun({
   }
 
   // The whisper runtime is not tracked in git (per-platform build products), so
-  // a fresh clone has none. Prepare it **in the background** so the daemon and
-  // client start immediately; dictation becomes available as soon as the build
-  // finishes (the library is only opened when a session starts), no restart.
+  // a fresh clone has none. `prepareNativeDictation` starts the acquisition tool
+  // detached and returns without watching it: the daemon and client start
+  // immediately, dictation becomes available as soon as the runtime lands (the
+  // library is only opened when a session starts), and the attempt keeps its own
+  // durable log after this process exits. `sanad-dev setup` awaits the same tool
+  // when a developer wants the verdict on the terminal.
   if (startsAgent) unawaited(prepareNativeDictation(agentDirectory));
 
   try {

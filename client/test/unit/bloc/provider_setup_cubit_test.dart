@@ -7,6 +7,7 @@ import 'package:sanad_client/features/provider_setup/data/models/model_options_d
 import 'package:sanad_client/features/provider_setup/data/models/provider_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_readiness_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_template_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_discovery_error_dto.dart';
 import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 import 'package:sanad_client/features/provider_setup/presentation/bloc/provider_setup_mappers.dart';
 import 'package:sanad_client/features/provider_setup/data/models/credential_summary_dto.dart';
@@ -1627,6 +1628,33 @@ void main() {
       expect(outcome.modelsCount, 4);
       expect(outcome.model, 'gpt-4o');
       expect(outcome.latencySeconds, '0.4');
+      await cubit.close();
+    });
+
+    test('Test applies a passing instance projection without another list read', () async {
+      const instance = ProviderInstanceDto(
+        id: 'offline', templateId: 'custom', displayName: 'Local provider',
+        protocol: 'openai_compatible', authMethod: 'api_key', defaultModel: 'model',
+        status: 'ready', isDefault: true, configRevision: 1, credentialRevision: 1,
+        discoveryError: ProviderDiscoveryErrorDto(kind: 'network', definitive: false),
+        modelCache: ProviderModelCacheDto(source: 'cache_stale'),
+      );
+      final fake = _FakeProviderSetupClient(instances: [instance]);
+      final recovered = instance.toJson()..remove('discovery_error');
+      recovered['model_cache'] = {'source': 'live', 'verified': true};
+      fake.testConnectionResult = {
+        'success': true, 'models_count': 13, 'probe_state': 'passed',
+        'model': 'model', 'instance': recovered,
+      };
+      final cubit = ProviderSetupCubit(client: fake);
+      await cubit.load();
+      expect(cubit.state.instances.single.discoveryError, isNotNull);
+      await cubit.testInstance(instance.id);
+      // The fake still returns the failed list snapshot; the Test reply wins.
+      expect(cubit.state.instances.single.discoveryError, isNull);
+      expect(cubit.state.instances.single.modelCache!.verified, isTrue);
+      expect(cubit.state.instanceTests[instance.id]!.probePassed, isTrue);
+      expect(cubit.state.instanceOperations, isEmpty);
       await cubit.close();
     });
 

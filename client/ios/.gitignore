@@ -27,6 +27,12 @@ Flutter/flutter_export_environment.sh
 ServiceDefinitions.json
 Runner/GeneratedPluginRegistrant.*
 
+# deliver creates these directories on every run. The store copy comes from
+# `release/store-whats-new.*.txt` through `scripts/release/store_whats_new.py`,
+# so no metadata file belongs here and nothing in this directory is authored.
+fastlane/metadata/
+fastlane/screenshots/
+
 # Exceptions to above rules.
 !default.mode1v3
 !default.mode2v3

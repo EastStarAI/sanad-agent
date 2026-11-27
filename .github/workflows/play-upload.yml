@@ -1,0 +1,291 @@
+name: Play upload lane
+
+# Uploads one signed Android App Bundle to a Google Play track. It either builds
+# the bundle from the current checkout, uploads it through
+# scripts/release/publish_play_bundle.py, and verifies that the target track
+# carries the expected versionCode afterwards, or - when a caller names a release
+# run - reuses that release's signed bundle instead of building a second one.
+# Either way it creates no tag and no GitHub Release, so the Stable release
+# workflow stays unchanged until it calls this lane.
+#
+# Testing tracks (`internal`, `alpha`, `beta`) default to a chosen release
+# status and never roll out automatically. The `production` track is reached by
+# a dispatch, or a release pipeline calling this lane, that also chooses a staged
+# rollout fraction; it is never a side effect of a testing upload, and the
+# tracked policy in docs/operations/release_and_signing.md governs it.
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Monotonically increasing versionCode (must exceed the highest uploaded one)
+        required: true
+        type: string
+      build_name:
+        description: Version name to build (empty uses the release contract version)
+        required: false
+        default: ''
+        type: string
+      track:
+        description: Play track to receive the upload
+        required: true
+        default: internal
+        type: choice
+        options:
+          - internal
+          - alpha
+          - beta
+          - production
+      status:
+        description: Release status for a testing track (auto = completed on internal, draft on alpha/beta)
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - draft
+          - completed
+      rollout_fraction:
+        description: Production staged rollout fraction, 0 < f <= 1 (ignored for testing tracks)
+        required: false
+        default: '0.2'
+        type: string
+      upload:
+        description: Upload to Google Play (off builds and verifies only)
+        type: boolean
+        default: false
+  # Callable so the release pipeline can reuse the proven lane instead of
+  # duplicating the build or the upload contract. A called workflow receives
+  # free-form strings, so every caller input is re-validated in the steps below.
+  workflow_call:
+    inputs:
+      build_number:
+        required: true
+        type: string
+      build_name:
+        required: false
+        default: ''
+        type: string
+      track:
+        required: false
+        default: internal
+        type: string
+      status:
+        required: false
+        default: auto
+        type: string
+      rollout_fraction:
+        required: false
+        default: '0.2'
+        type: string
+      upload:
+        required: false
+        default: false
+        type: boolean
+      # A dispatch always builds, so this input exists only for a caller. Naming
+      # the release run makes the published bytes the ones the release built and
+      # proved, instead of a second APK and AAB that only claim to be the same
+      # release.
+      prebuilt_run_id:
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+  # Reading the release run's artifact, which every download in the reuse path
+  # needs; a caller cannot grant more than it holds, so callers request it too.
+  actions: read
+
+concurrency:
+  group: play-upload
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  PLAY_PACKAGE_ID: com.eaststarai.sanad
+
+jobs:
+  build:
+    # Only this repository may run the lane: a foreign caller must not be able to
+    # enter the signing or Play Environments through a reusable workflow.
+    if: github.repository == 'EastStarAI/sanad-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: android-signing
+    outputs:
+      build_name: ${{ steps.identity.outputs.build_name }}
+      build_number: ${{ steps.identity.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup-fvm
+        if: inputs.prebuilt_run_id == ''
+      - id: identity
+        name: Resolve the build identity
+        shell: bash
+        env:
+          BUILD_NAME_INPUT: ${{ inputs.build_name }}
+          BUILD_NUMBER_INPUT: ${{ inputs.build_number }}
+        run: |
+          set -euo pipefail
+          contract_version="$(jq -r '.version' release/release-contract.json)"
+          contract_build_number="$(jq -r '.build_number' release/release-contract.json)"
+          build_number="$BUILD_NUMBER_INPUT"
+          if ! [[ "$build_number" =~ ^[0-9]+$ ]] || [[ "$build_number" -le 0 ]]; then
+            echo "::error::build_number must be a positive integer, got '$build_number'"
+            exit 1
+          fi
+          build_name="$BUILD_NAME_INPUT"
+          if [[ -z "$build_name" ]]; then
+            # A defaulted version name must describe the contracted release
+            # exactly; otherwise a manual build number would publish a permanent
+            # store record under the wrong version, such as `1.0.23 (27)`.
+            if [[ "$build_number" != "$contract_build_number" ]]; then
+              echo "::error::build_number $build_number differs from the release contract build number $contract_build_number; pass build_name explicitly or bump the contract first"
+              exit 1
+            fi
+            build_name="$contract_version"
+          fi
+          if ! [[ "$build_name" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::build_name must be a dotted version such as 1.0.24, got '$build_name'"
+            exit 1
+          fi
+          {
+            echo "build_name=$build_name"
+            echo "build_number=$build_number"
+          } >> "$GITHUB_OUTPUT"
+      - name: Validate the store What's New text
+        env:
+          BUILD_NAME: ${{ steps.identity.outputs.build_name }}
+        run: |
+          set -euo pipefail
+          # Fail before the build when the curated text belongs to another release,
+          # so a listing problem never costs a full Gradle run.
+          python3 scripts/release/store_whats_new.py --version "$BUILD_NAME"
+      - name: Restore Android signing material
+        if: inputs.prebuilt_run_id == ''
+        working-directory: client
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          set -euo pipefail
+          test -n "$KEYSTORE_BASE64"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/sanad-release.jks"
+          chmod 600 "$RUNNER_TEMP/sanad-release.jks"
+          {
+            echo "storeFile=$RUNNER_TEMP/sanad-release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+          } > android/key.properties
+          chmod 600 android/key.properties
+      - name: Build and verify the signed App Bundle
+        if: inputs.prebuilt_run_id == ''
+        working-directory: client
+        env:
+          BUILD_NAME: ${{ steps.identity.outputs.build_name }}
+          BUILD_NUMBER: ${{ steps.identity.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          fvm flutter pub get
+          bash release/android/build_signed_aab.sh \
+            --build-name="$BUILD_NAME" \
+            --build-number="$BUILD_NUMBER" \
+            --env-config=config/prod.json \
+            --output-dir=../dist
+      - name: Download the release App Bundle
+        if: inputs.prebuilt_run_id != ''
+        uses: actions/download-artifact@v5
+        with:
+          name: client-android
+          path: dist
+          run-id: ${{ inputs.prebuilt_run_id }}
+          github-token: ${{ github.token }}
+      - name: Verify the release App Bundle identity
+        if: inputs.prebuilt_run_id != ''
+        shell: bash
+        env:
+          BUILD_NAME: ${{ steps.identity.outputs.build_name }}
+          BUILD_NUMBER: ${{ steps.identity.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          # The release uploads the universal APK beside its bundle, and the
+          # shared proof reads both: the bundle carries no readable manifest, so
+          # the installed identity comes from the APK Gradle signed in the same
+          # invocation and the bundle's own signer certificate has to match it.
+          shopt -s nullglob
+          bundles=(dist/*.aab)
+          apks=(dist/*.apk)
+          if [[ "${#bundles[@]}" -ne 1 || "${#apks[@]}" -ne 1 ]]; then
+            echo "::error::the release artifact must carry exactly one bundle and one APK, found ${#bundles[@]} and ${#apks[@]}"
+            exit 1
+          fi
+          bash client/release/android/verify_android_release.sh \
+            --package "$PLAY_PACKAGE_ID" \
+            --version-name "$BUILD_NAME" \
+            --version-code "$BUILD_NUMBER" \
+            --apk "${apks[0]}" \
+            --aab "${bundles[0]}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: play-upload-android
+          path: dist/*.aab
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    if: github.repository == 'EastStarAI/sanad-agent' && inputs.upload == true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: google-play-publishing
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v5
+        with:
+          name: play-upload-android
+          path: dist
+      - name: Upload the bundle and verify the published track
+        env:
+          PLAY_SERVICE_ACCOUNT_JSON_BASE64: ${{ secrets.PLAY_SERVICE_ACCOUNT_JSON_BASE64 }}
+          TRACK: ${{ inputs.track }}
+          RELEASE_STATUS: ${{ inputs.status }}
+          ROLLOUT_FRACTION: ${{ inputs.rollout_fraction }}
+          BUILD_NAME: ${{ needs.build.outputs.build_name }}
+          BUILD_NUMBER: ${{ needs.build.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          test -n "$PLAY_SERVICE_ACCOUNT_JSON_BASE64"
+          # The dispatch path constrains these with choice menus, but a called
+          # workflow passes free-form strings, so the allowed values are proven
+          # again here before anything reaches the store.
+          if ! [[ "$TRACK" =~ ^(internal|alpha|beta|production)$ ]]; then
+            echo "::error::track must be internal, alpha, beta, or production, got '$TRACK'"
+            exit 1
+          fi
+          if ! [[ "$RELEASE_STATUS" =~ ^(auto|draft|completed)$ ]]; then
+            echo "::error::status must be auto, draft, or completed, got '$RELEASE_STATUS'"
+            exit 1
+          fi
+          if ! [[ "$ROLLOUT_FRACTION" =~ ^(0?\.[0-9]+|1(\.0+)?)$ ]]; then
+            echo "::error::rollout_fraction must be greater than 0 and at most 1, got '$ROLLOUT_FRACTION'"
+            exit 1
+          fi
+          if [[ "$TRACK" == production && "$RELEASE_STATUS" != auto ]]; then
+            echo "::error::the production status follows rollout_fraction; leave status at auto"
+            exit 1
+          fi
+          bundle="dist/sanad-client-${BUILD_NAME}-android-universal.aab"
+          test -s "$bundle"
+          python3 scripts/release/publish_play_bundle.py \
+            --bundle "$bundle" \
+            --package "$PLAY_PACKAGE_ID" \
+            --track "$TRACK" \
+            --expect-version-code "$BUILD_NUMBER" \
+            --version-name "$BUILD_NAME" \
+            --store-notes-dir release \
+            --status "$RELEASE_STATUS" \
+            --rollout-fraction "$ROLLOUT_FRACTION" \
+            --if-present skip

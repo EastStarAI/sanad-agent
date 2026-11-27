@@ -1,0 +1,252 @@
+name: Publish Stable release to stores
+
+# Publishes one already published Stable release to Google Play and the App Store.
+#
+# `release.yml` dispatches this workflow at the released tag in the same instant it
+# starts the Production Web deploy, so a slow store lane can never delay the
+# release run or the workflows that wait for its completion. Each store has its own
+# repository-variable switch, runs as an independent job, and cannot block or skip
+# the other.
+#
+# Manual dispatch is the recovery path: turn one switch off, or re-run a single
+# store for the same tag, without consuming that release's Play versionCode or iOS
+# build number a second time.
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Release workflow run holding the private Client iOS artifact (empty skips the App Store upload)
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-stores-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  APPSTORE_APP_IDENTIFIER: com.eaststarai.sanad
+
+jobs:
+  resolve:
+    name: Resolve the released identity
+    # Only this repository may publish to a store: a foreign caller must not be
+    # able to reach the signing or store Environments through this entry point.
+    if: github.repository == 'EastStarAI/sanad-agent'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # Reading the release run that built the private iOS artifact.
+      actions: read
+    outputs:
+      tag: ${{ steps.identity.outputs.tag }}
+      version: ${{ steps.identity.outputs.version }}
+      build: ${{ steps.identity.outputs.build }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: identity
+        name: Prove the tag and the published Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          if [[ "$GITHUB_REF_TYPE" != tag ]] || ! [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Stable store publication runs at a vX.Y.Z tag, not at '$GITHUB_REF'."
+            exit 1
+          fi
+          version="$(jq -r '.version' release/release-contract.json)"
+          build="$(jq -r '.build_number' release/release-contract.json)"
+          if [[ "$tag" != "v$version" ]]; then
+            echo "::error::Tag '$tag' does not match the release contract version '$version'."
+            exit 1
+          fi
+          if ! [[ "$build" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::The release contract build number must be a positive integer, got '$build'."
+            exit 1
+          fi
+          # Only a Release this repository already published may reach a store. A
+          # Draft, an RC, and a validation-only run never qualify.
+          state="$(gh release view "$tag" --json isDraft,isPrerelease,tagName)"
+          if ! jq -e --arg tag "$tag" \
+            '.isDraft == false and .isPrerelease == false and .tagName == $tag' \
+            <<<"$state" >/dev/null; then
+            echo "::error::Release $tag is not a published Stable release; refusing to publish to a store."
+            echo "$state" >&2
+            exit 1
+          fi
+          # The private iOS artifact is only accepted from a run of this exact
+          # commit, so a mistyped run id cannot ship another release's binary.
+          if [[ -n "$RELEASE_RUN_ID" ]]; then
+            run_sha="$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RELEASE_RUN_ID" --jq '.head_sha')"
+            tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/$tag" --jq '.sha')"
+            if [[ "$run_sha" != "$tag_sha" ]]; then
+              echo "::error::Release run $RELEASE_RUN_ID built $run_sha, not $tag ($tag_sha)."
+              exit 1
+            fi
+          fi
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "build=$build"
+          } >> "$GITHUB_OUTPUT"
+
+  play:
+    name: Publish the release bundle to Google Play
+    needs: resolve
+    if: >-
+      ${{ github.repository == 'EastStarAI/sanad-agent'
+      && vars.RELEASE_PLAY_PUBLICATION == 'enabled' }}
+    # The lane publishes the release's own signed App Bundle, proving its identity
+    # with the same shared script the build path uses, so one workflow owns the
+    # Play upload and no second build is created for the same release. Without a
+    # release run id it falls back to building the bundle itself.
+    uses: ./.github/workflows/play-upload.yml
+    permissions:
+      contents: read
+      actions: read
+    with:
+      build_number: ${{ needs.resolve.outputs.build }}
+      build_name: ${{ needs.resolve.outputs.version }}
+      prebuilt_run_id: ${{ inputs.release_run_id }}
+      track: production
+      status: auto
+      rollout_fraction: '1'
+      upload: true
+    secrets: inherit
+
+  appstore-upload:
+    name: Upload the release IPA to App Store Connect
+    needs: resolve
+    # Without the release run id the App Store IPA cannot be fetched, so the upload
+    # and the submission that follows it are skipped instead of rebuilding a
+    # binary the release already proved.
+    if: >-
+      ${{ github.repository == 'EastStarAI/sanad-agent'
+      && vars.RELEASE_APPSTORE_PUBLICATION == 'enabled'
+      && inputs.release_run_id != '' }}
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: apple-testflight
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Download the IPA the release built
+        uses: actions/download-artifact@v5
+        with:
+          name: client-ios-private
+          path: dist
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ github.token }}
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: client/ios
+      - id: presence
+        name: Prove whether the build is already in App Store Connect
+        # `latest_testflight_build_number` is fastlane's own query, so the re-run
+        # decision needs no hand-written App Store Connect client.
+        working-directory: client/ios
+        env:
+          APPSTORE_VERSION: ${{ needs.resolve.outputs.version }}
+          APPSTORE_BUILD_NUMBER: ${{ needs.resolve.outputs.build }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_KEY_PATH: ${{ runner.temp }}/AuthKey.p8
+          APPLE_API_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_P8_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$APPLE_API_KEY_ID"
+          test -n "$APPLE_API_PRIVATE_KEY_P8_BASE64"
+          # Written outside the checkout and never printed: fastlane reads the path.
+          printf '%s' "$APPLE_API_PRIVATE_KEY_P8_BASE64" | base64 -D > "$APPLE_API_KEY_PATH"
+          chmod 600 "$APPLE_API_KEY_PATH"
+          bundle exec fastlane ios build_upload_state
+      - name: Upload the release IPA
+        if: steps.presence.outputs.present != 'true'
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_API_PRIVATE_KEY_P8_BASE64: ${{ secrets.APPLE_API_PRIVATE_KEY_P8_BASE64 }}
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_BUILD: ${{ needs.resolve.outputs.build }}
+        run: |
+          set -euo pipefail
+          # `upload_ipa.sh` proves the IPA's bundle, version, build, signing team,
+          # and distribution entitlement before it touches the store.
+          ipa="$(find dist -maxdepth 1 -name '*.ipa' -print -quit)"
+          bash client/release/ios/upload_ipa.sh \
+            --ipa="$ipa" \
+            --version="$RELEASE_VERSION" \
+            --build="$RELEASE_BUILD"
+      - name: Report an upload that was already done
+        if: steps.presence.outputs.present == 'true'
+        env:
+          RELEASE_VERSION: ${{ needs.resolve.outputs.version }}
+          RELEASE_BUILD: ${{ needs.resolve.outputs.build }}
+          LATEST_BUILD: ${{ steps.presence.outputs.latest_build }}
+        run: |
+          {
+            printf '### App Store build already uploaded\n\n'
+            printf 'Build %s for %s is already in App Store Connect (latest upload: %s), so this\n' \
+              "$RELEASE_BUILD" "$RELEASE_VERSION" "$LATEST_BUILD"
+            printf 'run did not upload it again. App Store Connect rejects a duplicate build number.\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  appstore-submit:
+    name: Submit the App Store version for review
+    needs: [resolve, appstore-upload]
+    if: >-
+      ${{ github.repository == 'EastStarAI/sanad-agent'
+      && vars.RELEASE_APPSTORE_PUBLICATION == 'enabled' }}
+    # `appstore-submit.yml` owns the version record and the submission through
+    # fastlane, and returns success for a version that is already submitted,
+    # approved, or live.
+    uses: ./.github/workflows/appstore-submit.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.resolve.outputs.version }}
+      build_number: ${{ needs.resolve.outputs.build }}
+      submit: true
+    secrets: inherit
+
+  report:
+    name: Report the store publication
+    needs: [resolve, play, appstore-upload, appstore-submit]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Write the store publication summary
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
+          PLAY_SWITCH: ${{ vars.RELEASE_PLAY_PUBLICATION }}
+          APPSTORE_SWITCH: ${{ vars.RELEASE_APPSTORE_PUBLICATION }}
+          RESOLVE_RESULT: ${{ needs.resolve.result }}
+          PLAY_RESULT: ${{ needs.play.result }}
+          UPLOAD_RESULT: ${{ needs.appstore-upload.result }}
+          SUBMIT_RESULT: ${{ needs.appstore-submit.result }}
+        run: |
+          {
+            printf '### Store publication for %s\n\n' "${RELEASE_TAG:-unknown}"
+            printf '| Store | Switch | Result |\n|---|---|---|\n'
+            printf '| Google Play (production, 100%%) | %s | %s |\n' \
+              "${PLAY_SWITCH:-unset}" "${PLAY_RESULT:-unknown}"
+            printf '| App Store upload | %s | %s |\n' \
+              "${APPSTORE_SWITCH:-unset}" "${UPLOAD_RESULT:-unknown}"
+            printf '| App Store submission | %s | %s |\n' \
+              "${APPSTORE_SWITCH:-unset}" "${SUBMIT_RESULT:-unknown}"
+            printf '\nIdentity resolution: %s\n' "${RESOLVE_RESULT:-unknown}"
+          } >> "$GITHUB_STEP_SUMMARY"

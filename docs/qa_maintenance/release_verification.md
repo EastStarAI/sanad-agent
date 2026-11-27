@@ -132,7 +132,7 @@ build-setting override cannot silently re-enable the affected Metal path.
 | Client Linux x64 | Web/Linux workflow definition, compatibility-runner contract, `.deb` metadata/layout audit, portable-bundle smoke, and forbidden-symbol audit | hosted `.deb` install/launch/purge, provenance, clean update |
 | Client Windows x64 | installer and current fail-closed signing workflow definition | SANAD-12 unsigned-policy workflow adaptation, disclosure, SHA-256/manifest/provenance, Windows 11 clean installer/update/rollback and Defender/SmartScreen |
 | Client Android | signed APK/AAB, package identity, keystore fingerprint, and increasing `versionCode` | signed hosted build, Google Play internal-track install, production-track promotion, and in-place store update |
-| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload |
+| Client iOS | signed IPA export for NanoSoft LY LLC; App Store Connect record and API key ready | Internal TestFlight upload; App Store submission and review evidence when the build is promoted to the public listing |
 | Client Web | analyzer, startup contract test, real-browser startup composition guard, Production-profile release build, exact source and version markers, Flutter shell/bootstrap/favicon probes, and hosted readability | attested-run/source match, protected immutable deployment, public source probe, automatic selector rollback, cache/SPA checks, and clean-browser visible render with no uncaught startup/CSP/CanvasKit/Wasm error |
 
 The Agent macOS rows above are proved by two different lanes, and neither one
@@ -356,13 +356,17 @@ nothing there, which is why the dedicated browser step exists.
 ## Task 67A Desktop lifecycle regression matrix
 
 Shared automated coverage must prove exact target matching before download,
-rejected downgrade, canonical URL/size/SHA-256, exact signature metadata,
-Windows Agent `unsigned+github-attestation`, retained WinSparkle DSA, rejected
-empty/unknown/signed-under-unsigned-policy metadata, and unchanged macOS
-Developer ID/notarization rejection. Bootstrap preserves an existing executable
-on checksum/trust/replacement failure. Agent update keeps an exclusive lock,
-reports rollback as failure with a restored runtime, and never treats staging as
-final health success.
+rejected downgrade, canonical URL/size/SHA-256, exact signature metadata and
+rejected empty, unknown-value, or signed-under-unsigned-policy metadata **for a
+known `component:platform`**, Windows Agent `unsigned+github-attestation`,
+retained WinSparkle DSA, and unchanged macOS Developer ID/notarization
+rejection. Manifest parsing is forward-compatible instead: an additive target
+this build does not know is ignored by a runtime and refused by the publisher
+gate, as recorded in
+[Forward compatibility and the publisher gate](../technical/update_architecture.md#forward-compatibility-and-the-publisher-gate).
+Bootstrap preserves an existing executable on checksum/trust/replacement
+failure. Agent update keeps an exclusive lock, reports rollback as failure with
+a restored runtime, and never treats staging as final health success.
 
 Client tests prove one packaged macOS/Windows startup check, no packaged check in
 source mode, no Linux background check, canonical newer-artifact browser launch,
@@ -518,6 +522,25 @@ explicit owner approval plus a staged rollout; a release that only exists as a
 workflow artifact is not published. Verify after every upload that Production
 `assetlinks.json` still lists both the upload certificate and the Play
 app-signing certificates.
+
+For a Stable release the Approved production upload is automatic: `release.yml`
+dispatches `.github/workflows/release-stores.yml` at the released tag in the same
+instant it starts the Production Web deploy, the Play job publishes the release's
+own bundle to `production` at 100%, and the App Store job uploads the release's
+own IPA and submits the version.
+Verify a release on both stores with:
+
+1. `gh run list --workflow release-stores.yml --limit 1` and read the run's summary
+   table: it names both switches and the result of each store job.
+2. Play Console: the production track shows the contracted `versionCode` as a
+   completed release, and the release notes are the curated `en-US` and `ar` text.
+3. App Store Connect: the version carries the contracted build number, its What's
+   New is the curated `en-US` text, and the version state moved to
+   `WAITING_FOR_REVIEW` or later.
+4. Re-run safety: dispatching `release-stores.yml` again for the same tag reports
+   the already published Play release and the already uploaded build as success
+   instead of consuming either identity twice. A store failure reddens only that
+   store's run; the release run and its announcement are unaffected.
 
 The Windows workflow and installer produce the approved unsigned `1.0.0`
 artifacts without a PFX requirement, retain WinSparkle DSA for client updates,

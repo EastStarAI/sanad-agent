@@ -209,7 +209,11 @@ class DictationService implements DictationControlHost {
     final workingDirectory = Directory.current.path;
     final tool = File('$workingDirectory/tool/ensure_native_stt.dart');
     if (tool.existsSync()) {
-      final logFile = 'native/.stt-prepare.log';
+      // Bound the log before the redirect opens it: the shell owns the handle
+      // after that, and this process cannot truncate a file the shell is
+      // appending to. Without the reset a repeated retry grew it without limit.
+      resetBoundedSttPreparationLog(Directory('$workingDirectory/native'));
+      final logFile = 'native/$sttPreparationLogFileName';
       final command = 'fvm dart run tool/ensure_native_stt.dart >> $logFile 2>&1';
       try {
         unawaited(

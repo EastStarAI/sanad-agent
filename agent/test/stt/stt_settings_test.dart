@@ -21,6 +21,11 @@ void main() {
     File('${home.path}/config.yaml').writeAsStringSync(contents);
   }
 
+  // The owning resolver for this host's width, so no assertion restates a
+  // host-specific literal.
+  int resolvedFor(Abi abi) =>
+      defaultSttThreadsFor(abi, Platform.numberOfProcessors);
+
   group('gpu default', () {
     // Intel macOS is the one carve-out: the x64 whisper.cpp baseline has no
     // usable Metal path, so the default must not turn it on. Linux/Windows and
@@ -78,23 +83,112 @@ stt:
     });
   });
 
-  group('stt settings', () {
-    test('the default thread count follows the machine width', () {
-      // Small machines never oversubscribe; wide ones stop at the measured knee.
-      expect(sttThreadsFor(2), 2);
-      expect(sttThreadsFor(4), 4);
-      expect(sttThreadsFor(6), 4);
-      expect(sttThreadsFor(8), 6);
-      expect(sttThreadsFor(10), 6);
-      expect(sttThreadsFor(0), 4);
+  group('thread default', () {
+    // Windows x64 runs CPU inference. The accepted Windows benchmark had four
+    // threads meeting its interactive targets while six cost materially more
+    // CPU, so the implicit default must never exceed four there.
+    test('Windows x64 caps the implicit default at four', () {
+      expect(defaultSttThreadsFor(Abi.windowsX64, 2), 2);
+      expect(defaultSttThreadsFor(Abi.windowsX64, 4), 4);
+      expect(defaultSttThreadsFor(Abi.windowsX64, 8), 4);
+      expect(defaultSttThreadsFor(Abi.windowsX64, 16), 4);
     });
 
+    test('the Windows x64 cap still refuses to oversubscribe small hosts', () {
+      expect(defaultSttThreadsFor(Abi.windowsX64, 1), 1);
+      expect(defaultSttThreadsFor(Abi.windowsX64, 3), 3);
+    });
+
+    test('non-Windows ABIs keep the wide-machine six-thread policy', () {
+      // The Metal curve plateaus at five, so the pre-existing policy stays: the
+      // whisper.cpp baseline below eight cores, six from eight up.
+      for (final abi in [
+        Abi.macosArm64,
+        Abi.macosX64,
+        Abi.linuxX64,
+        Abi.linuxArm64,
+      ]) {
+        expect(
+          defaultSttThreadsFor(abi, 2),
+          2,
+          reason: '$abi must not oversubscribe',
+        );
+        expect(
+          defaultSttThreadsFor(abi, 6),
+          4,
+          reason: '$abi keeps min(4, cores)',
+        );
+        expect(
+          defaultSttThreadsFor(abi, 8),
+          6,
+          reason: '$abi keeps the wide policy',
+        );
+        expect(
+          defaultSttThreadsFor(abi, 16),
+          6,
+          reason: '$abi keeps the wide policy',
+        );
+      }
+    });
+
+    test('an unknown or non-positive core count stays bounded at four', () {
+      for (final abi in [Abi.windowsX64, Abi.macosArm64, Abi.linuxX64]) {
+        expect(defaultSttThreadsFor(abi, 0), 4, reason: '$abi');
+        expect(defaultSttThreadsFor(abi, -1), 4, reason: '$abi');
+      }
+    });
+
+    test('an absent threads key follows the ABI resolver, not a literal', () {
+      expect(SttSettings.load(sanadHome: home.path).threads, defaultSttThreads);
+      // The same empty home must resolve differently per named ABI, which a
+      // host-bound getter alone cannot prove.
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.windowsX64).threads,
+        resolvedFor(Abi.windowsX64),
+      );
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.macosArm64).threads,
+        resolvedFor(Abi.macosArm64),
+      );
+    });
+
+    test('a stt section without threads follows the ABI resolver too', () {
+      writeConfig('''
+stt:
+  enabled: true
+''');
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.windowsX64).threads,
+        resolvedFor(Abi.windowsX64),
+      );
+      expect(
+        SttSettings.load(sanadHome: home.path, abi: Abi.linuxX64).threads,
+        resolvedFor(Abi.linuxX64),
+      );
+    });
+
+    test('an explicit threads value wins over every ABI default', () {
+      writeConfig('''
+stt:
+  threads: 6
+''');
+      for (final abi in [Abi.windowsX64, Abi.macosArm64, Abi.linuxX64]) {
+        expect(
+          SttSettings.load(sanadHome: home.path, abi: abi).threads,
+          6,
+          reason: '$abi must keep the explicit value',
+        );
+      }
+    });
+  });
+
+  group('stt settings', () {
     test('defaults are used when config.yaml is absent', () {
       final settings = SttSettings.load(sanadHome: home.path);
       expect(settings.enabled, isTrue);
       expect(settings.effectiveModelId, defaultSttEntry.id);
       expect(settings.language, 'ar');
-      expect(settings.threads, 4);
+      expect(settings.threads, defaultSttThreads);
       expect(settings.modelPath, isNull);
       // Metal on by default except on Intel macOS, where the x64 baseline has
       // no GPU backend: the assertion follows the host resolver.

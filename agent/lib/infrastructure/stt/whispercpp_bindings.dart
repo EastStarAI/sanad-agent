@@ -161,7 +161,7 @@ class WhisperCppLibrary {
       final marker = File(path);
       if (!marker.existsSync()) continue;
       final age = DateTime.now().difference(marker.lastModifiedSync());
-      if (age < const Duration(minutes: 30)) return true;
+      if (age < sttPreparingMarkerMaxAge) return true;
     }
     return false;
   }

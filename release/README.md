@@ -4,6 +4,8 @@
 
 The shared Dart models and validators live beside the data contract in `release/contract/`; there is no separate top-level shared release island.
 
+Manifest parsing is forward-compatible and publication is not. A runtime validates trust metadata only for artifacts whose `component:platform` its build knows, so adding a component or platform never invalidates a manifest for an install that predates it; that install still verifies the artifact it actually downloads, and an artifact with an unknown target is never installed or trusted. Because the runtime tolerance cannot help an install older than the addition, `validate-contract` refuses a declared public target without a policy entry and `generate-manifest`/`verify-manifest` call `requireKnownTrustTargets()`, so a release refuses to publish a target its own build cannot verify. Installs older than a newly introduced target recover through the official installer; see [Release and Update Architecture](../docs/technical/update_architecture.md#forward-compatibility-and-the-publisher-gate).
+
 ## Channels
 
 The accepted tags are exactly the stable tag `v<marketing-version>` or an RC tag `v<marketing-version>-rc.<positive-number>`. Stable uses `release-manifest.json` and `appcast.xml`. RC uses the separate `release-manifest-rc.json` and `appcast-rc.xml`; stable clients never consume the RC feed.
@@ -28,6 +30,16 @@ fails contract validation when a target is missing.
 For RCs, `<release-version>` includes `-rc.N`; therefore RC1, RC2, and Stable downloads never collide on disk even though all share the same marketing version.
 
 Windows Agent artifacts use `unsigned+github-attestation`; Client artifacts use `unsigned+winsparkle-dsa` until the documented Authenticode transition is completed. The release notes disclose the missing Authenticode publisher and retain official-origin, manifest, size, SHA-256, SBOM, and GitHub-provenance verification.
+
+## Store What's New
+
+`store-whats-new.en.txt` and `store-whats-new.ar.txt` hold the short, user-facing text the stores publish: the App Store "What's New" and the Google Play release notes for `en-US` and `ar`. One file per language is shared by both stores, so the two listings cannot drift apart.
+
+The first line names the release version, for example `1.0.27`, followed by a blank line and three or four short bullets with no technical detail. The text is written for the release and is never extracted from `release/release-notes.md`, because a store listing is a mobile summary while the release notes are the technical release document.
+
+Both stores enforce a hard limit: Google Play accepts 500 characters per language and the App Store accepts 4000. `scripts/release/store_whats_new.py` owns that check for both lanes, and publication refuses when a file is missing, its first line names another version, the text is empty, or the text is over the limit. The App Store lane asks the same loader for its `en-US` and `ar-SA` text with `--limit app-store`, which also maps the shared `ar` file to the App Store's own `ar-SA` language code. Bumping the contract does not rewrite these files, so a release refuses to publish under a version whose text has not been written yet.
+
+A published Stable release sends both files to both stores with no manual dispatch: `.github/workflows/release-stores.yml` runs at the released tag and each store lane reads the text from that tag, so the copy that ships is the copy that was reviewed with the release. See [Stable release store publication](../docs/operations/release_and_signing.md#stable-release-store-publication).
 
 ## Agent native dictation runtime
 

@@ -84,6 +84,19 @@ class AppConfig {
     'SANAD_RELEASE_MANIFEST_URL',
     defaultValue: 'https://github.com/EastStarAI/sanad-agent/releases/latest/download/release-manifest.json',
   );
+
+  /// The project's own published copy of the same manifest.
+  ///
+  /// Used only when the primary release host's certificate chain cannot be
+  /// verified on this computer: `dart:io` on Windows and Linux does not complete
+  /// a chain whose issuer is missing locally, so a release edge that omits an
+  /// intermediate refuses here while ordinary browsers still succeed. The bytes
+  /// are identical to the tagged manifest, and every version, size, SHA-256, and
+  /// platform-trust requirement still applies. An empty value disables it.
+  static const String releaseManifestFallbackUrl = String.fromEnvironment(
+    'SANAD_RELEASE_MANIFEST_FALLBACK_URL',
+    defaultValue: 'https://updates.sanad.eaststarai.com/release-manifest.json',
+  );
   static const String releaseArtifactMirrorUrl = String.fromEnvironment(
     'SANAD_RELEASE_ARTIFACT_MIRROR_URL',
   );

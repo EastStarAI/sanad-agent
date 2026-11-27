@@ -85,10 +85,12 @@ Model fetch contract details:
 - The OpenAI-compatible adapter delegates its pure discovery rules to two owners: `agent/lib/engine/adapters/openai_compatible/model_discovery.dart` (identity normalization, fallback catalog, endpoint candidates, labels, agentic/reasoning/context heuristics) and `agent/lib/engine/adapters/openai_compatible/thinking_control_discovery.dart` (Kimi, native LM Studio, and OpenRouter declared controls). The adapter keeps the discovery transport, its outcome state, and the `models.dev` service, and passes transport, headers, and logging into the control rules as typed callbacks so no rule reaches for adapter state.
 - Model metadata returned by discovery is runtime input, not presentation-only data. `context_window` is persisted with each `ModelOption`; `AgentRuntimeService` supplies adapters with an instance-scoped lookup that accepts only cache rows matching the route's config and credential revisions and the exact normalized model id. Context-window resolution is owned by one policy (`agent/lib/core/config/context_window_policy.dart`; `docs/technical/context_window_resolution.md`), never by an adapter: an exact user `context.modelLimits` value (applied as written and never capped), then a shipped per-model default (also matched by a vendor-prefixed spelling), then provider evidence (matching instance catalog, live probe, `models.dev` including Codex Responses, known static metadata) — both of those capped by `context.maxLimit` (built-in `358000`; `0` disables it). A cloud model unknown from every source uses the cap; a local/self-hosted route whose live probe reports nothing usable uses `ContextWindowPolicy.localFallbackLimit` (`16000`), still subject to the cap, because an oversized request against a small engine is a provider error instead of a compaction. Codex forward-compatible GPT-6 aliases may inherit a positive window only from the live GPT-6 template that caused the alias to be offered; absent or invalid template metadata remains unresolved so the later sources decide it. A model discovered after the Sanad release therefore does not require a hardcoded model-name condition to receive its advertised context window, and model names live only in the shipped default table.
 - `provider.instance.create` must never crash the daemon on validation failures such as duplicate display names. The response must come back on `provider.instance.created` with an `error` payload so the client can render an inline validation message.
-- **Connection Verification** (issue 339): `provider.instance.test` has two independent stages, and only the first decides whether the configuration is wrong. **Discovery** (always): a manual live listing; a row with a `last_error`, or a `source` of `fallback`, `cache_stale`, or `failed`, is a discovery failure. **Generation probe** (opt-in via `probe: true`, default true): one minimal request against the instance's **selected** model only — a short prompt, `maxOutputTokens: 1` (adapters translate it onto their own wire field), a bounded timeout, no tools, no retries, never persisted, never streamed. `ProviderInstanceVerifier` (`agent/lib/core/provider_runtime/provider_instance_verifier.dart`) is the single owner; the Test action, the Client setup gate, and the CLI share it.
+- **Connection Verification** (issue 339): `provider.instance.test` has two independent stages, and only the first decides whether the configuration is wrong. **Discovery** (always): a manual live listing; a row with a `last_error`, or a `source` of `fallback`, `cache_stale`, or `failed`, is a discovery failure. **Generation probe** (opt-in via `probe: true`, default true): one minimal request against the instance's **selected** model only — a short prompt, a bounded timeout, no tools or retries, and an opaque, per-attempt affinity ID independent of any conversation. The shared Chat and Responses adapters omit non-portable optional output bounds for Test; transports that require a bound keep a small budget. Probe conversations are not created or streamed to the Client. An HTTP error reports the sanitized request target actually used, or omits the endpoint when unavailable. `ProviderInstanceVerifier` (`agent/lib/core/provider_runtime/provider_instance_verifier.dart`) is the single owner; the Test action, the Client setup gate, and the CLI share it.
 - **The probe never blocks setup** (issue 339 review): setup gates send `probe: false`, so an unselected model, a non-chat entry in a `/models` catalog (embeddings, audio, moderation, TTS), a model that rejects the output bound, or a cold-loading local engine can never reject a valid credential. Only a *definitive* discovery failure blocks: `invalid_credential`, `forbidden`, `endpoint_not_found`, and other 4xx answers except `408`/`429` (the projection exposes this as `definitive`).
 - **Probe outcomes**: no selected model → `probe_state: skipped` (partial success: the key listed models, and the user is asked to choose a model). Only a probe `401` is definitive (`probe_state: failed`, the single probe result that may move the instance to `needs_auth`) and it persists its cause. A probe `403` is a **warning**, never a rejection: discovery already accepted the key, so the account may list models while a plan, a policy, or a parameter restriction refuses this one. Any other probe failure — model or parameter rejection (`400`/`404`/`422`), timeout, network, rate limit, `5xx`, or unclassified — is also `probe_state: warning` with a `warning` object (`kind`, `model`, nested sanitized `cause`, and `definitive: false`) and leaves the instance status exactly as discovery decided. Probe budgets are `12 s` for hosted providers and `90 s` for local templates (optional API key: Ollama, LM Studio, llama.cpp, custom endpoints), and the Client's request timeout is `120 s` to outlive the local budget.
 - **Sanitized failure projection** (issue 339): every provider failure leaves the daemon as one typed, user-safe value — `ProviderDiscoveryError` (`agent/lib/core/provider_runtime/provider_discovery_error.dart`). It carries a category, the HTTP status, a short canonical reason, and the endpoint reduced to `scheme://host[:port]/path`. It never carries a credential, a header, the request payload, or the provider's raw response body; query strings, fragments, and user info are stripped because they can carry a secret. Categories: `invalid_credential` (`401`), `forbidden` (`403`), `endpoint_not_found` (`404`), `rate_limited` (`429`), `timeout` (`408` or a client-side timeout), `network` (socket/TLS/DNS), `server_error` (`5xx`), `no_models` (empty or unusable list), `http` (any other non-2xx), and `unknown`. Clients localize the category; `message`/`error` stay English for the CLI, logs, and older clients.
+
+An explicit Test also returns an additive `instance` projection in its correlated result. The Client applies that projection with the verdict, without another list request; older daemons still use the snapshot fallback. Identical transient and persisted failures are rendered once, including any fallback details. A non-definitive model probe warning on a live catalog is cleared when the default model changes; actual discovery and credential failures remain actionable.
 
 ### Provider Instance Projection (issue 339)
 
@@ -300,15 +302,54 @@ response.
 
 A snapshot carries `provider_instance_id`, `provider_template_id`, `source`,
 `fetched_at`, optional plan and safe details, non-negative `available_resets`,
-and only the windows returned by the adapter. Version 1 window types are
-`session`, `weekly`, and `monthly`. Percentages are normalized to `[0, 100]`,
-and one side is derived when only used or remaining is supplied. Missing
-windows never create placeholders.
+an optional non-negative `applicable_resets`, an optional `reset_credits` list,
+and only the windows returned by the adapter. Each reset-credit entry carries
+display-safe UTC `expires_at` and optional `granted_at`, plus an optional opaque
+`credit_id`; the provider's title, description, reset type, profile id, and
+account id never cross the protocol. The `credit_id` exists only so a row's own
+action can target that credit: it is never rendered, never placed in a tooltip,
+and never written to a log. `available_resets` remains authoritative for the
+reset count, while `reset_credits` supplies the per-credit display detail.
 
-The first adapter is ChatGPT account usage for `openai-codex`. It reads the
-account backend with the selected instance's bearer credential and optional
-account id. Adapter, service, and protocol failures do not mutate provider
-readiness or prevent model execution.
+The two reset-credit facts come from different ChatGPT documents. The count is
+read from `rate_limit_reset_credits.available_count` (plus
+`applicable_available_count`) inside `GET /backend-api/wham/usage`; the
+per-credit list is a **separate** document, `GET
+/backend-api/wham/rate-limit-reset-credits`, requested with the same headers and
+only when the count is above zero. That second request is non-fatal: a non-2xx
+response, a non-JSON body, or a transport error yields the count-only snapshot
+with no rows. `applicable_resets` is omitted when the provider does not report
+it, and `0` means credits exist but cannot be applied right now. A credit whose
+`expires_at` has already passed is dropped by the adapter even when its `status`
+still reads `available`, because it can no longer be spent; the authoritative
+count is unaffected, so the Client falls back to the count line. A `reset_credits`
+entry without `credit_id` still crosses (an older daemon), and the Client then
+keeps the single action instead of offering per-row targets it cannot honour.
+
+Both documents are pinned by reference-derived fixtures,
+`agent/test/fixtures/chatgpt_usage_reference_shape.json` and
+`agent/test/fixtures/chatgpt_rate_limit_reset_credits_reference_shape.json`, each
+carrying a `_fixture_note` provenance header. They are reverse-engineered, not
+captured from the user's account, so a live capture still confirms the field
+names; a rename drops the rows and degrades to the count-only fallback.
+
+A consumed credit resets one window, not the whole account: the reference
+transcript of `POST /wham/rate-limit-reset-credits/consume` reports
+`windows_reset=1` while the exhausted 7-day window drops from 100% to 0% and the
+5-hour window keeps its used percentage, so a credit must never be described as
+resetting both windows.
+Version 1 window types are `session`, `weekly`, and `monthly`. Percentages are
+normalized to `[0, 100]`, and one side is derived when only used or remaining is
+supplied. Missing windows never create placeholders.
+
+Registered adapters are ChatGPT account usage for `openai-codex` and OpenCode Go
+usage for `opencode-go`. ChatGPT reads the account backend with the selected
+instance's bearer credential and optional account id. OpenCode Go reads its
+literal account-usage endpoint with the instance's API key and maps `rolling`,
+`weekly`, and `monthly` to Session, Weekly, and Monthly; it exposes no plan name
+or reset credits, and the endpoint is not derived from the instance's model base
+URL. Adapter, service, and protocol failures do not mutate provider readiness or
+prevent model execution.
 
 Flutter owns a projection keyed by `device id + provider_instance_id`. Provider
 cards render before capability or usage requests finish. Successful snapshots
@@ -319,7 +360,9 @@ requests, or mismatched instance responses cannot restore stale data. A failed
 background refresh preserves the prior snapshot and adds an inline `Retry` or
 sign-in message. `auth_required` renders a `Reconnect` action that runs the same
 account re-authentication as the instance form (see "Usage status never mutates
-the instance lifecycle"); every other failure renders `Retry` as a usage
+the instance lifecycle"). An API-key instance renders `Update API key` instead,
+which opens the instance edit form; an OAuth reconnect cannot repair a static
+key. Every other failure renders `Retry` as a usage
 refresh. Both labels and every usage sentence are localized in `en` and `ar`.
 
 The `Usage & limits` disclosure is absent for unsupported instances. It renders
@@ -911,9 +954,9 @@ A bounded retry on the current provider follows the same durable ownership bound
 
 ### Provider usage reset
 
-`provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`.
+`provider.usage.reset` requires `request_id`, `provider_instance_id`, and a daemon-owned `idempotency_key`, and accepts an optional `credit_id` that targets one credit from the snapshot. The response event is `provider.usage.reset_result` with one of `reset`, `confirmation_required`, `nothing_to_reset`, `no_credit`, `already_redeemed`, `auth_required`, `unsupported`, or `failed`. Without `credit_id` the daemon keeps the original consume request and the provider spends its default credit, so an older client stays compatible; the daemon's idempotency cache is keyed by the instance, the key, and the targeted credit so a retry for one row can never replay another row's outcome.
 
-The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol.
+The daemon always performs a fresh usage preflight. If no window is exhausted, it returns a short-lived `confirmation_token` bound to the exact account and preflight snapshot. A subsequent confirmation uses a new transport `request_id`, reuses the logical operation's `idempotency_key` and the same `credit_id`, and includes that token. Changed or expired snapshots require confirmation again. Concurrent or replayed requests for the same instance-scoped key share the same daemon operation, and the client retains that key across ambiguous failures so a retry cannot create a second mutation. Successful, already-processed, and nothing-to-reset outcomes trigger a provider refresh; `refresh_failed: true` distinguishes a completed mutation from reconciliation failure. Credentials and raw provider responses never cross the protocol, and the credit identifier never enters a log.
 
 ## Exact-Route Model Capabilities & Thinking Controls (Plan 77 / Task 77i5)
 

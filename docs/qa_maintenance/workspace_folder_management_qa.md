@@ -47,6 +47,7 @@ local picker matrix and the client projection checks.
 | Transport | Path-only `create_workspace`; coded failures for browse and folder errors | `client/test/unit/services/device_conversation_commands_test.dart` |
 | Record removal | `workspace.remove` returns the correlated workspace id, removes the list/cache projection, and preserves the directory plus session rows | existing |
 | Local picker | A confirmed same-desktop local device still opens the native picker and can create or relocate a workspace using the selected path | `conversation_input_panel_rebuild_test.dart` (unchanged test) |
+| Local folder creation | The local branch requests `canCreateDirectories` from the real `file_selector` platform and passes `confirmButtonText` through; the remote branch opens the device-bound browser instead and issues no native directory request | `client/test/unit/utils/workspace_picker_helper_test.dart` |
 | Client projection | A workspace created from the sidebar/cache appears in the composer selector on its first opening without a close/reopen cycle | existing |
 
 ## Manual Regression Scenarios

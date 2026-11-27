@@ -561,6 +561,7 @@ class BaseOpenAIAdapter
       throw LlmHttpException.fromResponse(
         response,
         operation: 'generateResponse',
+        requestUri: url,
       );
     }
 
@@ -1095,7 +1096,8 @@ class BaseOpenAIAdapter
       ),
       if (stream) 'stream': true,
       if (stream) 'stream_options': const {'include_usage': true},
-      if (options.maxOutputTokens != null)
+      // Compatibility gateways need not accept this optional OpenAI field.
+      if (!options.connectionProbe && options.maxOutputTokens != null)
         'max_completion_tokens': options.maxOutputTokens,
     };
 

@@ -208,6 +208,20 @@ class ProviderInstanceService {
       updatedAt: now ?? DateTime.now(),
     );
     _repo.update(next);
+    if (next.defaultModel != existing.defaultModel && !changedConfig) {
+      final cache = _repo.readModelCache(id, 'models');
+      if (cache?['source'] == 'live' &&
+          cache?['config_revision'] == existing.configRevision &&
+          cache?['credential_revision'] == existing.credentialRevision &&
+          _discoveryFailure(existing)?.isDefinitive == false) {
+        // A warning on a live catalog came from probing the previous model.
+        // Actual discovery failures and credential rejection stay actionable.
+        _repo.recordVerificationCause(
+          instanceId: id, cacheKey: 'models',
+          lastError: null, lastErrorDetail: null,
+        );
+      }
+    }
     return _repo.findById(id)!;
   }
 

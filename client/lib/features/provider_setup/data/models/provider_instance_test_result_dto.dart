@@ -1,4 +1,5 @@
 import 'package:sanad_client/features/provider_setup/data/models/provider_discovery_error_dto.dart';
+import 'package:sanad_client/features/provider_setup/data/models/provider_instance_dto.dart';
 
 /// Parsed `provider.instance.test_result` payload.
 ///
@@ -25,6 +26,9 @@ class ProviderInstanceTestResultDto {
   /// Non-blocking probe warning when [probeState] is `warning`.
   final ProviderProbeWarningDto? warning;
 
+  /// Authoritative instance projection after the explicit Test (newer agents).
+  final ProviderInstanceDto? instance;
+
   const ProviderInstanceTestResultDto({
     required this.success,
     required this.modelsCount,
@@ -33,9 +37,11 @@ class ProviderInstanceTestResultDto {
     this.latencyMs,
     this.failure,
     this.warning,
+    this.instance,
   });
 
   factory ProviderInstanceTestResultDto.fromJson(Map<String, dynamic> json) {
+    final instance = json['instance'];
     return ProviderInstanceTestResultDto(
       success: json['success'] == true,
       modelsCount: (json['models_count'] as num?)?.toInt() ?? 0,
@@ -44,6 +50,9 @@ class ProviderInstanceTestResultDto {
       latencyMs: (json['latency_ms'] as num?)?.toInt(),
       failure: ProviderDiscoveryErrorDto.fromJson(json['failure']),
       warning: ProviderProbeWarningDto.fromJson(json['warning']),
+      instance: instance is Map<String, dynamic>
+          ? ProviderInstanceDto.fromJson(instance)
+          : null,
     );
   }
 

@@ -673,7 +673,7 @@
   "dictationNotHosted": "Not hosted yet",
   "dictationUnavailableTitle": "Dictation is not available on this device",
   "dictationRuntimePreparing": "Preparing the dictation engine (download or build in progress)…",
-  "dictationRuntimeMissing": "The dictation engine is not installed yet. Run `fvm dart run tool/ensure_native_stt.dart` in the agent folder.",
+  "dictationRuntimeMissing": "The dictation engine is not installed yet. The Sanad launcher prepares it automatically; use Set up now to retry.",
   "dictationRuntimeInstallFailed": "The dictation engine could not be installed with this Agent. The Agent itself is installed and running; use Set up now to retry the download.",
   "dictationUnsupportedPlatform": "This platform is not supported yet.",
   "dictationNotReadyTooltip": "Dictation is not ready · press for details",
@@ -779,6 +779,10 @@
         "type": "String"
       }
     }
+  },
+  "agentInstallTlsTrustFailed": "The secure connection to the release server could not be verified on this computer. Allow Sanad in your antivirus or network proxy, check that the system clock is correct, or point SANAD_EXTRA_CA_BUNDLE at your network's root certificate, then try again.",
+  "@agentInstallTlsTrustFailed": {
+    "description": "Install failure shown when the release host's TLS chain is refused locally (for example by antivirus HTTPS scanning, a proxy, a partial root store, or a skewed clock). Names the three remedies; the environment variable is a literal identifier and is not translated."
   },
   "secretRequestTitle": "Secret requested",
   "@secretRequestTitle": {
@@ -1209,6 +1213,7 @@
     }
   },
   "providerFormBackToList": "Back to providers",
+  "providerInstanceDefaultBadge": "Default",
   "providerUsageTitle": "Usage & limits",
   "providerUsageRefresh": "Refresh",
   "providerUsageUpdatedJustNow": "Updated just now",
@@ -1271,14 +1276,6 @@
       }
     }
   },
-  "providerUsageResetsAt": "Resets {when}",
-  "@providerUsageResetsAt": {
-    "placeholders": {
-      "when": {
-        "type": "String"
-      }
-    }
-  },
   "providerUsageResetsAnyMoment": "Resets any moment",
   "providerUsageResetsInMoment": "Resets in a moment",
   "providerUsageResetsInMinutes": "Resets in {count} min",
@@ -1305,6 +1302,17 @@
       }
     }
   },
+  "providerUsageResetsInDaysHours": "Resets in {days} d {hours} h",
+  "@providerUsageResetsInDaysHours": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      },
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
   "providerUsageResetsOnDate": "Resets on {when}",
   "@providerUsageResetsOnDate": {
     "placeholders": {
@@ -1322,6 +1330,45 @@
     }
   },
   "providerUsageResetAvailableSingle": "1 reset available",
+  "providerUsageResetNotApplicable": "This reset credit cannot be applied right now.",
+  "providerUsageResetCreditLabel": "Reset credit",
+  "providerUsageResetCreditExpired": "Expired",
+  "providerUsageResetCreditExpiresInMoment": "Expires in a moment",
+  "providerUsageResetCreditExpiresInMinutes": "Expires in {count} min",
+  "@providerUsageResetCreditExpiresInMinutes": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInHours": "Expires in {count} h",
+  "@providerUsageResetCreditExpiresInHours": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInDays": "Expires in {count} d",
+  "@providerUsageResetCreditExpiresInDays": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "providerUsageResetCreditExpiresInDaysHours": "Expires in {days} d {hours} h",
+  "@providerUsageResetCreditExpiresInDaysHours": {
+    "placeholders": {
+      "days": {
+        "type": "int"
+      },
+      "hours": {
+        "type": "int"
+      }
+    }
+  },
   "providerUsageResetLimits": "Reset limits",
   "providerUsageCancel": "Cancel",
   "providerUsageResetDialogTitle": "Reset usage limits?",
@@ -1337,8 +1384,13 @@
   },
   "providerUsageResetAnyway": "Reset anyway",
   "providerUsageAuthRequired": "Account sign-in is required to view usage limits.",
+  "providerUsageApiKeyRequired": "Update this provider's API key to view usage limits.",
   "providerUsageUnavailable": "Usage information is temporarily unavailable. Please retry.",
   "providerUsageFailed": "Usage information could not be loaded. Please try again.",
   "providerUsageRetry": "Retry",
-  "providerUsageReconnect": "Reconnect"
+  "providerUsageReconnect": "Reconnect",
+  "providerUsageUpdateApiKey": "Update API key",
+  "providerUsageWindowSession": "Session",
+  "providerUsageWindowWeekly": "Weekly",
+  "providerUsageWindowMonthly": "Monthly"
 }

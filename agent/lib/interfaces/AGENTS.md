@@ -14,6 +14,8 @@ This contract applies to `agent/lib/interfaces/`.
 
 ## Failure Isolation
 - Isolate platform initialization, command, and delivery failures so one adapter cannot terminate the daemon event loop or prevent other interfaces from starting.
+- Assistant stream deltas carry the run-owned `stream_seq`, allocated by the active run before the in-flight projection and before fan-out, so every transport copy and the projection's watermark describe the same delta. A delta without it stays a valid legacy producer; a terminal response never carries one.
+- Platform-family delivery is ordered per session: one session's events reach each platform in emission order, independent sessions never wait on each other, a session-less event shares one device-wide chain, and a drained chain removes its entry. Local is still awaited before Cloud inside each delivery, and every `sendResponse` must stay non-blocking so one send can never stall a session's chain.
 - Keep streaming default and high-frequency logging at debug/fine level while preserving concise lifecycle and terminal-event logs.
 - Unknown origins, invalid delivery policy, malformed command identity, and unsupported query combinations fail closed.
 

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:isolate';
 
 import 'package:sanad_agent/infrastructure/stt/stt_native_platform.dart';
 import 'package:test/test.dart';
@@ -13,12 +14,30 @@ import '../../tool/stt_native_archive.dart';
 /// the release contract that declares the archive, the tool that writes it with
 /// the packaged layout, and the installers that place it beside the executable.
 void main() {
-  final contract =
-      jsonDecode(File('../release/release-contract.json').readAsStringSync())
-          as Map<String, dynamic>;
-  final version = contract['version'] as String;
-  final artifacts = (contract['artifacts'] as List)
-      .cast<Map<String, dynamic>>();
+  // Every source this contract asserts is read in `setUpAll` from a
+  // package-resolved root. `dart test` runs several suites in one process, so a
+  // suite that models a checkout by changing `Directory.current` would otherwise
+  // break these reads while another suite is executing.
+  late String repositoryRoot;
+  late Map<String, dynamic> contract;
+  late List<Map<String, dynamic>> artifacts;
+  late String version;
+
+  setUpAll(() async {
+    repositoryRoot = await _repositoryRoot();
+    contract =
+        jsonDecode(
+              File(
+                '$repositoryRoot/release/release-contract.json',
+              ).readAsStringSync(),
+            )
+            as Map<String, dynamic>;
+    artifacts = (contract['artifacts'] as List).cast<Map<String, dynamic>>();
+    version = contract['version'] as String;
+  });
+
+  /// A repository file, resolved without trusting the process working directory.
+  File repositoryFile(String relative) => File('$repositoryRoot/$relative');
 
   List<Map<String, dynamic>> runtimesFor(String platform, String architecture) {
     return artifacts
@@ -118,8 +137,8 @@ void main() {
 
   group('installers', () {
     test('both installers consume the declared archive', () {
-      final posix = File('../scripts/install.sh').readAsStringSync();
-      final windows = File('../scripts/install.ps1').readAsStringSync();
+      final posix = repositoryFile('scripts/install.sh').readAsStringSync();
+      final windows = repositoryFile('scripts/install.ps1').readAsStringSync();
       for (final script in [posix, windows]) {
         expect(script, contains('agent-runtime'));
         expect(script, contains('native/'));
@@ -137,7 +156,7 @@ void main() {
 
   group('pull-request workflow', () {
     test('native dictation proves the published arm64 slice', () {
-      final ci = File('../.github/workflows/ci.yml').readAsStringSync();
+      final ci = repositoryFile('.github/workflows/ci.yml').readAsStringSync();
       final job = _jobs(ci)['native-stt'];
       expect(job, isNotNull);
 
@@ -168,7 +187,7 @@ void main() {
 
   group('release workflow', () {
     test('stages the runtime into the Agent payload and stays required', () {
-      final workflow = File('../.github/workflows/release.yml').readAsStringSync();
+      final workflow = repositoryFile('.github/workflows/release.yml').readAsStringSync();
       expect(workflow, contains('SANAD_STT_REQUIRE_NATIVE'));
       expect(workflow, contains('ensure_native_stt.dart --verify'));
       expect(workflow, contains('--stage ../dist'));
@@ -188,7 +207,7 @@ void main() {
     });
 
     test('the Agent job keeps its budget and a native shell per platform', () {
-      final workflow = File('../.github/workflows/release.yml').readAsStringSync();
+      final workflow = repositoryFile('.github/workflows/release.yml').readAsStringSync();
       final start = workflow.indexOf('\n  agent:\n');
       final end = workflow.indexOf('\n  client-linux-web:\n');
       expect(start, isNonNegative);
@@ -204,7 +223,7 @@ void main() {
     });
 
     test('the arm64 lane runs the runtime tooling with its own Dart', () {
-      final workflow = File('../.github/workflows/release.yml').readAsStringSync();
+      final workflow = repositoryFile('.github/workflows/release.yml').readAsStringSync();
       final start = workflow.indexOf('\n  agent:\n');
       final end = workflow.indexOf('\n  client-linux-web:\n');
       expect(start, isNonNegative);
@@ -257,12 +276,12 @@ void main() {
         );
       }
       // The overlay and the stand-in exist and are wired to each other.
-      final overlay = File('tool/pubspec_overrides.no_sherpa.yaml');
+      final overlay = repositoryFile('agent/tool/pubspec_overrides.no_sherpa.yaml');
       expect(overlay.existsSync(), isTrue);
       expect(overlay.readAsStringSync(), contains('packages/stt_sherpa_stub'));
-      final stub = File('packages/stt_sherpa_stub/pubspec.yaml');
+      final stub = repositoryFile('agent/packages/stt_sherpa_stub/pubspec.yaml');
       expect(stub.readAsStringSync(), contains('name: sanad_stt_sherpa'));
-      final stubLibrary = File('packages/stt_sherpa_stub/lib/sanad_stt_sherpa.dart');
+      final stubLibrary = repositoryFile('agent/packages/stt_sherpa_stub/lib/sanad_stt_sherpa.dart');
       expect(
         stubLibrary.readAsStringSync(),
         contains('const bool sherpaEngineAvailable = false;'),
@@ -283,8 +302,8 @@ void main() {
     });
 
     test('every Windows-reachable step keeps a pwsh twin', () {
-      final release = File('../.github/workflows/release.yml').readAsStringSync();
-      final ci = File('../.github/workflows/ci.yml').readAsStringSync();
+      final release = repositoryFile('.github/workflows/release.yml').readAsStringSync();
+      final ci = repositoryFile('.github/workflows/ci.yml').readAsStringSync();
 
       // The lanes W5 repaired: the same command must exist under both shells,
       // so the guard above can see and keep a Windows twin in place.
@@ -302,10 +321,195 @@ void main() {
       }
     });
   });
+
+  // A source checkout prepares dictation through one acquisition tool. The
+  // launcher, `sanad-dev setup`, and the daemon's retry all run that tool, so
+  // the two sides have to agree on what a finished attempt says and on when a
+  // second attempt must not start. Nothing links them at compile time (the
+  // launcher must not import the Agent package), so the agreement is asserted
+  // here instead of trusted.
+  //
+  // Sources are read in `setUpAll` from a package-resolved root: `dart test`
+  // shares one process across suites, and a suite that models a checkout by
+  // changing `Directory.current` would otherwise resolve these paths elsewhere.
+  group('development launcher preparation contract', () {
+    late String repositoryRoot;
+    late String tool;
+    late String probe;
+    late List<String> wrappers;
+
+    setUpAll(() async {
+      repositoryRoot = await _repositoryRoot();
+      tool = File('$repositoryRoot/agent/tool/ensure_native_stt.dart')
+          .readAsStringSync();
+      probe = File(
+        '$repositoryRoot/scripts/sanad_dev/lib/src/runtime/lifecycle/'
+        'native_runtime_probe.dart',
+      ).readAsStringSync();
+      wrappers = [
+        File('$repositoryRoot/scripts/sanad-dev').readAsStringSync(),
+        File('$repositoryRoot/scripts/sanad-dev.ps1').readAsStringSync(),
+      ];
+    });
+
+    test('the tool prints the machine keys the launcher reads', () {
+      for (final key in [
+        'native_stt_stage',
+        'native_stt_result',
+        'native_stt_failure',
+      ]) {
+        expect(tool, contains(key), reason: 'the tool must print $key');
+        expect(probe, contains(key), reason: 'the launcher must read $key');
+      }
+    });
+
+    test('both refuse a second attempt on the same marker and window', () {
+      // The tool claims the marker atomically before it stages anything; the
+      // launcher checks the same marker before spawning. One marker, one window,
+      // and one claim rule mean neither can consider an attempt finished while
+      // the other still sees it running.
+      expect(tool, contains('sttClaimPreparation'));
+      expect(tool, contains('sttPreparingMarkerName'));
+      expect(probe, contains('nativeSttAttemptInFlight'));
+      expect(probe, contains('\$nativeSttPreparingMarkerName'));
+      expect(probe, contains('nativeSttAttemptMaxAge'));
+      expect(probe, contains('Duration(minutes: 30)'));
+      expect(
+        sttPreparingMarkerMaxAge,
+        const Duration(minutes: 30),
+        reason: 'the launcher mirrors this window',
+      );
+    });
+
+    test('no preparation diagnostic is discarded on any platform', () {
+      // Windows redirected every word of a failed preparation to the null
+      // device, which is exactly the evidence a fresh checkout needs. Every
+      // spelling of that redirect is rejected on a *preparation* line, because
+      // any one of them silences the only record an attempt leaves. Null devices
+      // stay legal elsewhere (a `command -v` probe, a version check).
+      const nullDevices = [
+        'NUL',
+        '> \$null',
+        '1> \$null',
+        '2> \$null',
+        '>/dev/null',
+        '1>/dev/null',
+        '2>/dev/null',
+        '> /dev/null',
+      ];
+      for (final source in [tool, probe]) {
+        for (final device in nullDevices) {
+          expect(
+            source,
+            isNot(contains(device)),
+            reason: 'preparation output must reach the durable log ($device)',
+          );
+        }
+      }
+      for (final wrapper in wrappers) {
+        for (final line in preparationLines(wrapper)) {
+          for (final device in nullDevices) {
+            expect(
+              line,
+              isNot(contains(device)),
+              reason: 'a preparation stage must never discard its output',
+            );
+          }
+        }
+      }
+      for (final source in [probe, ...wrappers]) {
+        expect(source, contains('.stt-prepare.log'));
+      }
+    });
+
+    test('the launcher detaches the attempt instead of holding it', () {
+      // An attached child either dies with `sanad-dev run` or keeps it alive for
+      // the length of a build. The shell owns the log so the attempt outlives
+      // the launcher either way.
+      expect(probe, contains('ProcessStartMode.detached'));
+      expect(
+        probe,
+        isNot(contains('process.stdout.listen')),
+        reason: 'listening to the child is what held the launcher open',
+      );
+      expect(
+        probe,
+        isNot(contains('Timer.periodic')),
+        reason: 'a poll timer keeps the launcher alive as well',
+      );
+    });
+
+    test('both sides bound the same durable log', () {
+      // The Agent resets the log before its own retry, the launcher before a
+      // `run`, and the wrappers before `setup`; one bound keeps them honest.
+      expect(sttPreparationLogLimitBytes, 1024 * 1024);
+      expect(probe, contains('1024 * 1024'));
+      expect(wrappers[0], contains('1048576'));
+      expect(wrappers[1], contains('1048576'));
+      expect(probe, contains(sttPreparationLogFileName));
+      expect(tool, contains('sttClaimPreparation'));
+      // Both wrappers read the tool's own key, which is what turns `busy` into
+      // "already running" instead of "ready".
+      for (final wrapper in wrappers) {
+        expect(wrapper, contains('native_stt_result='));
+      }
+    });
+
+    test('setup waits and run never does', () {
+      // An awaited `run` startup would hold the daemon behind a compile; a
+      // backgrounded `setup` would end before the checkout was usable.
+      expect(wrappers[0], contains('run_dictation_prepare'));
+      expect(wrappers[0], contains('run_setup "\$force" true true'));
+      expect(wrappers[0], contains('run_setup "\$force" true false'));
+      expect(wrappers[1], contains('Invoke-DictationPreparation'));
+      expect(wrappers[1], contains('Invoke-Setup \$true \$true'));
+      expect(wrappers[1], contains('Invoke-Setup \$true \$false'));
+    });
+  });
 }
 
 int _namedSteps(String workflow, String name) =>
     RegExp('- name: ${RegExp.escape(name)}\\n').allMatches(workflow).length;
+
+/// The repository root, resolved from the package itself.
+///
+/// `dart test` runs several suites in one process, and a suite that models a
+/// checkout by changing `Directory.current` would break every relative path read
+/// here. A package URI is resolved from the compiled package config instead, so
+/// it does not depend on the working directory at all.
+Future<String> _repositoryRoot() async {
+  final lib = await Isolate.resolvePackageUri(
+    Uri.parse('package:sanad_agent/infrastructure/stt/stt_native_platform.dart'),
+  );
+  if (lib == null) {
+    throw StateError('could not resolve the sanad_agent package');
+  }
+  // `<repo>/agent/lib/infrastructure/stt/stt_native_platform.dart` — five
+  // parents up from the file is the repository root.
+  return File(lib.toFilePath())
+      .parent // stt
+      .parent // infrastructure
+      .parent // lib
+      .parent // agent
+      .parent // repository root
+      .path;
+}
+
+/// Every line of a wrapper that belongs to native dictation preparation.
+///
+/// Null-device redirects are legal elsewhere in these scripts (existence probes,
+/// version checks); the rule this returns for is that a preparation stage never
+/// discards its own output.
+List<String> preparationLines(String source) => const LineSplitter()
+    .convert(source)
+    .where(
+      (line) =>
+          line.contains('ictation') ||
+          line.contains('.stt-prepare') ||
+          line.contains('native_stt') ||
+          line.contains('ensure_native_stt'),
+    )
+    .toList();
 
 /// Every `shell: bash` run step in a job that can execute on Windows.
 ///

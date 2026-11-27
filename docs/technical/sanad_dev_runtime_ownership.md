@@ -409,7 +409,9 @@ command contract. No arguments render static help without mutation. `install`
 owns verified FVM, pinned Flutter, and the checkout-owned user shim, then stops.
 `setup` ensures tooling, resolves the Release Contract, standalone CLI, Agent,
 and Client packages, then compiles the package-owned runtime CLI through FVM
-into a checkout-local native artifact before stopping. `setup`, `run`, and
+into a checkout-local native artifact, and finally prepares the checkout's native
+dictation runtime through the Agent's acquisition tool before stopping. `setup`,
+`run`, and
 `switch` preserve a functional user shim owned by another checkout; changing
 shim ownership remains an explicit `install --force` action. `run` ensures only
 missing or stale install/setup/runtime-artifact stages before entering that CLI.
@@ -418,6 +420,20 @@ handoff transaction. Preparation failure occurs before runtime mutation, so the
 source group remains unchanged. Other runtime commands never bootstrap implicitly and
 fail with the exact setup recovery command when the prepared CLI is missing or
 stale.
+
+Dictation preparation is the one stage that is deliberately not fatal: `setup`
+awaits it and reports the tool's own machine keys, while `run` starts it
+detached so the attempt owns its log and outlives the launcher; `switch`
+prepares nothing. A failure only leaves dictation unavailable. Every attempt
+appends to `agent/native/.stt-prepare.log`, bounded to 1 MiB per attempt, and a
+fresh `agent/native/.stt-preparing` claim whose pid is still running means an
+attempt is in progress, so neither `setup`, `run`, nor the daemon's retry starts
+a second one. The claim is one atomic exclusive create, so a loser reports
+`busy` and no two attempts ever stage the same runtime directory; a claim whose
+owner is provably gone is taken over instead of blocking retries for the whole
+window. The stage reports the failed stage, its typed cause, that log, and the
+`sanad-dev setup` retry rather than a raw developer command. See
+[Native Dictation Runtime Platforms](native_stt_runtime_platforms.md#source-checkout-preparation-sanad-dev).
 
 Missing FVM is installed from pinned official release archives after
 per-platform SHA-256 verification; detecting ready FVM, Flutter, shim, or package

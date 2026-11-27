@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:logging/logging.dart';
+import 'package:uuid/uuid.dart';
 
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/models/message.dart';
@@ -12,6 +13,7 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance_repository.d
 import 'package:sanad_agent/core/provider_runtime/provider_instance_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
+import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 
 /// State of the optional generation probe inside one verification.
@@ -162,9 +164,8 @@ class ProviderInstanceVerifier {
       'You are a connection check. Answer with a single word.';
   static const String _probeUserPrompt = 'Reply with OK.';
 
-  /// Output bound for the probe. Adapters translate it onto their own wire
-  /// field (`max_completion_tokens`, `max_tokens`, `max_output_tokens`).
-  static const int _probeMaxOutputTokens = 1;
+  /// Small output budget for adapters that require a wire token limit.
+  static const int _probeMaxOutputTokens = 8;
 
   final _logger = Logger('ProviderInstanceVerifier');
   final ProviderModelCacheService _cache;
@@ -229,7 +230,8 @@ class ProviderInstanceVerifier {
       return _fail(instance, discoveryFailure, models.length);
     }
 
-    final selected = instance.defaultModel;
+    // The selected model can change while the live listing is in flight.
+    final selected = _repo.findById(instanceId)?.defaultModel;
     final probeModel = selected == null || selected.isEmpty ? null : selected;
     final canProbe = probe && probeEnabled && _runtime != null;
     if (!canProbe || probeModel == null) {
@@ -244,6 +246,19 @@ class ProviderInstanceVerifier {
     }
 
     // Stage two — minimal generation probe against the selected model only.
+    final probing = _repo.findById(instanceId);
+    bool stillCurrent() {
+      final current = _repo.findById(instanceId);
+      final discovery = _repo.readModelCache(instanceId, 'models');
+      return probing != null && current != null &&
+          current.defaultModel == probing.defaultModel &&
+          current.configRevision == probing.configRevision &&
+          current.credentialRevision == probing.credentialRevision &&
+          discovery?['config_revision'] == probing.configRevision &&
+          discovery?['credential_revision'] == probing.credentialRevision &&
+          discovery?['source'] == 'live';
+    }
+
     final budget = _probeBudget(instance);
     final stopwatch = Stopwatch()..start();
     try {
@@ -258,18 +273,23 @@ class ProviderInstanceVerifier {
               Message(role: MessageRole.system, content: _probeSystemPrompt),
               Message(role: MessageRole.user, content: _probeUserPrompt),
             ],
-            modelOverride: probeModel,
+            modelOverride: signature.modelId,
             options: LLMRequestOptions(
+              // Carries transport affinity without creating a conversation.
+              sessionId: 'probe-${const Uuid().v4()}',
               providerInstanceId: instanceId,
               timeout: budget,
               maxOutputTokens: _probeMaxOutputTokens,
+              connectionProbe: true,
             ),
           )
           .timeout(budget);
       stopwatch.stop();
       // A pass clears a previous warning from the stored row.
-      _cache.recordVerificationCause(instanceId, null);
-      _applyVerified(instance);
+      if (stillCurrent()) {
+        _cache.recordVerificationCause(instanceId, null);
+        _applyVerified(instance);
+      }
       return InstanceVerification(
         success: true,
         modelsCount: models.length,
@@ -279,21 +299,22 @@ class ProviderInstanceVerifier {
       );
     } catch (error) {
       stopwatch.stop();
-      _logger.fine('Generation probe failed during verification: $error');
       final cause = ProviderDiscoveryError.capture(
         error,
-        endpoint: _chatEndpoint(instance),
+        endpoint: error is LlmHttpException ? error.requestUri : null,
       );
+      _logger.fine('Generation probe failed: ${cause.kind}');
       if (cause.kind == ProviderFailureCategory.invalidCredential) {
         // Only a probe 401 proves the credential is rejected. The cause is
         // persisted so the demotion survives a restart (issue 339 review 2).
-        _cache.recordVerificationCause(instanceId, cause);
+        if (stillCurrent()) _cache.recordVerificationCause(instanceId, cause);
         return _fail(
           instance,
           cause,
           models.length,
           model: probeModel,
           latency: stopwatch.elapsed,
+          applyOutcome: stillCurrent(),
         );
       }
       // A probe 403, a model/parameter rejection, a timeout, a transport
@@ -303,8 +324,10 @@ class ProviderInstanceVerifier {
       // applied first — the warning must never block the readiness it did not
       // disprove (issue 339 review 2).
       final warningCause = cause.asWarning();
-      _applyVerified(instance);
-      _cache.recordVerificationCause(instanceId, warningCause);
+      if (stillCurrent()) {
+        _applyVerified(instance);
+        _cache.recordVerificationCause(instanceId, warningCause);
+      }
       return InstanceVerification(
         success: true,
         modelsCount: models.length,
@@ -370,12 +393,15 @@ class ProviderInstanceVerifier {
     int modelsCount, {
     String? model,
     Duration? latency,
+    bool applyOutcome = true,
   }) {
-    _instances.applyConnectionOutcome(
-      instance.id,
-      failure,
-      credentialConfigured: _credentialConfigured(instance.id),
-    );
+    if (applyOutcome) {
+      _instances.applyConnectionOutcome(
+        instance.id,
+        failure,
+        credentialConfigured: _credentialConfigured(instance.id),
+      );
+    }
     return InstanceVerification(
       success: false,
       modelsCount: modelsCount,
@@ -420,16 +446,4 @@ class ProviderInstanceVerifier {
     }
   }
 
-  Uri? _chatEndpoint(ProviderInstance instance) {
-    final baseUrl = instance.effectiveBaseUrl;
-    if (baseUrl == null || baseUrl.trim().isEmpty) return null;
-    try {
-      return ProviderEndpointResolver.resolveChatEndpoint(
-        baseUrl,
-        instance.protocol,
-      );
-    } catch (_) {
-      return null;
-    }
-  }
 }

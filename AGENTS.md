@@ -64,7 +64,7 @@ The `sanad-agent` repository is structured as follows:
 * **`agent/`**: Dart background daemon.
 * **`client/`**: Flutter UI desktop client.
 * **`docs/`**: Feature plans, product specifications, and markdown documentation.
-* **`release/`**: The versioned release contract, generated-output policy, and shared Dart contract package under `release/contract/` for manifest, checksum, and Appcast models consumed by the agent, client, and release tooling.
+* **`release/`**: The versioned release contract, generated-output policy, and shared Dart contract package under `release/contract/` for manifest, checksum, and Appcast models consumed by the agent, client, and release tooling. Manifest parsing stays forward-compatible — a runtime ignores an additive trust target its build does not know and never installs an unverified artifact — while publication refuses a target the building release cannot verify.
 * **`shared/`**: Focused pure-Dart runtime primitives consumed by both the agent and client; each package owns a local contract and must remain independent of presentation and agent execution domains.
 * **`scripts/`**: Management, build, and release helper scripts.
   * `scripts/sanad_dev/` is the standalone Pure-Dart package for the `sanad-dev` CLI; production modules belong in its `lib/` and tests in its `test/`. `scripts/sanad_dev.dart` remains only a thin compatibility forwarder; do not grow it back into a monolith or return tool tests to the Client package.

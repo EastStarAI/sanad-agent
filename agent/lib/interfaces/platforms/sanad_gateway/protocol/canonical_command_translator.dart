@@ -101,6 +101,7 @@ class CanonicalCommandTranslator {
   static const Set<String> _sessionScopedCommands = <String>{
     'attachment.admit',
     CanonicalEventTypes.getSessionHistory,
+    CanonicalEventTypes.sessionStreamState,
     CanonicalEventTypes.deleteSession,
     CanonicalEventTypes.updateSessionTitle,
     CanonicalEventTypes.updateSessionPreferences,

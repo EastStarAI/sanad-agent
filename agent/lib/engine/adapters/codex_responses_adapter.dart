@@ -232,6 +232,7 @@ class CodexResponsesAdapter extends BaseOpenAIAdapter
           response,
           errorBody,
           operation: 'generateResponse',
+          requestUri: url,
         );
         throw _providerStateFailureOrHttp(failure, body, codec);
       }

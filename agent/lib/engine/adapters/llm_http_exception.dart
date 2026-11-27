@@ -15,23 +15,28 @@ class LlmHttpException implements IOException {
   final String body;
   final Map<String, String> headers;
   final String operation;
+  /// Actual request target; sanitize it before using it in diagnostics.
+  final Uri? requestUri;
 
   const LlmHttpException({
     required this.statusCode,
     required this.body,
     required this.headers,
     required this.operation,
+    this.requestUri,
   });
 
   factory LlmHttpException.fromResponse(
     http.Response response, {
     required String operation,
+    Uri? requestUri,
   }) {
     return LlmHttpException(
       statusCode: response.statusCode,
       body: response.body,
       headers: response.headers,
       operation: operation,
+      requestUri: requestUri ?? response.request?.url,
     );
   }
 
@@ -39,12 +44,14 @@ class LlmHttpException implements IOException {
     http.StreamedResponse response,
     String body, {
     required String operation,
+    Uri? requestUri,
   }) {
     return LlmHttpException(
       statusCode: response.statusCode,
       body: body,
       headers: response.headers,
       operation: operation,
+      requestUri: requestUri ?? response.request?.url,
     );
   }
 

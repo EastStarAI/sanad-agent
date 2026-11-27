@@ -13,11 +13,13 @@ to a configured provider account, identified by its provider instance, and may
 be available for OAuth or API-key providers when that provider exposes a safe
 account-usage API.
 
-The first supported account is ChatGPT through the `openai-codex` provider
-template. The experience remains capability-driven so future providers can add
-support without a client catalog change. This rollout order is about
-account-usage capability only and does not describe the provider setup list,
-whose order follows the provider registry.
+The supported accounts are ChatGPT through the `openai-codex` provider template
+and OpenCode Go through the `opencode-go` template. ChatGPT is an OAuth account;
+OpenCode Go is an API-key subscription with 5-hour (Session), Weekly, and
+Monthly windows and no reset credits. The experience remains capability-driven
+so future providers can add support without a client catalog change. This
+rollout order is about account-usage capability only and does not describe the
+provider setup list, whose order follows the provider registry.
 
 ## Placement and loading
 
@@ -40,13 +42,20 @@ The expanded disclosure may show:
 - safe provider details, when supplied;
 - the last update age and a per-account Refresh action.
 
+Window labels are localized from the typed window (Session, Weekly, Monthly).
+An unknown future type falls back to the daemon's label instead of disappearing.
+
 There are no placeholder rows. For example, a ChatGPT response containing only
 Weekly and Monthly displays exactly those two rows.
 
 Each window prioritizes the remaining value, such as `58% remaining`, and shows
 the used value as secondary information, such as `42% used`. Its progress bar
 represents consumption. Reset timing is rendered relative to the user's local
-time zone, with the full local time available as a tooltip.
+time zone, with the full local time available as a tooltip. Within six days, a
+countdown whose hour component is non-zero includes both days and hours (for
+example, `2 d 22 h`); an exact day boundary may show days alone, and longer
+horizons show the local date. The countdown owns its full `Resets …` sentence,
+so the prefix is never duplicated.
 
 ## Freshness and recovery
 
@@ -61,6 +70,14 @@ the previous values and adds a concise Retry message. Authentication failures
 show a sign-in-oriented message. Device switches, account removal, disposal,
 and late responses cannot move usage between accounts or devices.
 
+## Credential recovery
+
+`auth_required` means the account's credential needs user action. Account
+instances offer the same `Reconnect` flow as the instance form. API-key
+instances offer `Update API key`, which opens the instance edit form, because an
+OAuth reconnect cannot repair a static key. Neither action changes the provider
+card's readiness.
+
 ## Reset credits
 
-When the daemon reports at least one reset credit, the expanded section shows the count and **Reset limits**. Exhausted limits use a normal confirmation. Non-exhausted limits require a second warning returned by the daemon and an explicit **Reset anyway** action. The button is disabled during execution. Sanad never subtracts credits or changes percentages optimistically: it replaces the card only with the provider snapshot returned after reconciliation. If reset succeeds but refresh fails, the success remains visible and the existing values remain stale with a retry path.
+When the daemon reports reset credits, the expanded section lists each available credit as its own row: the generic `Reset credit` title with a relative expiry underneath (`Expires in 2 d 5 h`), and a **Reset limits** action at the row's trailing edge that spends that row's own credit. The exact local date and time appear only in the expiry tooltip, formatted in the current app language, so a normal row never shows an absolute date. The combined `N resets available` line is hidden while the listed rows agree with the daemon's authoritative count, and it reappears above the rows whenever they disagree, so the count never disappears on an inconsistent payload. A payload that reports only a count falls back to that combined line with a single action. The list never echoes provider titles, descriptions, reset types, or account identifiers. A credit that has already passed its expiry is not offered at all, and if an older daemon sends rows without their opaque ids the card keeps the single action rather than pretending each row can be targeted. When the daemon reports that no listed credit can be applied right now (`applicable_resets` of zero), the rows stay visible and every row action is disabled with a short localized explanation under the first row instead of failing at the provider; when the daemon omits that count, the actions stay enabled. Exhausted limits use a normal confirmation. Non-exhausted limits require a second warning returned by the daemon and an explicit **Reset anyway** action. The button is disabled during execution. Sanad never subtracts credits or changes percentages optimistically: it replaces the card only with the provider snapshot returned after reconciliation. If reset succeeds but refresh fails, the success remains visible and the existing values remain stale with a retry path.

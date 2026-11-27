@@ -152,6 +152,81 @@ class SessionQueryHandler {
     );
   }
 
+  /// Answers `session.stream_state` from the in-memory in-flight projection
+  /// only.
+  ///
+  /// This owner deliberately projects nothing durable: no history page, no row
+  /// mapping, no cursor. A consumer uses it to adopt authoritative text for one
+  /// running assistant stream after losing or misordering deltas, so the answer
+  /// is either that one snapshot or an explicit `absent` — never a rebuilt
+  /// history and never an inferred partial row.
+  Map<String, dynamic> buildStreamStateEnvelope(CanonicalEvent event) {
+    final sessionId = event.payload['session_id']?.toString().trim() ?? '';
+    if (sessionId.isEmpty) {
+      return _buildStreamStateErrorEnvelope(
+        event,
+        'invalid_request',
+        'session_id is required',
+      );
+    }
+    if (_sessionManager.getSession(sessionId) == null) {
+      return _buildStreamStateAbsentEnvelope(event, sessionId, 'unknown_session');
+    }
+    final snapshot = _sessionManager.getInFlightSnapshot(sessionId);
+    if (snapshot == null) {
+      return _buildStreamStateAbsentEnvelope(event, sessionId, 'idle');
+    }
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionStreamStateResult,
+        sessionId: sessionId,
+        payload: {
+          'request_id': event.payload['request_id'],
+          'session_id': sessionId,
+          'state': 'streaming',
+          'stream': snapshot,
+        },
+      ),
+    );
+  }
+
+  Map<String, dynamic> _buildStreamStateAbsentEnvelope(
+    CanonicalEvent event,
+    String sessionId,
+    String reason,
+  ) {
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionStreamStateResult,
+        sessionId: sessionId,
+        payload: {
+          'request_id': event.payload['request_id'],
+          'session_id': sessionId,
+          'state': 'absent',
+          'reason': reason,
+        },
+      ),
+    );
+  }
+
+  Map<String, dynamic> _buildStreamStateErrorEnvelope(
+    CanonicalEvent event,
+    String code,
+    String message,
+  ) {
+    final sessionId = event.payload['session_id']?.toString().trim();
+    return _bridge.buildAgentEventEnvelope(
+      CanonicalEvent(
+        type: CanonicalEventTypes.sessionStreamStateResult,
+        sessionId: sessionId == null || sessionId.isEmpty ? null : sessionId,
+        payload: {
+          'request_id': event.payload['request_id'],
+          'error': {'code': code, 'message': message},
+        },
+      ),
+    );
+  }
+
   Map<String, dynamic> _buildHistoryEnvelope(CanonicalEvent event) {
     final sessionId = event.sessionId ?? 'default';
     final session = _sessionManager.getSession(sessionId);

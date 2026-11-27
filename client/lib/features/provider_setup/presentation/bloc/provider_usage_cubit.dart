@@ -398,6 +398,7 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
     required String instanceId,
     DeviceConfig? agent,
     String? confirmationToken,
+    String? creditId,
   }) async {
     final deviceId = _deviceId(agent);
     final prior = state.entry(deviceId, instanceId);
@@ -427,6 +428,7 @@ class ProviderUsageCubit extends Cubit<ProviderUsageState> {
         providerInstanceId: instanceId,
         idempotencyKey: idempotencyKey,
         confirmationToken: confirmationToken,
+        creditId: creditId,
         agent: agent,
       );
     } catch (_) {

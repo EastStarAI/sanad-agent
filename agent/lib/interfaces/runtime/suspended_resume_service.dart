@@ -19,6 +19,7 @@ import 'package:sanad_agent/interfaces/models/gateway_event.dart';
 import 'local_workspace_runtime_service.dart';
 import 'session_run_orchestrator.dart';
 import 'session_turn_executor.dart';
+import 'stream_delta_sequencer.dart';
 import 'suspended_checkpoint_store.dart';
 import 'package:sanad_agent/capabilities/runtime/local_runtime_catalog.dart';
 import 'package:sanad_agent/capabilities/runtime/runtime_context_builder.dart';
@@ -241,6 +242,14 @@ class SuspendedResumeService {
         (isAskUser ? false : (decision['allowed'] != true));
     final ownerRunId =
         resumeOwner?.runId ?? sessionMetadata['run_id']?.toString();
+
+    // One sequencer for this resume scope. The adopted run owns it when the
+    // orchestrator is registered; a resume that runs without an owned run is
+    // the only publisher of that run's stream, so it allocates locally instead
+    // of inventing a second shared authority.
+    final streamSequencer =
+        activeRun?.streamDeltaSequencer ??
+        StreamDeltaSequencer(runId: ownerRunId ?? checkpoint.sessionId);
     var terminalCommitted = false;
 
     if (!isAskUser && !isSecretRequest && decision['allowed'] == true) {
@@ -309,20 +318,37 @@ class SuspendedResumeService {
             },
         onReasoningDelta: (reasoning) async {
           if (!canPublish()) return;
+          final modelStepId = agentRunner.currentModelStepId;
+          final streamSeq = streamSequencer.next(
+            kind: StreamDeltaSequencer.reasoningKind,
+            modelStepId: modelStepId,
+          );
           await emitResponse(
             GatewayResponse(
               sessionId: checkpoint.sessionId,
-              message: Message(role: MessageRole.assistant, content: reasoning),
+              // Visible provider reasoning keeps its own surface here exactly
+              // as it does on the live path: ordinary text is the only thing
+              // that travels as `content`.
+              message: Message(
+                role: MessageRole.assistant,
+                reasoning: reasoning,
+              ),
               isComplete: false,
               runId: ownerRunId,
               turnId: activeRun?.turnId,
-              modelStepId: agentRunner.currentModelStepId,
+              modelStepId: modelStepId,
+              streamSeq: streamSeq,
             ),
           );
         },
       )) {
         if (!canPublish()) continue;
         fullContent += chunk;
+        final modelStepId = agentRunner.currentModelStepId;
+        final streamSeq = streamSequencer.next(
+          kind: StreamDeltaSequencer.thoughtKind,
+          modelStepId: modelStepId,
+        );
         await emitResponse(
           GatewayResponse(
             sessionId: checkpoint.sessionId,
@@ -330,7 +356,8 @@ class SuspendedResumeService {
             isComplete: false,
             runId: ownerRunId,
             turnId: activeRun?.turnId,
-            modelStepId: agentRunner.currentModelStepId,
+            modelStepId: modelStepId,
+            streamSeq: streamSeq,
           ),
         );
       }
