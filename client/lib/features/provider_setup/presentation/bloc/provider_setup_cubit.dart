@@ -534,15 +534,26 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     if (state.instanceOperations.containsKey(instanceId)) return;
     _setInstanceOperation(instanceId, 'Testing...');
     try {
-      final result = ProviderInstanceTestResultDto.fromJson(
-        await _client.testInstanceConnection(
-          providerInstanceId: instanceId,
-          agent: agent,
-        ),
+      final payload = await _client.testInstanceConnection(
+        providerInstanceId: instanceId, agent: agent,
       );
-      _recordInstanceTest(instanceId, result);
-      // The verification updated the daemon-owned lifecycle status.
-      await _refreshInstances(feedback: const {});
+      final result = ProviderInstanceTestResultDto.fromJson(payload);
+      final updated = result.instance;
+      if (updated == null || updated.id != instanceId) {
+        _recordInstanceTest(instanceId, result);
+        await _refreshInstances(feedback: const {}); // Older daemon.
+        return;
+      }
+      final instances = [
+        for (final entry in state.instances) entry.id == instanceId ? updated : entry,
+      ];
+      emit(state.copyWith(
+        instances: instances,
+        providers: _mapProviders(state.templates, instances),
+        instanceTests: {...state.instanceTests, instanceId: result},
+        instanceOperations: {...state.instanceOperations}..remove(instanceId),
+        verificationFailure: result.failure,
+      ));
     } catch (error) {
       _finishInstanceOperation(
         instanceId,
@@ -551,8 +562,7 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     }
   }
 
-  /// Keeps the credential form visible after a failed verification, carrying
-  /// its localized cause instead of an opaque transport sentence.
+  /// Keeps the credential form visible with the localized verification error.
   void _stayOnFormForVerification(
     ProviderInstanceDto instance, {
     ProviderSetupStatus status = ProviderSetupStatus.instanceForm,
@@ -1041,20 +1051,8 @@ class ProviderSetupCubit extends Cubit<ProviderSetupState> {
     return super.close();
   }
 
-  /// Fetches the three independent read-only provider snapshots in parallel.
-  ///
-  /// Templates, instances, and readiness are independent provider queries the
-  /// agent resolves ~concurrently. Issuing them together (rather than awaiting
-  /// each in sequence) overlaps their transport round-trips on the Windows
-  /// provider-list path so latencies no longer sum (plan 97g). Callers still
-  /// await the completed snapshot before emitting state, preserving readiness
-  /// ordering and freshness.
-  ///
-  /// The record `.wait` helper attaches an error handler to every future
-  /// immediately at issue time and only completes after **all** reads settle,
-  /// so a failure inside any single read is always captured as the aggregation
-  /// error (never as an unhandled async error) and no partial snapshot can be
-  /// emitted.
+  /// Read all three provider snapshots concurrently and publish only after
+  /// every read settles; never emit a partial snapshot (plan 97g).
   Future<ProviderSnapshot> _loadProviderSnapshot() async {
     final (templates, instances, readiness) = await (
       _client.listTemplates(agent: agent),

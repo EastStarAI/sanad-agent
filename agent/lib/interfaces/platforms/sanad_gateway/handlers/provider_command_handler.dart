@@ -317,6 +317,7 @@ class ProviderCommandHandler {
     // Setup gates pass `probe: false`: discovery alone decides, no probe runs.
     final probe = (event.payload['probe'] as bool?) ?? true;
     final verification = await _verifier.verify(instanceId, probe: probe);
+    final instance = probe ? _repository.findById(instanceId) : null;
     return _bridge.buildAgentEventEnvelope(
       CanonicalEvent(
         type: CanonicalEventTypes.providerInstanceTestResult,
@@ -324,6 +325,7 @@ class ProviderCommandHandler {
           'request_id': requestId,
           'provider_instance_id': instanceId,
           ...verification.toMap(),
+          if (instance != null) 'instance': _projectInstance(instance),
         },
       ),
     );

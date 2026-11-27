@@ -6,9 +6,11 @@
 // Fakes only: no test reaches a real provider endpoint.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:sanad_agent/core/agent_runtime_service.dart';
 import 'package:sanad_agent/core/config.dart';
 import 'package:sanad_agent/core/models/agent_response.dart';
@@ -23,7 +25,10 @@ import 'package:sanad_agent/core/provider_runtime/provider_instance_verifier.dar
 import 'package:sanad_agent/core/provider_runtime/provider_model_cache_service.dart';
 import 'package:sanad_agent/core/provider_runtime/provider_protocol_constants.dart';
 import 'package:sanad_agent/core/provider_thinking/provider_thinking_di.dart';
+import 'package:sanad_agent/engine/adapters/base_openai_adapter.dart';
+import 'package:sanad_agent/engine/adapters/codex_responses_adapter.dart';
 import 'package:sanad_agent/engine/adapters/llm_adapter.dart';
+import 'package:sanad_agent/engine/adapters/provider_profile.dart';
 import 'package:sanad_agent/engine/adapters/llm_http_exception.dart';
 import 'package:sanad_agent/engine/adapters/llm_request_options.dart';
 import 'package:sanad_agent/evolution/db/agent_state_database.dart';
@@ -141,8 +146,9 @@ void main() {
     Duration localProbeTimeout = const Duration(seconds: 1),
     bool probeEnabled = true,
     bool withRuntime = true,
+    LLMAdapter? wireAdapter,
   }) {
-    final runtime = _FakeRuntime(config, repo, adapter);
+    final runtime = _FakeRuntime(config, repo, wireAdapter ?? adapter);
     return ProviderInstanceVerifier(
       cache: ProviderModelCacheService(
         repo,
@@ -257,6 +263,70 @@ void main() {
   });
 
   group('generation probe', () {
+    test('ChatGPT probe omits its optional bound and reports the actual endpoint', () async {
+      const base = 'https://chatgpt.com/backend-api/codex';
+      createInstance(templateId: 'openai-codex', baseUrl: base);
+      await storeCredential();
+      late http.Request dispatched;
+      final wire = CodexResponsesAdapter(
+        config, const ProviderProfile(name: 'openai-codex'),
+        baseUrlOverride: base, apiKeyOverride: _secret,
+        client: MockClient((request) async {
+          if (request.method == 'GET') {
+            return http.Response('{"models":[{"slug":"gpt-4o"}]}', 200);
+          }
+          dispatched = request;
+          return http.Response('{"error":"account limit"}', 429);
+        }),
+      );
+      final result = await buildVerifier(wireAdapter: wire).verify('inst-verify');
+      expect(dispatched.url.path, '/backend-api/codex/responses');
+      expect(jsonDecode(dispatched.body), isNot(contains('max_output_tokens')));
+      expect(result.warning!.kind, ProbeWarning.rateLimited);
+      expect(result.warning!.cause.endpoint, '$base/responses');
+    });
+
+    test('OpenCode Go probe supplies one-shot affinity to the selected route', () async {
+      const base = 'https://opencode.ai/zen/go/v1';
+      const model = 'deepseek-v4.1-flash';
+      createInstance(templateId: 'opencode-go', baseUrl: base, defaultModel: model);
+      await storeCredential();
+      final affinities = <String>[];
+      final wire = BaseOpenAIAdapter(
+        config, const ProviderProfile(name: 'opencode-go'),
+        baseUrlOverride: base, apiKeyOverride: _secret,
+        client: MockClient((request) async {
+          if (request.method == 'GET') {
+            return http.Response('{"data":[{"id":"$model"}]}', 200);
+          }
+          expect(request.url.path, '/zen/go/v1/chat/completions');
+          final body = jsonDecode(request.body) as Map;
+          expect(body['model'], model);
+          expect(body, isNot(contains('max_completion_tokens')));
+          final affinity = request.headers['x-opencode-session'];
+          if (affinity == null) return http.Response('MissingSessionID', 400);
+          affinities.add(affinity);
+          return http.Response('{"model":"$model","choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}]}', 200);
+        }),
+      );
+      final verifier = buildVerifier(wireAdapter: wire);
+      expect((await verifier.verify('inst-verify')).probeState, ProbeState.passed);
+      expect((await verifier.verify('inst-verify')).probeState, ProbeState.passed);
+      expect(affinities, everyElement(startsWith('probe-')));
+      expect(affinities.toSet(), hasLength(2));
+    });
+
+    test('changing the default removes the previous model warning, not the catalog', () async {
+      adapter = _ScriptedAdapter(generationError: _http(400));
+      createInstance();
+      await storeCredential();
+      final result = await buildVerifier().verify('inst-verify');
+      expect(result.warning, isNotNull);
+      final changed = instances.updateMetadata('inst-verify', defaultModel: 'gpt-4o-mini');
+      final projection = ProviderDiscoveryProjection.of(repo, changed);
+      expect(projection.error, isNull);
+      expect(projection.verified, isTrue);
+    });
     test('a working credential passes discovery and the probe', () async {
       createInstance();
       await storeCredential();
@@ -376,10 +446,8 @@ void main() {
       expect(result.model, 'gpt-4o');
       expect(result.probeState, ProbeState.failed);
       expect(result.failure!.kind, ProviderFailureCategory.invalidCredential);
-      expect(
-        result.failure!.endpoint,
-        'https://gateway.example/v1/chat/completions',
-      );
+      // There is no request target on this fake error; do not invent one.
+      expect(result.failure!.endpoint, isNull);
       expect(adapter.generationCalls, 1);
       expect(status(), InstanceStatus.needsAuth);
     });
@@ -479,7 +547,8 @@ void main() {
 
       // Adapters translate the bound onto their own wire field; the verifier
       // never writes a wire parameter itself.
-      expect(adapter.lastGenerationOptions?.maxOutputTokens, 1);
+      expect(adapter.lastGenerationOptions?.maxOutputTokens, 8);
+      expect(adapter.lastGenerationOptions?.connectionProbe, isTrue);
       expect(
         adapter.lastGenerationOptions?.timeout,
         const Duration(milliseconds: 200),
