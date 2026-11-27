@@ -9,7 +9,72 @@ hidden: true
 
 Fast browser automation CLI for AI agents. Chrome/Chromium via CDP with accessibility-tree snapshots and compact `@eN` element refs.
 
-Install: `npm i -g agent-browser && agent-browser install`
+Capabilities worth knowing before you reach for another tool:
+
+- Fast native Rust CLI, not a Node.js wrapper.
+- No Playwright or Puppeteer dependency — it drives Chrome/Chromium over CDP directly.
+- Sessions, authentication vault, state persistence, and video recording are built in.
+- Works with any AI agent (Cursor, Claude Code, Codex, Continue, Windsurf, etc.).
+
+## Sanad profile — use this every time
+
+Always use the dedicated Sanad profile. Never use a temporary profile for any task that involves signing in.
+
+- Name: `sanad`
+- Path: `~/.sanad/browser-profile/main` (home-relative, valid on any OS)
+- If it does not exist, create it and use it.
+
+Install once per machine, then diagnose:
+
+```bash
+npx agent-browser install --with-deps     # on Linux also installs system deps
+agent-browser doctor --quick              # if it fails: agent-browser doctor --fix
+```
+
+Launch it visibly:
+
+```bash
+agent-browser --profile ~/.sanad/browser-profile/main --headed open <url>
+```
+
+Drop `--headed` when no window is needed (headless is the default).
+
+No display on this machine (typical for Linux servers)? Start a virtual display (Xvfb), export `DISPLAY`, then relaunch headed. Windows and macOS need nothing extra.
+
+## Non-negotiables
+
+- Never pass `--no-sandbox`, and never weaken OS or kernel protection just to make a browser start.
+- Keep the debugging port on loopback. Never expose it to the network.
+- One browser instance per profile at a time.
+- Do not change the profile path, and do not change whatever encrypts saved secrets — both silently lose logins.
+- Close the browser when the task is finished: `agent-browser close --all`. Do not leave an unattended browser and an unauthenticated debugging port behind.
+- Do not open untrusted pages on a profile that holds live sessions.
+
+## When it will not start
+
+- `No usable sandbox` — the sandbox is blocked by the OS, or the command was launched from a restricted context that forbids privilege changes. Fix the cause on the host; never disable the sandbox.
+- Browser disappears seconds after launch — it was started inside a short-lived supervisor that killed it along with itself. Start it as a long-lived process.
+- `profile appears to be in use` — another instance holds the profile. Close that one first.
+- Cannot reach the debugging port — the browser is not running. Start it first.
+- Warning banner about an unsupported flag — means a sandbox-disabling flag came back. Remove it.
+
+## Sessions and the profile
+
+Cookies live in the profile on disk, so logins survive closing and restarting the browser. They are lost only when the profile path changes or the secret-encryption settings change. Headless mode keeps cookies but presents a different browser fingerprint, which some sites (notably Google) may read as automation — prefer a real display whenever a signed-in session matters, and let the user solve any verification prompt themselves.
+
+## Machine-specific notes (optional file)
+
+Some hosts need extras: a specific browser build, a particular display, an OS-level exception that allows the sandbox, exact launch flags. Keep those out of this skill. On such a host write them to a notes file and read it before launching:
+
+- `BROWSER.md` in the workspace, or `~/.sanad/browser/BROWSER.md`
+
+If the file does not exist, this skill alone is enough — do not create it just to repeat what is already written here.
+
+When you do create it, put machine facts only:
+- launcher or script path, and the browser binary path
+- which display to use and how it is provided
+- any OS-level sandbox exception and how to re-apply it
+- log location, helper tool paths, backups
 
 ## Start here
 
@@ -24,8 +89,6 @@ The CLI serves skill content that always matches the installed version, so instr
 
 ## Specialized skills
 
-Load a specialized skill when the task falls outside browser web pages:
-
 ```bash
 agent-browser skills get electron          # Electron desktop apps (VS Code, Slack, Discord, Figma, ...)
 agent-browser skills get slack             # Slack workspace automation
@@ -36,15 +99,6 @@ agent-browser skills get agentcore         # AWS Bedrock AgentCore cloud browser
 ```
 
 Run `agent-browser skills list` to see everything available on the installed version.
-
-## Why agent-browser
-
-- Fast native Rust CLI, not a Node.js wrapper
-- Works with any AI agent (Cursor, Claude Code, Codex, Continue, Windsurf, etc.)
-- Chrome/Chromium via CDP with no Playwright or Puppeteer dependency
-- Accessibility-tree snapshots with element refs for reliable interaction
-- Sessions, authentication vault, state persistence, video recording
-- Specialized skills for Electron apps, Slack, exploratory testing, cloud providers
 
 ## Observability Dashboard
 
